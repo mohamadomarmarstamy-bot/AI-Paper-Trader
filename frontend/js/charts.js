@@ -169,7 +169,7 @@ async function loadChart(symbol) {
 
     try {
         const response = await fetch(
-            `http://127.0.0.1:8000/chart/${encodeURIComponent(cleanSymbol)}`,
+            `https://ai-paper-trader-production-7465.up.railway.app/chart/${encodeURIComponent(cleanSymbol)}`,
             {
                 signal: activeChartRequest.signal
             }

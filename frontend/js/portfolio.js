@@ -62,7 +62,7 @@ async function loadPortfolioChart() {
     try {
 
         const response = await fetch(
-            "http://127.0.0.1:8000/portfolio-history"
+            "https://ai-paper-trader-production-7465.up.railway.app/portfolio-history"
         );
 
         const history = await response.json();

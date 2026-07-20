@@ -40,7 +40,7 @@ async function loadWatchlist() {
         watchlist.map(async (symbol) => {
             try {
                 const response = await fetch(
-                    `http://127.0.0.1:8000/quote/${symbol}`
+                    `https://ai-paper-trader-production-7465.up.railway.app/quote/${symbol}`
                 );
 
                 if (!response.ok) {
@@ -127,7 +127,7 @@ async function selectWatchStock(symbol) {
 
     try {
         const response = await fetch(
-            `http://127.0.0.1:8000/quote/${symbol}`
+            `https://ai-paper-trader-production-7465.up.railway.app/quote/${symbol}`
         );
 
         if (!response.ok) {

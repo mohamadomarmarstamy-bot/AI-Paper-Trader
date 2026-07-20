@@ -1,4 +1,4 @@
-const SEARCH_API_URL = "http://127.0.0.1:8000";
+const SEARCH_API_URL = "https://ai-paper-trader-production-7465.up.railway.app";
 
 const symbolInput = document.getElementById("symbol");
 const priceInput = document.getElementById("price");
