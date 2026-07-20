@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>AI Paper Trader</title>
+
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <header class="topbar">
+
+        <div>
+            <h1>AI Paper Trader</h1>
+            <p>Practice trading without risking real money</p>
+        </div>
+
+        <button
+            type="button"
+            onclick="refreshDashboard()"
+        >
+            Refresh Dashboard
+        </button>
+
+    </header>
+
+    <main class="dashboard">
+
+        <!-- Account Stats -->
+
+        <section class="stats-grid">
+
+            <div class="stat-card">
+                <p>Cash</p>
+                <h2 id="cash">$0.00</h2>
+            </div>
+
+            <div class="stat-card">
+                <p>Portfolio Value</p>
+                <h2 id="portfolio-value">$0.00</h2>
+            </div>
+
+            <div class="stat-card">
+                <p>Total Profit / Loss</p>
+                <h2 id="profit-loss">$0.00</h2>
+            </div>
+
+            <div class="stat-card">
+                <p>Open Positions</p>
+                <h2 id="position-count">0</h2>
+            </div>
+
+        </section>
+
+        <!-- Main Dashboard -->
+
+        <section class="main-grid">
+
+            <!-- Open Positions -->
+
+            <div class="panel">
+
+                <div class="panel-header">
+                    <h2>Open Positions</h2>
+                </div>
+
+                <div class="table-wrapper">
+
+                    <table>
+
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Shares</th>
+                                <th>Entry</th>
+                                <th>Current</th>
+                                <th>Value</th>
+                                <th>Gain / Loss</th>
+                                <th>Return</th>
+                            </tr>
+                        </thead>
+
+                        <tbody id="positions-table">
+                            <tr>
+                                <td colspan="7">
+                                    No positions yet
+                                </td>
+                            </tr>
+                        </tbody>
+
+                    </table>
+
+                </div>
+
+            </div>
+
+            <!-- Portfolio Allocation -->
+
+            <div class="panel allocation-panel">
+
+                <div class="panel-header">
+                    <h2>🥧 Portfolio Allocation</h2>
+                </div>
+
+                <div class="allocation-chart-container">
+                    <canvas id="allocation-chart"></canvas>
+                </div>
+
+                <div
+                    id="allocation-empty"
+                    class="allocation-empty"
+                >
+                    Make a trade to view your portfolio allocation.
+                </div>
+
+            </div>
+
+            <!-- Place Trade -->
+
+            <div class="panel">
+
+                <div class="panel-header">
+                    <h2>Place Trade</h2>
+                </div>
+
+                <div class="trade-form">
+
+                    <label for="symbol">
+                        Stock Symbol
+                    </label>
+
+                    <div class="search-wrapper">
+
+                        <input
+                            id="symbol"
+                            type="text"
+                            placeholder="Search ticker, for example NVDA"
+                            autocomplete="off"
+                        >
+
+                        <div id="searchResults"></div>
+
+                    </div>
+
+                    <label for="shares">
+                        Shares
+                    </label>
+
+                    <input
+                        id="shares"
+                        type="number"
+                        min="1"
+                        step="1"
+                        placeholder="1"
+                    >
+
+                    <label for="price">
+                        Current Market Price
+                    </label>
+
+                    <input
+                        id="price"
+                        type="text"
+                        placeholder="Loading live market price..."
+                        readonly
+                        aria-readonly="true"
+                    >
+
+                    <p class="market-price-note">
+                        Live market price is automatically loaded from Yahoo Finance.
+                    </p>
+
+                    <div class="trade-buttons">
+
+                        <button
+                            type="button"
+                            class="buy-button"
+                            onclick="buyStock()"
+                        >
+                            Buy
+                        </button>
+
+                        <button
+                            type="button"
+                            class="sell-button"
+                            onclick="sellStock()"
+                        >
+                            Sell
+                        </button>
+
+                    </div>
+
+                    <button
+                        type="button"
+                        onclick="addCurrentStock()"
+                    >
+                        ⭐ Add to Watchlist
+                    </button>
+
+                    <p id="trade-message"></p>
+
+                </div>
+
+            </div>
+
+            <!-- Stock Chart -->
+
+            <div class="panel">
+
+                <div class="panel-header">
+                    <h2>Stock Chart</h2>
+                </div>
+
+                <div class="chart-container">
+                    <canvas id="priceChart"></canvas>
+                </div>
+
+            </div>
+
+            <!-- Watchlist -->
+
+            <div class="panel">
+
+                <div class="panel-header">
+
+                    <h2>⭐ Watchlist</h2>
+
+                    <button
+                        type="button"
+                        onclick="loadWatchlist()"
+                    >
+                        Refresh
+                    </button>
+
+                </div>
+
+                <div id="watchlist">
+                    Loading watchlist...
+                </div>
+
+            </div>
+
+            <!-- Market Scanner -->
+
+            <div class="panel">
+
+                <div class="panel-header">
+
+                    <h2>AI Market Scanner</h2>
+
+                    <button
+                        type="button"
+                        onclick="loadScanner()"
+                    >
+                        Run Scanner
+                    </button>
+
+                </div>
+
+                <div
+                    id="scanner-results"
+                    class="scanner-results"
+                >
+                    Click "Run Scanner" to analyze the market.
+                </div>
+
+            </div>
+
+            <!-- Trade History -->
+
+            <div class="panel">
+
+                <div class="panel-header">
+                    <h2>Trade History</h2>
+                </div>
+
+                <div class="table-wrapper">
+
+                    <table>
+
+                        <thead>
+                            <tr>
+                                <th>Action</th>
+                                <th>Symbol</th>
+                                <th>Shares</th>
+                                <th>Price / Profit</th>
+                            </tr>
+                        </thead>
+
+                        <tbody id="history-table">
+                            <tr>
+                                <td colspan="4">
+                                    No trades yet
+                                </td>
+                            </tr>
+                        </tbody>
+
+                    </table>
+
+                </div>
+
+            </div>
+
+        </section>
+
+        <!-- Portfolio Performance -->
+
+        <section class="panel portfolio-performance-panel">
+
+            <div class="panel-header">
+
+                <h2>📈 Portfolio Performance</h2>
+
+                <button
+                    type="button"
+                    onclick="loadPortfolioChart()"
+                >
+                    Refresh
+                </button>
+
+            </div>
+
+            <div
+                id="portfolio-chart"
+                class="portfolio-chart"
+            ></div>
+
+        </section>
+
+    </main>
+
+    <!-- JavaScript -->
+
+    <script src="js/app.js"></script>
+    <script src="js/account.js"></script>
+    <script src="js/charts.js"></script>
+    <script src="js/trades.js"></script>
+    <script src="js/scanner.js"></script>
+    <script src="js/search.js"></script>
+    <script src="js/watchlist.js"></script>
+    <script src="js/portfolio.js"></script>
+
+</body>
+</html>
