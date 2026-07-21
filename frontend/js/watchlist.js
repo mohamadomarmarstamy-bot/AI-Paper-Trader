@@ -1,9 +1,14 @@
 const DEFAULT_WATCHLIST = [
-    "NVDA",
-    "AAPL",
-    "TSLA",
-    "MSFT",
-    "AMZN"
+    "SOFI",
+    "PLTR",
+    "RKLB",
+    "ASTS",
+    "IONQ",
+    "QBTS",
+    "RGTI",
+    "HIMS",
+    "ACHR",
+    "LCID"
 ];
 
 let watchlist = JSON.parse(

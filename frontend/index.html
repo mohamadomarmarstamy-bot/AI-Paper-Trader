@@ -18,6 +18,16 @@
 
 <body>
 
+    <nav class="main-nav">
+    <button type="button" class="nav-button active" data-section="dashboard-section">
+        📊 Dashboard
+    </button>
+
+    <button type="button" class="nav-button" data-section="strategy-section">
+        🤖 Strategy Lab
+    </button>
+</nav>
+
     <header class="topbar">
 
         <div>
@@ -34,8 +44,7 @@
 
     </header>
 
-    <main class="dashboard">
-
+<main class="dashboard" id="dashboard-section">
         <!-- Account Stats -->
 
         <section class="stats-grid">
@@ -338,7 +347,54 @@
         </section>
 
     </main>
+<section id="strategy-section" class="strategy-section hidden">
 
+    <div class="panel">
+
+        <div class="panel-header">
+            <h2>🤖 Strategy Lab</h2>
+
+            <button
+                type="button"
+                onclick="loadStrategyLab()"
+            >
+                Analyze Watchlist
+            </button>
+        </div>
+
+        <p class="strategy-description">
+            Analyze your watchlist for paper-trading signals.
+        </p>
+
+        <div class="table-wrapper">
+
+            <table>
+
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Price</th>
+                        <th>Signal</th>
+                        <th>Confidence</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+
+                <tbody id="strategy-table">
+                    <tr>
+                        <td colspan="5">
+                            Click "Analyze Watchlist" to begin.
+                        </td>
+                    </tr>
+                </tbody>
+
+            </table>
+
+        </div>
+
+    </div>
+
+</section>
     <!-- JavaScript -->
 
     <script src="js/app.js"></script>
@@ -349,6 +405,7 @@
     <script src="js/search.js"></script>
     <script src="js/watchlist.js"></script>
     <script src="js/portfolio.js"></script>
+    <script src="js/strategy.js"></script>
 
 </body>
 </html>

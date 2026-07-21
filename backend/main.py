@@ -359,6 +359,17 @@ def get_quote(symbol: str):
         "price": price
     }
 
+@app.get("/strategy/{symbol}")
+def get_strategy(symbol: str):
+    return {
+        "symbol": symbol.upper(),
+        "price": 0,
+        "signal": "HOLD",
+        "confidence": 50,
+        "reason": [
+            "Strategy analysis is not connected yet."
+        ]
+    }
 
 @app.post("/buy")
 def buy(data: dict):
