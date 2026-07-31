@@ -1,11 +1,20 @@
-const API_URL = "https://ai-paper-trader-production-7465.up.railway.app";
-
+window.API_URL =
+    "https://ai-paper-trader-production-7465.up.railway.app";
 
 async function refreshDashboard() {
-    await loadAccount();
+    try {
+        await loadAccount();
+    } catch (error) {
+        console.error(
+            "Dashboard refresh failed:",
+            error
+        );
+    }
 }
 
-
-document.addEventListener("DOMContentLoaded", async () => {
-    await refreshDashboard();
-});
+document.addEventListener(
+    "DOMContentLoaded",
+    () => {
+        refreshDashboard();
+    }
+);

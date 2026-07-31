@@ -1,152 +1,976 @@
+from __future__ import annotations
+
+import copy
+import logging
+import math
+import threading
+import time
+from collections.abc import Iterator
+from typing import Any
+
+import pandas as pd
 import yfinance as yf
 
-
-WATCHLIST = [
-    "AAPL",
-    "MSFT",
-    "NVDA",
-    "AMZN",
-    "META",
-    "GOOGL",
-    "TSLA",
-    "AMD"
-]
+from market_universe import load_market_universe
 
 
-def calculate_rsi(prices, period=14):
+# =========================================================
+# Logging
+# =========================================================
 
-    changes = prices.diff()
+logger = logging.getLogger(__name__)
 
+
+# =========================================================
+# Scanner configuration
+# =========================================================
+
+SCAN_CACHE_SECONDS = 15 * 60
+
+DOWNLOAD_PERIOD = "6mo"
+DOWNLOAD_INTERVAL = "1d"
+DOWNLOAD_BATCH_SIZE = 25
+DOWNLOAD_TIMEOUT_SECONDS = 30
+
+MINIMUM_HISTORY_DAYS = 55
+MINIMUM_PRICE = 3.00
+MINIMUM_AVERAGE_VOLUME = 100_000
+
+# Preserve a useful mix of BUY, HOLD, and SELL candidates.
+MAX_RESULTS_PER_SIGNAL = 30
+SIGNAL_ORDER = ("BUY", "HOLD", "SELL")
+
+
+# =========================================================
+# Scanner state
+# =========================================================
+
+_scan_cache: dict[str, Any] = {
+    "results": [],
+    "updated_at": 0.0,
+}
+
+_cache_lock = threading.RLock()
+
+# Prevent two requests from launching separate full-market scans at once.
+_scan_lock = threading.Lock()
+
+
+# =========================================================
+# General helpers
+# =========================================================
+
+def clean_symbol(symbol: str) -> str:
+    """
+    Convert a symbol to Yahoo Finance format.
+
+    Wikipedia uses dots for some share classes, while Yahoo Finance
+    normally uses hyphens, such as BRK-B and BF-B.
+    """
+    return str(symbol or "").strip().upper().replace(".", "-")
+
+
+def safe_float(value: Any) -> float | None:
+    """Convert a value to a finite float."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+
+    if not math.isfinite(number):
+        return None
+
+    return number
+
+
+def percentage_change(
+    current_value: float,
+    previous_value: float,
+) -> float:
+    """Return a percentage change while avoiding division by zero."""
+    if previous_value == 0:
+        return 0.0
+
+    return ((current_value - previous_value) / previous_value) * 100.0
+
+
+def split_into_batches(
+    symbols: list[str],
+    batch_size: int,
+) -> Iterator[list[str]]:
+    """Yield symbol batches."""
+    if batch_size <= 0:
+        raise ValueError("batch_size must be greater than zero")
+
+    for index in range(0, len(symbols), batch_size):
+        yield symbols[index:index + batch_size]
+
+
+def _copy_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return a deep copy so callers cannot mutate cached nested values."""
+    return copy.deepcopy(results)
+
+
+def _get_cached_results(
+    *,
+    allow_stale: bool,
+) -> list[dict[str, Any]] | None:
+    """
+    Return cached results.
+
+    When allow_stale is False, the cache must still be within its TTL.
+    """
+    current_time = time.time()
+
+    with _cache_lock:
+        cached_results = _scan_cache.get("results", [])
+        cached_time = float(_scan_cache.get("updated_at", 0.0) or 0.0)
+
+        if not cached_results:
+            return None
+
+        cache_is_fresh = current_time - cached_time < SCAN_CACHE_SECONDS
+
+        if not allow_stale and not cache_is_fresh:
+            return None
+
+        return _copy_results(cached_results)
+
+
+def _set_cached_results(results: list[dict[str, Any]]) -> None:
+    """Replace the scanner cache atomically."""
+    with _cache_lock:
+        _scan_cache["results"] = _copy_results(results)
+        _scan_cache["updated_at"] = time.time()
+
+
+# =========================================================
+# Indicator calculations
+# =========================================================
+
+def calculate_rsi(
+    closes: pd.Series,
+    period: int = 14,
+) -> float | None:
+    """Calculate Wilder-style RSI."""
+    if period <= 0 or len(closes) < period + 1:
+        return None
+
+    numeric_closes = pd.to_numeric(closes, errors="coerce").dropna()
+
+    if len(numeric_closes) < period + 1:
+        return None
+
+    changes = numeric_closes.diff()
     gains = changes.clip(lower=0)
     losses = -changes.clip(upper=0)
 
-    average_gain = gains.rolling(period).mean()
-    average_loss = losses.rolling(period).mean()
+    average_gain = gains.ewm(
+        alpha=1 / period,
+        adjust=False,
+        min_periods=period,
+    ).mean()
 
-    rs = average_gain / average_loss
+    average_loss = losses.ewm(
+        alpha=1 / period,
+        adjust=False,
+        min_periods=period,
+    ).mean()
 
-    rsi = 100 - (100 / (1 + rs))
+    latest_gain = safe_float(average_gain.iloc[-1])
+    latest_loss = safe_float(average_loss.iloc[-1])
 
-    return rsi.iloc[-1]
+    if latest_gain is None or latest_loss is None:
+        return None
+
+    # A completely flat market is neutral, not overbought.
+    if latest_gain == 0 and latest_loss == 0:
+        return 50.0
+
+    if latest_loss == 0:
+        return 100.0
+
+    if latest_gain == 0:
+        return 0.0
+
+    relative_strength = latest_gain / latest_loss
+    return 100.0 - (100.0 / (1.0 + relative_strength))
 
 
-def scan_market():
+def calculate_macd(
+    closes: pd.Series,
+) -> tuple[float, float, float] | None:
+    """Return MACD, signal line, and histogram."""
+    numeric_closes = pd.to_numeric(closes, errors="coerce").dropna()
 
-    results = []
+    if len(numeric_closes) < 35:
+        return None
 
-    for symbol in WATCHLIST:
+    ema_12 = numeric_closes.ewm(span=12, adjust=False).mean()
+    ema_26 = numeric_closes.ewm(span=26, adjust=False).mean()
 
-        try:
+    macd_line = ema_12 - ema_26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    histogram = macd_line - signal_line
 
-            stock = yf.Ticker(symbol)
+    macd = safe_float(macd_line.iloc[-1])
+    signal = safe_float(signal_line.iloc[-1])
+    hist = safe_float(histogram.iloc[-1])
 
-            history = stock.history(
-                period="6mo",
-                interval="1d"
+    if macd is None or signal is None or hist is None:
+        return None
+
+    return macd, signal, hist
+
+
+def calculate_atr(
+    history: pd.DataFrame,
+    period: int = 14,
+) -> float | None:
+    """Calculate Wilder-style Average True Range."""
+    if period <= 0 or len(history) < period + 1:
+        return None
+
+    required_columns = {"High", "Low", "Close"}
+
+    if not required_columns.issubset(history.columns):
+        return None
+
+    high = pd.to_numeric(history["High"], errors="coerce")
+    low = pd.to_numeric(history["Low"], errors="coerce")
+    close = pd.to_numeric(history["Close"], errors="coerce")
+
+    previous_close = close.shift(1)
+
+    true_range = pd.concat(
+        [
+            high - low,
+            (high - previous_close).abs(),
+            (low - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+
+    atr_series = true_range.ewm(
+        alpha=1 / period,
+        adjust=False,
+        min_periods=period,
+    ).mean()
+
+    return safe_float(atr_series.iloc[-1])
+
+
+def calculate_bollinger_bands(
+    closes: pd.Series,
+    period: int = 20,
+) -> tuple[float, float, float] | None:
+    """Return upper, middle, and lower Bollinger Bands."""
+    if period <= 1:
+        return None
+
+    numeric_closes = pd.to_numeric(closes, errors="coerce").dropna()
+
+    if len(numeric_closes) < period:
+        return None
+
+    window = numeric_closes.tail(period)
+
+    middle = safe_float(window.mean())
+    standard_deviation = safe_float(window.std(ddof=1))
+
+    if middle is None or standard_deviation is None:
+        return None
+
+    upper = middle + (2.0 * standard_deviation)
+    lower = middle - (2.0 * standard_deviation)
+
+    return upper, middle, lower
+
+
+# =========================================================
+# Yahoo Finance download and extraction
+# =========================================================
+
+def download_batch(
+    symbols: list[str],
+) -> pd.DataFrame | None:
+    """Download one batch of historical data."""
+    if not symbols:
+        return None
+
+    try:
+        data = yf.download(
+            tickers=" ".join(symbols),
+            period=DOWNLOAD_PERIOD,
+            interval=DOWNLOAD_INTERVAL,
+            group_by="column",
+            auto_adjust=False,
+            progress=False,
+            threads=True,
+            timeout=DOWNLOAD_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        logger.exception(
+            "Scanner batch download failed for %s symbol(s).",
+            len(symbols),
+        )
+        return None
+
+    if not isinstance(data, pd.DataFrame) or data.empty:
+        logger.warning(
+            "Yahoo Finance returned no scanner data for %s symbol(s).",
+            len(symbols),
+        )
+        return None
+
+    return data
+
+
+def extract_symbol_history(
+    downloaded_data: pd.DataFrame,
+    symbol: str,
+    batch_size: int,
+) -> pd.DataFrame | None:
+    """
+    Extract one symbol from a yfinance response.
+
+    Supports:
+    - single-symbol flat columns
+    - field -> ticker MultiIndex
+    - ticker -> field MultiIndex
+    """
+    if downloaded_data is None or downloaded_data.empty:
+        return None
+
+    required_columns = {
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume",
+    }
+
+    try:
+        if not isinstance(downloaded_data.columns, pd.MultiIndex):
+            if batch_size != 1:
+                return None
+
+            history = downloaded_data.copy()
+        else:
+            level_zero = {
+                str(value)
+                for value in downloaded_data.columns.get_level_values(0)
+            }
+            level_one = {
+                str(value)
+                for value in downloaded_data.columns.get_level_values(1)
+            }
+
+            if symbol in level_one:
+                history = downloaded_data.xs(
+                    symbol,
+                    axis=1,
+                    level=1,
+                    drop_level=True,
+                ).copy()
+            elif symbol in level_zero:
+                history = downloaded_data.xs(
+                    symbol,
+                    axis=1,
+                    level=0,
+                    drop_level=True,
+                ).copy()
+            else:
+                return None
+
+        if isinstance(history.columns, pd.MultiIndex):
+            history.columns = history.columns.get_level_values(0)
+
+        history.columns = [
+            str(column).strip()
+            for column in history.columns
+        ]
+
+        if not required_columns.issubset(set(history.columns)):
+            return None
+
+        history = history[
+            ["Open", "High", "Low", "Close", "Volume"]
+        ].copy()
+
+        for column in history.columns:
+            history[column] = pd.to_numeric(
+                history[column],
+                errors="coerce",
             )
 
-            if history.empty or len(history) < 50:
-                continue
+        history = history.dropna(subset=["Close"])
 
-            closes = history["Close"]
-            volumes = history["Volume"]
+        if history.empty:
+            return None
 
-            price = float(closes.iloc[-1])
-            previous_close = float(closes.iloc[-2])
+        return history
 
-            change = (
-                (price - previous_close)
-                / previous_close
-            ) * 100
+    except (KeyError, IndexError, TypeError, ValueError):
+        logger.exception("History extraction failed for %s.", symbol)
+        return None
 
-            ma20 = float(
-                closes.rolling(20).mean().iloc[-1]
+
+# =========================================================
+# Ranking
+# =========================================================
+
+def rank_candidate(
+    price: float,
+    sma_20: float,
+    sma_50: float,
+    rsi: float,
+    macd: float,
+    macd_signal: float,
+    macd_histogram: float,
+    one_day_change: float,
+    five_day_change: float,
+    twenty_day_change: float,
+    volume_ratio: float,
+    bollinger_upper: float,
+    bollinger_lower: float,
+) -> dict[str, Any]:
+    """
+    Score a stock from technical conditions.
+
+    The score is intentionally balanced so the scanner returns useful
+    BUY, HOLD, and SELL candidates.
+    """
+    score = 50
+    reasons: list[str] = []
+
+    # Trend
+    if price > sma_20:
+        score += 8
+        reasons.append("Price is above its 20-day moving average.")
+    else:
+        score -= 8
+        reasons.append("Price is below its 20-day moving average.")
+
+    if sma_20 > sma_50:
+        score += 10
+        reasons.append(
+            "The short-term trend is above the medium-term trend."
+        )
+    else:
+        score -= 10
+        reasons.append(
+            "The short-term trend is below the medium-term trend."
+        )
+
+    # MACD
+    if macd > macd_signal:
+        score += 8
+        reasons.append("MACD is above its signal line.")
+    else:
+        score -= 8
+        reasons.append("MACD is below its signal line.")
+
+    if macd_histogram > 0:
+        score += 3
+    elif macd_histogram < 0:
+        score -= 3
+
+    # RSI
+    if 45 <= rsi <= 65:
+        score += 5
+        reasons.append("RSI supports healthy momentum.")
+    elif 30 <= rsi < 45:
+        score += 2
+        reasons.append("RSI is slightly weak but not deeply oversold.")
+    elif rsi < 30:
+        score += 4
+        reasons.append("RSI is in oversold territory.")
+    elif 65 < rsi <= 75:
+        score -= 2
+        reasons.append("RSI is becoming elevated.")
+    else:
+        score -= 7
+        reasons.append("RSI is strongly overbought.")
+
+    # Momentum
+    if five_day_change > 2:
+        score += 5
+        reasons.append("Five-day price momentum is positive.")
+    elif five_day_change < -2:
+        score -= 5
+        reasons.append("Five-day price momentum is negative.")
+
+    if twenty_day_change > 5:
+        score += 5
+        reasons.append("Twenty-day trend is positive.")
+    elif twenty_day_change < -5:
+        score -= 5
+        reasons.append("Twenty-day trend is negative.")
+
+    if one_day_change > 5:
+        score -= 2
+        reasons.append("The stock made an unusually large one-day move.")
+    elif one_day_change < -5:
+        score -= 2
+        reasons.append("The stock had a sharp one-day decline.")
+
+    # Volume
+    if volume_ratio >= 1.5:
+        if one_day_change >= 0:
+            score += 5
+            reasons.append(
+                "Positive movement is supported by strong volume."
             )
-
-            ma50 = float(
-                closes.rolling(50).mean().iloc[-1]
+        else:
+            score -= 5
+            reasons.append(
+                "Selling pressure is supported by strong volume."
             )
+    elif volume_ratio < 0.60:
+        score -= 2
+        reasons.append("Current volume is well below average.")
 
-            rsi = float(calculate_rsi(closes))
+    # Bollinger position
+    if price < bollinger_lower:
+        score += 3
+        reasons.append("Price is below the lower Bollinger Band.")
+    elif price > bollinger_upper:
+        score -= 3
+        reasons.append("Price is above the upper Bollinger Band.")
 
-            average_volume = float(
-                volumes.rolling(20).mean().iloc[-1]
-            )
+    score = max(0, min(100, int(round(score))))
 
-            current_volume = float(
-                volumes.iloc[-1]
-            )
+    if score >= 65:
+        signal = "BUY"
+        rating = "Bullish"
+    elif score <= 35:
+        signal = "SELL"
+        rating = "Bearish"
+    else:
+        signal = "HOLD"
+        rating = "Neutral"
 
-            volume_ratio = 0
-
-            if average_volume > 0:
-                volume_ratio = (
-                    current_volume / average_volume
-                )
-
-            score = 50
-
-            if price > ma20:
-                score += 10
-
-            if price > ma50:
-                score += 15
-
-            if ma20 > ma50:
-                score += 10
-
-            if 45 <= rsi <= 65:
-                score += 10
-            elif rsi > 75:
-                score -= 10
-
-            if volume_ratio > 1.2:
-                score += 5
-
-            score = max(0, min(100, score))
-
-            signals = []
-
-            signals.append(
-                "Above 20-day average"
-                if price > ma20
-                else "Below 20-day average"
-            )
-
-            signals.append(
-                "Above 50-day average"
-                if price > ma50
-                else "Below 50-day average"
-            )
-
-            signals.append(
-                f"RSI {round(rsi, 1)}"
-            )
-
-            results.append({
-                "symbol": symbol,
-                "price": round(price, 2),
-                "change": round(change, 2),
-                "score": round(score, 1),
-                "rsi": round(rsi, 1),
-                "ma20": round(ma20, 2),
-                "ma50": round(ma50, 2),
-                "volume_ratio": round(
-                    volume_ratio,
-                    2
-                ),
-                "signals": signals
-            })
-
-        except Exception as error:
-
-            print(
-                f"Scanner error for {symbol}: {error}"
-            )
-
-    results.sort(
-        key=lambda stock: stock["score"],
-        reverse=True
+    confidence = min(
+        95,
+        max(
+            50,
+            50 + int(abs(score - 50) * 1.5),
+        ),
     )
 
-    return results
+    return {
+        "score": score,
+        "signal": signal,
+        "rating": rating,
+        "confidence": confidence,
+        "reasons": reasons[:6],
+    }
+
+
+# =========================================================
+# Stock analysis
+# =========================================================
+
+def analyze_stock(
+    symbol: str,
+    history: pd.DataFrame,
+) -> dict[str, Any] | None:
+    """Analyze one stock and return a scanner candidate."""
+    if history is None or len(history) < MINIMUM_HISTORY_DAYS:
+        return None
+
+    closes = pd.to_numeric(
+        history["Close"],
+        errors="coerce",
+    ).dropna()
+
+    volumes = pd.to_numeric(
+        history["Volume"],
+        errors="coerce",
+    ).dropna()
+
+    if len(closes) < MINIMUM_HISTORY_DAYS or len(volumes) < 20:
+        return None
+
+    price = safe_float(closes.iloc[-1])
+    previous_close = safe_float(closes.iloc[-2])
+
+    if price is None or previous_close is None:
+        return None
+
+    if price < MINIMUM_PRICE:
+        return None
+
+    average_volume = safe_float(volumes.tail(20).mean())
+    latest_volume = safe_float(volumes.iloc[-1])
+
+    if average_volume is None or latest_volume is None:
+        return None
+
+    if average_volume < MINIMUM_AVERAGE_VOLUME:
+        return None
+
+    sma_20 = safe_float(closes.tail(20).mean())
+    sma_50 = safe_float(closes.tail(50).mean())
+    rsi = calculate_rsi(closes)
+    macd_values = calculate_macd(closes)
+    bollinger = calculate_bollinger_bands(closes)
+    atr = calculate_atr(history)
+
+    if (
+        sma_20 is None
+        or sma_50 is None
+        or rsi is None
+        or macd_values is None
+        or bollinger is None
+        or atr is None
+    ):
+        return None
+
+    macd, macd_signal, macd_histogram = macd_values
+    bollinger_upper, bollinger_middle, bollinger_lower = bollinger
+
+    volume_ratio = (
+        latest_volume / average_volume
+        if average_volume > 0
+        else 0.0
+    )
+
+    one_day_change = percentage_change(
+        price,
+        previous_close,
+    )
+
+    five_day_change = 0.0
+
+    if len(closes) >= 6:
+        five_day_price = safe_float(closes.iloc[-6])
+
+        if five_day_price is not None:
+            five_day_change = percentage_change(
+                price,
+                five_day_price,
+            )
+
+    twenty_day_change = 0.0
+
+    if len(closes) >= 21:
+        twenty_day_price = safe_float(closes.iloc[-21])
+
+        if twenty_day_price is not None:
+            twenty_day_change = percentage_change(
+                price,
+                twenty_day_price,
+            )
+
+    atr_percent = (
+        (atr / price) * 100.0
+        if price > 0
+        else 0.0
+    )
+
+    ranking = rank_candidate(
+        price=price,
+        sma_20=sma_20,
+        sma_50=sma_50,
+        rsi=rsi,
+        macd=macd,
+        macd_signal=macd_signal,
+        macd_histogram=macd_histogram,
+        one_day_change=one_day_change,
+        five_day_change=five_day_change,
+        twenty_day_change=twenty_day_change,
+        volume_ratio=volume_ratio,
+        bollinger_upper=bollinger_upper,
+        bollinger_lower=bollinger_lower,
+    )
+
+    reasons = list(ranking["reasons"])
+
+    return {
+        "symbol": symbol,
+        "price": round(price, 2),
+        "change": round(one_day_change, 2),
+        "five_day_change": round(five_day_change, 2),
+        "twenty_day_change": round(twenty_day_change, 2),
+        "score": ranking["score"],
+        "scanner_score": ranking["score"],
+        "signal": ranking["signal"],
+        "rating": ranking["rating"],
+        "confidence": ranking["confidence"],
+        "rsi": round(rsi, 2),
+        "ma20": round(sma_20, 2),
+        "ma50": round(sma_50, 2),
+        "macd": round(macd, 4),
+        "macd_signal": round(macd_signal, 4),
+        "macd_histogram": round(macd_histogram, 4),
+        "volume_ratio": round(volume_ratio, 2),
+        "average_volume": int(round(average_volume)),
+        "atr": round(atr, 2),
+        "atr_percent": round(atr_percent, 2),
+        "bollinger_upper": round(bollinger_upper, 2),
+        "bollinger_middle": round(bollinger_middle, 2),
+        "bollinger_lower": round(bollinger_lower, 2),
+        "signals": reasons,
+        "reason": list(reasons),
+    }
+
+
+# =========================================================
+# Result selection
+# =========================================================
+
+def _candidate_sort_key(
+    stock: dict[str, Any],
+) -> tuple[float, float, float]:
+    """
+    Return a signal-aware sort key.
+
+    BUY candidates rank from strongest to weakest.
+    SELL candidates rank from most bearish to least bearish.
+    HOLD candidates rank by distance from neutral.
+    """
+    signal = str(stock.get("signal", "HOLD")).upper()
+    score = float(stock.get("score", 50) or 50)
+    volume_ratio = float(stock.get("volume_ratio", 0) or 0)
+    five_day_change = float(stock.get("five_day_change", 0) or 0)
+
+    if signal == "SELL":
+        return (
+            100.0 - score,
+            volume_ratio,
+            -five_day_change,
+        )
+
+    if signal == "HOLD":
+        return (
+            abs(score - 50.0),
+            volume_ratio,
+            abs(five_day_change),
+        )
+
+    return (
+        score,
+        volume_ratio,
+        five_day_change,
+    )
+
+
+def _select_balanced_results(
+    results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep the strongest candidates for every signal category."""
+    grouped: dict[str, list[dict[str, Any]]] = {
+        signal: []
+        for signal in SIGNAL_ORDER
+    }
+
+    for stock in results:
+        signal = str(stock.get("signal", "HOLD")).upper()
+
+        if signal not in grouped:
+            signal = "HOLD"
+
+        grouped[signal].append(stock)
+
+    selected: list[dict[str, Any]] = []
+
+    for signal in SIGNAL_ORDER:
+        group = grouped[signal]
+        group.sort(
+            key=_candidate_sort_key,
+            reverse=True,
+        )
+
+        selected.extend(group[:MAX_RESULTS_PER_SIGNAL])
+
+    # Preserve predictable top-level ordering for clients.
+    selected.sort(
+        key=lambda stock: (
+            SIGNAL_ORDER.index(
+                str(stock.get("signal", "HOLD")).upper()
+                if str(stock.get("signal", "HOLD")).upper() in SIGNAL_ORDER
+                else "HOLD"
+            ),
+            -_candidate_sort_key(stock)[0],
+            -_candidate_sort_key(stock)[1],
+            -_candidate_sort_key(stock)[2],
+        )
+    )
+
+    for index, stock in enumerate(selected, start=1):
+        stock["rank"] = index
+        stock["scanner_rank"] = index
+
+    return selected
+
+
+# =========================================================
+# Scanner
+# =========================================================
+
+def scan_market(
+    force_refresh: bool = False,
+) -> list[dict[str, Any]]:
+    """
+    Scan the market universe, rank valid stocks, and return balanced results.
+
+    Fresh results are cached for 15 minutes. If a refresh fails, the most
+    recent stale cache is returned when available.
+    """
+    if not force_refresh:
+        fresh_cache = _get_cached_results(allow_stale=False)
+
+        if fresh_cache is not None:
+            logger.info("Returning fresh cached scanner results.")
+            return fresh_cache
+
+    # Only one request may perform the expensive full-market scan.
+    with _scan_lock:
+        # Another request may have completed a scan while this request waited.
+        if not force_refresh:
+            fresh_cache = _get_cached_results(allow_stale=False)
+
+            if fresh_cache is not None:
+                logger.info(
+                    "Returning scanner results refreshed by another request."
+                )
+                return fresh_cache
+
+        stale_cache = _get_cached_results(allow_stale=True)
+
+        try:
+            raw_symbols = load_market_universe()
+        except Exception:
+            logger.exception("The scanner could not load its market universe.")
+
+            if stale_cache is not None:
+                logger.warning(
+                    "Returning stale scanner cache after universe failure."
+                )
+                return stale_cache
+
+            return []
+
+        symbols: list[str] = []
+        seen_symbols: set[str] = set()
+
+        for raw_symbol in raw_symbols or []:
+            symbol = clean_symbol(raw_symbol)
+
+            if symbol and symbol not in seen_symbols:
+                symbols.append(symbol)
+                seen_symbols.add(symbol)
+
+        if not symbols:
+            logger.error("The scanner market universe is empty.")
+
+            if stale_cache is not None:
+                logger.warning(
+                    "Returning stale scanner cache because the universe is empty."
+                )
+                return stale_cache
+
+            return []
+
+        logger.info("Beginning scan of %s stocks.", len(symbols))
+
+        results: list[dict[str, Any]] = []
+        extraction_count = 0
+        analyzed_count = 0
+        successful_batch_count = 0
+
+        batches = list(
+            split_into_batches(
+                symbols,
+                DOWNLOAD_BATCH_SIZE,
+            )
+        )
+
+        for batch_index, batch in enumerate(batches, start=1):
+            logger.info(
+                "Scanning batch %s/%s with %s symbols.",
+                batch_index,
+                len(batches),
+                len(batch),
+            )
+
+            downloaded_data = download_batch(batch)
+
+            if downloaded_data is None:
+                continue
+
+            successful_batch_count += 1
+
+            for symbol in batch:
+                history = extract_symbol_history(
+                    downloaded_data,
+                    symbol,
+                    len(batch),
+                )
+
+                if history is None:
+                    continue
+
+                extraction_count += 1
+
+                try:
+                    candidate = analyze_stock(
+                        symbol,
+                        history,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Scanner analysis failed for %s.",
+                        symbol,
+                    )
+                    continue
+
+                if candidate is not None:
+                    analyzed_count += 1
+                    results.append(candidate)
+
+        if successful_batch_count == 0:
+            logger.error("Every Yahoo Finance scanner batch failed.")
+
+            if stale_cache is not None:
+                logger.warning(
+                    "Returning stale scanner cache after download failure."
+                )
+                return stale_cache
+
+            return []
+
+        if not results:
+            logger.warning("The scanner produced no valid candidates.")
+
+            if stale_cache is not None:
+                logger.warning(
+                    "Returning stale scanner cache because no candidates passed."
+                )
+                return stale_cache
+
+            return []
+
+        final_results = _select_balanced_results(results)
+        _set_cached_results(final_results)
+
+        logger.info(
+            (
+                "Market scan completed. Extracted %s histories, "
+                "%s stocks passed filters, returning %s results."
+            ),
+            extraction_count,
+            analyzed_count,
+            len(final_results),
+        )
+
+        return _copy_results(final_results)
+
+
+def clear_scanner_cache() -> None:
+    """Clear scanner results manually."""
+    with _cache_lock:
+        _scan_cache["results"] = []
+        _scan_cache["updated_at"] = 0.0

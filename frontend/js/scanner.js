@@ -1,100 +1,1917 @@
+"use strict";
+
+let scannerStocks = [];
+let filteredScannerStocks = [];
+
+let activeScannerRequest = null;
+let latestScannerRequestNumber = 0;
+
+let scannerResultsElement = null;
+let scannerControlsElement = null;
+
+const SCANNER_REQUEST_TIMEOUT_MS = 30_000;
+
+const scannerState = {
+    search: "",
+    minimumScore: 0,
+    rating: "ALL",
+    risk: "ALL",
+    trend: "ALL",
+    sort: "SCORE_DESC",
+};
+
+const scannerCurrencyFormatter =
+    new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    });
+
+const scannerPercentFormatter =
+    new Intl.NumberFormat("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+        signDisplay: "always",
+    });
+
+
 async function loadScanner() {
+    scannerResultsElement =
+        document.getElementById(
+            "scanner-results"
+        );
 
-    const scanner = document.getElementById("scanner-results");
+    if (!scannerResultsElement) {
+        console.error(
+            "Scanner results container was not found."
+        );
 
-    scanner.innerHTML = "Scanning market...";
+        return;
+    }
+
+    createScannerControls();
+    cancelActiveScannerRequest();
+
+    const requestController =
+        new AbortController();
+
+    activeScannerRequest =
+        requestController;
+
+    const requestNumber =
+        ++latestScannerRequestNumber;
+
+    let requestTimedOut = false;
+
+    const timeoutId =
+        window.setTimeout(
+            () => {
+                requestTimedOut = true;
+                requestController.abort();
+            },
+            SCANNER_REQUEST_TIMEOUT_MS
+        );
+
+    setScannerLoadingState();
 
     try {
+        const response = await fetch(
+            `${getScannerApiUrl()}/scanner`,
+            {
+                method: "GET",
 
-        const response = await fetch(`${API_URL}/scanner`);
+                headers: {
+                    Accept: "application/json",
+                },
 
-        const stocks = await response.json();
+                signal:
+                    requestController.signal,
+            }
+        );
 
-        if (!stocks.length) {
+        const payload =
+            await readScannerJson(
+                response
+            );
 
-            scanner.innerHTML = "No opportunities found.";
+        if (!response.ok) {
+            const message =
+                payload?.detail ??
+                payload?.error ??
+                `Scanner request failed with status ${response.status}.`;
 
-            return;
-
+            throw new Error(
+                String(message)
+            );
         }
 
-        scanner.innerHTML = "";
+        if (
+            requestNumber !==
+            latestScannerRequestNumber
+        ) {
+            return;
+        }
 
-        stocks.forEach(stock => {
+        scannerStocks =
+            normalizeScannerResponse(
+                payload
+            );
 
-            scanner.innerHTML += `
+        updateScannerSummary();
+        applyScannerFilters();
+    } catch (error) {
+        if (
+            error?.name ===
+            "AbortError"
+        ) {
+            if (
+                requestNumber !==
+                latestScannerRequestNumber
+            ) {
+                return;
+            }
 
-            <div
-                class="scanner-card"
-                onclick="selectStock('${stock.symbol}', ${stock.price})"
-                style="cursor:pointer;">
+            if (requestTimedOut) {
+                showScannerStatus(
+                    "The market scan took too long. Try refreshing the scanner.",
+                    true
+                );
+            }
 
-                <div>
+            return;
+        }
 
-                    <strong>${stock.symbol}</strong>
+        console.error(
+            "Scanner request failed:",
+            error
+        );
 
-                    <br>
+        scannerStocks = [];
+        filteredScannerStocks = [];
 
-                    <small>$${stock.price}</small>
+        updateScannerSummary();
 
-                    <br><br>
+        showScannerStatus(
+            "Unable to load market scanner results.",
+            true
+        );
+    } finally {
+        window.clearTimeout(
+            timeoutId
+        );
 
-                    ${stock.signals.map(signal => `
-                        <div style="font-size:13px;color:#94a3b8;">
-                            ✔ ${signal}
-                        </div>
-                    `).join("")}
+        if (
+            activeScannerRequest ===
+            requestController
+        ) {
+            activeScannerRequest =
+                null;
+        }
 
-                </div>
-
-                <div style="text-align:right;">
-
-                    <div class="scanner-score">
-                        ${stock.score}/100
-                    </div>
-
-                    <div class="${
-                        stock.change >= 0
-                            ? "positive"
-                            : "negative"
-                    }">
-
-                        ${
-                            stock.change >= 0
-                                ? "+"
-                                : ""
-                        }${stock.change}%
-
-                    </div>
-
-                </div>
-
-            </div>
-
-            `;
-
-        });
-
+        clearScannerLoadingState();
     }
-
-    catch(error){
-
-        console.error(error);
-
-        scanner.innerHTML =
-            "Unable to load scanner.";
-
-    }
-
 }
 
 
-function selectStock(symbol, price){
+function normalizeScannerResponse(
+    payload
+) {
+    let stocks = payload;
 
-    document.getElementById("symbol").value = symbol;
+    if (
+        payload &&
+        typeof payload ===
+            "object" &&
+        !Array.isArray(payload)
+    ) {
+        stocks =
+            payload.stocks ??
+            payload.results ??
+            payload.opportunities ??
+            payload.data ??
+            [];
+    }
 
-    document.getElementById("price").value = price;
+    if (!Array.isArray(stocks)) {
+        throw new Error(
+            "The scanner response must contain an array of stocks."
+        );
+    }
 
-    loadChart(symbol);
+    const normalizedStocks =
+        stocks
+            .map(
+                normalizeScannerStock
+            )
+            .filter(Boolean);
 
+    const uniqueStocks =
+        new Map();
+
+    for (
+        const stock of
+        normalizedStocks
+    ) {
+        const existing =
+            uniqueStocks.get(
+                stock.symbol
+            );
+
+        if (
+            !existing ||
+            stock.score >
+                existing.score
+        ) {
+            uniqueStocks.set(
+                stock.symbol,
+                stock
+            );
+        }
+    }
+
+    return Array.from(
+        uniqueStocks.values()
+    );
 }
+
+
+function normalizeScannerStock(
+    stock
+) {
+    if (
+        !stock ||
+        typeof stock !==
+            "object"
+    ) {
+        return null;
+    }
+
+    const symbol =
+        normalizeScannerSymbol(
+            stock.symbol ??
+            stock.ticker
+        );
+
+    if (!symbol) {
+        return null;
+    }
+
+    const price =
+        toFiniteScannerNumber(
+            stock.price ??
+            stock.current_price ??
+            stock.last_price,
+            0
+        );
+
+    const change =
+        toFiniteScannerNumber(
+            stock.change_percent ??
+            stock.change ??
+            stock.percent_change,
+            0
+        );
+
+    const score =
+        clampScannerNumber(
+            stock.score ??
+            stock.ai_score ??
+            stock.rank_score,
+            0,
+            100
+        );
+
+    const confidence =
+        clampScannerNumber(
+            stock.confidence ??
+            stock.ai_confidence ??
+            score,
+            0,
+            100
+        );
+
+    const riskReward =
+        Math.max(
+            0,
+            toFiniteScannerNumber(
+                stock.risk_reward ??
+                stock.risk_reward_ratio ??
+                stock.rr_ratio,
+                0
+            )
+        );
+
+    const stopLoss =
+        toNullableScannerNumber(
+            stock.stop_loss ??
+            stock.stop
+        );
+
+    const takeProfit =
+        toNullableScannerNumber(
+            stock.take_profit ??
+            stock.target ??
+            stock.price_target
+        );
+
+    const rating =
+        normalizeScannerRating(
+            stock.rating ??
+            stock.recommendation ??
+            getScannerRatingFromScore(
+                score
+            )
+        );
+
+    const risk =
+        normalizeScannerRisk(
+            stock.risk ??
+            stock.risk_level
+        );
+
+    const trend =
+        normalizeScannerTrend(
+            stock.trend ??
+            stock.trend_strength
+        );
+
+    return {
+        symbol,
+
+        company:
+            normalizeScannerText(
+                stock.company ??
+                stock.company_name ??
+                stock.name
+            ),
+
+        sector:
+            normalizeScannerText(
+                stock.sector
+            ),
+
+        price,
+        change,
+        score,
+        confidence,
+        rating,
+        risk,
+        trend,
+        riskReward,
+        stopLoss,
+        takeProfit,
+
+        signals:
+            normalizeScannerSignals(
+                stock.signals ??
+                stock.reasons ??
+                stock.indicators
+            ),
+
+        aiSummary:
+            normalizeScannerText(
+                stock.ai_summary ??
+                stock.summary ??
+                stock.analysis ??
+                stock.explanation
+            ),
+    };
+}
+
+
+function applyScannerFilters() {
+    const search =
+        scannerState.search
+            .trim()
+            .toUpperCase();
+
+    filteredScannerStocks =
+        scannerStocks.filter(
+            stock => {
+                const matchesSearch =
+                    !search ||
+                    stock.symbol.includes(
+                        search
+                    ) ||
+                    stock.company
+                        .toUpperCase()
+                        .includes(search) ||
+                    stock.sector
+                        .toUpperCase()
+                        .includes(search);
+
+                const matchesScore =
+                    stock.score >=
+                    scannerState.minimumScore;
+
+                const matchesRating =
+                    scannerState.rating ===
+                        "ALL" ||
+                    stock.rating ===
+                        scannerState.rating;
+
+                const matchesRisk =
+                    scannerState.risk ===
+                        "ALL" ||
+                    stock.risk ===
+                        scannerState.risk;
+
+                const matchesTrend =
+                    scannerState.trend ===
+                        "ALL" ||
+                    stock.trend ===
+                        scannerState.trend;
+
+                return (
+                    matchesSearch &&
+                    matchesScore &&
+                    matchesRating &&
+                    matchesRisk &&
+                    matchesTrend
+                );
+            }
+        );
+
+    sortScannerStocks(
+        filteredScannerStocks,
+        scannerState.sort
+    );
+
+    renderScannerResults(
+        filteredScannerStocks
+    );
+
+    updateScannerSummary();
+}
+
+
+function sortScannerStocks(
+    stocks,
+    sortMethod
+) {
+    const sorters = {
+        SCORE_DESC:
+            (first, second) =>
+                second.score -
+                first.score,
+
+        CONFIDENCE_DESC:
+            (first, second) =>
+                second.confidence -
+                first.confidence,
+
+        CHANGE_DESC:
+            (first, second) =>
+                second.change -
+                first.change,
+
+        RISK_REWARD_DESC:
+            (first, second) =>
+                second.riskReward -
+                first.riskReward,
+
+        PRICE_ASC:
+            (first, second) =>
+                first.price -
+                second.price,
+
+        SYMBOL_ASC:
+            (first, second) =>
+                first.symbol.localeCompare(
+                    second.symbol
+                ),
+    };
+
+    stocks.sort(
+        sorters[sortMethod] ??
+        sorters.SCORE_DESC
+    );
+}
+
+
+function renderScannerResults(
+    stocks
+) {
+    if (!scannerResultsElement) {
+        return;
+    }
+
+    scannerResultsElement.replaceChildren();
+
+    if (stocks.length === 0) {
+        const message =
+            scannerStocks.length === 0
+                ? "No market opportunities were found."
+                : "No stocks match the current scanner filters.";
+
+        showScannerStatus(
+            message
+        );
+
+        return;
+    }
+
+    const fragment =
+        document.createDocumentFragment();
+
+    for (const stock of stocks) {
+        fragment.appendChild(
+            createScannerCard(stock)
+        );
+    }
+
+    scannerResultsElement.appendChild(
+        fragment
+    );
+}
+
+
+function createScannerCard(stock) {
+    const card =
+        document.createElement(
+            "article"
+        );
+
+    card.className =
+        "scanner-card";
+
+    card.dataset.symbol =
+        stock.symbol;
+
+    card.dataset.price =
+        String(stock.price);
+
+    card.tabIndex = 0;
+
+    card.setAttribute(
+        "role",
+        "button"
+    );
+
+    card.setAttribute(
+        "aria-label",
+        `Select ${stock.symbol}, score ${Math.round(
+            stock.score
+        )} out of 100`
+    );
+
+    const header =
+        document.createElement(
+            "div"
+        );
+
+    header.className =
+        "scanner-card-header";
+
+    const identity =
+        document.createElement(
+            "div"
+        );
+
+    identity.className =
+        "scanner-stock-identity";
+
+    const title =
+        document.createElement(
+            "div"
+        );
+
+    title.className =
+        "scanner-stock-title";
+
+    const symbol =
+        document.createElement(
+            "strong"
+        );
+
+    symbol.className =
+        "scanner-symbol";
+
+    symbol.textContent =
+        stock.symbol;
+
+    title.appendChild(symbol);
+
+    if (stock.company) {
+        const company =
+            document.createElement(
+                "span"
+            );
+
+        company.className =
+            "scanner-company";
+
+        company.textContent =
+            stock.company;
+
+        title.appendChild(company);
+    }
+
+    const priceRow =
+        document.createElement(
+            "div"
+        );
+
+    priceRow.className =
+        "scanner-price-row";
+
+    const price =
+        document.createElement(
+            "span"
+        );
+
+    price.className =
+        "scanner-price";
+
+    price.textContent =
+        formatScannerCurrency(
+            stock.price
+        );
+
+    const change =
+        document.createElement(
+            "span"
+        );
+
+    change.className =
+        stock.change >= 0
+            ? "positive"
+            : "negative";
+
+    change.textContent =
+        `${formatScannerPercent(
+            stock.change
+        )}%`;
+
+    priceRow.append(
+        price,
+        change
+    );
+
+    identity.append(
+        title,
+        priceRow
+    );
+
+    const ratingBlock =
+        document.createElement(
+            "div"
+        );
+
+    ratingBlock.className =
+        "scanner-rating-block";
+
+    const rating =
+        document.createElement(
+            "span"
+        );
+
+    rating.className =
+        `scanner-rating scanner-rating-${getScannerClassName(
+            stock.rating
+        )}`;
+
+    rating.textContent =
+        stock.rating;
+
+    const score =
+        document.createElement(
+            "span"
+        );
+
+    score.className =
+        "scanner-score";
+
+    score.textContent =
+        `${Math.round(
+            stock.score
+        )}/100`;
+
+    ratingBlock.append(
+        rating,
+        score
+    );
+
+    header.append(
+        identity,
+        ratingBlock
+    );
+
+    const metrics =
+        document.createElement(
+            "div"
+        );
+
+    metrics.className =
+        "scanner-metrics";
+
+    metrics.append(
+        createScannerMetric(
+            "Confidence",
+            `${Math.round(
+                stock.confidence
+            )}%`
+        ),
+
+        createScannerMetric(
+            "Trend",
+            stock.trend
+        ),
+
+        createScannerMetric(
+            "Risk",
+            stock.risk
+        ),
+
+        createScannerMetric(
+            "Risk / Reward",
+            stock.riskReward > 0
+                ? `${formatScannerNumber(
+                    stock.riskReward,
+                    2
+                )}:1`
+                : "—"
+        )
+    );
+
+    if (
+        stock.stopLoss !== null ||
+        stock.takeProfit !== null
+    ) {
+        const tradePlan =
+            document.createElement(
+                "div"
+            );
+
+        tradePlan.className =
+            "scanner-trade-plan";
+
+        tradePlan.append(
+            createScannerMetric(
+                "Suggested Stop",
+                stock.stopLoss !== null
+                    ? formatScannerCurrency(
+                        stock.stopLoss
+                    )
+                    : "—"
+            ),
+
+            createScannerMetric(
+                "Target",
+                stock.takeProfit !== null
+                    ? formatScannerCurrency(
+                        stock.takeProfit
+                    )
+                    : "—"
+            )
+        );
+
+        metrics.appendChild(
+            tradePlan
+        );
+    }
+
+    card.append(
+        header,
+        metrics
+    );
+
+    if (stock.signals.length > 0) {
+        const signals =
+            document.createElement(
+                "div"
+            );
+
+        signals.className =
+            "scanner-signals";
+
+        const signalsTitle =
+            document.createElement(
+                "h4"
+            );
+
+        signalsTitle.textContent =
+            "Signals";
+
+        const signalList =
+            document.createElement(
+                "ul"
+            );
+
+        for (
+            const signal of
+            stock.signals.slice(0, 6)
+        ) {
+            const signalItem =
+                document.createElement(
+                    "li"
+                );
+
+            signalItem.textContent =
+                signal;
+
+            signalList.appendChild(
+                signalItem
+            );
+        }
+
+        signals.append(
+            signalsTitle,
+            signalList
+        );
+
+        card.appendChild(signals);
+    }
+
+    if (stock.aiSummary) {
+        const insight =
+            document.createElement(
+                "div"
+            );
+
+        insight.className =
+            "scanner-ai-insight";
+
+        const insightTitle =
+            document.createElement(
+                "h4"
+            );
+
+        insightTitle.textContent =
+            "AI Insight";
+
+        const insightText =
+            document.createElement(
+                "p"
+            );
+
+        insightText.textContent =
+            stock.aiSummary;
+
+        insight.append(
+            insightTitle,
+            insightText
+        );
+
+        card.appendChild(insight);
+    }
+
+    const actions =
+        document.createElement(
+            "div"
+        );
+
+    actions.className =
+        "scanner-card-actions";
+
+    const analyzeButton =
+        document.createElement(
+            "button"
+        );
+
+    analyzeButton.type =
+        "button";
+
+    analyzeButton.className =
+        "scanner-action-button scanner-analyze-button";
+
+    analyzeButton.dataset.action =
+        "analyze";
+
+    analyzeButton.textContent =
+        "Analyze";
+
+    const tradeButton =
+        document.createElement(
+            "button"
+        );
+
+    tradeButton.type =
+        "button";
+
+    tradeButton.className =
+        "scanner-action-button scanner-trade-button";
+
+    tradeButton.dataset.action =
+        "trade";
+
+    tradeButton.textContent =
+        "Select Trade";
+
+    actions.append(
+        analyzeButton,
+        tradeButton
+    );
+
+    card.appendChild(actions);
+
+    return card;
+}
+
+
+function createScannerMetric(
+    label,
+    value
+) {
+    const metric =
+        document.createElement(
+            "div"
+        );
+
+    metric.className =
+        "scanner-metric";
+
+    const labelElement =
+        document.createElement(
+            "span"
+        );
+
+    labelElement.className =
+        "scanner-metric-label";
+
+    labelElement.textContent =
+        label;
+
+    const valueElement =
+        document.createElement(
+            "strong"
+        );
+
+    valueElement.className =
+        "scanner-metric-value";
+
+    valueElement.textContent =
+        value;
+
+    metric.append(
+        labelElement,
+        valueElement
+    );
+
+    return metric;
+}
+
+
+function createScannerControls() {
+    if (scannerControlsElement) {
+        return;
+    }
+
+    scannerResultsElement =
+        scannerResultsElement ??
+        document.getElementById(
+            "scanner-results"
+        );
+
+    if (!scannerResultsElement) {
+        return;
+    }
+
+    scannerControlsElement =
+        document.getElementById(
+            "scanner-controls"
+        );
+
+    if (!scannerControlsElement) {
+        scannerControlsElement =
+            document.createElement(
+                "section"
+            );
+
+        scannerControlsElement.id =
+            "scanner-controls";
+
+        scannerControlsElement.className =
+            "scanner-controls";
+
+        scannerResultsElement
+            .parentElement
+            ?.insertBefore(
+                scannerControlsElement,
+                scannerResultsElement
+            );
+    }
+
+    scannerControlsElement.replaceChildren();
+
+    const searchInput =
+        createScannerInput(
+            "scanner-search",
+            "Search symbol, company, or sector"
+        );
+
+    searchInput.addEventListener(
+        "input",
+        event => {
+            scannerState.search =
+                event.target.value;
+
+            applyScannerFilters();
+        }
+    );
+
+    const scoreSelect =
+        createScannerSelect(
+            "Minimum score",
+            [
+                ["0", "Any score"],
+                ["70", "70+"],
+                ["80", "80+"],
+                ["90", "90+"],
+                ["95", "95+"],
+            ]
+        );
+
+    scoreSelect.addEventListener(
+        "change",
+        event => {
+            scannerState.minimumScore =
+                Number(
+                    event.target.value
+                );
+
+            applyScannerFilters();
+        }
+    );
+
+    const ratingSelect =
+        createScannerSelect(
+            "Rating",
+            [
+                ["ALL", "All ratings"],
+                [
+                    "STRONG BUY",
+                    "Strong Buy",
+                ],
+                ["BUY", "Buy"],
+                ["WATCH", "Watch"],
+                ["AVOID", "Avoid"],
+                [
+                    "STRONG SELL",
+                    "Strong Sell",
+                ],
+            ]
+        );
+
+    ratingSelect.addEventListener(
+        "change",
+        event => {
+            scannerState.rating =
+                event.target.value;
+
+            applyScannerFilters();
+        }
+    );
+
+    const riskSelect =
+        createScannerSelect(
+            "Risk",
+            [
+                ["ALL", "All risk levels"],
+                ["LOW", "Low"],
+                ["MEDIUM", "Medium"],
+                ["HIGH", "High"],
+                ["UNKNOWN", "Unknown"],
+            ]
+        );
+
+    riskSelect.addEventListener(
+        "change",
+        event => {
+            scannerState.risk =
+                event.target.value;
+
+            applyScannerFilters();
+        }
+    );
+
+    const trendSelect =
+        createScannerSelect(
+            "Trend",
+            [
+                ["ALL", "All trends"],
+                [
+                    "STRONG BULLISH",
+                    "Strong Bullish",
+                ],
+                ["BULLISH", "Bullish"],
+                ["NEUTRAL", "Neutral"],
+                ["BEARISH", "Bearish"],
+                [
+                    "STRONG BEARISH",
+                    "Strong Bearish",
+                ],
+            ]
+        );
+
+    trendSelect.addEventListener(
+        "change",
+        event => {
+            scannerState.trend =
+                event.target.value;
+
+            applyScannerFilters();
+        }
+    );
+
+    const sortSelect =
+        createScannerSelect(
+            "Sort by",
+            [
+                [
+                    "SCORE_DESC",
+                    "Highest score",
+                ],
+                [
+                    "CONFIDENCE_DESC",
+                    "Highest confidence",
+                ],
+                [
+                    "RISK_REWARD_DESC",
+                    "Best risk/reward",
+                ],
+                [
+                    "CHANGE_DESC",
+                    "Largest gain",
+                ],
+                [
+                    "PRICE_ASC",
+                    "Lowest price",
+                ],
+                [
+                    "SYMBOL_ASC",
+                    "Symbol A–Z",
+                ],
+            ]
+        );
+
+    sortSelect.addEventListener(
+        "change",
+        event => {
+            scannerState.sort =
+                event.target.value;
+
+            applyScannerFilters();
+        }
+    );
+
+    const refreshButton =
+        document.createElement(
+            "button"
+        );
+
+    refreshButton.type =
+        "button";
+
+    refreshButton.className =
+        "scanner-refresh-button";
+
+    refreshButton.textContent =
+        "Refresh Scan";
+
+    refreshButton.addEventListener(
+        "click",
+        () => {
+            loadScanner();
+        }
+    );
+
+    const summary =
+        document.createElement(
+            "div"
+        );
+
+    summary.id =
+        "scanner-summary";
+
+    summary.className =
+        "scanner-summary";
+
+    scannerControlsElement.append(
+        searchInput,
+        scoreSelect,
+        ratingSelect,
+        riskSelect,
+        trendSelect,
+        sortSelect,
+        refreshButton,
+        summary
+    );
+}
+
+
+function createScannerInput(
+    id,
+    placeholder
+) {
+    const input =
+        document.createElement(
+            "input"
+        );
+
+    input.id = id;
+    input.type = "search";
+    input.className =
+        "scanner-filter-input";
+
+    input.placeholder =
+        placeholder;
+
+    input.setAttribute(
+        "aria-label",
+        placeholder
+    );
+
+    return input;
+}
+
+
+function createScannerSelect(
+    label,
+    options
+) {
+    const select =
+        document.createElement(
+            "select"
+        );
+
+    select.className =
+        "scanner-filter-select";
+
+    select.setAttribute(
+        "aria-label",
+        label
+    );
+
+    for (
+        const [
+            value,
+            text,
+        ] of options
+    ) {
+        const option =
+            document.createElement(
+                "option"
+            );
+
+        option.value = value;
+        option.textContent = text;
+
+        select.appendChild(option);
+    }
+
+    return select;
+}
+
+
+function handleScannerClick(
+    event
+) {
+    const card =
+        event.target.closest(
+            ".scanner-card"
+        );
+
+    if (!card) {
+        return;
+    }
+
+    const stock =
+        getScannerStockFromCard(
+            card
+        );
+
+    if (!stock) {
+        return;
+    }
+
+    const action =
+        event.target.closest(
+            "[data-action]"
+        )?.dataset.action;
+
+    if (
+        action === "analyze"
+    ) {
+        selectStock(
+            stock.symbol,
+            stock.price,
+            false
+        );
+
+        return;
+    }
+
+    selectStock(
+        stock.symbol,
+        stock.price,
+        true
+    );
+}
+
+
+function handleScannerKeydown(
+    event
+) {
+    if (
+        event.key !== "Enter" &&
+        event.key !== " "
+    ) {
+        return;
+    }
+
+    if (
+        event.target.closest(
+            "button, input, select"
+        )
+    ) {
+        return;
+    }
+
+    const card =
+        event.target.closest(
+            ".scanner-card"
+        );
+
+    if (!card) {
+        return;
+    }
+
+    event.preventDefault();
+
+    const stock =
+        getScannerStockFromCard(
+            card
+        );
+
+    if (stock) {
+        selectStock(
+            stock.symbol,
+            stock.price,
+            true
+        );
+    }
+}
+
+
+function getScannerStockFromCard(
+    card
+) {
+    const symbol =
+        normalizeScannerSymbol(
+            card.dataset.symbol
+        );
+
+    return scannerStocks.find(
+        stock =>
+            stock.symbol ===
+            symbol
+    );
+}
+
+
+function selectStock(
+    symbol,
+    price,
+    focusTradeForm = true
+) {
+    const cleanSymbol =
+        normalizeScannerSymbol(
+            symbol
+        );
+
+    const cleanPrice =
+        toFiniteScannerNumber(
+            price,
+            0
+        );
+
+    if (!cleanSymbol) {
+        return;
+    }
+
+    const symbolInput =
+        document.getElementById(
+            "symbol"
+        );
+
+    const priceInput =
+        document.getElementById(
+            "price"
+        );
+
+    if (symbolInput) {
+        symbolInput.value =
+            cleanSymbol;
+
+        symbolInput.dispatchEvent(
+            new Event(
+                "change",
+                {
+                    bubbles: true,
+                }
+            )
+        );
+    }
+
+    if (
+        priceInput &&
+        cleanPrice > 0
+    ) {
+        priceInput.value =
+            cleanPrice.toFixed(2);
+
+        priceInput.dispatchEvent(
+            new Event(
+                "change",
+                {
+                    bubbles: true,
+                }
+            )
+        );
+    }
+
+    if (
+        typeof window.loadChart ===
+        "function"
+    ) {
+        window.loadChart(
+            cleanSymbol
+        );
+    }
+
+    if (
+        focusTradeForm &&
+        symbolInput
+    ) {
+        symbolInput.focus();
+    }
+
+    document.dispatchEvent(
+        new CustomEvent(
+            "scanner:stock-selected",
+            {
+                detail: {
+                    symbol:
+                        cleanSymbol,
+
+                    price:
+                        cleanPrice,
+                },
+            }
+        )
+    );
+}
+
+
+function setScannerLoadingState() {
+    if (!scannerResultsElement) {
+        return;
+    }
+
+    scannerResultsElement.setAttribute(
+        "aria-busy",
+        "true"
+    );
+
+    showScannerStatus(
+        "Scanning the market for opportunities…"
+    );
+}
+
+
+function clearScannerLoadingState() {
+    scannerResultsElement
+        ?.removeAttribute(
+            "aria-busy"
+        );
+}
+
+
+function showScannerStatus(
+    message,
+    isError = false
+) {
+    if (!scannerResultsElement) {
+        return;
+    }
+
+    scannerResultsElement.replaceChildren();
+
+    const status =
+        document.createElement(
+            "div"
+        );
+
+    status.className =
+        "scanner-status-message";
+
+    if (isError) {
+        status.classList.add(
+            "scanner-error-message"
+        );
+    }
+
+    status.setAttribute(
+        "role",
+        isError
+            ? "alert"
+            : "status"
+    );
+
+    status.textContent =
+        message;
+
+    scannerResultsElement.appendChild(
+        status
+    );
+}
+
+
+function updateScannerSummary() {
+    const summary =
+        document.getElementById(
+            "scanner-summary"
+        );
+
+    if (!summary) {
+        return;
+    }
+
+    if (
+        scannerStocks.length === 0
+    ) {
+        summary.textContent =
+            "No scanner results";
+
+        return;
+    }
+
+    summary.textContent =
+        `${filteredScannerStocks.length} of ${scannerStocks.length} opportunities shown`;
+}
+
+
+function cancelActiveScannerRequest() {
+    if (activeScannerRequest) {
+        activeScannerRequest.abort();
+
+        activeScannerRequest =
+            null;
+    }
+}
+
+
+async function readScannerJson(
+    response
+) {
+    try {
+        return await response.json();
+    } catch {
+        return null;
+    }
+}
+
+
+function getScannerApiUrl() {
+    const apiUrl =
+        String(
+            window.API_URL ?? ""
+        )
+            .trim()
+            .replace(/\/+$/, "");
+
+    if (!apiUrl) {
+        throw new Error(
+            "API_URL is not configured."
+        );
+    }
+
+    return apiUrl;
+}
+
+
+function normalizeScannerSignals(
+    signals
+) {
+    if (!Array.isArray(signals)) {
+        return [];
+    }
+
+    return Array.from(
+        new Set(
+            signals
+                .map(
+                    normalizeScannerText
+                )
+                .filter(Boolean)
+        )
+    );
+}
+
+
+function normalizeScannerRating(
+    value
+) {
+    const rating =
+        normalizeScannerText(value)
+            .toUpperCase()
+            .replace(/[_-]+/g, " ");
+
+    const ratings = {
+        "STRONG BUY":
+            "STRONG BUY",
+
+        BUY:
+            "BUY",
+
+        HOLD:
+            "WATCH",
+
+        WATCH:
+            "WATCH",
+
+        NEUTRAL:
+            "WATCH",
+
+        AVOID:
+            "AVOID",
+
+        SELL:
+            "AVOID",
+
+        "STRONG SELL":
+            "STRONG SELL",
+    };
+
+    return ratings[rating] ??
+        "WATCH";
+}
+
+
+function normalizeScannerRisk(
+    value
+) {
+    const risk =
+        normalizeScannerText(value)
+            .toUpperCase();
+
+    if (
+        risk.includes("LOW")
+    ) {
+        return "LOW";
+    }
+
+    if (
+        risk.includes("HIGH")
+    ) {
+        return "HIGH";
+    }
+
+    if (
+        risk.includes("MEDIUM") ||
+        risk.includes("MODERATE")
+    ) {
+        return "MEDIUM";
+    }
+
+    return "UNKNOWN";
+}
+
+
+function normalizeScannerTrend(
+    value
+) {
+    const trend =
+        normalizeScannerText(value)
+            .toUpperCase()
+            .replace(/[_-]+/g, " ");
+
+    const trends = {
+        "STRONG BULLISH":
+            "STRONG BULLISH",
+
+        BULLISH:
+            "BULLISH",
+
+        NEUTRAL:
+            "NEUTRAL",
+
+        BEARISH:
+            "BEARISH",
+
+        "STRONG BEARISH":
+            "STRONG BEARISH",
+    };
+
+    return trends[trend] ??
+        "NEUTRAL";
+}
+
+
+function getScannerRatingFromScore(
+    score
+) {
+    if (score >= 90) {
+        return "STRONG BUY";
+    }
+
+    if (score >= 75) {
+        return "BUY";
+    }
+
+    if (score >= 55) {
+        return "WATCH";
+    }
+
+    if (score >= 35) {
+        return "AVOID";
+    }
+
+    return "STRONG SELL";
+}
+
+
+function normalizeScannerSymbol(
+    symbol
+) {
+    return String(
+        symbol ?? ""
+    )
+        .trim()
+        .toUpperCase()
+        .replace(
+            /[^A-Z0-9.\-^]/g,
+            ""
+        )
+        .slice(0, 20);
+}
+
+
+function normalizeScannerText(
+    value
+) {
+    return String(
+        value ?? ""
+    )
+        .trim()
+        .replace(/\s+/g, " ")
+        .slice(0, 500);
+}
+
+
+function getScannerClassName(
+    value
+) {
+    return String(value)
+        .toLowerCase()
+        .replace(
+            /[^a-z0-9]+/g,
+            "-"
+        )
+        .replace(
+            /^-+|-+$/g,
+            ""
+        );
+}
+
+
+function toFiniteScannerNumber(
+    value,
+    fallback = 0
+) {
+    const number =
+        Number(value);
+
+    return Number.isFinite(number)
+        ? number
+        : fallback;
+}
+
+
+function toNullableScannerNumber(
+    value
+) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return null;
+    }
+
+    const number =
+        Number(value);
+
+    return Number.isFinite(number)
+        ? number
+        : null;
+}
+
+
+function clampScannerNumber(
+    value,
+    minimum,
+    maximum
+) {
+    const number =
+        toFiniteScannerNumber(
+            value,
+            minimum
+        );
+
+    return Math.min(
+        maximum,
+        Math.max(
+            minimum,
+            number
+        )
+    );
+}
+
+
+function formatScannerCurrency(
+    value
+) {
+    const number =
+        Number(value);
+
+    if (!Number.isFinite(number)) {
+        return "—";
+    }
+
+    return scannerCurrencyFormatter.format(
+        number
+    );
+}
+
+
+function formatScannerPercent(
+    value
+) {
+    const number =
+        Number(value);
+
+    if (!Number.isFinite(number)) {
+        return "0.00";
+    }
+
+    return scannerPercentFormatter.format(
+        number
+    );
+}
+
+
+function formatScannerNumber(
+    value,
+    decimalPlaces = 2
+) {
+    const number =
+        Number(value);
+
+    if (!Number.isFinite(number)) {
+        return "—";
+    }
+
+    return number.toFixed(
+        decimalPlaces
+    );
+}
+
+
+window.loadScanner =
+    loadScanner;
+
+window.selectStock =
+    selectStock;
+
+window.refreshScanner =
+    loadScanner;
+
+
+document.addEventListener(
+    "DOMContentLoaded",
+    () => {
+        scannerResultsElement =
+            document.getElementById(
+                "scanner-results"
+            );
+
+        if (!scannerResultsElement) {
+            return;
+        }
+
+        scannerResultsElement.addEventListener(
+            "click",
+            handleScannerClick
+        );
+
+        scannerResultsElement.addEventListener(
+            "keydown",
+            handleScannerKeydown
+        );
+
+        loadScanner();
+    }
+);

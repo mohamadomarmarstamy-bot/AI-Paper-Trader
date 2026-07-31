@@ -1,5 +1,41 @@
-let allocationChart = null;
+/* account.js
+ * Account dashboard rendering and interactions.
+ * Depends on:
+ *   - window.API_URL
+ *   - Chart.js (optional; the page still works without the chart)
+ */
 
+"use strict";
+
+let allocationChart = null;
+let accountRequestController = null;
+
+const ACCOUNT_REQUEST_TIMEOUT_MS = 15_000;
+const DEFAULT_STARTING_BALANCE = 100_000;
+
+const moneyFormatter = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+});
+
+const sharesFormatter = new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 4,
+});
+
+const ALLOCATION_COLORS = [
+    "#22c55e",
+    "#3b82f6",
+    "#a855f7",
+    "#f59e0b",
+    "#ef4444",
+    "#06b6d4",
+    "#ec4899",
+    "#84cc16",
+    "#64748b",
+    "#f97316",
+    "#14b8a6",
+    "#8b5cf6",
+];
 
 async function loadAccount() {
     const positionsTable =
@@ -8,32 +44,68 @@ async function loadAccount() {
     const historyTable =
         document.getElementById("history-table");
 
+    setTableMessage(
+        positionsTable,
+        7,
+        "Loading positions…"
+    );
+
+    setTableMessage(
+        historyTable,
+        4,
+        "Loading trade history…"
+    );
+
+    if (accountRequestController) {
+        accountRequestController.abort();
+    }
+
+    accountRequestController =
+        new AbortController();
+
+    const timeoutId = window.setTimeout(
+        () => accountRequestController?.abort(),
+        ACCOUNT_REQUEST_TIMEOUT_MS
+    );
+
     try {
-        const response = await fetch(`${API_URL}/account`);
+        const account = await fetchJson(
+            `${getApiUrl()}/account`,
+            {
+                signal:
+                    accountRequestController.signal,
+            }
+        );
 
-        if (!response.ok) {
-            throw new Error(
-                `Account request failed: ${response.status}`
-            );
-        }
-
-        const account = await response.json();
-
-        if (account.error) {
-            throw new Error(account.error);
-        }
-
-        const cash = toNumber(account.cash);
+        const cash =
+            toNumber(account.cash);
 
         const portfolioValue = toNumber(
             account.portfolio_value ??
             account.total_value ??
+            account.equity ??
             cash
+        );
+
+        const startingBalance = toNumber(
+            account.starting_balance ??
+            account.initial_balance ??
+            DEFAULT_STARTING_BALANCE
         );
 
         const profitLoss = toNumber(
             account.profit_loss ??
-            portfolioValue - 100000
+            account.total_profit_loss ??
+            portfolioValue - startingBalance
+        );
+
+        const positions =
+            normalizePositions(account.positions);
+
+        const history = normalizeHistory(
+            account.history ??
+            account.trades ??
+            []
         );
 
         setText(
@@ -51,16 +123,12 @@ async function loadAccount() {
             formatSignedMoney(profitLoss)
         );
 
-        updateProfitLossColor(profitLoss);
-
-        const positions = normalizePositions(
-            account.positions
-        );
-
         setText(
             "position-count",
             String(positions.length)
         );
+
+        updateProfitLossColor(profitLoss);
 
         renderPositions(
             positionsTable,
@@ -74,92 +142,167 @@ async function loadAccount() {
 
         renderHistory(
             historyTable,
-            account.history || []
+            history
+        );
+    } catch (error) {
+        if (error?.name === "AbortError") {
+            console.warn(
+                "Account request was cancelled or timed out."
+            );
+        } else {
+            console.error(
+                "Account error:",
+                error
+            );
+        }
+
+        setTableMessage(
+            positionsTable,
+            7,
+            "Could not load account information."
         );
 
-    } catch (error) {
-        console.error("Account error:", error);
-
-        if (positionsTable) {
-            positionsTable.innerHTML = `
-                <tr>
-                    <td colspan="4">
-                        Could not load account information.
-                    </td>
-                </tr>
-            `;
-        }
-
-        if (historyTable) {
-            historyTable.innerHTML = `
-                <tr>
-                    <td colspan="4">
-                        Could not load trade history.
-                    </td>
-                </tr>
-            `;
-        }
+        setTableMessage(
+            historyTable,
+            4,
+            "Could not load trade history."
+        );
 
         showAllocationError();
+    } finally {
+        window.clearTimeout(timeoutId);
+        accountRequestController = null;
     }
 }
 
+async function fetchJson(
+    url,
+    options = {}
+) {
+    const response = await fetch(
+        url,
+        {
+            headers: {
+                Accept: "application/json",
+                ...(options.headers || {}),
+            },
+            ...options,
+        }
+    );
+
+    let payload = null;
+
+    try {
+        payload = await response.json();
+    } catch {
+        // A non-JSON error response is
+        // handled below.
+    }
+
+    if (!response.ok) {
+        const message =
+            payload?.detail ??
+            payload?.error ??
+            `Request failed with status ${response.status}`;
+
+        throw new Error(String(message));
+    }
+
+    if (
+        !payload ||
+        typeof payload !== "object"
+    ) {
+        throw new Error(
+            "The server returned an invalid response."
+        );
+    }
+
+    if (payload.error) {
+        throw new Error(
+            String(payload.error)
+        );
+    }
+
+    return payload;
+}
+
+function getApiUrl() {
+    const apiUrl = String(
+        window.API_URL ?? ""
+
+    ).replace(/\/+$/, "");
+
+    if (!apiUrl) {
+        throw new Error(
+            "API_URL is not configured."
+        );
+    }
+
+    return apiUrl;
+}
 
 function normalizePositions(positions) {
     if (!positions) {
         return [];
     }
 
-    let normalizedPositions;
+    const list = Array.isArray(positions)
+        ? positions
+        : Object.entries(positions)
+            .map(([symbol, position]) => ({
+                symbol,
+                ...(
+                    position &&
+                    typeof position === "object"
+                        ? position
+                        : {}
+                ),
+            }));
 
-    if (Array.isArray(positions)) {
-        normalizedPositions = positions;
-    } else {
-        normalizedPositions = Object.entries(
-            positions
-        ).map(([symbol, position]) => ({
-            symbol,
-            ...position
-        }));
-    }
-
-    return normalizedPositions.filter(position => {
-        const shares = toNumber(
-            position.shares ??
-            position.quantity
+    return list
+        .filter(
+            position =>
+                position &&
+                typeof position === "object"
+        )
+        .map(getPositionDetails)
+        .filter(
+            position =>
+                position.symbol &&
+                position.shares > 0
         );
-
-        return shares > 0;
-    });
 }
-
 
 function getPositionDetails(position) {
     const symbol = String(
-        position.symbol || ""
-    ).trim().toUpperCase();
+        position?.symbol ?? ""
+    )
+        .trim()
+        .toUpperCase();
 
     const shares = toNumber(
-        position.shares ??
-        position.quantity
+        position?.shares ??
+        position?.quantity
     );
 
     const entryPrice = toNumber(
-        position.entry_price ??
-        position.average_price ??
-        position.price
+        position?.entry_price ??
+        position?.average_price ??
+        position?.avg_price ??
+        position?.price
     );
 
     const currentPrice = toNumber(
-        position.current_price ??
-        position.market_price ??
+        position?.current_price ??
+        position?.market_price ??
+        position?.last_price ??
         entryPrice
     );
 
     const positionValue = toNumber(
-        position.position_value ??
-        position.market_value ??
-        position.value ??
+        position?.position_value ??
+        position?.market_value ??
+        position?.value ??
         shares * currentPrice
     );
 
@@ -168,356 +311,93 @@ function getPositionDetails(position) {
         shares,
         entryPrice,
         currentPrice,
-        positionValue
+        positionValue,
     };
 }
-
-
-function renderPositions(table, positions) {
+function renderPositions(
+    table,
+    positions
+) {
     if (!table) {
         return;
     }
 
     if (positions.length === 0) {
-        table.innerHTML = `
-            <tr>
-                <td colspan="7">
-                    No positions yet
-                </td>
-            </tr>
-        `;
-
-        return;
-    }
-
-    table.innerHTML = positions.map(position => {
-        const {
-            symbol,
-            shares,
-            entryPrice,
-            currentPrice,
-            positionValue
-        } = getPositionDetails(position);
-
-        const costBasis =
-            shares * entryPrice;
-
-        const gainLoss =
-            positionValue - costBasis;
-
-        const returnPercentage =
-            costBasis > 0
-                ? gainLoss / costBasis * 100
-                : 0;
-
-        let performanceClass = "";
-
-        if (gainLoss > 0) {
-            performanceClass = "positive";
-        } else if (gainLoss < 0) {
-            performanceClass = "negative";
-        }
-
-        return `
-            <tr>
-                <td>
-                    <button
-                        type="button"
-                        class="symbol-link"
-                        data-position-symbol="${escapeHtml(symbol)}"
-                    >
-                        ${escapeHtml(symbol)}
-                    </button>
-                </td>
-
-                <td>${formatShares(shares)}</td>
-
-                <td>${formatMoney(entryPrice)}</td>
-
-                <td>${formatMoney(currentPrice)}</td>
-
-                <td>${formatMoney(positionValue)}</td>
-
-                <td class="${performanceClass}">
-                    ${formatSignedMoney(gainLoss)}
-                </td>
-
-                <td class="${performanceClass}">
-                    ${formatSignedPercentage(returnPercentage)}
-                </td>
-            </tr>
-        `;
-    }).join("");
-}
-
-
-function renderAllocationChart(positions, cash) {
-    const canvas =
-        document.getElementById("allocation-chart");
-
-    const emptyMessage =
-        document.getElementById("allocation-empty");
-
-    if (!canvas) {
-        return;
-    }
-
-    if (typeof Chart === "undefined") {
-        console.error(
-            "Chart.js is not loaded. Check the Chart.js script tag."
+        setTableMessage(
+            table,
+            7,
+            "No positions yet"
         );
 
-        canvas.style.display = "none";
-
-        if (emptyMessage) {
-            emptyMessage.style.display = "block";
-            emptyMessage.textContent =
-                "Could not load the allocation chart.";
-        }
-
         return;
     }
 
-    const labels = [];
-    const values = [];
+    table.innerHTML = positions
+        .map(position => {
+            const {
+                symbol,
+                shares,
+                entryPrice,
+                currentPrice,
+                positionValue,
+            } = position;
 
-    positions.forEach(position => {
-        const {
-            symbol,
-            positionValue
-        } = getPositionDetails(position);
+            const costBasis =
+                shares * entryPrice;
 
-        if (symbol && positionValue > 0) {
-            labels.push(symbol);
-            values.push(positionValue);
-        }
-    });
+            const gainLoss =
+                positionValue - costBasis;
 
-    const cashValue = toNumber(cash);
+            const returnPercentage =
+                costBasis > 0
+                    ? (
+                        gainLoss /
+                        costBasis
+                    ) * 100
+                    : 0;
 
-    if (cashValue > 0) {
-        labels.push("Cash");
-        values.push(cashValue);
-    }
-
-    const hasAllocationData =
-        labels.length > 0 &&
-        values.some(value => value > 0);
-
-    if (!hasAllocationData) {
-        canvas.style.display = "none";
-
-        if (emptyMessage) {
-            emptyMessage.style.display = "block";
-            emptyMessage.textContent =
-                "Make a trade to view your portfolio allocation.";
-        }
-
-        if (allocationChart) {
-            allocationChart.destroy();
-            allocationChart = null;
-        }
-
-        return;
-    }
-
-    canvas.style.display = "block";
-
-    if (emptyMessage) {
-        emptyMessage.style.display = "none";
-    }
-
-    if (allocationChart) {
-        allocationChart.destroy();
-        allocationChart = null;
-    }
-
-    allocationChart = new Chart(
-        canvas.getContext("2d"),
-        {
-            type: "doughnut",
-
-            data: {
-                labels,
-
-                datasets: [
-                    {
-                        data: values,
-
-                        backgroundColor: [
-                            "#22c55e",
-                            "#3b82f6",
-                            "#a855f7",
-                            "#f59e0b",
-                            "#ef4444",
-                            "#06b6d4",
-                            "#ec4899",
-                            "#84cc16",
-                            "#64748b",
-                            "#f97316",
-                            "#14b8a6",
-                            "#8b5cf6"
-                        ],
-
-                        borderColor: "#111827",
-                        borderWidth: 3,
-                        hoverOffset: 8
-                    }
-                ]
-            },
-
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                cutout: "65%",
-
-                animation: {
-                    duration: 500
-                },
-
-                plugins: {
-                    legend: {
-                        position: "bottom",
-
-                        labels: {
-                            color: "#d1d5db",
-                            padding: 16,
-                            usePointStyle: true
-                        }
-                    },
-
-                    tooltip: {
-                        callbacks: {
-                            label(context) {
-                                const value = toNumber(
-                                    context.raw
-                                );
-
-                                const total =
-                                    context.dataset.data.reduce(
-                                        (sum, item) =>
-                                            sum + toNumber(item),
-                                        0
-                                    );
-
-                                const percentage =
-                                    total > 0
-                                        ? (
-                                            value /
-                                            total *
-                                            100
-                                        ).toFixed(1)
-                                        : "0.0";
-
-                                return (
-                                    `${context.label}: ` +
-                                    `${formatMoney(value)} ` +
-                                    `(${percentage}%)`
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    );
-}
-
-
-function showAllocationError() {
-    const canvas =
-        document.getElementById("allocation-chart");
-
-    const emptyMessage =
-        document.getElementById("allocation-empty");
-
-    if (allocationChart) {
-        allocationChart.destroy();
-        allocationChart = null;
-    }
-
-    if (canvas) {
-        canvas.style.display = "none";
-    }
-
-    if (emptyMessage) {
-        emptyMessage.style.display = "block";
-        emptyMessage.textContent =
-            "Could not load portfolio allocation.";
-    }
-}
-
-
-function renderHistory(table, history) {
-    if (!table) {
-        return;
-    }
-
-    if (!Array.isArray(history) || history.length === 0) {
-        table.innerHTML = `
-            <tr>
-                <td colspan="4">
-                    No trades yet
-                </td>
-            </tr>
-        `;
-
-        return;
-    }
-
-    table.innerHTML = [...history]
-        .reverse()
-        .map(trade => {
-            const action = String(
-                trade.action ??
-                trade.type ??
-                ""
-            ).toUpperCase();
-
-            const symbol = String(
-                trade.symbol || ""
-            ).toUpperCase();
-
-            const shares = toNumber(
-                trade.shares ??
-                trade.quantity
-            );
-
-            const hasProfit =
-                trade.profit !== undefined &&
-                trade.profit !== null;
-
-            const displayedValue = toNumber(
-                hasProfit
-                    ? trade.profit
-                    : trade.price
-            );
-
-            let valueClass = "";
-
-            if (hasProfit && displayedValue > 0) {
-                valueClass = "positive";
-            } else if (
-                hasProfit &&
-                displayedValue < 0
-            ) {
-                valueClass = "negative";
-            }
+            const performanceClass =
+                getPerformanceClass(
+                    gainLoss
+                );
 
             return `
                 <tr>
-                    <td>${escapeHtml(action)}</td>
+                    <td>
+                        <button
+                            type="button"
+                            class="symbol-link"
+                            data-position-symbol="${escapeHtml(symbol)}"
+                            aria-label="Select ${escapeHtml(symbol)}"
+                        >
+                            ${escapeHtml(symbol)}
+                        </button>
+                    </td>
 
-                    <td>${escapeHtml(symbol)}</td>
+                    <td>
+                        ${formatShares(shares)}
+                    </td>
 
-                    <td>${formatShares(shares)}</td>
+                    <td>
+                        ${formatMoney(entryPrice)}
+                    </td>
 
-                    <td class="${valueClass}">
-                        ${
-                            hasProfit
-                                ? formatSignedMoney(displayedValue)
-                                : formatMoney(displayedValue)
-                        }
+                    <td>
+                        ${formatMoney(currentPrice)}
+                    </td>
+
+                    <td>
+                        ${formatMoney(positionValue)}
+                    </td>
+
+                    <td class="${performanceClass}">
+                        ${formatSignedMoney(gainLoss)}
+                    </td>
+
+                    <td class="${performanceClass}">
+                        ${formatSignedPercentage(
+                            returnPercentage
+                        )}
                     </td>
                 </tr>
             `;
@@ -525,57 +405,569 @@ function renderHistory(table, history) {
         .join("");
 }
 
-
-async function selectPositionStock(symbol) {
-    const symbolInput =
-        document.getElementById("symbol");
-
-    const priceInput =
-        document.getElementById("price");
-
-    if (symbolInput) {
-        symbolInput.value = symbol;
-    }
-
-    if (typeof window.loadChart === "function") {
-        window.loadChart(symbol);
-    }
-
-    try {
-        const response = await fetch(
-            `${API_URL}/quote/${encodeURIComponent(symbol)}`
+function renderAllocationChart(
+    positions,
+    cash
+) {
+    const canvas =
+        document.getElementById(
+            "allocation-chart"
         );
 
-        if (!response.ok) {
-            throw new Error(
-                `Quote request failed: ${response.status}`
-            );
-        }
+    const emptyMessage =
+        document.getElementById(
+            "allocation-empty"
+        );
 
-        const quote = await response.json();
+    if (!canvas) {
+        return;
+    }
 
-        if (quote.error) {
-            throw new Error(quote.error);
-        }
+    destroyAllocationChart();
 
-        const price = toNumber(quote.price);
-
-        if (priceInput && price > 0) {
-            priceInput.value = price.toFixed(2);
-        }
-
-    } catch (error) {
+    if (
+        typeof window.Chart ===
+        "undefined"
+    ) {
         console.error(
-            `Could not select ${symbol}:`,
-            error
+            "Chart.js is not loaded."
         );
+
+        showChartMessage(
+            canvas,
+            emptyMessage,
+            "Could not load the allocation chart."
+        );
+
+        return;
+    }
+
+    const allocations = positions
+        .filter(
+            position =>
+                position.symbol &&
+                position.positionValue > 0
+        )
+        .map(position => ({
+            label: position.symbol,
+            value: position.positionValue,
+        }));
+
+    const cashValue =
+        toNumber(cash);
+
+    if (cashValue > 0) {
+        allocations.push({
+            label: "Cash",
+            value: cashValue,
+        });
+    }
+
+    if (allocations.length === 0) {
+        showChartMessage(
+            canvas,
+            emptyMessage,
+            "Make a trade to view your portfolio allocation."
+        );
+
+        return;
+    }
+
+    canvas.style.display =
+        "block";
+
+    if (emptyMessage) {
+        emptyMessage.style.display =
+            "none";
+    }
+
+    const labels =
+        allocations.map(
+            item => item.label
+        );
+
+    const values =
+        allocations.map(
+            item => item.value
+        );
+
+    allocationChart =
+        new window.Chart(
+            canvas.getContext("2d"),
+            {
+                type: "doughnut",
+
+                data: {
+                    labels,
+
+                    datasets: [
+                        {
+                            data: values,
+
+                            backgroundColor:
+                                labels.map(
+                                    (
+                                        _,
+                                        index
+                                    ) =>
+                                        ALLOCATION_COLORS[
+                                            index %
+                                            ALLOCATION_COLORS.length
+                                        ]
+                                ),
+
+                            borderColor:
+                                "#111827",
+
+                            borderWidth: 3,
+
+                            hoverOffset: 8,
+                        },
+                    ],
+                },
+
+                options: {
+                    responsive: true,
+
+                    maintainAspectRatio:
+                        false,
+
+                    cutout: "65%",
+
+                    animation: {
+                        duration: 500,
+                    },
+
+                    plugins: {
+                        legend: {
+                            position:
+                                "bottom",
+
+                            labels: {
+                                color:
+                                    "#d1d5db",
+
+                                padding: 16,
+
+                                usePointStyle:
+                                    true,
+                            },
+                        },
+
+                        tooltip: {
+                            callbacks: {
+                                label(context) {
+                                    const value =
+                                        toNumber(
+                                            context.raw
+                                        );
+
+                                    const total =
+                                        context
+                                            .dataset
+                                            .data
+                                            .reduce(
+                                                (
+                                                    sum,
+                                                    item
+                                                ) =>
+                                                    sum +
+                                                    toNumber(
+                                                        item
+                                                    ),
+                                                0
+                                            );
+
+                                    const percentage =
+                                        total > 0
+                                            ? (
+                                                (
+                                                    value /
+                                                    total
+                                                ) *
+                                                100
+                                            ).toFixed(
+                                                1
+                                            )
+                                            : "0.0";
+
+                                    return (
+                                        `${context.label}: ` +
+                                        `${formatMoney(value)} ` +
+                                        `(${percentage}%)`
+                                    );
+                                },
+                            },
+                        },
+                    },
+                },
+            }
+        );
+}
+
+function showAllocationError() {
+    const canvas =
+        document.getElementById(
+            "allocation-chart"
+        );
+
+    const emptyMessage =
+        document.getElementById(
+            "allocation-empty"
+        );
+
+    destroyAllocationChart();
+
+    showChartMessage(
+        canvas,
+        emptyMessage,
+        "Could not load portfolio allocation."
+    );
+}
+
+function showChartMessage(
+    canvas,
+    messageElement,
+    message
+) {
+    if (canvas) {
+        canvas.style.display =
+            "none";
+    }
+
+    if (messageElement) {
+        messageElement.style.display =
+            "block";
+
+        messageElement.textContent =
+            message;
     }
 }
 
+function destroyAllocationChart() {
+    if (allocationChart) {
+        allocationChart.destroy();
+        allocationChart = null;
+    }
+}
+function normalizeHistory(history) {
+    if (!history) {
+        return [];
+    }
+
+    const list = Array.isArray(history)
+        ? history
+        : Object.values(history);
+
+    return list
+        .filter(
+            trade =>
+                trade &&
+                typeof trade === "object"
+        )
+        .map((trade, index) => {
+            const symbol = String(
+                trade.symbol ??
+                trade.ticker ??
+                ""
+            )
+                .trim()
+                .toUpperCase();
+
+            const rawSide = String(
+                trade.side ??
+                trade.action ??
+                trade.type ??
+                ""
+            )
+                .trim()
+                .toUpperCase();
+
+            const side =
+                rawSide === "BUY" ||
+                rawSide === "BOUGHT"
+                    ? "BUY"
+                    : rawSide === "SELL" ||
+                      rawSide === "SOLD"
+                        ? "SELL"
+                        : rawSide || "UNKNOWN";
+
+            const shares = toNumber(
+                trade.shares ??
+                trade.quantity ??
+                trade.qty
+            );
+
+            const price = toNumber(
+                trade.price ??
+                trade.execution_price ??
+                trade.fill_price ??
+                trade.entry_price
+            );
+
+            const total = toNumber(
+                trade.total ??
+                trade.total_value ??
+                trade.notional ??
+                trade.amount ??
+                shares * price
+            );
+
+            const timestamp =
+                trade.timestamp ??
+                trade.created_at ??
+                trade.executed_at ??
+                trade.date ??
+                trade.time ??
+                null;
+
+            return {
+                id:
+                    trade.id ??
+                    trade.trade_id ??
+                    index,
+
+                symbol,
+                side,
+                shares,
+                price,
+                total,
+                timestamp,
+                timestampValue:
+                    getTimestampValue(timestamp),
+            };
+        })
+        .filter(
+            trade =>
+                trade.symbol &&
+                trade.side !== "UNKNOWN"
+        )
+        .sort(
+            (first, second) =>
+                second.timestampValue -
+                first.timestampValue
+        );
+}
+
+function renderHistory(
+    table,
+    history
+) {
+    if (!table) {
+        return;
+    }
+
+    if (history.length === 0) {
+        setTableMessage(
+            table,
+            4,
+            "No trades yet"
+        );
+
+        return;
+    }
+
+    table.innerHTML = history
+        .map(trade => {
+            const sideClass =
+                trade.side === "BUY"
+                    ? "positive"
+                    : trade.side === "SELL"
+                        ? "negative"
+                        : "";
+
+            return `
+                <tr>
+                    <td>
+                        ${formatDateTime(
+                            trade.timestamp
+                        )}
+                    </td>
+
+                    <td>
+                        <button
+                            type="button"
+                            class="symbol-link"
+                            data-history-symbol="${escapeHtml(
+                                trade.symbol
+                            )}"
+                            aria-label="Select ${escapeHtml(
+                                trade.symbol
+                            )}"
+                        >
+                            ${escapeHtml(
+                                trade.symbol
+                            )}
+                        </button>
+                    </td>
+
+                    <td class="${sideClass}">
+                        ${escapeHtml(
+                            trade.side
+                        )}
+                        ${formatShares(
+                            trade.shares
+                        )}
+                        @
+                        ${formatMoney(
+                            trade.price
+                        )}
+                    </td>
+
+                    <td>
+                        ${formatMoney(
+                            trade.total
+                        )}
+                    </td>
+                </tr>
+            `;
+        })
+        .join("");
+}
+
+function getTimestampValue(value) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return 0;
+    }
+
+    if (
+        typeof value === "number" &&
+        Number.isFinite(value)
+    ) {
+        const milliseconds =
+            value < 10_000_000_000
+                ? value * 1000
+                : value;
+
+        return milliseconds;
+    }
+
+    const parsed =
+        Date.parse(String(value));
+
+    return Number.isFinite(parsed)
+        ? parsed
+        : 0;
+}
+
+function formatDateTime(value) {
+    const timestamp =
+        getTimestampValue(value);
+
+    if (!timestamp) {
+        return "—";
+    }
+
+    const date =
+        new Date(timestamp);
+
+    if (
+        Number.isNaN(
+            date.getTime()
+        )
+    ) {
+        return "—";
+    }
+
+    return new Intl.DateTimeFormat(
+        "en-US",
+        {
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+        }
+    ).format(date);
+}
+function toNumber(value) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return 0;
+    }
+
+    if (typeof value === "number") {
+        return Number.isFinite(value)
+            ? value
+            : 0;
+    }
+
+    const normalized = String(value)
+        .replace(/[$,%\s]/g, "")
+        .replace(/,/g, "");
+
+    const number =
+        Number(normalized);
+
+    return Number.isFinite(number)
+        ? number
+        : 0;
+}
+
+function formatMoney(value) {
+    return moneyFormatter.format(
+        toNumber(value)
+    );
+}
+
+function formatSignedMoney(value) {
+    const number =
+        toNumber(value);
+
+    if (number > 0) {
+        return `+${moneyFormatter.format(
+            number
+        )}`;
+    }
+
+    return moneyFormatter.format(number);
+}
+
+function formatShares(value) {
+    return sharesFormatter.format(
+        toNumber(value)
+    );
+}
+
+function formatSignedPercentage(value) {
+    const number =
+        toNumber(value);
+
+    const prefix =
+        number > 0
+            ? "+"
+            : "";
+
+    return `${prefix}${number.toFixed(2)}%`;
+}
+
+function getPerformanceClass(value) {
+    const number =
+        toNumber(value);
+
+    if (number > 0) {
+        return "positive";
+    }
+
+    if (number < 0) {
+        return "negative";
+    }
+
+    return "neutral";
+}
 
 function updateProfitLossColor(value) {
     const element =
-        document.getElementById("profit-loss");
+        document.getElementById(
+            "profit-loss"
+        );
 
     if (!element) {
         return;
@@ -583,111 +975,148 @@ function updateProfitLossColor(value) {
 
     element.classList.remove(
         "positive",
-        "negative"
+        "negative",
+        "neutral"
     );
 
-    if (value > 0) {
-        element.classList.add("positive");
-    } else if (value < 0) {
-        element.classList.add("negative");
-    }
+    element.classList.add(
+        getPerformanceClass(value)
+    );
 }
 
-
-function setText(elementId, value) {
+function setText(
+    elementId,
+    value
+) {
     const element =
-        document.getElementById(elementId);
+        document.getElementById(
+            elementId
+        );
 
     if (element) {
-        element.textContent = value;
+        element.textContent =
+            String(value);
     }
 }
 
+function setTableMessage(
+    table,
+    columnCount,
+    message
+) {
+    if (!table) {
+        return;
+    }
 
-function toNumber(value) {
-    const number = Number(value);
-
-    return Number.isFinite(number)
-        ? number
-        : 0;
+    table.innerHTML = `
+        <tr>
+            <td
+                colspan="${Math.max(
+                    1,
+                    toNumber(columnCount)
+                )}"
+                class="table-message"
+            >
+                ${escapeHtml(message)}
+            </td>
+        </tr>
+    `;
 }
-
-
-function formatMoney(value) {
-    return toNumber(value).toLocaleString(
-        "en-US",
-        {
-            style: "currency",
-            currency: "USD"
-        }
-    );
-}
-
-
-function formatSignedMoney(value) {
-    const amount = toNumber(value);
-
-    const prefix =
-        amount > 0
-            ? "+"
-            : "";
-
-    return `${prefix}${formatMoney(amount)}`;
-}
-
-function formatSignedPercentage(value) {
-    const percentage = toNumber(value);
-    const prefix = percentage > 0 ? "+" : "";
-
-    return `${prefix}${percentage.toFixed(2)}%`;
-}
-
-function formatShares(value) {
-    return toNumber(value).toLocaleString(
-        "en-US",
-        {
-            maximumFractionDigits: 4
-        }
-    );
-}
-
 
 function escapeHtml(value) {
-    return String(value)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#039;");
+    return String(
+        value ?? ""
+    )
+        .replace(
+            /&/g,
+            "&amp;"
+        )
+        .replace(
+            /</g,
+            "&lt;"
+        )
+        .replace(
+            />/g,
+            "&gt;"
+        )
+        .replace(
+            /"/g,
+            "&quot;"
+        )
+        .replace(
+            /'/g,
+            "&#039;"
+        );
 }
 
+function selectSymbol(symbol) {
+    const normalizedSymbol =
+        String(symbol ?? "")
+            .trim()
+            .toUpperCase();
 
-window.addEventListener(
-    "DOMContentLoaded",
-    () => {
-        const positionsTable =
-            document.getElementById("positions-table");
-
-        if (positionsTable) {
-            positionsTable.addEventListener(
-                "click",
-                event => {
-                    const button =
-                        event.target.closest(
-                            "[data-position-symbol]"
-                        );
-
-                    if (!button) {
-                        return;
-                    }
-
-                    selectPositionStock(
-                        button.dataset.positionSymbol
-                    );
-                }
-            );
-        }
-
-        loadAccount();
+    if (!normalizedSymbol) {
+        return;
     }
-);
+
+    const symbolInput =
+        document.getElementById(
+            "symbol"
+        ) ??
+        document.getElementById(
+            "trade-symbol"
+        );
+
+    if (symbolInput) {
+        symbolInput.value =
+            normalizedSymbol;
+
+        symbolInput.dispatchEvent(
+            new Event(
+                "input",
+                {
+                    bubbles: true,
+                }
+            )
+        );
+
+        symbolInput.focus();
+    }
+
+    if (
+        typeof window.loadStock ===
+        "function"
+    ) {
+        window.loadStock(
+            normalizedSymbol
+        );
+    }
+}
+
+function handleAccountTableClick(event) {
+    const positionButton =
+        event.target.closest(
+            "[data-position-symbol]"
+        );
+
+    if (positionButton) {
+        selectSymbol(
+            positionButton.dataset
+                .positionSymbol
+        );
+
+        return;
+    }
+
+    const historyButton =
+        event.target.closest(
+            "[data-history-symbol]"
+        );
+
+    if (historyButton) {
+        selectSymbol(
+            historyButton.dataset
+                .historySymbol
+        );
+    }
+}

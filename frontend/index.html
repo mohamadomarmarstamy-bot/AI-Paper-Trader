@@ -8,394 +8,905 @@
         content="width=device-width, initial-scale=1.0"
     >
 
+    <meta
+        name="description"
+        content="AI-powered paper trading, market research, portfolio tracking, and risk analysis."
+    >
+
+    <meta
+        name="theme-color"
+        content="#0b1020"
+    >
+
     <title>AI Paper Trader</title>
 
-    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link
+        rel="preconnect"
+        href="https://cdn.jsdelivr.net"
+    >
 
-    <link rel="stylesheet" href="style.css">
+    <link
+        rel="preconnect"
+        href="https://unpkg.com"
+    >
+
+    <script
+        src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"
+        defer
+    ></script>
+
+    <script
+        src="https://cdn.jsdelivr.net/npm/chart.js"
+        defer
+    ></script>
+
+    <link
+        rel="stylesheet"
+        href="style.css"
+    >
 </head>
 
 <body>
+    <a
+        class="skip-link"
+        href="#main-content"
+    >
+        Skip to main content
+    </a>
 
-    <nav class="main-nav">
-    <button type="button" class="nav-button active" data-section="dashboard-section">
-        📊 Dashboard
-    </button>
+    <div class="app-shell">
 
-    <button type="button" class="nav-button" data-section="strategy-section">
-        🤖 Strategy Lab
-    </button>
-</nav>
+        <!-- =====================================
+             Sidebar
+        ====================================== -->
 
-    <header class="topbar">
-
-        <div>
-            <h1>AI Paper Trader</h1>
-            <p>Practice trading without risking real money</p>
-        </div>
-
-        <button
-            type="button"
-            onclick="refreshDashboard()"
+        <aside
+            class="sidebar"
+            aria-label="Primary navigation"
         >
-            Refresh Dashboard
-        </button>
-
-    </header>
-
-<main class="dashboard" id="dashboard-section">
-        <!-- Account Stats -->
-
-        <section class="stats-grid">
-
-            <div class="stat-card">
-                <p>Cash</p>
-                <h2 id="cash">$0.00</h2>
-            </div>
-
-            <div class="stat-card">
-                <p>Portfolio Value</p>
-                <h2 id="portfolio-value">$0.00</h2>
-            </div>
-
-            <div class="stat-card">
-                <p>Total Profit / Loss</p>
-                <h2 id="profit-loss">$0.00</h2>
-            </div>
-
-            <div class="stat-card">
-                <p>Open Positions</p>
-                <h2 id="position-count">0</h2>
-            </div>
-
-        </section>
-
-        <!-- Main Dashboard -->
-
-        <section class="main-grid">
-
-            <!-- Open Positions -->
-
-            <div class="panel">
-
-                <div class="panel-header">
-                    <h2>Open Positions</h2>
-                </div>
-
-                <div class="table-wrapper">
-
-                    <table>
-
-                        <thead>
-                            <tr>
-                                <th>Symbol</th>
-                                <th>Shares</th>
-                                <th>Entry</th>
-                                <th>Current</th>
-                                <th>Value</th>
-                                <th>Gain / Loss</th>
-                                <th>Return</th>
-                            </tr>
-                        </thead>
-
-                        <tbody id="positions-table">
-                            <tr>
-                                <td colspan="7">
-                                    No positions yet
-                                </td>
-                            </tr>
-                        </tbody>
-
-                    </table>
-
-                </div>
-
-            </div>
-
-            <!-- Portfolio Allocation -->
-
-            <div class="panel allocation-panel">
-
-                <div class="panel-header">
-                    <h2>🥧 Portfolio Allocation</h2>
-                </div>
-
-                <div class="allocation-chart-container">
-                    <canvas id="allocation-chart"></canvas>
-                </div>
-
+            <div class="brand-block">
                 <div
-                    id="allocation-empty"
-                    class="allocation-empty"
+                    class="brand-mark"
+                    aria-hidden="true"
                 >
-                    Make a trade to view your portfolio allocation.
+                    AI
                 </div>
 
-            </div>
-
-            <!-- Place Trade -->
-
-            <div class="panel">
-
-                <div class="panel-header">
-                    <h2>Place Trade</h2>
-                </div>
-
-                <div class="trade-form">
-
-                    <label for="symbol">
-                        Stock Symbol
-                    </label>
-
-                    <div class="search-wrapper">
-
-                        <input
-                            id="symbol"
-                            type="text"
-                            placeholder="Search ticker, for example NVDA"
-                            autocomplete="off"
-                        >
-
-                        <div id="searchResults"></div>
-
-                    </div>
-
-                    <label for="shares">
-                        Shares
-                    </label>
-
-                    <input
-                        id="shares"
-                        type="number"
-                        min="1"
-                        step="1"
-                        placeholder="1"
-                    >
-
-                    <label for="price">
-                        Current Market Price
-                    </label>
-
-                    <input
-                        id="price"
-                        type="text"
-                        placeholder="Loading live market price..."
-                        readonly
-                        aria-readonly="true"
-                    >
-
-                    <p class="market-price-note">
-                        Live market price is automatically loaded from Yahoo Finance.
+                <div>
+                    <p class="eyebrow">
+                        Research Platform
                     </p>
 
-                    <div class="trade-buttons">
-
-                        <button
-                            type="button"
-                            class="buy-button"
-                            onclick="buyStock()"
-                        >
-                            Buy
-                        </button>
-
-                        <button
-                            type="button"
-                            class="sell-button"
-                            onclick="sellStock()"
-                        >
-                            Sell
-                        </button>
-
-                    </div>
-
-                    <button
-                        type="button"
-                        onclick="addCurrentStock()"
-                    >
-                        ⭐ Add to Watchlist
-                    </button>
-
-                    <p id="trade-message"></p>
-
+                    <h1 class="brand-title">
+                        AI Paper Trader
+                    </h1>
                 </div>
-
             </div>
 
-            <!-- Stock Chart -->
-
-            <div class="panel">
-
-                <div class="panel-header">
-                    <h2>Stock Chart</h2>
-                </div>
-
-                <div class="chart-container">
-                    <canvas id="priceChart"></canvas>
-                </div>
-
-            </div>
-
-            <!-- Watchlist -->
-
-            <div class="panel">
-
-                <div class="panel-header">
-
-                    <h2>⭐ Watchlist</h2>
-
-                    <button
-                        type="button"
-                        onclick="loadWatchlist()"
-                    >
-                        Refresh
-                    </button>
-
-                </div>
-
-                <div id="watchlist">
-                    Loading watchlist...
-                </div>
-
-            </div>
-
-            <!-- Market Scanner -->
-
-            <div class="panel">
-
-                <div class="panel-header">
-
-                    <h2>AI Market Scanner</h2>
-
-                    <button
-                        type="button"
-                        onclick="loadScanner()"
-                    >
-                        Run Scanner
-                    </button>
-
-                </div>
-
-                <div
-                    id="scanner-results"
-                    class="scanner-results"
+            <nav
+                class="main-nav"
+                aria-label="Application sections"
+            >
+                <button
+                    type="button"
+                    class="nav-button active"
+                    data-section="dashboard-section"
+                    aria-controls="dashboard-section"
+                    aria-current="page"
                 >
-                    Click "Run Scanner" to analyze the market.
-                </div>
+                    <span aria-hidden="true">
+                        📊
+                    </span>
 
-            </div>
-
-            <!-- Trade History -->
-
-            <div class="panel">
-
-                <div class="panel-header">
-                    <h2>Trade History</h2>
-                </div>
-
-                <div class="table-wrapper">
-
-                    <table>
-
-                        <thead>
-                            <tr>
-                                <th>Action</th>
-                                <th>Symbol</th>
-                                <th>Shares</th>
-                                <th>Price / Profit</th>
-                            </tr>
-                        </thead>
-
-                        <tbody id="history-table">
-                            <tr>
-                                <td colspan="4">
-                                    No trades yet
-                                </td>
-                            </tr>
-                        </tbody>
-
-                    </table>
-
-                </div>
-
-            </div>
-
-        </section>
-
-        <!-- Portfolio Performance -->
-
-        <section class="panel portfolio-performance-panel">
-
-            <div class="panel-header">
-
-                <h2>📈 Portfolio Performance</h2>
+                    <span>
+                        Dashboard
+                    </span>
+                </button>
 
                 <button
                     type="button"
-                    onclick="loadPortfolioChart()"
+                    class="nav-button"
+                    data-section="strategy-section"
+                    aria-controls="strategy-section"
                 >
-                    Refresh
+                    <span aria-hidden="true">
+                        🤖
+                    </span>
+
+                    <span>
+                        Research Lab
+                    </span>
                 </button>
+            </nav>
 
+            <div class="sidebar-footer">
+                <p>
+                    Paper-trading simulation only.
+                </p>
+
+                <p>
+                    No real orders are submitted.
+                </p>
             </div>
+        </aside>
 
-            <div
-                id="portfolio-chart"
-                class="portfolio-chart"
-            ></div>
+        <!-- =====================================
+             Main application
+        ====================================== -->
 
-        </section>
+        <div class="app-content">
 
-    </main>
-<section id="strategy-section" class="strategy-section hidden">
+            <!-- Topbar -->
 
-    <div class="panel">
+            <header class="topbar">
+                <div>
+                    <p class="eyebrow">
+                        Market Workspace
+                    </p>
 
-        <div class="panel-header">
-            <h2>🤖 Strategy Lab</h2>
+                    <h2>
+                        Trading Dashboard
+                    </h2>
 
-            <button
-                type="button"
-                onclick="loadStrategyLab()"
+                    <p>
+                        Research stocks, test ideas, and track simulated performance.
+                    </p>
+                </div>
+
+                <div class="topbar-actions">
+                    <span
+                        id="market-status"
+                        class="market-status"
+                        role="status"
+                        aria-live="polite"
+                    >
+                        Ready
+                    </span>
+
+                    <button
+                        id="refresh-dashboard-button"
+                        type="button"
+                        class="secondary-button"
+                        data-action="refresh-dashboard"
+                    >
+                        <span aria-hidden="true">
+                            ↻
+                        </span>
+
+                        Refresh Dashboard
+                    </button>
+                </div>
+            </header>
+
+            <main
+                id="main-content"
+                tabindex="-1"
             >
-                Analyze Watchlist
-            </button>
+
+                <!-- =====================================
+                     Dashboard section
+                ====================================== -->
+
+                <section
+                    id="dashboard-section"
+                    class="dashboard app-section"
+                    aria-labelledby="dashboard-title"
+                >
+                    <div class="section-heading visually-hidden">
+                        <h2 id="dashboard-title">
+                            Dashboard
+                        </h2>
+                    </div>
+
+                    <!-- Account summary -->
+
+                    <section
+                        class="stats-grid"
+                        aria-label="Account summary"
+                    >
+                        <article class="stat-card">
+                            <div class="stat-card-heading">
+                                <p>
+                                    Cash
+                                </p>
+
+                                <span aria-hidden="true">
+                                    💵
+                                </span>
+                            </div>
+
+                            <h3 id="cash">
+                                $0.00
+                            </h3>
+
+                            <p class="stat-caption">
+                                Available funds
+                            </p>
+                        </article>
+
+                        <article class="stat-card">
+                            <div class="stat-card-heading">
+                                <p>
+                                    Portfolio Value
+                                </p>
+
+                                <span aria-hidden="true">
+                                    📦
+                                </span>
+                            </div>
+
+                            <h3 id="portfolio-value">
+                                $0.00
+                            </h3>
+
+                            <p class="stat-caption">
+                                Cash plus holdings
+                            </p>
+                        </article>
+
+                        <article class="stat-card">
+                            <div class="stat-card-heading">
+                                <p>
+                                    Total Profit / Loss
+                                </p>
+
+                                <span aria-hidden="true">
+                                    📈
+                                </span>
+                            </div>
+
+                            <h3 id="profit-loss">
+                                $0.00
+                            </h3>
+
+                            <p class="stat-caption">
+                                Realized and unrealized
+                            </p>
+                        </article>
+
+                        <article class="stat-card">
+                            <div class="stat-card-heading">
+                                <p>
+                                    Open Positions
+                                </p>
+
+                                <span aria-hidden="true">
+                                    🧾
+                                </span>
+                            </div>
+
+                            <h3 id="position-count">
+                                0
+                            </h3>
+
+                            <p class="stat-caption">
+                                Active holdings
+                            </p>
+                        </article>
+                    </section>
+
+                    <!-- Trading workspace -->
+
+                    <section
+                        class="workspace-grid"
+                        aria-label="Trading workspace"
+                    >
+
+                        <!-- Trade Center -->
+
+                        <article
+                            class="panel trade-center-panel"
+                            id="trade-center"
+                        >
+                            <div class="panel-header">
+                                <div>
+                                    <p class="panel-kicker">
+                                        Execution
+                                    </p>
+
+                                    <h2>
+                                        Trade Center
+                                    </h2>
+                                </div>
+
+                                <span class="paper-badge">
+                                    Paper Trading
+                                </span>
+                            </div>
+
+                            <form
+                                id="trade-form"
+                                class="trade-form"
+                                novalidate
+                            >
+                                <div class="form-field form-field-wide">
+                                    <label for="symbol">
+                                        Stock Symbol
+                                    </label>
+
+                                    <div class="search-wrapper">
+                                        <input
+                                            id="symbol"
+                                            name="symbol"
+                                            type="text"
+                                            placeholder="Search ticker or company"
+                                            autocomplete="off"
+                                            spellcheck="false"
+                                            maxlength="20"
+                                            aria-autocomplete="list"
+                                            aria-controls="searchResults"
+                                        >
+
+                                        <div
+                                            id="searchResults"
+                                            class="search-results"
+                                            role="listbox"
+                                            aria-label="Stock search results"
+                                        ></div>
+                                    </div>
+                                </div>
+
+                                <div class="form-field">
+                                    <label for="shares">
+                                        Shares
+                                    </label>
+
+                                    <input
+                                        id="shares"
+                                        name="shares"
+                                        type="number"
+                                        min="1"
+                                        step="1"
+                                        inputmode="numeric"
+                                        placeholder="1"
+                                    >
+                                </div>
+
+                                <div class="form-field">
+                                    <label for="price">
+                                        Current Market Price
+                                    </label>
+
+                                    <input
+                                        id="price"
+                                        name="price"
+                                        type="text"
+                                        placeholder="Select a stock"
+                                        readonly
+                                        aria-readonly="true"
+                                    >
+                                </div>
+
+                                <p class="market-price-note form-field-wide">
+                                    Prices are loaded from the market-data service and may be delayed.
+                                </p>
+
+                                <section
+                                    id="trade-risk-plan"
+                                    class="trade-risk-panel form-field-wide"
+                                    aria-live="polite"
+                                    aria-label="Suggested risk plan"
+                                ></section>
+
+                                <section
+                                    id="trade-preview"
+                                    class="trade-preview-panel form-field-wide"
+                                    aria-live="polite"
+                                    aria-label="Order preview"
+                                ></section>
+
+                                <div class="trade-buttons form-field-wide">
+                                    <button
+                                        id="buy-button"
+                                        type="button"
+                                        class="buy-button"
+                                        data-trade-action="buy"
+                                    >
+                                        Buy
+                                    </button>
+
+                                    <button
+                                        id="sell-button"
+                                        type="button"
+                                        class="sell-button"
+                                        data-trade-action="sell"
+                                    >
+                                        Sell
+                                    </button>
+                                </div>
+
+                                <button
+                                    id="add-watchlist-button"
+                                    type="button"
+                                    class="watchlist-add-button form-field-wide"
+                                    data-action="add-watchlist"
+                                >
+                                    <span aria-hidden="true">
+                                        ⭐
+                                    </span>
+
+                                    Add to Watchlist
+                                </button>
+
+                                <p
+                                    id="trade-message"
+                                    class="trade-message form-field-wide"
+                                    aria-live="polite"
+                                ></p>
+                            </form>
+                        </article>
+
+                        <!-- Stock chart -->
+
+                        <article class="panel stock-chart-panel">
+                            <div class="panel-header">
+                                <div>
+                                    <p class="panel-kicker">
+                                        Price Action
+                                    </p>
+
+                                    <h2>
+                                        Stock Chart
+                                    </h2>
+                                </div>
+                            </div>
+
+                            <div class="chart-container">
+                                <canvas
+                                    id="priceChart"
+                                    role="img"
+                                    aria-label="Selected stock price chart"
+                                ></canvas>
+                            </div>
+                        </article>
+
+                        <!-- Watchlist -->
+
+                        <article class="panel watchlist-panel">
+                            <div class="panel-header">
+                                <div>
+                                    <p class="panel-kicker">
+                                        Tracking
+                                    </p>
+
+                                    <h2>
+                                        Watchlist
+                                    </h2>
+                                </div>
+
+                                <div class="panel-actions">
+                                    <button
+                                        id="reset-watchlist-button"
+                                        type="button"
+                                        class="secondary-button"
+                                        data-action="reset-watchlist"
+                                    >
+                                        Reset
+                                    </button>
+
+                                    <button
+                                        id="refresh-watchlist-button"
+                                        type="button"
+                                        class="secondary-button"
+                                        data-action="refresh-watchlist"
+                                    >
+                                        Refresh
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div
+                                id="watchlist"
+                                class="watchlist"
+                                aria-live="polite"
+                            >
+                                <p class="watchlist-status">
+                                    Loading watchlist…
+                                </p>
+                            </div>
+                        </article>
+
+                        <!-- Scanner -->
+
+                        <article class="panel scanner-panel">
+                            <div class="panel-header">
+                                <div>
+                                    <p class="panel-kicker">
+                                        Discovery
+                                    </p>
+
+                                    <h2>
+                                        AI Market Scanner
+                                    </h2>
+                                </div>
+
+                                <button
+                                    id="run-scanner-button"
+                                    type="button"
+                                    class="primary-button"
+                                    data-action="run-scanner"
+                                >
+                                    Run Scanner
+                                </button>
+                            </div>
+
+                            <div
+                                class="scanner-toolbar"
+                                aria-label="Scanner controls"
+                            >
+                                <label
+                                    class="compact-field"
+                                    for="scanner-search"
+                                >
+                                    <span>
+                                        Filter
+                                    </span>
+
+                                    <input
+                                        id="scanner-search"
+                                        type="search"
+                                        placeholder="Symbol or company"
+                                        autocomplete="off"
+                                    >
+                                </label>
+
+                                <label
+                                    class="compact-field"
+                                    for="scanner-sort"
+                                >
+                                    <span>
+                                        Sort
+                                    </span>
+
+                                    <select id="scanner-sort">
+                                        <option value="score-desc">
+                                            AI Score
+                                        </option>
+
+                                        <option value="confidence-desc">
+                                            Confidence
+                                        </option>
+
+                                        <option value="symbol-asc">
+                                            Symbol
+                                        </option>
+
+                                        <option value="price-desc">
+                                            Price
+                                        </option>
+                                    </select>
+                                </label>
+                            </div>
+
+                            <div
+                                id="scanner-results"
+                                class="scanner-results"
+                                aria-live="polite"
+                            >
+                                <p class="scanner-empty">
+                                    Run the scanner to analyze the market.
+                                </p>
+                            </div>
+                        </article>
+                    </section>
+
+                    <!-- Portfolio details -->
+
+                    <section
+                        class="portfolio-grid"
+                        aria-label="Portfolio details"
+                    >
+
+                        <!-- Positions -->
+
+                        <article class="panel positions-panel">
+                            <div class="panel-header">
+                                <div>
+                                    <p class="panel-kicker">
+                                        Holdings
+                                    </p>
+
+                                    <h2>
+                                        Open Positions
+                                    </h2>
+                                </div>
+                            </div>
+
+                            <div class="table-wrapper">
+                                <table>
+                                    <caption class="visually-hidden">
+                                        Current open paper-trading positions
+                                    </caption>
+
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">
+                                                Symbol
+                                            </th>
+
+                                            <th scope="col">
+                                                Shares
+                                            </th>
+
+                                            <th scope="col">
+                                                Entry
+                                            </th>
+
+                                            <th scope="col">
+                                                Current
+                                            </th>
+
+                                            <th scope="col">
+                                                Value
+                                            </th>
+
+                                            <th scope="col">
+                                                Gain / Loss
+                                            </th>
+
+                                            <th scope="col">
+                                                Return
+                                            </th>
+                                        </tr>
+                                    </thead>
+
+                                    <tbody id="positions-table">
+                                        <tr>
+                                            <td colspan="7">
+                                                No positions yet.
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </article>
+
+                        <!-- Allocation -->
+
+                        <article class="panel allocation-panel">
+                            <div class="panel-header">
+                                <div>
+                                    <p class="panel-kicker">
+                                        Diversification
+                                    </p>
+
+                                    <h2>
+                                        Portfolio Allocation
+                                    </h2>
+                                </div>
+                            </div>
+
+                            <div class="allocation-chart-container">
+                                <canvas
+                                    id="allocation-chart"
+                                    role="img"
+                                    aria-label="Portfolio allocation chart"
+                                ></canvas>
+                            </div>
+
+                            <div
+                                id="allocation-empty"
+                                class="allocation-empty"
+                            >
+                                Make a trade to view your portfolio allocation.
+                            </div>
+                        </article>
+
+                        <!-- History -->
+
+                        <article class="panel history-panel">
+                            <div class="panel-header">
+                                <div>
+                                    <p class="panel-kicker">
+                                        Activity
+                                    </p>
+
+                                    <h2>
+                                        Trade History
+                                    </h2>
+                                </div>
+                            </div>
+
+                            <div class="table-wrapper">
+                                <table>
+                                    <caption class="visually-hidden">
+                                        Completed paper trades
+                                    </caption>
+
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">
+                                                Action
+                                            </th>
+
+                                            <th scope="col">
+                                                Symbol
+                                            </th>
+
+                                            <th scope="col">
+                                                Shares
+                                            </th>
+
+                                            <th scope="col">
+                                                Price / Profit
+                                            </th>
+                                        </tr>
+                                    </thead>
+
+                                    <tbody id="history-table">
+                                        <tr>
+                                            <td colspan="4">
+                                                No trades yet.
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </article>
+                    </section>
+
+                    <!-- Portfolio performance -->
+
+                    <section class="panel portfolio-performance-panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">
+                                    Performance
+                                </p>
+
+                                <h2>
+                                    Portfolio Performance
+                                </h2>
+                            </div>
+
+                            <button
+                                id="refresh-portfolio-chart-button"
+                                type="button"
+                                class="secondary-button"
+                                data-action="refresh-portfolio-chart"
+                            >
+                                Refresh
+                            </button>
+                        </div>
+
+                        <div
+                            id="portfolio-chart"
+                            class="portfolio-chart"
+                            role="img"
+                            aria-label="Portfolio value over time"
+                        ></div>
+                    </section>
+                </section>
+
+                <!-- =====================================
+                     Research Lab section
+                ====================================== -->
+
+                <section
+                    id="strategy-section"
+                    class="strategy-section app-section hidden"
+                    aria-labelledby="strategy-title"
+                    hidden
+                >
+                    <article class="panel research-lab-panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">
+                                    Watchlist Research
+                                </p>
+
+                                <h2 id="strategy-title">
+                                    AI Research Lab
+                                </h2>
+                            </div>
+
+                            <button
+                                id="analyze-watchlist-button"
+                                type="button"
+                                class="primary-button"
+                                data-action="analyze-watchlist"
+                            >
+                                Analyze Watchlist
+                            </button>
+                        </div>
+
+                        <p class="strategy-description">
+                            Compare paper-trading signals, confidence, and technical conditions across your watchlist.
+                        </p>
+
+                        <div class="research-toolbar">
+                            <label
+                                class="compact-field"
+                                for="strategy-search"
+                            >
+                                <span>
+                                    Filter
+                                </span>
+
+                                <input
+                                    id="strategy-search"
+                                    type="search"
+                                    placeholder="Search symbol"
+                                    autocomplete="off"
+                                >
+                            </label>
+
+                            <label
+                                class="compact-field"
+                                for="strategy-sort"
+                            >
+                                <span>
+                                    Sort
+                                </span>
+
+                                <select id="strategy-sort">
+                                    <option value="confidence-desc">
+                                        Confidence
+                                    </option>
+
+                                    <option value="symbol-asc">
+                                        Symbol
+                                    </option>
+
+                                    <option value="price-desc">
+                                        Price
+                                    </option>
+
+                                    <option value="signal-asc">
+                                        Signal
+                                    </option>
+                                </select>
+                            </label>
+                        </div>
+
+                        <div class="table-wrapper">
+                            <table>
+                                <caption class="visually-hidden">
+                                    AI research results for watchlist stocks
+                                </caption>
+
+                                <thead>
+                                    <tr>
+                                        <th scope="col">
+                                            Symbol
+                                        </th>
+
+                                        <th scope="col">
+                                            Price
+                                        </th>
+
+                                        <th scope="col">
+                                            Signal
+                                        </th>
+
+                                        <th scope="col">
+                                            Confidence
+                                        </th>
+
+                                        <th scope="col">
+                                            Status
+                                        </th>
+                                    </tr>
+                                </thead>
+
+                                <tbody id="strategy-table">
+                                    <tr>
+                                        <td colspan="5">
+                                            Select Analyze Watchlist to begin.
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </article>
+                </section>
+            </main>
         </div>
-
-        <p class="strategy-description">
-            Analyze your watchlist for paper-trading signals.
-        </p>
-
-        <div class="table-wrapper">
-
-            <table>
-
-                <thead>
-                    <tr>
-                        <th>Symbol</th>
-                        <th>Price</th>
-                        <th>Signal</th>
-                        <th>Confidence</th>
-                        <th>Status</th>
-                    </tr>
-                </thead>
-
-                <tbody id="strategy-table">
-                    <tr>
-                        <td colspan="5">
-                            Click "Analyze Watchlist" to begin.
-                        </td>
-                    </tr>
-                </tbody>
-
-            </table>
-
-        </div>
-
     </div>
 
-</section>
-    <!-- JavaScript -->
+    <!-- =====================================
+         Application scripts
+    ====================================== -->
 
     <script src="js/app.js"></script>
     <script src="js/account.js"></script>
@@ -407,5 +918,86 @@
     <script src="js/portfolio.js"></script>
     <script src="js/strategy.js"></script>
 
+    <!-- =====================================
+         Button bindings
+    ====================================== -->
+
+    <script>
+        "use strict";
+
+        document.addEventListener(
+            "DOMContentLoaded",
+            () => {
+                bindPageAction(
+                    "refresh-dashboard-button",
+                    () => window.refreshDashboard?.()
+                );
+
+                bindPageAction(
+                    "add-watchlist-button",
+                    () => window.addCurrentStock?.()
+                );
+
+                bindPageAction(
+                    "refresh-watchlist-button",
+                    () => window.loadWatchlist?.()
+                );
+
+                bindPageAction(
+                    "reset-watchlist-button",
+                    () => window.resetWatchlist?.()
+                );
+
+                bindPageAction(
+                    "run-scanner-button",
+                    () => {
+                        if (
+                            typeof window.refreshScanner ===
+                            "function"
+                        ) {
+                            window.refreshScanner();
+                            return;
+                        }
+
+                        window.loadScanner?.();
+                    }
+                );
+
+                bindPageAction(
+                    "refresh-portfolio-chart-button",
+                    () => window.loadPortfolioChart?.()
+                );
+
+                bindPageAction(
+                    "analyze-watchlist-button",
+                    () => window.loadStrategyLab?.()
+                );
+            }
+        );
+
+
+        function bindPageAction(
+            elementId,
+            callback
+        ) {
+            const element =
+                document.getElementById(
+                    elementId
+                );
+
+            if (
+                !element ||
+                typeof callback !==
+                "function"
+            ) {
+                return;
+            }
+
+            element.addEventListener(
+                "click",
+                callback
+            );
+        }
+    </script>
 </body>
 </html>

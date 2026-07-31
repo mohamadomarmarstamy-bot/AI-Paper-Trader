@@ -1,3 +1,5 @@
+"use strict";
+
 let chart = null;
 let candleSeries = null;
 let volumeSeries = null;
@@ -5,202 +7,310 @@ let ma20Series = null;
 let ma50Series = null;
 
 let chartContainer = null;
+let chartElement = null;
 let resizeObserver = null;
 let activeChartRequest = null;
 let latestRequestNumber = 0;
 
+const CHART_HEIGHT = 420;
+const CHART_REQUEST_TIMEOUT_MS = 15_000;
 
+
+/**
+ * Creates the trading chart once.
+ *
+ * @returns {boolean} Whether the chart is ready.
+ */
 function createChart() {
-    // Never create the chart twice.
     if (chart) {
         return true;
     }
 
-    chartContainer = document.querySelector(".chart-container");
+    if (
+        typeof window.LightweightCharts ===
+        "undefined"
+    ) {
+        console.error(
+            "Lightweight Charts is not loaded."
+        );
+
+        showChartError(
+            "The chart library could not be loaded."
+        );
+
+        return false;
+    }
+
+    chartContainer =
+        document.querySelector(
+            ".chart-container"
+        );
 
     if (!chartContainer) {
-        console.error("Chart container was not found.");
+        console.error(
+            "Chart container was not found."
+        );
+
         return false;
     }
 
     chartContainer.innerHTML = "";
 
-    const chartDiv = document.createElement("div");
+    chartElement =
+        document.createElement("div");
 
-    chartDiv.id = "trading-chart";
-    chartDiv.style.width = "100%";
-    chartDiv.style.height = "420px";
+    chartElement.id = "trading-chart";
+    chartElement.style.width = "100%";
+    chartElement.style.height =
+        `${CHART_HEIGHT}px`;
 
-    chartContainer.appendChild(chartDiv);
-
-    chart = LightweightCharts.createChart(chartDiv, {
-        width: chartDiv.clientWidth,
-        height: 420,
-
-        layout: {
-            background: {
-                type: "solid",
-                color: "#111827"
-            },
-            textColor: "#d1d5db"
-        },
-
-        grid: {
-            vertLines: {
-                color: "#1f2937"
-            },
-            horzLines: {
-                color: "#1f2937"
-            }
-        },
-
-        rightPriceScale: {
-            borderColor: "#374151"
-        },
-
-        timeScale: {
-            borderColor: "#374151",
-            timeVisible: false,
-            secondsVisible: false
-        },
-
-        crosshair: {
-            mode: LightweightCharts.CrosshairMode.Normal
-        }
-    });
-
-    candleSeries = chart.addSeries(
-        LightweightCharts.CandlestickSeries,
-        {
-            upColor: "#22c55e",
-            downColor: "#ef4444",
-            borderVisible: false,
-            wickUpColor: "#22c55e",
-            wickDownColor: "#ef4444"
-        }
+    chartContainer.appendChild(
+        chartElement
     );
 
-    volumeSeries = chart.addSeries(
-        LightweightCharts.HistogramSeries,
-        {
-            priceFormat: {
-                type: "volume"
-            },
-            priceScaleId: "volume",
-            priceLineVisible: false,
-            lastValueVisible: false
-        }
-    );
+    try {
+        chart =
+            window.LightweightCharts.createChart(
+                chartElement,
+                {
+                    width:
+                        chartElement.clientWidth ||
+                        chartContainer.clientWidth ||
+                        800,
 
-    chart.priceScale("volume").applyOptions({
-        scaleMargins: {
-            top: 0.8,
-            bottom: 0
-        }
-    });
+                    height: CHART_HEIGHT,
 
-    ma20Series = chart.addSeries(
-        LightweightCharts.LineSeries,
-        {
-            color: "#3b82f6",
-            lineWidth: 2,
-            priceLineVisible: false,
-            lastValueVisible: false,
-            title: "MA 20"
-        }
-    );
+                    layout: {
+                        background: {
+                            type:
+                                getSolidBackgroundType(),
 
-    ma50Series = chart.addSeries(
-        LightweightCharts.LineSeries,
-        {
-            color: "#f59e0b",
-            lineWidth: 2,
-            priceLineVisible: false,
-            lastValueVisible: false,
-            title: "MA 50"
-        }
-    );
+                            color: "#111827",
+                        },
 
-    resizeObserver = new ResizeObserver((entries) => {
-        if (!chart || entries.length === 0) {
-            return;
-        }
+                        textColor: "#d1d5db",
+                    },
 
-        const width = Math.floor(
-            entries[0].contentRect.width
+                    grid: {
+                        vertLines: {
+                            color: "#1f2937",
+                        },
+
+                        horzLines: {
+                            color: "#1f2937",
+                        },
+                    },
+
+                    rightPriceScale: {
+                        borderColor: "#374151",
+                    },
+
+                    timeScale: {
+                        borderColor: "#374151",
+                        timeVisible: false,
+                        secondsVisible: false,
+                    },
+
+                    crosshair: {
+                        mode:
+                            window.LightweightCharts
+                                .CrosshairMode
+                                ?.Normal ?? 0,
+                    },
+                }
+            );
+
+        candleSeries =
+            addCandlestickSeries(chart);
+
+        volumeSeries =
+            addHistogramSeries(chart);
+
+        ma20Series =
+            addLineSeries(
+                chart,
+                {
+                    color: "#3b82f6",
+                    lineWidth: 2,
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    title: "MA 20",
+                }
+            );
+
+        ma50Series =
+            addLineSeries(
+                chart,
+                {
+                    color: "#f59e0b",
+                    lineWidth: 2,
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    title: "MA 50",
+                }
+            );
+
+        chart
+            .priceScale("volume")
+            .applyOptions({
+                scaleMargins: {
+                    top: 0.8,
+                    bottom: 0,
+                },
+            });
+
+        setupChartResizeObserver();
+
+        return true;
+    } catch (error) {
+        console.error(
+            "Could not create the trading chart:",
+            error
         );
 
-        if (width > 0) {
-            chart.applyOptions({
-                width: width
-            });
-        }
-    });
+        destroyChart();
 
-    resizeObserver.observe(chartDiv);
+        showChartError(
+            "The trading chart could not be created."
+        );
 
-    return true;
+        return false;
+    }
 }
 
 
+/**
+ * Loads chart information for a stock symbol.
+ *
+ * @param {string} symbol
+ */
 async function loadChart(symbol) {
-    const cleanSymbol = String(symbol || "")
-        .trim()
-        .toUpperCase();
+    const cleanSymbol =
+        normalizeSymbol(symbol);
 
     if (!cleanSymbol) {
+        console.warn(
+            "A valid symbol is required to load a chart."
+        );
+
         return;
     }
 
-    const chartReady = createChart();
-
-    if (!chartReady) {
+    if (!createChart()) {
         return;
     }
 
-    // Cancel the previous request when another stock is clicked.
-    if (activeChartRequest) {
-        activeChartRequest.abort();
-    }
+    cancelActiveChartRequest();
 
-    activeChartRequest = new AbortController();
+    const requestController =
+        new AbortController();
 
-    const requestNumber = ++latestRequestNumber;
+    activeChartRequest =
+        requestController;
+
+    const requestNumber =
+        ++latestRequestNumber;
+
+    const timeoutId =
+        window.setTimeout(
+            () => {
+                requestController.abort();
+            },
+            CHART_REQUEST_TIMEOUT_MS
+        );
+
+    setChartLoadingState(cleanSymbol);
 
     try {
         const response = await fetch(
-            `https://ai-paper-trader-production-7465.up.railway.app/chart/${encodeURIComponent(cleanSymbol)}`,
+            `${getApiUrl()}/chart/${encodeURIComponent(
+                cleanSymbol
+            )}`,
             {
-                signal: activeChartRequest.signal
+                method: "GET",
+
+                headers: {
+                    Accept: "application/json",
+                },
+
+                signal:
+                    requestController.signal,
             }
         );
 
+        const payload =
+            await readJsonResponse(response);
+
         if (!response.ok) {
+            const message =
+                payload?.detail ??
+                payload?.error ??
+                `Chart request failed with status ${response.status}.`;
+
             throw new Error(
-                `Chart request failed: ${response.status}`
+                String(message)
             );
         }
 
-        const data = await response.json();
-
-        // Ignore an older request that finished late.
-        if (requestNumber !== latestRequestNumber) {
+        if (
+            requestNumber !==
+            latestRequestNumber
+        ) {
             return;
         }
 
-        if (!Array.isArray(data.candles)) {
-            throw new Error("Invalid candle data received.");
+        const chartData =
+            normalizeChartData(payload);
+
+        candleSeries.setData(
+            chartData.candles
+        );
+
+        volumeSeries.setData(
+            chartData.volume
+        );
+
+        ma20Series.setData(
+            chartData.ma20
+        );
+
+        ma50Series.setData(
+            chartData.ma50
+        );
+
+        if (
+            chartData.candles.length === 0
+        ) {
+            showChartMessage(
+                `No chart data is available for ${cleanSymbol}.`
+            );
+
+            return;
         }
 
-        candleSeries.setData(data.candles);
-        volumeSeries.setData(data.volume || []);
-        ma20Series.setData(data.ma20 || []);
-        ma50Series.setData(data.ma50 || []);
+        clearChartMessage();
 
-        chart.timeScale().fitContent();
-
+        chart
+            .timeScale()
+            .fitContent();
     } catch (error) {
-        if (error.name === "AbortError") {
+        if (
+            error?.name ===
+            "AbortError"
+        ) {
+            if (
+                requestNumber ===
+                latestRequestNumber
+            ) {
+                console.warn(
+                    `Chart request for ${cleanSymbol} was cancelled or timed out.`
+                );
+
+                showChartMessage(
+                    `The chart request for ${cleanSymbol} timed out.`
+                );
+            }
+
             return;
         }
 
@@ -208,14 +318,560 @@ async function loadChart(symbol) {
             `Could not load chart for ${cleanSymbol}:`,
             error
         );
+
+        if (
+            requestNumber ===
+            latestRequestNumber
+        ) {
+            clearChartSeries();
+
+            showChartMessage(
+                `Could not load chart data for ${cleanSymbol}.`
+            );
+        }
+    } finally {
+        window.clearTimeout(
+            timeoutId
+        );
+
+        if (
+            activeChartRequest ===
+            requestController
+        ) {
+            activeChartRequest =
+                null;
+        }
     }
 }
 
 
-// Make it reliably available to every other JavaScript file.
+/**
+ * Supports Lightweight Charts version 5 and older versions.
+ */
+function addCandlestickSeries(
+    chartInstance
+) {
+    const options = {
+        upColor: "#22c55e",
+        downColor: "#ef4444",
+        borderVisible: false,
+        wickUpColor: "#22c55e",
+        wickDownColor: "#ef4444",
+    };
+
+    if (
+        typeof chartInstance.addSeries ===
+            "function" &&
+        window.LightweightCharts
+            .CandlestickSeries
+    ) {
+        return chartInstance.addSeries(
+            window.LightweightCharts
+                .CandlestickSeries,
+            options
+        );
+    }
+
+    if (
+        typeof chartInstance
+            .addCandlestickSeries ===
+        "function"
+    ) {
+        return chartInstance
+            .addCandlestickSeries(
+                options
+            );
+    }
+
+    throw new Error(
+        "Candlestick series is not supported by this Lightweight Charts version."
+    );
+}
+
+
+function addHistogramSeries(
+    chartInstance
+) {
+    const options = {
+        priceFormat: {
+            type: "volume",
+        },
+
+        priceScaleId: "volume",
+        priceLineVisible: false,
+        lastValueVisible: false,
+    };
+
+    if (
+        typeof chartInstance.addSeries ===
+            "function" &&
+        window.LightweightCharts
+            .HistogramSeries
+    ) {
+        return chartInstance.addSeries(
+            window.LightweightCharts
+                .HistogramSeries,
+            options
+        );
+    }
+
+    if (
+        typeof chartInstance
+            .addHistogramSeries ===
+        "function"
+    ) {
+        return chartInstance
+            .addHistogramSeries(
+                options
+            );
+    }
+
+    throw new Error(
+        "Histogram series is not supported by this Lightweight Charts version."
+    );
+}
+
+
+function addLineSeries(
+    chartInstance,
+    options
+) {
+    if (
+        typeof chartInstance.addSeries ===
+            "function" &&
+        window.LightweightCharts
+            .LineSeries
+    ) {
+        return chartInstance.addSeries(
+            window.LightweightCharts
+                .LineSeries,
+            options
+        );
+    }
+
+    if (
+        typeof chartInstance
+            .addLineSeries ===
+        "function"
+    ) {
+        return chartInstance
+            .addLineSeries(
+                options
+            );
+    }
+
+    throw new Error(
+        "Line series is not supported by this Lightweight Charts version."
+    );
+}
+
+
+function getSolidBackgroundType() {
+    return (
+        window.LightweightCharts
+            .ColorType?.Solid ??
+        "solid"
+    );
+}
+
+
+function setupChartResizeObserver() {
+    if (
+        typeof window.ResizeObserver ===
+        "undefined"
+    ) {
+        window.addEventListener(
+            "resize",
+            resizeChart
+        );
+
+        return;
+    }
+
+    resizeObserver =
+        new ResizeObserver(
+            entries => {
+                const entry =
+                    entries[0];
+
+                if (
+                    !entry ||
+                    !chart
+                ) {
+                    return;
+                }
+
+                const width =
+                    Math.floor(
+                        entry.contentRect.width
+                    );
+
+                resizeChart(width);
+            }
+        );
+
+    resizeObserver.observe(
+        chartElement
+    );
+}
+
+
+function resizeChart(width = null) {
+    if (
+        !chart ||
+        !chartElement
+    ) {
+        return;
+    }
+
+    const chartWidth =
+        Number.isFinite(width)
+            ? width
+            : Math.floor(
+                chartElement
+                    .clientWidth
+            );
+
+    if (chartWidth <= 0) {
+        return;
+    }
+
+    chart.applyOptions({
+        width: chartWidth,
+        height: CHART_HEIGHT,
+    });
+}
+
+
+function normalizeChartData(payload) {
+    if (
+        !payload ||
+        typeof payload !==
+            "object" ||
+        Array.isArray(payload)
+    ) {
+        throw new Error(
+            "The server returned invalid chart data."
+        );
+    }
+
+    if (
+        !Array.isArray(
+            payload.candles
+        )
+    ) {
+        throw new Error(
+            "The server response did not include valid candle data."
+        );
+    }
+
+    return {
+        candles:
+            normalizeSeriesData(
+                payload.candles
+            ),
+
+        volume:
+            normalizeSeriesData(
+                payload.volume
+            ),
+
+        ma20:
+            normalizeSeriesData(
+                payload.ma20
+            ),
+
+        ma50:
+            normalizeSeriesData(
+                payload.ma50
+            ),
+    };
+}
+
+
+function normalizeSeriesData(series) {
+    if (!Array.isArray(series)) {
+        return [];
+    }
+
+    return series
+        .filter(
+            item =>
+                item &&
+                typeof item ===
+                    "object" &&
+                item.time !==
+                    undefined &&
+                item.time !==
+                    null
+        )
+        .sort(
+            (first, second) =>
+                getTimeValue(
+                    first.time
+                ) -
+                getTimeValue(
+                    second.time
+                )
+        );
+}
+
+
+function getTimeValue(value) {
+    if (
+        typeof value ===
+        "number"
+    ) {
+        return value;
+    }
+
+    if (
+        typeof value ===
+        "string"
+    ) {
+        const numericValue =
+            Number(value);
+
+        if (
+            Number.isFinite(
+                numericValue
+            )
+        ) {
+            return numericValue;
+        }
+
+        const dateValue =
+            Date.parse(value);
+
+        if (
+            Number.isFinite(
+                dateValue
+            )
+        ) {
+            return dateValue;
+        }
+    }
+
+    if (
+        value &&
+        typeof value ===
+            "object"
+    ) {
+        return (
+            Number(value.year) *
+                10_000 +
+            Number(value.month) *
+                100 +
+            Number(value.day)
+        );
+    }
+
+    return 0;
+}
+
+
+async function readJsonResponse(
+    response
+) {
+    try {
+        return await response.json();
+    } catch {
+        return null;
+    }
+}
+
+
+function getApiUrl() {
+    const apiUrl =
+        String(
+            window.API_URL ?? ""
+        ).replace(/\/+$/, "");
+
+    if (!apiUrl) {
+        throw new Error(
+            "API_URL is not configured."
+        );
+    }
+
+    return apiUrl;
+}
+
+
+function normalizeSymbol(symbol) {
+    return String(
+        symbol ?? ""
+    )
+        .trim()
+        .toUpperCase();
+}
+
+
+function cancelActiveChartRequest() {
+    if (activeChartRequest) {
+        activeChartRequest.abort();
+        activeChartRequest = null;
+    }
+}
+
+
+function clearChartSeries() {
+    candleSeries?.setData([]);
+    volumeSeries?.setData([]);
+    ma20Series?.setData([]);
+    ma50Series?.setData([]);
+}
+
+
+function setChartLoadingState(
+    symbol
+) {
+    clearChartMessage();
+
+    if (
+        chartContainer
+    ) {
+        chartContainer.setAttribute(
+            "aria-busy",
+            "true"
+        );
+
+        chartContainer.setAttribute(
+            "aria-label",
+            `Loading chart for ${symbol}`
+        );
+    }
+}
+
+
+function clearChartMessage() {
+    if (!chartContainer) {
+        return;
+    }
+
+    chartContainer.removeAttribute(
+        "aria-busy"
+    );
+
+    chartContainer.removeAttribute(
+        "aria-label"
+    );
+
+    const message =
+        chartContainer.querySelector(
+            ".chart-status-message"
+        );
+
+    if (message) {
+        message.remove();
+    }
+
+    if (chartElement) {
+        chartElement.style.display =
+            "block";
+    }
+}
+
+
+function showChartMessage(message) {
+    if (!chartContainer) {
+        return;
+    }
+
+    clearChartMessage();
+
+    chartContainer.removeAttribute(
+        "aria-busy"
+    );
+
+    if (chartElement) {
+        chartElement.style.display =
+            "none";
+    }
+
+    const messageElement =
+        document.createElement("div");
+
+    messageElement.className =
+        "chart-status-message";
+
+    messageElement.setAttribute(
+        "role",
+        "status"
+    );
+
+    messageElement.textContent =
+        message;
+
+    chartContainer.appendChild(
+        messageElement
+    );
+}
+
+
+function showChartError(message) {
+    chartContainer =
+        chartContainer ??
+        document.querySelector(
+            ".chart-container"
+        );
+
+    if (!chartContainer) {
+        return;
+    }
+
+    chartContainer.innerHTML = "";
+
+    const errorElement =
+        document.createElement("div");
+
+    errorElement.className =
+        "chart-status-message chart-error-message";
+
+    errorElement.setAttribute(
+        "role",
+        "alert"
+    );
+
+    errorElement.textContent =
+        message;
+
+    chartContainer.appendChild(
+        errorElement
+    );
+}
+
+
+function destroyChart() {
+    cancelActiveChartRequest();
+
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+
+    window.removeEventListener(
+        "resize",
+        resizeChart
+    );
+
+    if (chart) {
+        chart.remove();
+    }
+
+    chart = null;
+    candleSeries = null;
+    volumeSeries = null;
+    ma20Series = null;
+    ma50Series = null;
+    chartElement = null;
+}
+
+
 window.loadChart = loadChart;
+window.createChart = createChart;
+window.destroyChart = destroyChart;
 
-
-window.addEventListener("DOMContentLoaded", () => {
-    createChart();
-});
+window.addEventListener(
+    "DOMContentLoaded",
+    () => {
+        createChart();
+    }
+);
