@@ -417,6 +417,94 @@ def extract_symbol_history(
 
 
 # =========================================================
+# Scanner presentation and risk helpers
+# =========================================================
+
+def classify_risk_level(atr_percent: float) -> str:
+    """Classify volatility from ATR as a percentage of price."""
+    if atr_percent < 2.0:
+        return "LOW"
+    if atr_percent < 4.0:
+        return "MEDIUM"
+    return "HIGH"
+
+
+def classify_trend(
+    *,
+    price: float,
+    sma_20: float,
+    sma_50: float,
+    macd: float,
+    macd_signal: float,
+    twenty_day_change: float,
+) -> str:
+    """Return a frontend-friendly technical trend label."""
+    bullish_structure = price > sma_20 > sma_50
+    bearish_structure = price < sma_20 < sma_50
+
+    if (
+        bullish_structure
+        and macd > macd_signal
+        and twenty_day_change >= 5.0
+    ):
+        return "STRONG BULLISH"
+
+    if (
+        bearish_structure
+        and macd < macd_signal
+        and twenty_day_change <= -5.0
+    ):
+        return "STRONG BEARISH"
+
+    if price > sma_20 and (sma_20 >= sma_50 or macd > macd_signal):
+        return "BULLISH"
+
+    if price < sma_20 and (sma_20 <= sma_50 or macd < macd_signal):
+        return "BEARISH"
+
+    return "NEUTRAL"
+
+
+def recommendation_from_score(score: int) -> str:
+    """Return the recommendation labels expected by the V3 frontend."""
+    if score >= 90:
+        return "STRONG BUY"
+    if score >= 75:
+        return "BUY"
+    if score >= 55:
+        return "WATCH"
+    if score >= 35:
+        return "AVOID"
+    return "STRONG SELL"
+
+
+def build_trade_plan(price: float) -> dict[str, float]:
+    """
+    Build the scanner's default paper-trade plan.
+
+    These values intentionally match the current Trade Center defaults:
+    a 5% stop and a 10% target, which produces a 2:1 reward/risk ratio.
+    """
+    stop_loss = price * 0.95
+    take_profit = price * 1.10
+
+    risk_per_share = max(price - stop_loss, 0.0)
+    reward_per_share = max(take_profit - price, 0.0)
+
+    risk_reward_ratio = (
+        reward_per_share / risk_per_share
+        if risk_per_share > 0
+        else 0.0
+    )
+
+    return {
+        "stop_loss": round(stop_loss, 2),
+        "take_profit": round(take_profit, 2),
+        "risk_reward_ratio": round(risk_reward_ratio, 2),
+    }
+
+
+# =========================================================
 # Ranking
 # =========================================================
 
@@ -543,13 +631,12 @@ def rank_candidate(
 
     if score >= 65:
         signal = "BUY"
-        rating = "Bullish"
     elif score <= 35:
         signal = "SELL"
-        rating = "Bearish"
     else:
         signal = "HOLD"
-        rating = "Neutral"
+
+    rating = recommendation_from_score(score)
 
     confidence = min(
         95,
@@ -688,6 +775,19 @@ def analyze_stock(
 
     reasons = list(ranking["reasons"])
 
+    risk_level = classify_risk_level(atr_percent)
+
+    trend = classify_trend(
+        price=price,
+        sma_20=sma_20,
+        sma_50=sma_50,
+        macd=macd,
+        macd_signal=macd_signal,
+        twenty_day_change=twenty_day_change,
+    )
+
+    trade_plan = build_trade_plan(price)
+
     return {
         "symbol": symbol,
         "price": round(price, 2),
@@ -698,7 +798,12 @@ def analyze_stock(
         "scanner_score": ranking["score"],
         "signal": ranking["signal"],
         "rating": ranking["rating"],
+        "recommendation": ranking["rating"],
         "confidence": ranking["confidence"],
+        "trend": trend,
+        "trend_strength": trend,
+        "risk": risk_level,
+        "risk_level": risk_level,
         "rsi": round(rsi, 2),
         "ma20": round(sma_20, 2),
         "ma50": round(sma_50, 2),
@@ -709,6 +814,10 @@ def analyze_stock(
         "average_volume": int(round(average_volume)),
         "atr": round(atr, 2),
         "atr_percent": round(atr_percent, 2),
+        "stop_loss": trade_plan["stop_loss"],
+        "take_profit": trade_plan["take_profit"],
+        "risk_reward": trade_plan["risk_reward_ratio"],
+        "risk_reward_ratio": trade_plan["risk_reward_ratio"],
         "bollinger_upper": round(bollinger_upper, 2),
         "bollinger_middle": round(bollinger_middle, 2),
         "bollinger_lower": round(bollinger_lower, 2),
