@@ -88,6 +88,7 @@ async function loadAccount() {
         );
 
         const startingBalance = toNumber(
+            account.starting_cash ??
             account.starting_balance ??
             account.initial_balance ??
             DEFAULT_STARTING_BALANCE
@@ -97,6 +98,43 @@ async function loadAccount() {
             account.profit_loss ??
             account.total_profit_loss ??
             portfolioValue - startingBalance
+        );
+
+        const profitLossPercent = toNumber(
+            account.profit_loss_percent ??
+            account.total_return_percent
+        );
+
+        const realizedProfitLoss = toNumber(
+            account.realized_profit_loss
+        );
+
+        const unrealizedProfitLoss = toNumber(
+            account.unrealized_profit_loss
+        );
+
+        const winRate = toNumber(
+            account.win_rate
+        );
+
+        const closedTrades = Math.max(
+            0,
+            Math.trunc(
+                toNumber(account.closed_trades)
+            )
+        );
+
+        const cashPercent = toNumber(
+            account.cash_percent
+        );
+
+        const investedPercent = toNumber(
+            account.invested_percent
+        );
+
+        const highestPortfolioValue = toNumber(
+            account.performance?.highest_value ??
+            portfolioValue
         );
 
         const positions =
@@ -128,7 +166,70 @@ async function loadAccount() {
             String(positions.length)
         );
 
+        setText(
+            "total-return-percent",
+            formatSignedPercentage(
+                profitLossPercent
+            )
+        );
+
+        setText(
+            "realized-profit-loss",
+            formatSignedMoney(
+                realizedProfitLoss
+            )
+        );
+
+        setText(
+            "unrealized-profit-loss",
+            formatSignedMoney(
+                unrealizedProfitLoss
+            )
+        );
+
+        setText(
+            "win-rate",
+            `${winRate.toFixed(2)}%`
+        );
+
+        setText(
+            "closed-trades",
+            String(closedTrades)
+        );
+
+        setText(
+            "cash-percent",
+            `${cashPercent.toFixed(2)}%`
+        );
+
+        setText(
+            "invested-percent",
+            `${investedPercent.toFixed(2)}%`
+        );
+
+        setText(
+            "highest-portfolio-value",
+            formatMoney(
+                highestPortfolioValue
+            )
+        );
+
         updateProfitLossColor(profitLoss);
+
+        updateMetricColor(
+            "total-return-percent",
+            profitLossPercent
+        );
+
+        updateMetricColor(
+            "realized-profit-loss",
+            realizedProfitLoss
+        );
+
+        updateMetricColor(
+            "unrealized-profit-loss",
+            unrealizedProfitLoss
+        );
 
         renderPositions(
             positionsTable,
@@ -195,8 +296,7 @@ async function fetchJson(
     try {
         payload = await response.json();
     } catch {
-        // A non-JSON error response is
-        // handled below.
+        // Non-JSON error responses are handled below.
     }
 
     if (!response.ok) {
@@ -229,7 +329,6 @@ async function fetchJson(
 function getApiUrl() {
     const apiUrl = String(
         window.API_URL ?? ""
-
     ).replace(/\/+$/, "");
 
     if (!apiUrl) {
@@ -240,7 +339,6 @@ function getApiUrl() {
 
     return apiUrl;
 }
-
 function normalizePositions(positions) {
     if (!positions) {
         return [];
@@ -306,14 +404,40 @@ function getPositionDetails(position) {
         shares * currentPrice
     );
 
+    const costBasis = toNumber(
+        position?.cost_basis ??
+        shares * entryPrice
+    );
+
+    const unrealizedProfit = toNumber(
+        position?.unrealized_profit ??
+        positionValue - costBasis
+    );
+
+    const unrealizedProfitPercent = toNumber(
+        position?.unrealized_profit_percent ??
+        (
+            costBasis > 0
+                ? (
+                    unrealizedProfit /
+                    costBasis
+                ) * 100
+                : 0
+        )
+    );
+
     return {
         symbol,
         shares,
         entryPrice,
         currentPrice,
         positionValue,
+        costBasis,
+        unrealizedProfit,
+        unrealizedProfitPercent,
     };
 }
+
 function renderPositions(
     table,
     positions
@@ -340,21 +464,15 @@ function renderPositions(
                 entryPrice,
                 currentPrice,
                 positionValue,
+                unrealizedProfit,
+                unrealizedProfitPercent,
             } = position;
 
-            const costBasis =
-                shares * entryPrice;
-
             const gainLoss =
-                positionValue - costBasis;
+                unrealizedProfit;
 
             const returnPercentage =
-                costBasis > 0
-                    ? (
-                        gainLoss /
-                        costBasis
-                    ) * 100
-                    : 0;
+                unrealizedProfitPercent;
 
             const performanceClass =
                 getPerformanceClass(
@@ -604,7 +722,6 @@ function renderAllocationChart(
             }
         );
 }
-
 function showAllocationError() {
     const canvas =
         document.getElementById(
@@ -650,6 +767,7 @@ function destroyAllocationChart() {
         allocationChart = null;
     }
 }
+
 function normalizeHistory(history) {
     if (!history) {
         return [];
@@ -733,6 +851,7 @@ function normalizeHistory(history) {
                 price,
                 total,
                 timestamp,
+
                 timestampValue:
                     getTimestampValue(timestamp),
             };
@@ -884,6 +1003,7 @@ function formatDateTime(value) {
         }
     ).format(date);
 }
+
 function toNumber(value) {
     if (
         value === null ||
@@ -961,6 +1081,29 @@ function getPerformanceClass(value) {
     }
 
     return "neutral";
+}
+function updateMetricColor(
+    elementId,
+    value
+) {
+    const element =
+        document.getElementById(
+            elementId
+        );
+
+    if (!element) {
+        return;
+    }
+
+    element.classList.remove(
+        "positive",
+        "negative",
+        "neutral"
+    );
+
+    element.classList.add(
+        getPerformanceClass(value)
+    );
 }
 
 function updateProfitLossColor(value) {
@@ -1120,3 +1263,11 @@ function handleAccountTableClick(event) {
         );
     }
 }
+
+document.addEventListener(
+    "click",
+    handleAccountTableClick
+);
+
+window.loadAccount =
+    loadAccount;
