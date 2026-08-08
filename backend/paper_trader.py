@@ -515,130 +515,181 @@ class PaperTrader:
 
     def account(self) -> dict[str, Any]:
         """
-        Return account balances, positions, and history.
+        Return account balances, positions, trade history, and
+        portfolio-performance metrics.
         """
         with self._lock:
-            positions_list: list[
-                dict[str, Any]
-            ] = []
+            positions_list: list[dict[str, Any]] = []
 
             invested_value = 0.0
+            total_cost_basis = 0.0
+            total_unrealized_profit = 0.0
 
             for symbol in sorted(self.positions):
                 position = self.positions[symbol]
-
-                shares = int(
-                    position["shares"]
-                )
-
-                entry_price = float(
-                    position["entry_price"]
-                )
-
+                shares = int(position["shares"])
+                entry_price = float(position["entry_price"])
                 current_price = self._valid_market_price(
                     self.current_prices.get(symbol),
                     fallback=entry_price,
                 )
 
-                position_value = round(
-                    shares * current_price,
-                    2,
-                )
-
-                unrealized_profit = round(
-                    (
-                        current_price
-                        - entry_price
-                    )
-                    * shares,
-                    2,
+                cost_basis = round(shares * entry_price, 2)
+                position_value = round(shares * current_price, 2)
+                unrealized_profit = round(position_value - cost_basis, 2)
+                unrealized_profit_percent = (
+                    round((unrealized_profit / cost_basis) * 100, 2)
+                    if cost_basis > 0
+                    else 0.0
                 )
 
                 invested_value += position_value
+                total_cost_basis += cost_basis
+                total_unrealized_profit += unrealized_profit
 
-                stop_loss = (
-                    self.risk_manager.calculate_stop_loss(
-                        entry_price
-                    )
-                )
-
-                take_profit = (
-                    self.risk_manager.calculate_take_profit(
-                        entry_price
-                    )
-                )
+                stop_loss = self.risk_manager.calculate_stop_loss(entry_price)
+                take_profit = self.risk_manager.calculate_take_profit(entry_price)
 
                 positions_list.append({
                     "symbol": symbol,
                     "shares": shares,
-                    "entry_price": round(
-                        entry_price,
-                        2,
-                    ),
-                    "current_price": round(
-                        current_price,
-                        2,
-                    ),
+                    "entry_price": round(entry_price, 2),
+                    "current_price": round(current_price, 2),
+                    "cost_basis": cost_basis,
                     "position_value": position_value,
-                    "unrealized_profit": (
-                        unrealized_profit
-                    ),
+                    "unrealized_profit": unrealized_profit,
+                    "unrealized_profit_percent": unrealized_profit_percent,
                     "stop_loss": stop_loss,
                     "take_profit": take_profit,
                 })
 
-            invested_value = round(
-                invested_value,
-                2,
+            invested_value = round(invested_value, 2)
+            total_cost_basis = round(total_cost_basis, 2)
+            total_unrealized_profit = round(total_unrealized_profit, 2)
+            portfolio_value = round(self.cash + invested_value, 2)
+            profit_loss = round(portfolio_value - self.starting_cash, 2)
+            profit_loss_percent = (
+                round((profit_loss / self.starting_cash) * 100, 2)
+                if self.starting_cash > 0
+                else 0.0
             )
 
-            portfolio_value = round(
-                self.cash + invested_value,
-                2,
+            realized_profit_loss = self._calculate_realized_profit_loss()
+            trade_stats = self._calculate_trade_statistics()
+            performance = self._calculate_performance_summary(
+                current_value=portfolio_value
             )
 
-            profit_loss = round(
-                portfolio_value
-                - self.starting_cash,
-                2,
+            cash_percent = (
+                round((self.cash / portfolio_value) * 100, 2)
+                if portfolio_value > 0
+                else 0.0
+            )
+            invested_percent = (
+                round((invested_value / portfolio_value) * 100, 2)
+                if portfolio_value > 0
+                else 0.0
             )
 
             return {
-                "starting_cash": round(
-                    self.starting_cash,
-                    2,
-                ),
-                "cash": round(
-                    self.cash,
-                    2,
-                ),
+                "starting_cash": round(self.starting_cash, 2),
+                "cash": round(self.cash, 2),
+                "cash_percent": cash_percent,
                 "invested_value": invested_value,
+                "invested_percent": invested_percent,
+                "total_cost_basis": total_cost_basis,
                 "portfolio_value": portfolio_value,
                 "profit_loss": profit_loss,
+                "profit_loss_percent": profit_loss_percent,
+                "total_return_percent": profit_loss_percent,
+                "realized_profit_loss": realized_profit_loss,
+                "unrealized_profit_loss": total_unrealized_profit,
+                "winning_trades": trade_stats["winning_trades"],
+                "losing_trades": trade_stats["losing_trades"],
+                "break_even_trades": trade_stats["break_even_trades"],
+                "closed_trades": trade_stats["closed_trades"],
+                "win_rate": trade_stats["win_rate"],
                 "positions": positions_list,
-                "history": [
-                    trade.copy()
-                    for trade in self.history
-                ],
+                "history": [trade.copy() for trade in self.history],
+                "performance": performance,
                 "risk_settings": {
-                    "max_position_percent": (
-                        self.risk_manager.settings
-                        .max_position_percent
-                    ),
-                    "risk_per_trade_percent": (
-                        self.risk_manager.settings
-                        .risk_per_trade_percent
-                    ),
-                    "stop_loss_percent": (
-                        self.risk_manager.settings
-                        .stop_loss_percent
-                    ),
-                    "take_profit_percent": (
-                        self.risk_manager.settings
-                        .take_profit_percent
-                    ),
+                    "max_position_percent": self.risk_manager.settings.max_position_percent,
+                    "risk_per_trade_percent": self.risk_manager.settings.risk_per_trade_percent,
+                    "stop_loss_percent": self.risk_manager.settings.stop_loss_percent,
+                    "take_profit_percent": self.risk_manager.settings.take_profit_percent,
                 },
             }
+
+    def _calculate_realized_profit_loss(self) -> float:
+        """Sum realized profit/loss from completed SELL trades."""
+        realized_profit_loss = 0.0
+        for trade in self.history:
+            if str(trade.get("action", "")).upper() != "SELL":
+                continue
+            profit = self._finite_number(trade.get("profit"))
+            if profit is not None:
+                realized_profit_loss += profit
+        return round(realized_profit_loss, 2)
+
+    def _calculate_trade_statistics(self) -> dict[str, Any]:
+        """Return win/loss statistics for completed SELL trades."""
+        winning_trades = 0
+        losing_trades = 0
+        break_even_trades = 0
+
+        for trade in self.history:
+            if str(trade.get("action", "")).upper() != "SELL":
+                continue
+            profit = self._finite_number(trade.get("profit"))
+            if profit is None:
+                continue
+            if profit > 0:
+                winning_trades += 1
+            elif profit < 0:
+                losing_trades += 1
+            else:
+                break_even_trades += 1
+
+        decided_trades = winning_trades + losing_trades
+        win_rate = (
+            round((winning_trades / decided_trades) * 100, 2)
+            if decided_trades > 0
+            else 0.0
+        )
+
+        return {
+            "winning_trades": winning_trades,
+            "losing_trades": losing_trades,
+            "break_even_trades": break_even_trades,
+            "closed_trades": winning_trades + losing_trades + break_even_trades,
+            "win_rate": win_rate,
+        }
+
+    def _calculate_performance_summary(self, current_value: float) -> dict[str, Any]:
+        """Return high-level portfolio performance information."""
+        values: list[float] = []
+        for snapshot in self.portfolio_history:
+            value = self._non_negative_number(snapshot.get("value"))
+            if value is not None:
+                values.append(value)
+        values.append(max(float(current_value), 0.0))
+
+        highest_value = max(values)
+        lowest_value = min(values)
+
+        return {
+            "starting_value": round(self.starting_cash, 2),
+            "current_value": round(current_value, 2),
+            "highest_value": round(highest_value, 2),
+            "lowest_value": round(lowest_value, 2),
+            "net_change": round(current_value - self.starting_cash, 2),
+            "return_percent": (
+                round(((current_value - self.starting_cash) / self.starting_cash) * 100, 2)
+                if self.starting_cash > 0
+                else 0.0
+            ),
+            "snapshot_count": len(self.portfolio_history),
+        }
 
     def calculate_portfolio_value(self) -> float:
         """
@@ -1083,6 +1134,21 @@ class PaperTrader:
         ):
             return None
 
+        return number
+
+    @staticmethod
+    def _finite_number(
+        value: Any,
+    ) -> float | None:
+        """Return any finite numeric value, including zero and negatives."""
+        if isinstance(value, bool):
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(number):
+            return None
         return number
 
     @staticmethod

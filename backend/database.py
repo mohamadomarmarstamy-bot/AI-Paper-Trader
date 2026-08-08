@@ -6,7 +6,7 @@ from typing import Any
 
 DATABASE_PATH = Path(__file__).resolve().parent / "trader.db"
 
-DEFAULT_STARTING_CASH = 10_000.0
+DEFAULT_STARTING_CASH = 100_000.0
 SQLITE_TIMEOUT_SECONDS = 30
 
 
