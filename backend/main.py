@@ -1,6 +1,7 @@
 import asyncio
 import math
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -22,9 +23,16 @@ from paper_trader import PaperTrader
 from scanner import scan_market
 
 
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.4.0"
 
 AUTO_PORTFOLIO_REFRESH_SECONDS = 300
+
+# Paper trading only. This intentionally does not read a live-trading
+# base URL from an environment variable, which prevents an accidental
+# switch to the live brokerage endpoint while we are testing.
+ALPACA_PAPER_BASE_URL = "https://paper-api.alpaca.markets"
+ALPACA_ORDER_POLL_SECONDS = 0.25
+ALPACA_ORDER_POLL_TIMEOUT_SECONDS = 8.0
 
 
 async def portfolio_refresh_loop() -> None:
@@ -128,6 +136,477 @@ def normalize_reason_list(reason: Any) -> list[str]:
         return [reason.strip()]
 
     return []
+
+
+# =========================================================
+# Alpaca paper-trading helpers
+# =========================================================
+
+def get_alpaca_credentials() -> tuple[str, str] | None:
+    """
+    Return the Alpaca key pair stored in Railway environment variables.
+    """
+    api_key = os.getenv("ALPACA_API_KEY", "").strip()
+    secret_key = os.getenv("ALPACA_SECRET_KEY", "").strip()
+
+    if not api_key or not secret_key:
+        return None
+
+    return api_key, secret_key
+
+
+def get_alpaca_headers() -> dict[str, str]:
+    """
+    Build authentication headers without exposing credentials.
+    """
+    credentials = get_alpaca_credentials()
+
+    if credentials is None:
+        raise RuntimeError(
+            "Alpaca API credentials are not configured."
+        )
+
+    api_key, secret_key = credentials
+
+    return {
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": secret_key,
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+
+def extract_alpaca_error(payload: Any) -> str:
+    """
+    Extract a readable error message from an Alpaca response body.
+    """
+    if isinstance(payload, dict):
+        for key in (
+            "message",
+            "error",
+            "detail",
+        ):
+            value = payload.get(key)
+
+            if value:
+                return str(value)
+
+    return "Alpaca rejected the request."
+
+
+def alpaca_paper_request(
+    method: str,
+    path: str,
+    *,
+    json_body: dict[str, Any] | None = None,
+    params: dict[str, Any] | None = None,
+    timeout: float = 10.0,
+) -> Any:
+    """
+    Call Alpaca's PAPER Trading API.
+
+    The base URL is hard-coded to paper-api.alpaca.markets so this helper
+    cannot accidentally submit a live-money order.
+    """
+    if ALPACA_PAPER_BASE_URL != "https://paper-api.alpaca.markets":
+        raise RuntimeError(
+            "Paper-trading safety check failed."
+        )
+
+    response = requests.request(
+        method=method,
+        url=f"{ALPACA_PAPER_BASE_URL}{path}",
+        headers=get_alpaca_headers(),
+        json=json_body,
+        params=params,
+        timeout=timeout,
+    )
+
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+
+    if not response.ok:
+        request_id = response.headers.get(
+            "X-Request-ID",
+            "",
+        )
+
+        message = extract_alpaca_error(
+            payload
+        )
+
+        if request_id:
+            message = (
+                f"{message} "
+                f"(Alpaca request ID: {request_id})"
+            )
+
+        raise RuntimeError(message)
+
+    return payload
+
+
+def get_alpaca_paper_order(
+    order_id: str,
+) -> dict[str, Any]:
+    """
+    Retrieve a single paper order from Alpaca.
+    """
+    payload = alpaca_paper_request(
+        "GET",
+        f"/v2/orders/{order_id}",
+    )
+
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            "Alpaca returned an invalid order response."
+        )
+
+    return payload
+
+
+def wait_for_alpaca_paper_order(
+    order: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Briefly poll a newly submitted paper order so the frontend can receive
+    Alpaca's actual simulated fill price when the order fills quickly.
+
+    If the market is closed, a normal DAY market order can remain queued.
+    In that case the latest order state is returned without resubmitting it.
+    """
+    order_id = str(
+        order.get("id", "")
+    ).strip()
+
+    if not order_id:
+        return order
+
+    terminal_statuses = {
+        "filled",
+        "canceled",
+        "expired",
+        "rejected",
+        "replaced",
+        "done_for_day",
+    }
+
+    latest_order = order
+    deadline = (
+        time.monotonic()
+        + ALPACA_ORDER_POLL_TIMEOUT_SECONDS
+    )
+
+    while time.monotonic() < deadline:
+        status = str(
+            latest_order.get(
+                "status",
+                "",
+            )
+        ).strip().lower()
+
+        filled_price = safe_float(
+            latest_order.get(
+                "filled_avg_price"
+            )
+        )
+
+        if (
+            status in terminal_statuses
+            or (
+                filled_price is not None
+                and filled_price > 0
+            )
+        ):
+            break
+
+        time.sleep(
+            ALPACA_ORDER_POLL_SECONDS
+        )
+
+        try:
+            latest_order = (
+                get_alpaca_paper_order(
+                    order_id
+                )
+            )
+        except Exception as error:
+            print(
+                "Alpaca order-status refresh failed "
+                f"for {order_id}: "
+                f"{clean_error_message(error)}"
+            )
+            break
+
+    return latest_order
+
+
+def normalize_alpaca_paper_order(
+    order: dict[str, Any],
+    *,
+    requested_symbol: str,
+    requested_shares: int,
+    requested_side: str,
+) -> dict[str, Any]:
+    """
+    Convert Alpaca's order object into the structure trades.js already
+    understands.
+    """
+    status = str(
+        order.get(
+            "status",
+            "",
+        )
+    ).strip().lower()
+
+    symbol = clean_symbol(
+        order.get("symbol")
+        or requested_symbol
+    )
+
+    side = str(
+        order.get("side")
+        or requested_side
+    ).strip().lower()
+
+    filled_qty = safe_float(
+        order.get(
+            "filled_qty"
+        )
+    )
+
+    submitted_qty = safe_float(
+        order.get("qty")
+    )
+
+    execution_price = safe_float(
+        order.get(
+            "filled_avg_price"
+        )
+    )
+
+    displayed_shares = (
+        int(filled_qty)
+        if (
+            filled_qty is not None
+            and filled_qty > 0
+            and float(filled_qty).is_integer()
+        )
+        else (
+            int(submitted_qty)
+            if (
+                submitted_qty is not None
+                and submitted_qty > 0
+                and float(submitted_qty).is_integer()
+            )
+            else requested_shares
+        )
+    )
+
+    total = None
+
+    if (
+        execution_price is not None
+        and execution_price > 0
+        and filled_qty is not None
+        and filled_qty > 0
+    ):
+        total = round(
+            execution_price
+            * filled_qty,
+            2,
+        )
+
+    failed_statuses = {
+        "canceled",
+        "expired",
+        "rejected",
+    }
+
+    success = (
+        status not in failed_statuses
+    )
+
+    if status == "filled":
+        message = (
+            f"Alpaca paper order filled: "
+            f"{side.upper()} {displayed_shares} "
+            f"{symbol}."
+        )
+    elif success:
+        message = (
+            f"Alpaca paper order submitted. "
+            f"Current status: "
+            f"{status or 'accepted'}."
+        )
+    else:
+        message = (
+            f"Alpaca paper order was not completed. "
+            f"Status: "
+            f"{status or 'unknown'}."
+        )
+
+    trade = {
+        "id": order.get("id"),
+        "client_order_id": order.get(
+            "client_order_id"
+        ),
+        "symbol": symbol,
+        "shares": displayed_shares,
+        "requested_shares": requested_shares,
+        "filled_shares": (
+            filled_qty
+            if filled_qty is not None
+            else 0
+        ),
+        "action": side.upper(),
+        "side": side,
+        "price": (
+            round(
+                execution_price,
+                4,
+            )
+            if (
+                execution_price is not None
+                and execution_price > 0
+            )
+            else None
+        ),
+        "execution_price": (
+            round(
+                execution_price,
+                4,
+            )
+            if (
+                execution_price is not None
+                and execution_price > 0
+            )
+            else None
+        ),
+        "total": total,
+        "status": status,
+        "type": order.get("type"),
+        "time_in_force": order.get(
+            "time_in_force"
+        ),
+        "submitted_at": order.get(
+            "submitted_at"
+        ),
+        "filled_at": order.get(
+            "filled_at"
+        ),
+        "paper": True,
+    }
+
+    return {
+        "success": success,
+        "paper": True,
+        "message": message,
+        "trade": trade,
+        "order": order,
+    }
+
+
+def submit_alpaca_paper_market_order(
+    *,
+    symbol: str,
+    shares: int,
+    side: str,
+) -> dict[str, Any]:
+    """
+    Submit a whole-share DAY market order to Alpaca PAPER Trading.
+
+    This intentionally uses the paper endpoint only.
+    """
+    normalized_symbol = clean_symbol(
+        symbol
+    )
+
+    normalized_side = str(
+        side or ""
+    ).strip().lower()
+
+    if not normalized_symbol:
+        return {
+            "success": False,
+            "error": "A stock symbol is required.",
+        }
+
+    if shares <= 0:
+        return {
+            "success": False,
+            "error": (
+                "Share quantity must be greater "
+                "than zero."
+            ),
+        }
+
+    if normalized_side not in {
+        "buy",
+        "sell",
+    }:
+        return {
+            "success": False,
+            "error": "Trade side must be buy or sell.",
+        }
+
+    request_body = {
+        "symbol": normalized_symbol,
+        "qty": str(shares),
+        "side": normalized_side,
+        "type": "market",
+        "time_in_force": "day",
+    }
+
+    try:
+        payload = alpaca_paper_request(
+            "POST",
+            "/v2/orders",
+            json_body=request_body,
+        )
+
+        if not isinstance(
+            payload,
+            dict,
+        ):
+            return {
+                "success": False,
+                "error": (
+                    "Alpaca returned an invalid "
+                    "paper-order response."
+                ),
+            }
+
+        latest_order = (
+            wait_for_alpaca_paper_order(
+                payload
+            )
+        )
+
+        return normalize_alpaca_paper_order(
+            latest_order,
+            requested_symbol=normalized_symbol,
+            requested_shares=shares,
+            requested_side=normalized_side,
+        )
+
+    except Exception as error:
+        print(
+            f"Alpaca PAPER {normalized_side} "
+            f"order error for "
+            f"{normalized_symbol}: "
+            f"{clean_error_message(error)}"
+        )
+
+        return {
+            "success": False,
+            "paper": True,
+            "error": clean_error_message(
+                error
+            ),
+        }
 
 
 # =========================================================
@@ -1073,40 +1552,18 @@ def buy(data: dict[str, Any]) -> dict[str, Any]:
 
     if symbol is None or shares is None:
         return {
+            "success": False,
             "error": (
                 "Enter a valid stock symbol and a "
                 "whole number of shares greater than zero."
-            )
+            ),
         }
 
-    price = fetch_current_price(symbol)
-
-    if price is None:
-        return {
-            "error": (
-                f"Unable to retrieve the current market "
-                f"price for {symbol}."
-            )
-        }
-
-    try:
-        return trader.buy(
-            symbol,
-            shares,
-            price,
-        )
-
-    except Exception as error:
-        print(
-            f"Buy endpoint error for {symbol}: "
-            f"{clean_error_message(error)}"
-        )
-        return {
-            "error": (
-                f"The purchase of {symbol} could not "
-                "be completed."
-            )
-        }
+    return submit_alpaca_paper_market_order(
+        symbol=symbol,
+        shares=shares,
+        side="buy",
+    )
 
 
 @app.post("/sell")
@@ -1115,37 +1572,15 @@ def sell(data: dict[str, Any]) -> dict[str, Any]:
 
     if symbol is None or shares is None:
         return {
+            "success": False,
             "error": (
                 "Enter a valid stock symbol and a "
                 "whole number of shares greater than zero."
-            )
+            ),
         }
 
-    price = fetch_current_price(symbol)
-
-    if price is None:
-        return {
-            "error": (
-                f"Unable to retrieve the current market "
-                f"price for {symbol}."
-            )
-        }
-
-    try:
-        return trader.sell(
-            symbol,
-            shares,
-            price,
-        )
-
-    except Exception as error:
-        print(
-            f"Sell endpoint error for {symbol}: "
-            f"{clean_error_message(error)}"
-        )
-        return {
-            "error": (
-                f"The sale of {symbol} could not "
-                "be completed."
-            )
-        }
+    return submit_alpaca_paper_market_order(
+        symbol=symbol,
+        shares=shares,
+        side="sell",
+    )
