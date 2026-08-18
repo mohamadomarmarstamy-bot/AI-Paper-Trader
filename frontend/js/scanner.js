@@ -378,8 +378,6 @@ function normalizeScannerStock(
             ),
     };
 }
-
-
 function applyScannerFilters() {
     const search =
         scannerState.search
@@ -476,6 +474,11 @@ function sortScannerStocks(
                 first.price -
                 second.price,
 
+        PRICE_DESC:
+            (first, second) =>
+                second.price -
+                first.price,
+
         SYMBOL_ASC:
             (first, second) =>
                 first.symbol.localeCompare(
@@ -525,65 +528,36 @@ function renderScannerResults(
         fragment
     );
 }
-
-
 function createScannerCard(stock) {
-    const card =
-        document.createElement(
-            "article"
-        );
+    const card = document.createElement("article");
 
-    card.className =
-        "scanner-card";
-
-    card.dataset.symbol =
-        stock.symbol;
-
-    card.dataset.price =
-        String(stock.price);
-
+    card.className = "scanner-card scanner-card-v3";
+    card.dataset.symbol = stock.symbol;
+    card.dataset.price = String(stock.price);
     card.tabIndex = 0;
 
-    card.setAttribute(
-        "role",
-        "button"
-    );
-
+    card.setAttribute("role", "button");
     card.setAttribute(
         "aria-label",
-        `Select ${stock.symbol}, score ${Math.round(
+        `Select ${stock.symbol}, AI score ${Math.round(
             stock.score
         )} out of 100`
     );
 
     const header =
-        document.createElement(
-            "div"
-        );
+        document.createElement("div");
 
     header.className =
         "scanner-card-header";
 
     const identity =
-        document.createElement(
-            "div"
-        );
+        document.createElement("div");
 
     identity.className =
         "scanner-stock-identity";
 
-    const title =
-        document.createElement(
-            "div"
-        );
-
-    title.className =
-        "scanner-stock-title";
-
     const symbol =
-        document.createElement(
-            "strong"
-        );
+        document.createElement("strong");
 
     symbol.className =
         "scanner-symbol";
@@ -591,35 +565,25 @@ function createScannerCard(stock) {
     symbol.textContent =
         stock.symbol;
 
-    title.appendChild(symbol);
+    const company =
+        document.createElement("span");
 
-    if (stock.company) {
-        const company =
-            document.createElement(
-                "span"
-            );
+    company.className =
+        "scanner-company";
 
-        company.className =
-            "scanner-company";
-
-        company.textContent =
-            stock.company;
-
-        title.appendChild(company);
-    }
+    company.textContent =
+        stock.company ||
+        stock.sector ||
+        "Market opportunity";
 
     const priceRow =
-        document.createElement(
-            "div"
-        );
+        document.createElement("div");
 
     priceRow.className =
         "scanner-price-row";
 
     const price =
-        document.createElement(
-            "span"
-        );
+        document.createElement("span");
 
     price.className =
         "scanner-price";
@@ -630,19 +594,21 @@ function createScannerCard(stock) {
         );
 
     const change =
-        document.createElement(
-            "span"
-        );
+        document.createElement("span");
 
     change.className =
         stock.change >= 0
-            ? "positive"
-            : "negative";
+            ? "scanner-change positive"
+            : "scanner-change negative";
 
     change.textContent =
-        `${formatScannerPercent(
-            stock.change
-        )}%`;
+        stock.change >= 0
+            ? `▲ ${formatScannerPercent(
+                stock.change
+            )}%`
+            : `▼ ${formatScannerPercent(
+                stock.change
+            )}%`;
 
     priceRow.append(
         price,
@@ -650,80 +616,168 @@ function createScannerCard(stock) {
     );
 
     identity.append(
-        title,
+        symbol,
+        company,
         priceRow
     );
 
-    const ratingBlock =
-        document.createElement(
-            "div"
-        );
+    const scoreBlock =
+        document.createElement("div");
 
-    ratingBlock.className =
-        "scanner-rating-block";
+    scoreBlock.className =
+        "scanner-score-block";
 
-    const rating =
-        document.createElement(
-            "span"
-        );
+    const scoreLabel =
+        document.createElement("span");
 
-    rating.className =
-        `scanner-rating scanner-rating-${getScannerClassName(
-            stock.rating
-        )}`;
+    scoreLabel.className =
+        "scanner-score-label";
 
-    rating.textContent =
-        stock.rating;
+    scoreLabel.textContent =
+        "AI Score";
 
-    const score =
-        document.createElement(
-            "span"
-        );
+    const scoreValue =
+        document.createElement("strong");
 
-    score.className =
-        "scanner-score";
+    scoreValue.className =
+        "scanner-score-value";
 
-    score.textContent =
-        `${Math.round(
-            stock.score
-        )}/100`;
+    scoreValue.textContent =
+        Math.round(stock.score);
 
-    ratingBlock.append(
-        rating,
-        score
+    const scoreMax =
+        document.createElement("span");
+
+    scoreMax.className =
+        "scanner-score-max";
+
+    scoreMax.textContent =
+        "/100";
+
+    scoreBlock.append(
+        scoreLabel,
+        scoreValue,
+        scoreMax
     );
 
     header.append(
         identity,
-        ratingBlock
+        scoreBlock
+    );
+
+    const badges =
+        document.createElement("div");
+
+    badges.className =
+        "scanner-badges";
+
+    badges.append(
+        createScannerBadge(
+            stock.rating,
+            `rating-${getScannerClassName(
+                stock.rating
+            )}`
+        ),
+        createScannerBadge(
+            stock.trend,
+            `trend-${getScannerClassName(
+                stock.trend
+            )}`
+        ),
+        createScannerBadge(
+            `${stock.risk} RISK`,
+            `risk-${getScannerClassName(
+                stock.risk
+            )}`
+        )
+    );
+
+    const confidence =
+        document.createElement("div");
+
+    confidence.className =
+        "scanner-confidence";
+
+    const confidenceHeader =
+        document.createElement("div");
+
+    confidenceHeader.className =
+        "scanner-confidence-header";
+
+    const confidenceLabel =
+        document.createElement("span");
+
+    confidenceLabel.textContent =
+        "AI Confidence";
+
+    const confidenceValue =
+        document.createElement("strong");
+
+    confidenceValue.textContent =
+        `${Math.round(
+            stock.confidence
+        )}%`;
+
+    confidenceHeader.append(
+        confidenceLabel,
+        confidenceValue
+    );
+
+    const confidenceBar =
+        document.createElement("div");
+
+    confidenceBar.className =
+        "confidence-bar";
+
+    confidenceBar.setAttribute(
+        "role",
+        "progressbar"
+    );
+
+    confidenceBar.setAttribute(
+        "aria-valuemin",
+        "0"
+    );
+
+    confidenceBar.setAttribute(
+        "aria-valuemax",
+        "100"
+    );
+
+    confidenceBar.setAttribute(
+        "aria-valuenow",
+        String(
+            Math.round(
+                stock.confidence
+            )
+        )
+    );
+
+    const confidenceFill =
+        document.createElement("div");
+
+    confidenceFill.className =
+        "confidence-bar-fill";
+
+    confidenceFill.style.width =
+        `${stock.confidence}%`;
+
+    confidenceBar.appendChild(
+        confidenceFill
+    );
+
+    confidence.append(
+        confidenceHeader,
+        confidenceBar
     );
 
     const metrics =
-        document.createElement(
-            "div"
-        );
+        document.createElement("div");
 
     metrics.className =
         "scanner-metrics";
 
     metrics.append(
-        createScannerMetric(
-            "Confidence",
-            `${Math.round(
-                stock.confidence
-            )}%`
-        ),
-
-        createScannerMetric(
-            "Trend",
-            stock.trend
-        ),
-
-        createScannerMetric(
-            "Risk",
-            stock.risk
-        ),
-
         createScannerMetric(
             "Risk / Reward",
             stock.riskReward > 0
@@ -732,55 +786,36 @@ function createScannerCard(stock) {
                     2
                 )}:1`
                 : "—"
+        ),
+        createScannerMetric(
+            "Suggested Stop",
+            stock.stopLoss !== null
+                ? formatScannerCurrency(
+                    stock.stopLoss
+                )
+                : "—"
+        ),
+        createScannerMetric(
+            "Target",
+            stock.takeProfit !== null
+                ? formatScannerCurrency(
+                    stock.takeProfit
+                )
+                : "—"
         )
     );
 
-    if (
-        stock.stopLoss !== null ||
-        stock.takeProfit !== null
-    ) {
-        const tradePlan =
-            document.createElement(
-                "div"
-            );
-
-        tradePlan.className =
-            "scanner-trade-plan";
-
-        tradePlan.append(
-            createScannerMetric(
-                "Suggested Stop",
-                stock.stopLoss !== null
-                    ? formatScannerCurrency(
-                        stock.stopLoss
-                    )
-                    : "—"
-            ),
-
-            createScannerMetric(
-                "Target",
-                stock.takeProfit !== null
-                    ? formatScannerCurrency(
-                        stock.takeProfit
-                    )
-                    : "—"
-            )
-        );
-
-        metrics.appendChild(
-            tradePlan
-        );
-    }
-
     card.append(
         header,
+        badges,
+        confidence,
         metrics
     );
 
     if (stock.signals.length > 0) {
         const signals =
             document.createElement(
-                "div"
+                "section"
             );
 
         signals.className =
@@ -792,7 +827,7 @@ function createScannerCard(stock) {
             );
 
         signalsTitle.textContent =
-            "Signals";
+            "Why it scored";
 
         const signalList =
             document.createElement(
@@ -801,15 +836,36 @@ function createScannerCard(stock) {
 
         for (
             const signal of
-            stock.signals.slice(0, 6)
+            stock.signals.slice(0, 5)
         ) {
             const signalItem =
                 document.createElement(
                     "li"
                 );
 
-            signalItem.textContent =
+            const icon =
+                document.createElement(
+                    "span"
+                );
+
+            icon.className =
+                "scanner-signal-icon";
+
+            icon.textContent =
+                "✓";
+
+            const text =
+                document.createElement(
+                    "span"
+                );
+
+            text.textContent =
                 signal;
+
+            signalItem.append(
+                icon,
+                text
+            );
 
             signalList.appendChild(
                 signalItem
@@ -821,13 +877,15 @@ function createScannerCard(stock) {
             signalList
         );
 
-        card.appendChild(signals);
+        card.appendChild(
+            signals
+        );
     }
 
     if (stock.aiSummary) {
         const insight =
             document.createElement(
-                "div"
+                "section"
             );
 
         insight.className =
@@ -854,13 +912,13 @@ function createScannerCard(stock) {
             insightText
         );
 
-        card.appendChild(insight);
+        card.appendChild(
+            insight
+        );
     }
 
     const actions =
-        document.createElement(
-            "div"
-        );
+        document.createElement("div");
 
     actions.className =
         "scanner-card-actions";
@@ -904,9 +962,30 @@ function createScannerCard(stock) {
         tradeButton
     );
 
-    card.appendChild(actions);
+    card.appendChild(
+        actions
+    );
 
     return card;
+}
+
+
+function createScannerBadge(
+    text,
+    typeClass
+) {
+    const badge =
+        document.createElement(
+            "span"
+        );
+
+    badge.className =
+        `scanner-v3-badge ${typeClass}`;
+
+    badge.textContent =
+        text;
+
+    return badge;
 }
 
 
@@ -951,8 +1030,6 @@ function createScannerMetric(
 
     return metric;
 }
-
-
 function createScannerControls() {
     if (scannerControlsElement) {
         return;
@@ -966,6 +1043,54 @@ function createScannerControls() {
 
     if (!scannerResultsElement) {
         return;
+    }
+
+    const existingSearchInput =
+        document.getElementById(
+            "scanner-search"
+        );
+
+    const existingSortSelect =
+        document.getElementById(
+            "scanner-sort"
+        );
+
+    if (
+        existingSearchInput &&
+        !existingSearchInput.dataset.scannerBound
+    ) {
+        existingSearchInput.dataset.scannerBound =
+            "true";
+
+        existingSearchInput.addEventListener(
+            "input",
+            event => {
+                scannerState.search =
+                    event.target.value;
+
+                applyScannerFilters();
+            }
+        );
+    }
+
+    if (
+        existingSortSelect &&
+        !existingSortSelect.dataset.scannerBound
+    ) {
+        existingSortSelect.dataset.scannerBound =
+            "true";
+
+        existingSortSelect.addEventListener(
+            "change",
+            event => {
+                scannerState.sort =
+                    mapScannerSortValue(
+                        event.target.value
+                    );
+
+                applyScannerFilters();
+            }
+        );
     }
 
     scannerControlsElement =
@@ -985,6 +1110,11 @@ function createScannerControls() {
         scannerControlsElement.className =
             "scanner-controls";
 
+        scannerControlsElement.setAttribute(
+            "aria-label",
+            "Advanced scanner filters"
+        );
+
         scannerResultsElement
             .parentElement
             ?.insertBefore(
@@ -995,24 +1125,9 @@ function createScannerControls() {
 
     scannerControlsElement.replaceChildren();
 
-    const searchInput =
-        createScannerInput(
-            "scanner-search",
-            "Search symbol, company, or sector"
-        );
-
-    searchInput.addEventListener(
-        "input",
-        event => {
-            scannerState.search =
-                event.target.value;
-
-            applyScannerFilters();
-        }
-    );
-
     const scoreSelect =
         createScannerSelect(
+            "scanner-minimum-score",
             "Minimum score",
             [
                 ["0", "Any score"],
@@ -1037,6 +1152,7 @@ function createScannerControls() {
 
     const ratingSelect =
         createScannerSelect(
+            "scanner-rating-filter",
             "Rating",
             [
                 ["ALL", "All ratings"],
@@ -1066,6 +1182,7 @@ function createScannerControls() {
 
     const riskSelect =
         createScannerSelect(
+            "scanner-risk-filter",
             "Risk",
             [
                 ["ALL", "All risk levels"],
@@ -1088,6 +1205,7 @@ function createScannerControls() {
 
     const trendSelect =
         createScannerSelect(
+            "scanner-trend-filter",
             "Trend",
             [
                 ["ALL", "All trends"],
@@ -1115,47 +1233,6 @@ function createScannerControls() {
         }
     );
 
-    const sortSelect =
-        createScannerSelect(
-            "Sort by",
-            [
-                [
-                    "SCORE_DESC",
-                    "Highest score",
-                ],
-                [
-                    "CONFIDENCE_DESC",
-                    "Highest confidence",
-                ],
-                [
-                    "RISK_REWARD_DESC",
-                    "Best risk/reward",
-                ],
-                [
-                    "CHANGE_DESC",
-                    "Largest gain",
-                ],
-                [
-                    "PRICE_ASC",
-                    "Lowest price",
-                ],
-                [
-                    "SYMBOL_ASC",
-                    "Symbol A–Z",
-                ],
-            ]
-        );
-
-    sortSelect.addEventListener(
-        "change",
-        event => {
-            scannerState.sort =
-                event.target.value;
-
-            applyScannerFilters();
-        }
-    );
-
     const refreshButton =
         document.createElement(
             "button"
@@ -1165,16 +1242,14 @@ function createScannerControls() {
         "button";
 
     refreshButton.className =
-        "scanner-refresh-button";
+        "scanner-refresh-button secondary-button";
 
     refreshButton.textContent =
         "Refresh Scan";
 
     refreshButton.addEventListener(
         "click",
-        () => {
-            loadScanner();
-        }
+        loadScanner
     );
 
     const summary =
@@ -1188,61 +1263,59 @@ function createScannerControls() {
     summary.className =
         "scanner-summary";
 
+    summary.setAttribute(
+        "aria-live",
+        "polite"
+    );
+
     scannerControlsElement.append(
-        searchInput,
         scoreSelect,
         ratingSelect,
         riskSelect,
         trendSelect,
-        sortSelect,
         refreshButton,
         summary
     );
 }
 
 
-function createScannerInput(
-    id,
-    placeholder
-) {
-    const input =
-        document.createElement(
-            "input"
-        );
-
-    input.id = id;
-    input.type = "search";
-    input.className =
-        "scanner-filter-input";
-
-    input.placeholder =
-        placeholder;
-
-    input.setAttribute(
-        "aria-label",
-        placeholder
-    );
-
-    return input;
-}
-
-
 function createScannerSelect(
+    id,
     label,
     options
 ) {
+    const wrapper =
+        document.createElement(
+            "label"
+        );
+
+    wrapper.className =
+        "scanner-filter-field";
+
+    wrapper.htmlFor =
+        id;
+
+    const labelText =
+        document.createElement(
+            "span"
+        );
+
+    labelText.textContent =
+        label;
+
     const select =
         document.createElement(
             "select"
         );
 
+    select.id =
+        id;
+
+    select.name =
+        id;
+
     select.className =
         "scanner-filter-select";
-
-    select.setAttribute(
-        "aria-label",
-        label
-    );
 
     for (
         const [
@@ -1255,13 +1328,66 @@ function createScannerSelect(
                 "option"
             );
 
-        option.value = value;
-        option.textContent = text;
+        option.value =
+            value;
 
-        select.appendChild(option);
+        option.textContent =
+            text;
+
+        select.appendChild(
+            option
+        );
     }
 
-    return select;
+    wrapper.append(
+        labelText,
+        select
+    );
+
+    return wrapper;
+}
+
+
+function mapScannerSortValue(
+    value
+) {
+    const sortValues = {
+        "score-desc":
+            "SCORE_DESC",
+
+        "confidence-desc":
+            "CONFIDENCE_DESC",
+
+        "symbol-asc":
+            "SYMBOL_ASC",
+
+        "price-desc":
+            "PRICE_DESC",
+
+        SCORE_DESC:
+            "SCORE_DESC",
+
+        CONFIDENCE_DESC:
+            "CONFIDENCE_DESC",
+
+        CHANGE_DESC:
+            "CHANGE_DESC",
+
+        RISK_REWARD_DESC:
+            "RISK_REWARD_DESC",
+
+        PRICE_ASC:
+            "PRICE_ASC",
+
+        PRICE_DESC:
+            "PRICE_DESC",
+
+        SYMBOL_ASC:
+            "SYMBOL_ASC",
+    };
+
+    return sortValues[value] ??
+        "SCORE_DESC";
 }
 
 
@@ -1407,6 +1533,15 @@ function selectStock(
 
         symbolInput.dispatchEvent(
             new Event(
+                "input",
+                {
+                    bubbles: true,
+                }
+            )
+        );
+
+        symbolInput.dispatchEvent(
+            new Event(
                 "change",
                 {
                     bubbles: true,
@@ -1445,7 +1580,20 @@ function selectStock(
         focusTradeForm &&
         symbolInput
     ) {
-        symbolInput.focus();
+        symbolInput.scrollIntoView({
+            behavior:
+                "smooth",
+
+            block:
+                "center",
+        });
+
+        window.setTimeout(
+            () => {
+                symbolInput.focus();
+            },
+            350
+        );
     }
 
     document.dispatchEvent(
@@ -1463,8 +1611,6 @@ function selectStock(
         )
     );
 }
-
-
 function setScannerLoadingState() {
     if (!scannerResultsElement) {
         return;
@@ -1554,12 +1700,12 @@ function updateScannerSummary() {
 
 
 function cancelActiveScannerRequest() {
-    if (activeScannerRequest) {
-        activeScannerRequest.abort();
-
-        activeScannerRequest =
-            null;
+    if (!activeScannerRequest) {
+        return;
     }
+
+    activeScannerRequest.abort();
+    activeScannerRequest = null;
 }
 
 
@@ -1617,7 +1763,10 @@ function normalizeScannerRating(
     const rating =
         normalizeScannerText(value)
             .toUpperCase()
-            .replace(/[_-]+/g, " ");
+            .replace(
+                /[_-]+/g,
+                " "
+            );
 
     const ratings = {
         "STRONG BUY":
@@ -1686,7 +1835,10 @@ function normalizeScannerTrend(
     const trend =
         normalizeScannerText(value)
             .toUpperCase()
-            .replace(/[_-]+/g, " ");
+            .replace(
+                /[_-]+/g,
+                " "
+            );
 
     const trends = {
         "STRONG BULLISH":
@@ -1745,7 +1897,10 @@ function normalizeScannerSymbol(
             /[^A-Z0-9.\-^]/g,
             ""
         )
-        .slice(0, 20);
+        .slice(
+            0,
+            20
+        );
 }
 
 
@@ -1756,15 +1911,23 @@ function normalizeScannerText(
         value ?? ""
     )
         .trim()
-        .replace(/\s+/g, " ")
-        .slice(0, 500);
+        .replace(
+            /\s+/g,
+            " "
+        )
+        .slice(
+            0,
+            500
+        );
 }
 
 
 function getScannerClassName(
     value
 ) {
-    return String(value)
+    return String(
+        value ?? ""
+    )
         .toLowerCase()
         .replace(
             /[^a-z0-9]+/g,

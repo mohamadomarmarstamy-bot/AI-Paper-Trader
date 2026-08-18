@@ -1,4 +1,6 @@
+import asyncio
 import math
+from contextlib import asynccontextmanager
 from typing import Any
 
 import yfinance as yf
@@ -20,8 +22,49 @@ from scanner import scan_market
 
 APP_VERSION = "2.3.0"
 
+AUTO_PORTFOLIO_REFRESH_SECONDS = 300
+
+
+async def portfolio_refresh_loop() -> None:
+    """
+    Refresh open-position prices and record portfolio changes
+    automatically while the API is running.
+    """
+    while True:
+        try:
+            await asyncio.to_thread(
+                refresh_portfolio_prices
+            )
+        except Exception as error:
+            print(
+                "Automatic portfolio refresh error: "
+                f"{clean_error_message(error)}"
+            )
+
+        await asyncio.sleep(
+            AUTO_PORTFOLIO_REFRESH_SECONDS
+        )
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    refresh_task = asyncio.create_task(
+        portfolio_refresh_loop()
+    )
+
+    try:
+        yield
+    finally:
+        refresh_task.cancel()
+
+        try:
+            await refresh_task
+        except asyncio.CancelledError:
+            pass
+
 app = FastAPI(
     title="AI Paper Trader",
+    lifespan=lifespan,
     description=(
         "Paper trading, portfolio tracking, stock search, "
         "chart data, strategy analysis, risk management, and market scanning API."

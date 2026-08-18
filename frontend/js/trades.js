@@ -693,11 +693,12 @@ function normalizeRiskPlan(
 
     const suggestedShares =
         firstPositiveInteger(
+            source.recommended_shares,
             source.suggested_shares,
             source.position_size,
             source.shares,
             source.quantity
-        );
+    );
 
     const riskReward =
         firstPositiveTradeNumber(
@@ -710,7 +711,32 @@ function normalizeRiskPlan(
             stopLoss,
             takeProfit
         );
+let derivedRiskLevel =
+    normalizeRiskLevel(
+        source.risk_level ??
+        source.risk
+    );
 
+if (
+    derivedRiskLevel === "Unknown" &&
+    entryPrice !== null &&
+    stopLoss !== null &&
+    entryPrice > 0
+) {
+    const stopDistancePercent =
+        Math.abs(
+            (entryPrice - stopLoss) /
+            entryPrice
+        ) * 100;
+
+    if (stopDistancePercent < 3) {
+        derivedRiskLevel = "Low";
+    } else if (stopDistancePercent <= 6) {
+        derivedRiskLevel = "Medium";
+    } else {
+        derivedRiskLevel = "High";
+    }
+}
     return {
         symbol:
             normalizeTradeSymbol(
@@ -745,10 +771,7 @@ function normalizeRiskPlan(
             ),
 
         riskLevel:
-            normalizeRiskLevel(
-                source.risk_level ??
-                source.risk
-            ),
+            derivedRiskLevel,
 
         recommendation:
             normalizeTradeText(
@@ -1675,43 +1698,51 @@ function findTradeFormContainer() {
 }
 
 
-function createTradeMetric(
-    label,
-    value
-) {
-    const metric =
-        document.createElement("div");
+function createTradeMetric(label, value) {
+    const metric = document.createElement("div");
 
-    metric.className =
-        "trade-metric";
+    let type = "";
 
-    const labelElement =
-        document.createElement("span");
+    switch (label.toLowerCase()) {
+        case "entry":
+            type = "entry";
+            break;
 
-    labelElement.className =
-        "trade-metric-label";
+        case "stop loss":
+            type = "stop-loss";
+            break;
 
-    labelElement.textContent =
-        label;
+        case "target":
+            type = "target";
+            break;
 
-    const valueElement =
-        document.createElement("strong");
+        case "risk / reward":
+            type = "rr";
+            break;
 
-    valueElement.className =
-        "trade-metric-value";
+        case "potential profit":
+            type = "profit";
+            break;
 
-    valueElement.textContent =
-        value;
+        case "potential loss":
+            type = "loss";
+            break;
+    }
 
-    metric.append(
-        labelElement,
-        valueElement
-    );
+    metric.className = `trade-metric ${type}`;
+
+    const labelElement = document.createElement("span");
+    labelElement.className = "trade-metric-label";
+    labelElement.textContent = label;
+
+    const valueElement = document.createElement("strong");
+    valueElement.className = "trade-metric-value";
+    valueElement.textContent = value ?? "—";
+
+    metric.append(labelElement, valueElement);
 
     return metric;
 }
-
-
 // ==========================================
 // Button behavior
 // ==========================================
