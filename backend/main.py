@@ -134,10 +134,11 @@ def normalize_reason_list(reason: Any) -> list[str]:
 
 def fetch_current_price(symbol: str) -> float | None:
     """
-    Retrieve the most recent available price for a symbol.
+    Return the latest available stock price.
 
-    Fast info is attempted first. Recent historical data is used as
-    a fallback because Yahoo may not always return fast-info data.
+    The primary source is 1-minute Yahoo Finance history with
+    pre-market and after-hours data enabled. Fast info and recent
+    daily history are used as fallbacks.
     """
     normalized_symbol = clean_symbol(symbol)
 
@@ -147,7 +148,40 @@ def fetch_current_price(symbol: str) -> float | None:
     try:
         ticker = yf.Ticker(normalized_symbol)
 
-        # Fast-info lookup
+        # Primary source: latest 1-minute price, including
+        # pre-market and after-hours when Yahoo provides it.
+        try:
+            history = ticker.history(
+                period="1d",
+                interval="1m",
+                prepost=True,
+                auto_adjust=False,
+                actions=False,
+                repair=False,
+                timeout=15,
+            )
+
+            if (
+                history is not None
+                and not history.empty
+                and "Close" in history.columns
+            ):
+                closes = history["Close"].dropna()
+
+                if not closes.empty:
+                    price = safe_float(closes.iloc[-1])
+
+                    if is_valid_price(price):
+                        return round(float(price), 2)
+
+        except Exception as error:
+            print(
+                f"Intraday price failed for "
+                f"{normalized_symbol}: "
+                f"{clean_error_message(error)}"
+            )
+
+        # First fallback: Yahoo fast_info.
         try:
             fast_info = ticker.fast_info
             price = None
@@ -164,44 +198,52 @@ def fetch_current_price(symbol: str) -> float | None:
             if is_valid_price(price):
                 return round(float(price), 2)
 
-        except Exception:
-            # Historical data below acts as the fallback.
-            pass
+        except Exception as error:
+            print(
+                f"Fast-info price failed for "
+                f"{normalized_symbol}: "
+                f"{clean_error_message(error)}"
+            )
 
-        history = ticker.history(
-            period="5d",
-            interval="1d",
-            auto_adjust=False,
-            actions=False,
-            timeout=15,
-        )
+        # Final fallback: most recent regular daily close.
+        try:
+            history = ticker.history(
+                period="5d",
+                interval="1d",
+                auto_adjust=False,
+                actions=False,
+                repair=False,
+                timeout=15,
+            )
 
-        if (
-            history is None
-            or history.empty
-            or "Close" not in history.columns
-        ):
-            return None
+            if (
+                history is not None
+                and not history.empty
+                and "Close" in history.columns
+            ):
+                closes = history["Close"].dropna()
 
-        closes = history["Close"].dropna()
+                if not closes.empty:
+                    price = safe_float(closes.iloc[-1])
 
-        if closes.empty:
-            return None
+                    if is_valid_price(price):
+                        return round(float(price), 2)
 
-        price = safe_float(closes.iloc[-1])
-
-        if price is None or price <= 0:
-            return None
-
-        return round(price, 2)
+        except Exception as error:
+            print(
+                f"Daily price fallback failed for "
+                f"{normalized_symbol}: "
+                f"{clean_error_message(error)}"
+            )
 
     except Exception as error:
         print(
             f"Current-price error for "
-            f"{normalized_symbol}: {clean_error_message(error)}"
+            f"{normalized_symbol}: "
+            f"{clean_error_message(error)}"
         )
-        return None
 
+    return None
 
 def fetch_strategy_history(symbol: str):
     try:

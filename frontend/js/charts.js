@@ -12,7 +12,13 @@ let resizeObserver = null;
 let activeChartRequest = null;
 let latestRequestNumber = 0;
 
+let liveChartTimer = null;
+let liveChartSymbol = null;
+let liveQuoteRequestInFlight = false;
+let latestLiveCandle = null;
+
 const CHART_HEIGHT = 420;
+const LIVE_CHART_REFRESH_MS = 1_000;
 const CHART_REQUEST_TIMEOUT_MS = 15_000;
 
 
@@ -266,6 +272,15 @@ async function loadChart(symbol) {
             chartData.candles
         );
 
+        latestLiveCandle =
+            chartData.candles.length > 0
+                ? {
+                    ...chartData.candles[
+                        chartData.candles.length - 1
+                    ]
+                }
+                : null;
+
         volumeSeries.setData(
             chartData.volume
         );
@@ -293,6 +308,10 @@ async function loadChart(symbol) {
         chart
             .timeScale()
             .fitContent();
+
+        startLiveChartUpdates(
+            cleanSymbol
+        );
     } catch (error) {
         if (
             error?.name ===
@@ -342,6 +361,263 @@ async function loadChart(symbol) {
                 null;
         }
     }
+}
+
+/**
+ * Start a lightweight one-second quote refresh.
+ *
+ * This does not re-download the full six-month chart every second.
+ * It polls the much smaller /quote endpoint and updates the newest
+ * displayed candle plus the Trade Center price field when present.
+ */
+function startLiveChartUpdates(symbol) {
+    stopLiveChartUpdates();
+
+    liveChartSymbol =
+        normalizeSymbol(symbol);
+
+    if (!liveChartSymbol) {
+        return;
+    }
+
+    updateLiveChartPrice();
+
+    liveChartTimer =
+        window.setInterval(
+            updateLiveChartPrice,
+            LIVE_CHART_REFRESH_MS
+        );
+}
+
+
+function stopLiveChartUpdates() {
+    if (liveChartTimer) {
+        window.clearInterval(
+            liveChartTimer
+        );
+
+        liveChartTimer = null;
+    }
+
+    liveChartSymbol = null;
+    liveQuoteRequestInFlight = false;
+}
+
+
+async function updateLiveChartPrice() {
+    const symbol =
+        liveChartSymbol;
+
+    if (
+        !symbol ||
+        !candleSeries ||
+        liveQuoteRequestInFlight
+    ) {
+        return;
+    }
+
+    liveQuoteRequestInFlight = true;
+
+    try {
+        const response = await fetch(
+            `${getApiUrl()}/quote/${encodeURIComponent(
+                symbol
+            )}`,
+            {
+                method: "GET",
+
+                headers: {
+                    Accept: "application/json",
+                },
+
+                cache: "no-store",
+            }
+        );
+
+        const payload =
+            await readJsonResponse(
+                response
+            );
+
+        if (!response.ok) {
+            return;
+        }
+
+        const price =
+            Number(
+                payload?.price
+            );
+
+        if (
+            !Number.isFinite(price) ||
+            price <= 0
+        ) {
+            return;
+        }
+
+        updateNewestCandle(
+            price
+        );
+
+        updateTradePriceField(
+            symbol,
+            price
+        );
+
+        document.dispatchEvent(
+            new CustomEvent(
+                "market:quote-updated",
+                {
+                    detail: {
+                        symbol,
+                        price,
+                    },
+                }
+            )
+        );
+
+    } catch (error) {
+        console.debug(
+            `Live quote unavailable for ${symbol}:`,
+            error
+        );
+    } finally {
+        liveQuoteRequestInFlight =
+            false;
+    }
+}
+
+
+function updateNewestCandle(price) {
+    if (
+        !latestLiveCandle ||
+        !candleSeries
+    ) {
+        return;
+    }
+
+    const open =
+        Number(
+            latestLiveCandle.open
+        );
+
+    const previousHigh =
+        Number(
+            latestLiveCandle.high
+        );
+
+    const previousLow =
+        Number(
+            latestLiveCandle.low
+        );
+
+    const safeOpen =
+        Number.isFinite(open)
+            ? open
+            : price;
+
+    const safeHigh =
+        Number.isFinite(previousHigh)
+            ? Math.max(
+                previousHigh,
+                price
+            )
+            : Math.max(
+                safeOpen,
+                price
+            );
+
+    const safeLow =
+        Number.isFinite(previousLow)
+            ? Math.min(
+                previousLow,
+                price
+            )
+            : Math.min(
+                safeOpen,
+                price
+            );
+
+    latestLiveCandle = {
+        ...latestLiveCandle,
+        open: safeOpen,
+        high: safeHigh,
+        low: safeLow,
+        close: price,
+    };
+
+    candleSeries.update(
+        latestLiveCandle
+    );
+}
+
+
+function updateTradePriceField(
+    symbol,
+    price
+) {
+    const symbolInput =
+        document.getElementById(
+            "symbol"
+        );
+
+    const priceInput =
+        document.getElementById(
+            "price"
+        );
+
+    if (
+        !symbolInput ||
+        !priceInput
+    ) {
+        return;
+    }
+
+    if (
+        normalizeSymbol(
+            symbolInput.value
+        ) !== symbol
+    ) {
+        return;
+    }
+
+    const nextValue =
+        Number(price).toFixed(2);
+
+    if (
+        priceInput.value ===
+        nextValue
+    ) {
+        return;
+    }
+
+    priceInput.value =
+        nextValue;
+
+    priceInput.placeholder =
+        "0.00";
+
+    priceInput.classList.remove(
+        "error"
+    );
+
+    priceInput.removeAttribute(
+        "aria-busy"
+    );
+
+    /*
+     * trades.js already listens for this event on the price field.
+     * Dispatching it keeps the trade preview synchronized with the
+     * newest displayed quote.
+     */
+    priceInput.dispatchEvent(
+        new Event(
+            "input",
+            {
+                bubbles: true,
+            }
+        )
+    );
 }
 
 
@@ -523,8 +799,7 @@ function resizeChart(width = null) {
     ) {
         return;
     }
-
-    const chartWidth =
+        const chartWidth =
         Number.isFinite(width)
             ? width
             : Math.floor(
@@ -770,8 +1045,6 @@ function clearChartMessage() {
             "block";
     }
 }
-
-
 function showChartMessage(message) {
     if (!chartContainer) {
         return;
@@ -842,6 +1115,7 @@ function showChartError(message) {
 
 
 function destroyChart() {
+    stopLiveChartUpdates();
     cancelActiveChartRequest();
 
     resizeObserver?.disconnect();
@@ -862,12 +1136,14 @@ function destroyChart() {
     ma20Series = null;
     ma50Series = null;
     chartElement = null;
+    latestLiveCandle = null;
 }
 
 
 window.loadChart = loadChart;
 window.createChart = createChart;
 window.destroyChart = destroyChart;
+
 
 window.addEventListener(
     "DOMContentLoaded",
