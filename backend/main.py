@@ -8,7 +8,7 @@ from typing import Any
 
 import requests
 import yfinance as yf
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from chart_data import get_chart_data
@@ -24,7 +24,7 @@ from paper_trader import PaperTrader
 from scanner import scan_market
 
 
-APP_VERSION = "2.6.0"
+APP_VERSION = "2.7.0"
 
 AUTO_PORTFOLIO_REFRESH_SECONDS = 300
 
@@ -55,6 +55,37 @@ RISK_REQUIRE_REGULAR_MARKET_OPEN = True
 RISK_BLOCK_SHORT_SELLING = True
 
 
+# =========================================================
+# Automatic PAPER-trading controls
+# =========================================================
+#
+# Safety design:
+#   - PAPER endpoint remains hard-coded.
+#   - Automation is OFF after every process restart.
+#   - Railway must explicitly set AUTO_TRADER_ALLOW_AUTOMATION=true.
+#   - Enable/disable/run-once controls require a secret header token.
+#   - At most one new automatic position is opened per scan cycle.
+#   - Broker-native bracket exits are attached to automatic entries.
+AUTO_TRADER_SCAN_SECONDS = 300
+AUTO_TRADER_ENTRY_SCORE_MIN = 70
+AUTO_TRADER_ENTRY_CONFIDENCE_MIN = 80
+AUTO_TRADER_EXIT_SCORE_MAX = 30
+AUTO_TRADER_EXIT_CONFIDENCE_MIN = 80
+AUTO_TRADER_ENTRY_EQUITY_PERCENT = 0.50
+AUTO_TRADER_STOP_LOSS_PERCENT = 2.0
+AUTO_TRADER_TAKE_PROFIT_PERCENT = 4.0
+AUTO_TRADER_SYMBOL_COOLDOWN_SECONDS = 60 * 60
+AUTO_TRADER_MAX_NEW_POSITIONS_PER_CYCLE = 1
+AUTO_TRADER_LOG_LIMIT = 250
+
+_auto_trader_enabled = False
+_auto_trader_cycle_running = False
+_auto_trader_last_cycle_at: float | None = None
+_auto_trader_last_cycle_result: dict[str, Any] | None = None
+_auto_trader_symbol_cooldowns: dict[str, float] = {}
+_auto_trader_log: list[dict[str, Any]] = []
+
+
 
 async def portfolio_refresh_loop() -> None:
     """
@@ -83,15 +114,24 @@ async def lifespan(app: FastAPI):
         portfolio_refresh_loop()
     )
 
+    auto_trade_task = asyncio.create_task(
+        auto_trader_loop()
+    )
+
     try:
         yield
     finally:
         refresh_task.cancel()
+        auto_trade_task.cancel()
 
-        try:
-            await refresh_task
-        except asyncio.CancelledError:
-            pass
+        for task in (
+            refresh_task,
+            auto_trade_task,
+        ):
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 app = FastAPI(
     title="AI Paper Trader",
@@ -2354,6 +2394,1029 @@ def refresh_portfolio_prices() -> None:
 
 
 # =========================================================
+# Automatic PAPER trader
+# =========================================================
+
+def auto_trader_automation_allowed() -> bool:
+    """
+    Railway must explicitly allow automatic PAPER orders.
+
+    This is a hard kill switch separate from the runtime enable/disable flag.
+    """
+    return (
+        os.getenv(
+            "AUTO_TRADER_ALLOW_AUTOMATION",
+            "",
+        )
+        .strip()
+        .lower()
+        in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+    )
+
+
+def get_auto_trader_control_token() -> str:
+    return os.getenv(
+        "AUTO_TRADER_CONTROL_TOKEN",
+        "",
+    ).strip()
+
+
+def auto_trader_control_authorized(
+    supplied_token: str | None,
+) -> bool:
+    configured_token = (
+        get_auto_trader_control_token()
+    )
+
+    if not configured_token:
+        return False
+
+    return (
+        str(
+            supplied_token
+            or ""
+        ).strip()
+        == configured_token
+    )
+
+
+def add_auto_trader_log(
+    event: str,
+    *,
+    symbol: str | None = None,
+    message: str = "",
+    details: dict[str, Any] | None = None,
+) -> None:
+    entry = {
+        "timestamp": time.time(),
+        "event": str(event),
+        "symbol": (
+            clean_symbol(symbol)
+            if symbol
+            else None
+        ),
+        "message": str(message),
+        "details": (
+            details
+            if isinstance(
+                details,
+                dict,
+            )
+            else {}
+        ),
+    }
+
+    _auto_trader_log.append(
+        entry
+    )
+
+    if (
+        len(_auto_trader_log)
+        > AUTO_TRADER_LOG_LIMIT
+    ):
+        del _auto_trader_log[
+            :-AUTO_TRADER_LOG_LIMIT
+        ]
+
+
+def auto_trader_symbol_on_cooldown(
+    symbol: str,
+) -> tuple[bool, float]:
+    normalized_symbol = clean_symbol(
+        symbol
+    )
+
+    last_action = (
+        _auto_trader_symbol_cooldowns.get(
+            normalized_symbol
+        )
+    )
+
+    if last_action is None:
+        return False, 0.0
+
+    remaining = (
+        AUTO_TRADER_SYMBOL_COOLDOWN_SECONDS
+        - (
+            time.time()
+            - last_action
+        )
+    )
+
+    return (
+        remaining > 0,
+        max(
+            0.0,
+            remaining,
+        ),
+    )
+
+
+def mark_auto_trader_symbol_cooldown(
+    symbol: str,
+) -> None:
+    _auto_trader_symbol_cooldowns[
+        clean_symbol(symbol)
+    ] = time.time()
+
+
+def cancel_alpaca_open_orders_for_symbol(
+    symbol: str,
+) -> list[str]:
+    """
+    Cancel current PAPER orders for one symbol.
+
+    This is mainly used before a scanner-driven early exit when a bracket
+    order already has protective child orders working.
+    """
+    canceled_ids: list[str] = []
+
+    for order in (
+        fetch_alpaca_open_orders_for_symbol(
+            symbol
+        )
+    ):
+        order_id = str(
+            order.get(
+                "id",
+                "",
+            )
+        ).strip()
+
+        if not order_id:
+            continue
+
+        try:
+            alpaca_paper_request(
+                "DELETE",
+                f"/v2/orders/{order_id}",
+            )
+
+            canceled_ids.append(
+                order_id
+            )
+
+        except Exception as error:
+            print(
+                f"Could not cancel PAPER order "
+                f"{order_id} for {symbol}: "
+                f"{clean_error_message(error)}"
+            )
+
+    if canceled_ids:
+        time.sleep(0.35)
+
+    return canceled_ids
+
+
+def calculate_auto_entry_shares(
+    *,
+    symbol: str,
+    account: dict[str, Any],
+) -> tuple[int, dict[str, Any]]:
+    """
+    Size an automatic entry using a small percent of account equity.
+
+    The normal execution risk layer still runs afterward, so this sizing
+    cannot bypass the global 2% order / 5% position limits.
+    """
+    equity = safe_float(
+        account.get("equity")
+    )
+
+    if (
+        equity is None
+        or equity <= 0
+    ):
+        return 0, {}
+
+    quote = fetch_alpaca_risk_quote(
+        symbol
+    )
+
+    ask = safe_float(
+        quote.get("ask")
+    )
+
+    if (
+        ask is None
+        or ask <= 0
+    ):
+        return 0, quote
+
+    budget = (
+        equity
+        * (
+            AUTO_TRADER_ENTRY_EQUITY_PERCENT
+            / 100
+        )
+    )
+
+    shares = max(
+        0,
+        math.floor(
+            budget
+            / ask
+        ),
+    )
+
+    return shares, quote
+
+
+def submit_alpaca_auto_bracket_buy(
+    *,
+    symbol: str,
+    shares: int,
+    reference_price: float,
+    scanner_result: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Submit an automatic PAPER buy with broker-native stop-loss and
+    take-profit exit orders.
+
+    Alpaca remains the source of truth for the actual simulated fill.
+    """
+    normalized_symbol = clean_symbol(
+        symbol
+    )
+
+    risk_check = (
+        validate_alpaca_paper_order_risk(
+            symbol=normalized_symbol,
+            shares=shares,
+            side="buy",
+        )
+    )
+
+    if not risk_check.get(
+        "approved"
+    ):
+        return {
+            "success": False,
+            "paper": True,
+            "error": str(
+                risk_check.get(
+                    "error",
+                    "Automatic entry was blocked by risk controls.",
+                )
+            ),
+            "risk": risk_check,
+        }
+
+    stop_price = round(
+        reference_price
+        * (
+            1
+            - (
+                AUTO_TRADER_STOP_LOSS_PERCENT
+                / 100
+            )
+        ),
+        2,
+    )
+
+    take_profit_price = round(
+        reference_price
+        * (
+            1
+            + (
+                AUTO_TRADER_TAKE_PROFIT_PERCENT
+                / 100
+            )
+        ),
+        2,
+    )
+
+    if (
+        stop_price <= 0
+        or take_profit_price <= stop_price
+    ):
+        return {
+            "success": False,
+            "paper": True,
+            "error": (
+                "Automatic bracket prices were invalid."
+            ),
+        }
+
+    request_body = {
+        "symbol": normalized_symbol,
+        "qty": str(shares),
+        "side": "buy",
+        "type": "market",
+        "time_in_force": "day",
+        "order_class": "bracket",
+        "take_profit": {
+            "limit_price": (
+                f"{take_profit_price:.2f}"
+            ),
+        },
+        "stop_loss": {
+            "stop_price": (
+                f"{stop_price:.2f}"
+            ),
+        },
+        "client_order_id": (
+            f"auto-entry-"
+            f"{normalized_symbol.lower()}-"
+            f"{uuid.uuid4().hex[:12]}"
+        ),
+    }
+
+    try:
+        payload = alpaca_paper_request(
+            "POST",
+            "/v2/orders",
+            json_body=request_body,
+        )
+
+        if not isinstance(
+            payload,
+            dict,
+        ):
+            raise RuntimeError(
+                "Alpaca returned an invalid automatic order response."
+            )
+
+        latest_order = (
+            wait_for_alpaca_paper_order(
+                payload
+            )
+        )
+
+        result = normalize_alpaca_paper_order(
+            latest_order,
+            requested_symbol=normalized_symbol,
+            requested_shares=shares,
+            requested_side="buy",
+        )
+
+        result["risk"] = risk_check
+        result["automatic"] = True
+        result["scanner"] = {
+            "score": scanner_result.get(
+                "score"
+            ),
+            "confidence": scanner_result.get(
+                "confidence"
+            ),
+            "signal": scanner_result.get(
+                "signal"
+            ),
+            "rank": (
+                scanner_result.get(
+                    "scanner_rank"
+                )
+                or scanner_result.get(
+                    "rank"
+                )
+            ),
+        }
+        result["bracket"] = {
+            "stop_loss_percent": (
+                AUTO_TRADER_STOP_LOSS_PERCENT
+            ),
+            "take_profit_percent": (
+                AUTO_TRADER_TAKE_PROFIT_PERCENT
+            ),
+            "stop_price": stop_price,
+            "take_profit_price": (
+                take_profit_price
+            ),
+        }
+
+        return result
+
+    except Exception as error:
+        return {
+            "success": False,
+            "paper": True,
+            "automatic": True,
+            "error": clean_error_message(
+                error
+            ),
+        }
+
+
+def get_scanner_result_by_symbol(
+    scanner_results: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    return {
+        clean_symbol(
+            item.get("symbol")
+        ): item
+        for item in scanner_results
+        if (
+            isinstance(
+                item,
+                dict,
+            )
+            and clean_symbol(
+                item.get("symbol")
+            )
+        )
+    }
+
+
+def run_auto_trader_cycle() -> dict[str, Any]:
+    """
+    Run one automatic PAPER-trading decision cycle.
+
+    Entry:
+      BUY signal, score >= 70, confidence >= 80.
+      Position sizing targets 0.5% of equity, then all global risk checks run.
+      Automatic entries attach a 2% stop and 4% take-profit bracket.
+
+    Early exit:
+      Existing position receives a strong SELL scanner result with
+      score <= 30 and confidence >= 80. Protective bracket orders are
+      canceled before the market exit.
+
+    The function opens at most one new position per cycle.
+    """
+    global _auto_trader_cycle_running
+    global _auto_trader_last_cycle_at
+    global _auto_trader_last_cycle_result
+
+    if _auto_trader_cycle_running:
+        return {
+            "success": False,
+            "skipped": True,
+            "reason": (
+                "An automatic trading cycle is already running."
+            ),
+        }
+
+    if not _auto_trader_enabled:
+        return {
+            "success": False,
+            "skipped": True,
+            "reason": (
+                "Automatic paper trading is disabled."
+            ),
+        }
+
+    if not auto_trader_automation_allowed():
+        return {
+            "success": False,
+            "skipped": True,
+            "reason": (
+                "Railway has not enabled the automatic "
+                "paper-trading hard switch."
+            ),
+        }
+
+    _auto_trader_cycle_running = True
+    _auto_trader_last_cycle_at = (
+        time.time()
+    )
+
+    cycle_result: dict[str, Any] = {
+        "success": True,
+        "paper": True,
+        "entries": [],
+        "exits": [],
+        "skipped_candidates": [],
+    }
+
+    try:
+        clock = fetch_alpaca_market_clock()
+
+        if not bool(
+            clock.get(
+                "is_open"
+            )
+        ):
+            cycle_result.update({
+                "success": True,
+                "skipped": True,
+                "reason": (
+                    "Regular market is closed."
+                ),
+                "next_open": (
+                    clock.get(
+                        "next_open"
+                    )
+                ),
+            })
+
+            return cycle_result
+
+        scanner_results = scan_market(
+            force_refresh=False
+        )
+
+        if not isinstance(
+            scanner_results,
+            list,
+        ):
+            scanner_results = []
+
+        scanner_results = [
+            item
+            for item in scanner_results
+            if isinstance(
+                item,
+                dict,
+            )
+        ]
+
+        account = (
+            fetch_alpaca_paper_account()
+        )
+
+        positions = (
+            fetch_alpaca_paper_positions()
+        )
+
+        scanner_by_symbol = (
+            get_scanner_result_by_symbol(
+                scanner_results
+            )
+        )
+
+        # -------------------------------------------------
+        # Strong scanner SELL = early exit.
+        # Broker-native stop / take-profit orders remain the
+        # primary exit protection.
+        # -------------------------------------------------
+        for position in positions:
+            symbol = clean_symbol(
+                position.get(
+                    "symbol"
+                )
+            )
+
+            if not symbol:
+                continue
+
+            candidate = (
+                scanner_by_symbol.get(
+                    symbol
+                )
+            )
+
+            if not candidate:
+                continue
+
+            signal = str(
+                candidate.get(
+                    "signal",
+                    "",
+                )
+            ).strip().upper()
+
+            score = safe_float(
+                candidate.get(
+                    "score"
+                )
+            )
+
+            confidence = safe_float(
+                candidate.get(
+                    "confidence"
+                )
+            )
+
+            if not (
+                signal == "SELL"
+                and score is not None
+                and score <=
+                    AUTO_TRADER_EXIT_SCORE_MAX
+                and confidence is not None
+                and confidence >=
+                    AUTO_TRADER_EXIT_CONFIDENCE_MIN
+            ):
+                continue
+
+            qty = safe_float(
+                position.get(
+                    "qty"
+                )
+            )
+
+            if (
+                qty is None
+                or qty <= 0
+            ):
+                continue
+
+            shares = math.floor(
+                qty
+            )
+
+            if shares <= 0:
+                continue
+
+            cooldown, remaining = (
+                auto_trader_symbol_on_cooldown(
+                    symbol
+                )
+            )
+
+            if cooldown:
+                cycle_result[
+                    "skipped_candidates"
+                ].append({
+                    "symbol": symbol,
+                    "reason": (
+                        "symbol cooldown"
+                    ),
+                    "cooldown_seconds": round(
+                        remaining,
+                        1,
+                    ),
+                })
+                continue
+
+            canceled_orders = (
+                cancel_alpaca_open_orders_for_symbol(
+                    symbol
+                )
+            )
+
+            exit_result = (
+                submit_alpaca_paper_market_order(
+                    symbol=symbol,
+                    shares=shares,
+                    side="sell",
+                )
+            )
+
+            mark_auto_trader_symbol_cooldown(
+                symbol
+            )
+
+            cycle_result["exits"].append({
+                "symbol": symbol,
+                "scanner": {
+                    "score": score,
+                    "confidence": (
+                        confidence
+                    ),
+                    "signal": signal,
+                },
+                "canceled_protective_orders": (
+                    canceled_orders
+                ),
+                "result": exit_result,
+            })
+
+            add_auto_trader_log(
+                "scanner_exit",
+                symbol=symbol,
+                message=(
+                    "Strong SELL signal triggered an "
+                    "automatic PAPER exit."
+                ),
+                details={
+                    "score": score,
+                    "confidence": (
+                        confidence
+                    ),
+                    "result_success": (
+                        exit_result.get(
+                            "success"
+                        )
+                    ),
+                },
+            )
+
+        # Refresh positions after any exits.
+        positions = (
+            fetch_alpaca_paper_positions()
+        )
+
+        existing_symbols = {
+            clean_symbol(
+                position.get(
+                    "symbol"
+                )
+            )
+            for position in positions
+            if clean_symbol(
+                position.get(
+                    "symbol"
+                )
+            )
+        }
+
+        # -------------------------------------------------
+        # Entries.
+        # -------------------------------------------------
+        new_positions = 0
+
+        for candidate in scanner_results:
+            if (
+                new_positions
+                >= AUTO_TRADER_MAX_NEW_POSITIONS_PER_CYCLE
+            ):
+                break
+
+            symbol = clean_symbol(
+                candidate.get(
+                    "symbol"
+                )
+            )
+
+            if not symbol:
+                continue
+
+            signal = str(
+                candidate.get(
+                    "signal",
+                    "",
+                )
+            ).strip().upper()
+
+            score = safe_float(
+                candidate.get(
+                    "score"
+                )
+            )
+
+            confidence = safe_float(
+                candidate.get(
+                    "confidence"
+                )
+            )
+
+            if not (
+                signal == "BUY"
+                and score is not None
+                and score >=
+                    AUTO_TRADER_ENTRY_SCORE_MIN
+                and confidence is not None
+                and confidence >=
+                    AUTO_TRADER_ENTRY_CONFIDENCE_MIN
+            ):
+                continue
+
+            if symbol in existing_symbols:
+                cycle_result[
+                    "skipped_candidates"
+                ].append({
+                    "symbol": symbol,
+                    "reason": (
+                        "position already open"
+                    ),
+                })
+                continue
+
+            cooldown, remaining = (
+                auto_trader_symbol_on_cooldown(
+                    symbol
+                )
+            )
+
+            if cooldown:
+                cycle_result[
+                    "skipped_candidates"
+                ].append({
+                    "symbol": symbol,
+                    "reason": (
+                        "symbol cooldown"
+                    ),
+                    "cooldown_seconds": round(
+                        remaining,
+                        1,
+                    ),
+                })
+                continue
+
+            try:
+                shares, quote = (
+                    calculate_auto_entry_shares(
+                        symbol=symbol,
+                        account=account,
+                    )
+                )
+
+                reference_price = safe_float(
+                    quote.get(
+                        "ask"
+                    )
+                )
+
+                if (
+                    shares <= 0
+                    or reference_price is None
+                    or reference_price <= 0
+                ):
+                    cycle_result[
+                        "skipped_candidates"
+                    ].append({
+                        "symbol": symbol,
+                        "reason": (
+                            "automatic position sizing "
+                            "returned zero shares"
+                        ),
+                    })
+                    continue
+
+                entry_result = (
+                    submit_alpaca_auto_bracket_buy(
+                        symbol=symbol,
+                        shares=shares,
+                        reference_price=(
+                            reference_price
+                        ),
+                        scanner_result=candidate,
+                    )
+                )
+
+            except Exception as error:
+                entry_result = {
+                    "success": False,
+                    "error": (
+                        clean_error_message(
+                            error
+                        )
+                    ),
+                }
+
+            mark_auto_trader_symbol_cooldown(
+                symbol
+            )
+
+            cycle_result["entries"].append({
+                "symbol": symbol,
+                "shares": shares,
+                "score": score,
+                "confidence": (
+                    confidence
+                ),
+                "result": entry_result,
+            })
+
+            add_auto_trader_log(
+                "entry_attempt",
+                symbol=symbol,
+                message=(
+                    "Automatic PAPER entry candidate "
+                    "was processed."
+                ),
+                details={
+                    "shares": shares,
+                    "score": score,
+                    "confidence": (
+                        confidence
+                    ),
+                    "result_success": (
+                        entry_result.get(
+                            "success"
+                        )
+                    ),
+                    "error": (
+                        entry_result.get(
+                            "error"
+                        )
+                    ),
+                },
+            )
+
+            if entry_result.get(
+                "success"
+            ):
+                new_positions += 1
+                existing_symbols.add(
+                    symbol
+                )
+
+        cycle_result[
+            "scanner_result_count"
+        ] = len(
+            scanner_results
+        )
+
+        cycle_result[
+            "new_positions_opened"
+        ] = new_positions
+
+        return cycle_result
+
+    except Exception as error:
+        cycle_result = {
+            "success": False,
+            "paper": True,
+            "error": (
+                clean_error_message(
+                    error
+                )
+            ),
+        }
+
+        add_auto_trader_log(
+            "cycle_error",
+            message=(
+                clean_error_message(
+                    error
+                )
+            ),
+        )
+
+        return cycle_result
+
+    finally:
+        _auto_trader_cycle_running = False
+        _auto_trader_last_cycle_result = (
+            cycle_result
+        )
+
+
+async def auto_trader_loop() -> None:
+    """
+    Background PAPER automation loop.
+
+    Runtime automation starts disabled after every Railway restart.
+    """
+    while True:
+        try:
+            if (
+                _auto_trader_enabled
+                and auto_trader_automation_allowed()
+            ):
+                await asyncio.to_thread(
+                    run_auto_trader_cycle
+                )
+
+        except Exception as error:
+            add_auto_trader_log(
+                "background_error",
+                message=(
+                    clean_error_message(
+                        error
+                    )
+                ),
+            )
+
+        await asyncio.sleep(
+            AUTO_TRADER_SCAN_SECONDS
+        )
+
+
+def get_auto_trader_status() -> dict[str, Any]:
+    return {
+        "paper": True,
+        "enabled": (
+            _auto_trader_enabled
+        ),
+        "hard_switch_allowed": (
+            auto_trader_automation_allowed()
+        ),
+        "control_token_configured": bool(
+            get_auto_trader_control_token()
+        ),
+        "cycle_running": (
+            _auto_trader_cycle_running
+        ),
+        "last_cycle_at": (
+            _auto_trader_last_cycle_at
+        ),
+        "last_cycle_result": (
+            _auto_trader_last_cycle_result
+        ),
+        "settings": {
+            "scan_seconds": (
+                AUTO_TRADER_SCAN_SECONDS
+            ),
+            "entry_score_min": (
+                AUTO_TRADER_ENTRY_SCORE_MIN
+            ),
+            "entry_confidence_min": (
+                AUTO_TRADER_ENTRY_CONFIDENCE_MIN
+            ),
+            "exit_score_max": (
+                AUTO_TRADER_EXIT_SCORE_MAX
+            ),
+            "exit_confidence_min": (
+                AUTO_TRADER_EXIT_CONFIDENCE_MIN
+            ),
+            "entry_equity_percent": (
+                AUTO_TRADER_ENTRY_EQUITY_PERCENT
+            ),
+            "stop_loss_percent": (
+                AUTO_TRADER_STOP_LOSS_PERCENT
+            ),
+            "take_profit_percent": (
+                AUTO_TRADER_TAKE_PROFIT_PERCENT
+            ),
+            "symbol_cooldown_seconds": (
+                AUTO_TRADER_SYMBOL_COOLDOWN_SECONDS
+            ),
+            "max_new_positions_per_cycle": (
+                AUTO_TRADER_MAX_NEW_POSITIONS_PER_CYCLE
+            ),
+        },
+    }
+
+
+# =========================================================
 # Basic API routes
 # =========================================================
 
@@ -2502,6 +3565,133 @@ def scanner(
         signal=signal,
         refresh=refresh,
     )
+
+
+# =========================================================
+# Automatic PAPER trader routes
+# =========================================================
+
+@app.get("/auto-trader/status")
+def auto_trader_status() -> dict[str, Any]:
+    return get_auto_trader_status()
+
+
+@app.get("/auto-trader/logs")
+def auto_trader_logs(
+    limit: int = Query(
+        default=50,
+        ge=1,
+        le=AUTO_TRADER_LOG_LIMIT,
+    ),
+) -> dict[str, Any]:
+    return {
+        "paper": True,
+        "count": min(
+            limit,
+            len(
+                _auto_trader_log
+            ),
+        ),
+        "logs": (
+            _auto_trader_log[
+                -limit:
+            ][::-1]
+        ),
+    }
+
+
+@app.post("/auto-trader/enable")
+def auto_trader_enable(
+    x_auto_trader_token: str | None = Header(
+        default=None
+    ),
+) -> dict[str, Any]:
+    global _auto_trader_enabled
+
+    if not auto_trader_control_authorized(
+        x_auto_trader_token
+    ):
+        return {
+            "success": False,
+            "error": (
+                "Auto-trader control authorization failed."
+            ),
+        }
+
+    if not auto_trader_automation_allowed():
+        return {
+            "success": False,
+            "error": (
+                "Set AUTO_TRADER_ALLOW_AUTOMATION=true "
+                "in Railway before enabling automation."
+            ),
+        }
+
+    _auto_trader_enabled = True
+
+    add_auto_trader_log(
+        "enabled",
+        message=(
+            "Automatic PAPER trading was enabled."
+        ),
+    )
+
+    return {
+        "success": True,
+        **get_auto_trader_status(),
+    }
+
+
+@app.post("/auto-trader/disable")
+def auto_trader_disable(
+    x_auto_trader_token: str | None = Header(
+        default=None
+    ),
+) -> dict[str, Any]:
+    global _auto_trader_enabled
+
+    if not auto_trader_control_authorized(
+        x_auto_trader_token
+    ):
+        return {
+            "success": False,
+            "error": (
+                "Auto-trader control authorization failed."
+            ),
+        }
+
+    _auto_trader_enabled = False
+
+    add_auto_trader_log(
+        "disabled",
+        message=(
+            "Automatic PAPER trading was disabled."
+        ),
+    )
+
+    return {
+        "success": True,
+        **get_auto_trader_status(),
+    }
+
+
+@app.post("/auto-trader/run-once")
+def auto_trader_run_once(
+    x_auto_trader_token: str | None = Header(
+        default=None
+    ),
+) -> dict[str, Any]:
+    if not auto_trader_control_authorized(
+        x_auto_trader_token
+    ):
+        return {
+            "success": False,
+            "error": (
+                "Auto-trader control authorization failed."
+            ),
+        }
+
+    return run_auto_trader_cycle()
 
 
 # =========================================================
