@@ -2,6 +2,7 @@ import asyncio
 import math
 import os
 import time
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -23,7 +24,7 @@ from paper_trader import PaperTrader
 from scanner import scan_market
 
 
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.6.0"
 
 AUTO_PORTFOLIO_REFRESH_SECONDS = 300
 
@@ -33,6 +34,26 @@ AUTO_PORTFOLIO_REFRESH_SECONDS = 300
 ALPACA_PAPER_BASE_URL = "https://paper-api.alpaca.markets"
 ALPACA_ORDER_POLL_SECONDS = 0.25
 ALPACA_ORDER_POLL_TIMEOUT_SECONDS = 8.0
+
+# =========================================================
+# Paper execution risk controls
+# =========================================================
+#
+# These limits apply only to Alpaca PAPER orders. They are deliberately
+# conservative while the strategy and execution pipeline are being tested.
+RISK_MAX_ORDER_EQUITY_PERCENT = 2.0
+RISK_MAX_POSITION_EQUITY_PERCENT = 5.0
+RISK_MAX_OPEN_POSITIONS = 10
+RISK_MAX_SPREAD_PERCENT = 1.0
+RISK_BUYING_POWER_BUFFER_DOLLARS = 25.0
+
+# For now, market orders are submitted only during the regular market
+# session. Alpaca requires limit orders for extended-hours eligibility.
+RISK_REQUIRE_REGULAR_MARKET_OPEN = True
+
+# The first version of the bot is long-only.
+RISK_BLOCK_SHORT_SELLING = True
+
 
 
 async def portfolio_refresh_loop() -> None:
@@ -343,6 +364,589 @@ def wait_for_alpaca_paper_order(
     return latest_order
 
 
+
+def fetch_alpaca_market_clock() -> dict[str, Any]:
+    """
+    Return Alpaca's current US market clock for the PAPER account.
+    """
+    payload = alpaca_paper_request(
+        "GET",
+        "/v2/clock",
+    )
+
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            "Alpaca returned an invalid market-clock response."
+        )
+
+    return payload
+
+
+def fetch_alpaca_risk_quote(
+    symbol: str,
+) -> dict[str, Any]:
+    """
+    Fetch the latest Alpaca IEX bid/ask quote used for execution risk checks.
+    """
+    normalized_symbol = clean_symbol(symbol)
+
+    if not normalized_symbol:
+        raise RuntimeError(
+            "A valid symbol is required for a risk quote."
+        )
+
+    credentials = get_alpaca_credentials()
+
+    if credentials is None:
+        raise RuntimeError(
+            "Alpaca API credentials are not configured."
+        )
+
+    api_key, secret_key = credentials
+
+    response = requests.get(
+        (
+            "https://data.alpaca.markets/v2/stocks/"
+            f"{normalized_symbol}/quotes/latest"
+        ),
+        headers={
+            "APCA-API-KEY-ID": api_key,
+            "APCA-API-SECRET-KEY": secret_key,
+            "Accept": "application/json",
+        },
+        params={
+            "feed": "iex",
+        },
+        timeout=10,
+    )
+
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+
+    if not response.ok:
+        raise RuntimeError(
+            extract_alpaca_error(payload)
+        )
+
+    quote = (
+        payload.get("quote", {})
+        if isinstance(payload, dict)
+        else {}
+    )
+
+    bid = safe_float(
+        quote.get("bp")
+        if isinstance(quote, dict)
+        else None
+    )
+
+    ask = safe_float(
+        quote.get("ap")
+        if isinstance(quote, dict)
+        else None
+    )
+
+    if (
+        bid is None
+        or ask is None
+        or bid <= 0
+        or ask <= 0
+        or ask < bid
+    ):
+        raise RuntimeError(
+            f"A valid bid/ask quote is unavailable for "
+            f"{normalized_symbol}."
+        )
+
+    midpoint = (
+        bid
+        + ask
+    ) / 2
+
+    spread = (
+        ask
+        - bid
+    )
+
+    spread_percent = (
+        (
+            spread
+            / midpoint
+        )
+        * 100
+        if midpoint > 0
+        else math.inf
+    )
+
+    return {
+        "symbol": normalized_symbol,
+        "bid": round(
+            bid,
+            4,
+        ),
+        "ask": round(
+            ask,
+            4,
+        ),
+        "midpoint": round(
+            midpoint,
+            4,
+        ),
+        "spread": round(
+            spread,
+            4,
+        ),
+        "spread_percent": round(
+            spread_percent,
+            4,
+        ),
+        "timestamp": (
+            quote.get("t")
+            if isinstance(quote, dict)
+            else None
+        ),
+    }
+
+
+def fetch_alpaca_open_orders_for_symbol(
+    symbol: str,
+) -> list[dict[str, Any]]:
+    """
+    Return currently open PAPER orders for one symbol.
+    """
+    normalized_symbol = clean_symbol(
+        symbol
+    )
+
+    payload = alpaca_paper_request(
+        "GET",
+        "/v2/orders",
+        params={
+            "status": "open",
+            "limit": 100,
+            "direction": "desc",
+            "symbols": normalized_symbol,
+        },
+    )
+
+    if not isinstance(payload, list):
+        raise RuntimeError(
+            "Alpaca returned an invalid open-orders response."
+        )
+
+    return [
+        order
+        for order in payload
+        if (
+            isinstance(order, dict)
+            and clean_symbol(
+                order.get("symbol")
+            ) == normalized_symbol
+        )
+    ]
+
+
+def get_alpaca_position_for_symbol(
+    symbol: str,
+    positions: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """
+    Find one current Alpaca PAPER position by symbol.
+    """
+    normalized_symbol = clean_symbol(
+        symbol
+    )
+
+    for position in positions:
+        if (
+            isinstance(position, dict)
+            and clean_symbol(
+                position.get("symbol")
+            ) == normalized_symbol
+        ):
+            return position
+
+    return None
+
+
+def validate_alpaca_paper_order_risk(
+    *,
+    symbol: str,
+    shares: int,
+    side: str,
+) -> dict[str, Any]:
+    """
+    Validate a manual PAPER order against conservative execution controls.
+
+    Controls:
+      - regular-market session only for market orders
+      - no duplicate open orders for the same symbol
+      - spread ceiling
+      - max order size as a percent of account equity
+      - max total position size as a percent of account equity
+      - max number of simultaneous positions
+      - buying-power check with a small cash buffer
+      - long-only selling; no accidental short sale
+    """
+    normalized_symbol = clean_symbol(
+        symbol
+    )
+
+    normalized_side = str(
+        side or ""
+    ).strip().lower()
+
+    if normalized_side not in {
+        "buy",
+        "sell",
+    }:
+        return {
+            "approved": False,
+            "error": (
+                "Trade side must be buy or sell."
+            ),
+        }
+
+    if shares <= 0:
+        return {
+            "approved": False,
+            "error": (
+                "Share quantity must be greater than zero."
+            ),
+        }
+
+    account = fetch_alpaca_paper_account()
+    positions = fetch_alpaca_paper_positions()
+
+    equity = safe_float(
+        account.get("equity")
+    )
+
+    buying_power = safe_float(
+        account.get("buying_power")
+    )
+
+    if (
+        equity is None
+        or equity <= 0
+    ):
+        return {
+            "approved": False,
+            "error": (
+                "Account equity is unavailable, so the "
+                "risk check cannot approve this order."
+            ),
+        }
+
+    if buying_power is None:
+        buying_power = 0.0
+
+    if RISK_REQUIRE_REGULAR_MARKET_OPEN:
+        clock = fetch_alpaca_market_clock()
+
+        if not bool(
+            clock.get("is_open")
+        ):
+            next_open = clock.get(
+                "next_open"
+            )
+
+            return {
+                "approved": False,
+                "error": (
+                    "The regular stock market is closed. "
+                    "This bot currently blocks market orders "
+                    "outside regular hours to avoid queued or "
+                    "unexpected fills."
+                ),
+                "next_open": next_open,
+            }
+
+    open_orders = (
+        fetch_alpaca_open_orders_for_symbol(
+            normalized_symbol
+        )
+    )
+
+    if open_orders:
+        open_sides = sorted({
+            str(
+                order.get(
+                    "side",
+                    "",
+                )
+            ).strip().lower()
+            for order in open_orders
+        })
+
+        return {
+            "approved": False,
+            "error": (
+                f"{normalized_symbol} already has an open "
+                f"paper order. Wait for it to fill or cancel "
+                f"before submitting another order."
+            ),
+            "open_order_sides": open_sides,
+        }
+
+    quote = fetch_alpaca_risk_quote(
+        normalized_symbol
+    )
+
+    spread_percent = safe_float(
+        quote.get(
+            "spread_percent"
+        )
+    )
+
+    if (
+        spread_percent is None
+        or spread_percent >
+            RISK_MAX_SPREAD_PERCENT
+    ):
+        return {
+            "approved": False,
+            "error": (
+                f"{normalized_symbol}'s bid/ask spread is "
+                f"{(spread_percent or 0):.2f}%, above the "
+                f"{RISK_MAX_SPREAD_PERCENT:.2f}% safety limit."
+            ),
+            "quote": quote,
+        }
+
+    midpoint = safe_float(
+        quote.get("midpoint")
+    )
+
+    if (
+        midpoint is None
+        or midpoint <= 0
+    ):
+        return {
+            "approved": False,
+            "error": (
+                "A valid execution reference price is unavailable."
+            ),
+        }
+
+    estimated_notional = (
+        midpoint
+        * shares
+    )
+
+    max_order_notional = (
+        equity
+        * (
+            RISK_MAX_ORDER_EQUITY_PERCENT
+            / 100
+        )
+    )
+
+    current_position = (
+        get_alpaca_position_for_symbol(
+            normalized_symbol,
+            positions,
+        )
+    )
+
+    current_qty = 0.0
+    current_market_value = 0.0
+
+    if current_position is not None:
+        current_qty = safe_float(
+            current_position.get("qty")
+        ) or 0.0
+
+        current_market_value = abs(
+            safe_float(
+                current_position.get(
+                    "market_value"
+                )
+            ) or 0.0
+        )
+
+    max_position_notional = (
+        equity
+        * (
+            RISK_MAX_POSITION_EQUITY_PERCENT
+            / 100
+        )
+    )
+
+    if normalized_side == "buy":
+        if (
+            estimated_notional >
+            max_order_notional
+        ):
+            max_allowed_shares = max(
+                0,
+                math.floor(
+                    max_order_notional
+                    / midpoint
+                ),
+            )
+
+            return {
+                "approved": False,
+                "error": (
+                    f"Order size is about "
+                    f"${estimated_notional:,.2f}, above the "
+                    f"{RISK_MAX_ORDER_EQUITY_PERCENT:.1f}% "
+                    f"per-order risk limit."
+                ),
+                "max_allowed_shares": max_allowed_shares,
+                "estimated_notional": round(
+                    estimated_notional,
+                    2,
+                ),
+            }
+
+        projected_position_value = (
+            current_market_value
+            + estimated_notional
+        )
+
+        if (
+            projected_position_value >
+            max_position_notional
+        ):
+            remaining_capacity = max(
+                0.0,
+                max_position_notional
+                - current_market_value,
+            )
+
+            max_allowed_shares = max(
+                0,
+                math.floor(
+                    remaining_capacity
+                    / midpoint
+                ),
+            )
+
+            return {
+                "approved": False,
+                "error": (
+                    f"This order would make the "
+                    f"{normalized_symbol} position larger "
+                    f"than {RISK_MAX_POSITION_EQUITY_PERCENT:.1f}% "
+                    f"of account equity."
+                ),
+                "max_allowed_shares": max_allowed_shares,
+            }
+
+        if (
+            current_position is None
+            and len(positions) >=
+                RISK_MAX_OPEN_POSITIONS
+        ):
+            return {
+                "approved": False,
+                "error": (
+                    f"The account already has "
+                    f"{len(positions)} open positions, which "
+                    f"meets the {RISK_MAX_OPEN_POSITIONS}-position "
+                    f"safety limit."
+                ),
+            }
+
+        required_buying_power = (
+            estimated_notional
+            + RISK_BUYING_POWER_BUFFER_DOLLARS
+        )
+
+        if (
+            buying_power <
+            required_buying_power
+        ):
+            return {
+                "approved": False,
+                "error": (
+                    "Available buying power is too low for "
+                    "this order plus the safety buffer."
+                ),
+                "buying_power": round(
+                    buying_power,
+                    2,
+                ),
+                "estimated_notional": round(
+                    estimated_notional,
+                    2,
+                ),
+            }
+
+    else:
+        if (
+            RISK_BLOCK_SHORT_SELLING
+            and (
+                current_position is None
+                or current_qty <= 0
+            )
+        ):
+            return {
+                "approved": False,
+                "error": (
+                    f"No long {normalized_symbol} position is "
+                    f"available to sell. Short selling is "
+                    f"disabled."
+                ),
+            }
+
+        if (
+            RISK_BLOCK_SHORT_SELLING
+            and shares > current_qty
+        ):
+            return {
+                "approved": False,
+                "error": (
+                    f"You requested to sell {shares} shares, "
+                    f"but the paper account holds only "
+                    f"{current_qty:g} shares."
+                ),
+                "max_allowed_shares": math.floor(
+                    current_qty
+                ),
+            }
+
+    return {
+        "approved": True,
+        "symbol": normalized_symbol,
+        "side": normalized_side,
+        "shares": shares,
+        "equity": round(
+            equity,
+            2,
+        ),
+        "buying_power": round(
+            buying_power,
+            2,
+        ),
+        "estimated_notional": round(
+            estimated_notional,
+            2,
+        ),
+        "quote": quote,
+        "limits": {
+            "max_order_equity_percent":
+                RISK_MAX_ORDER_EQUITY_PERCENT,
+            "max_position_equity_percent":
+                RISK_MAX_POSITION_EQUITY_PERCENT,
+            "max_open_positions":
+                RISK_MAX_OPEN_POSITIONS,
+            "max_spread_percent":
+                RISK_MAX_SPREAD_PERCENT,
+            "buying_power_buffer_dollars":
+                RISK_BUYING_POWER_BUFFER_DOLLARS,
+            "regular_market_only":
+                RISK_REQUIRE_REGULAR_MARKET_OPEN,
+            "short_selling_disabled":
+                RISK_BLOCK_SHORT_SELLING,
+        },
+    }
+
+
 def normalize_alpaca_paper_order(
     order: dict[str, Any],
     *,
@@ -552,12 +1156,53 @@ def submit_alpaca_paper_market_order(
             "error": "Trade side must be buy or sell.",
         }
 
+    try:
+        risk_check = validate_alpaca_paper_order_risk(
+            symbol=normalized_symbol,
+            shares=shares,
+            side=normalized_side,
+        )
+
+    except Exception as error:
+        print(
+            f"Paper risk-check error for "
+            f"{normalized_symbol}: "
+            f"{clean_error_message(error)}"
+        )
+
+        return {
+            "success": False,
+            "paper": True,
+            "error": (
+                "The trade was blocked because the "
+                "execution risk check could not be completed."
+            ),
+        }
+
+    if not risk_check.get("approved"):
+        return {
+            "success": False,
+            "paper": True,
+            "error": str(
+                risk_check.get(
+                    "error",
+                    "The order was blocked by risk controls.",
+                )
+            ),
+            "risk": risk_check,
+        }
+
     request_body = {
         "symbol": normalized_symbol,
         "qty": str(shares),
         "side": normalized_side,
         "type": "market",
         "time_in_force": "day",
+        "client_order_id": (
+            f"paper-{normalized_side}-"
+            f"{normalized_symbol.lower()}-"
+            f"{uuid.uuid4().hex[:12]}"
+        ),
     }
 
     try:
@@ -585,12 +1230,16 @@ def submit_alpaca_paper_market_order(
             )
         )
 
-        return normalize_alpaca_paper_order(
+        result = normalize_alpaca_paper_order(
             latest_order,
             requested_symbol=normalized_symbol,
             requested_shares=shares,
             requested_side=normalized_side,
         )
+
+        result["risk"] = risk_check
+
+        return result
 
     except Exception as error:
         print(
@@ -2085,6 +2734,66 @@ def get_risk_plan(symbol: str) -> dict[str, Any]:
             "success": False,
             "error": message,
             "message": message,
+        }
+
+
+# =========================================================
+# Execution risk preview
+# =========================================================
+
+@app.get("/execution-risk/{symbol}")
+def execution_risk(
+    symbol: str,
+    shares: int = Query(
+        default=1,
+        ge=1,
+        le=1_000_000,
+    ),
+    side: str = Query(
+        default="buy",
+    ),
+) -> dict[str, Any]:
+    """
+    Preview the PAPER execution risk decision without placing an order.
+    """
+    normalized_symbol = clean_symbol(
+        symbol
+    )
+
+    normalized_side = str(
+        side or ""
+    ).strip().lower()
+
+    if normalized_side not in {
+        "buy",
+        "sell",
+    }:
+        return {
+            "approved": False,
+            "error": (
+                "Side must be buy or sell."
+            ),
+        }
+
+    try:
+        return validate_alpaca_paper_order_risk(
+            symbol=normalized_symbol,
+            shares=shares,
+            side=normalized_side,
+        )
+
+    except Exception as error:
+        print(
+            f"Execution-risk endpoint error for "
+            f"{normalized_symbol}: "
+            f"{clean_error_message(error)}"
+        )
+
+        return {
+            "approved": False,
+            "error": (
+                "The execution risk check could not be completed."
+            ),
         }
 
 
