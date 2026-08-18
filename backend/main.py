@@ -1,8 +1,10 @@
 import asyncio
 import math
+import os
 from contextlib import asynccontextmanager
 from typing import Any
 
+import requests
 import yfinance as yf
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -136,20 +138,76 @@ def fetch_current_price(symbol: str) -> float | None:
     """
     Return the latest available stock price.
 
-    The primary source is 1-minute Yahoo Finance history with
-    pre-market and after-hours data enabled. Fast info and recent
-    daily history are used as fallbacks.
+    Alpaca Market Data is used first. On the free plan this normally
+    uses the IEX feed. The latest quote midpoint is preferred because
+    it can continue updating during extended-hours trading even when
+    the latest trade is unchanged. Alpaca's latest trade is the next
+    fallback, followed by Yahoo Finance.
     """
     normalized_symbol = clean_symbol(symbol)
 
     if not normalized_symbol:
         return None
 
+    alpaca_key = os.getenv("ALPACA_API_KEY", "").strip()
+    alpaca_secret = os.getenv("ALPACA_SECRET_KEY", "").strip()
+
+    if alpaca_key and alpaca_secret:
+        headers = {
+            "APCA-API-KEY-ID": alpaca_key,
+            "APCA-API-SECRET-KEY": alpaca_secret,
+            "Accept": "application/json",
+        }
+
+        try:
+            response = requests.get(
+                f"https://data.alpaca.markets/v2/stocks/{normalized_symbol}/quotes/latest",
+                headers=headers,
+                params={"feed": "iex"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            quote = payload.get("quote", {}) if isinstance(payload, dict) else {}
+            bid = safe_float(quote.get("bp") if isinstance(quote, dict) else None)
+            ask = safe_float(quote.get("ap") if isinstance(quote, dict) else None)
+            if bid is not None and ask is not None and bid > 0 and ask > 0 and ask >= bid:
+                midpoint = (bid + ask) / 2
+                if is_valid_price(midpoint):
+                    return round(float(midpoint), 2)
+        except Exception as error:
+            print(
+                f"Alpaca latest-quote error for {normalized_symbol}: "
+                f"{clean_error_message(error)}"
+            )
+
+        try:
+            response = requests.get(
+                f"https://data.alpaca.markets/v2/stocks/{normalized_symbol}/trades/latest",
+                headers=headers,
+                params={"feed": "iex"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            trade = payload.get("trade", {}) if isinstance(payload, dict) else {}
+            price = safe_float(trade.get("p") if isinstance(trade, dict) else None)
+            if is_valid_price(price):
+                return round(float(price), 2)
+        except Exception as error:
+            print(
+                f"Alpaca latest-trade error for {normalized_symbol}: "
+                f"{clean_error_message(error)}"
+            )
+    else:
+        print(
+            "Alpaca API credentials are not configured. "
+            "Falling back to Yahoo Finance."
+        )
+
     try:
         ticker = yf.Ticker(normalized_symbol)
 
-        # Primary source: latest 1-minute price, including
-        # pre-market and after-hours when Yahoo provides it.
         try:
             history = ticker.history(
                 period="1d",
@@ -160,52 +218,36 @@ def fetch_current_price(symbol: str) -> float | None:
                 repair=False,
                 timeout=15,
             )
-
-            if (
-                history is not None
-                and not history.empty
-                and "Close" in history.columns
-            ):
+            if history is not None and not history.empty and "Close" in history.columns:
                 closes = history["Close"].dropna()
-
                 if not closes.empty:
                     price = safe_float(closes.iloc[-1])
-
                     if is_valid_price(price):
                         return round(float(price), 2)
-
         except Exception as error:
             print(
-                f"Intraday price failed for "
-                f"{normalized_symbol}: "
+                f"Yahoo intraday-price error for {normalized_symbol}: "
                 f"{clean_error_message(error)}"
             )
 
-        # First fallback: Yahoo fast_info.
         try:
             fast_info = ticker.fast_info
             price = None
-
             if hasattr(fast_info, "get"):
                 price = fast_info.get("last_price")
-
             if price is None:
                 try:
                     price = fast_info["last_price"]
                 except Exception:
                     price = None
-
             if is_valid_price(price):
                 return round(float(price), 2)
-
         except Exception as error:
             print(
-                f"Fast-info price failed for "
-                f"{normalized_symbol}: "
+                f"Yahoo fast-info error for {normalized_symbol}: "
                 f"{clean_error_message(error)}"
             )
 
-        # Final fallback: most recent regular daily close.
         try:
             history = ticker.history(
                 period="5d",
@@ -215,31 +257,21 @@ def fetch_current_price(symbol: str) -> float | None:
                 repair=False,
                 timeout=15,
             )
-
-            if (
-                history is not None
-                and not history.empty
-                and "Close" in history.columns
-            ):
+            if history is not None and not history.empty and "Close" in history.columns:
                 closes = history["Close"].dropna()
-
                 if not closes.empty:
                     price = safe_float(closes.iloc[-1])
-
                     if is_valid_price(price):
                         return round(float(price), 2)
-
         except Exception as error:
             print(
-                f"Daily price fallback failed for "
-                f"{normalized_symbol}: "
+                f"Yahoo daily-price fallback error for {normalized_symbol}: "
                 f"{clean_error_message(error)}"
             )
 
     except Exception as error:
         print(
-            f"Current-price error for "
-            f"{normalized_symbol}: "
+            f"Current-price error for {normalized_symbol}: "
             f"{clean_error_message(error)}"
         )
 
