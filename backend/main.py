@@ -23,7 +23,7 @@ from paper_trader import PaperTrader
 from scanner import scan_market
 
 
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.5.0"
 
 AUTO_PORTFOLIO_REFRESH_SECONDS = 300
 
@@ -610,6 +610,585 @@ def submit_alpaca_paper_market_order(
 
 
 # =========================================================
+# Alpaca paper-account dashboard helpers
+# =========================================================
+
+def fetch_alpaca_paper_account() -> dict[str, Any]:
+    """
+    Fetch the current Alpaca PAPER account.
+    """
+    payload = alpaca_paper_request(
+        "GET",
+        "/v2/account",
+    )
+
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            "Alpaca returned an invalid account response."
+        )
+
+    return payload
+
+
+def fetch_alpaca_paper_positions() -> list[dict[str, Any]]:
+    """
+    Fetch all currently open Alpaca PAPER positions.
+    """
+    payload = alpaca_paper_request(
+        "GET",
+        "/v2/positions",
+    )
+
+    if not isinstance(payload, list):
+        raise RuntimeError(
+            "Alpaca returned an invalid positions response."
+        )
+
+    return [
+        position
+        for position in payload
+        if isinstance(position, dict)
+    ]
+
+
+def fetch_alpaca_paper_orders(
+    *,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """
+    Fetch recent Alpaca PAPER orders for dashboard trade history.
+    """
+    safe_limit = max(
+        1,
+        min(
+            int(limit),
+            500,
+        ),
+    )
+
+    payload = alpaca_paper_request(
+        "GET",
+        "/v2/orders",
+        params={
+            "status": "all",
+            "limit": safe_limit,
+            "direction": "desc",
+        },
+    )
+
+    if not isinstance(payload, list):
+        raise RuntimeError(
+            "Alpaca returned an invalid orders response."
+        )
+
+    return [
+        order
+        for order in payload
+        if isinstance(order, dict)
+    ]
+
+
+def normalize_alpaca_position(
+    position: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Convert Alpaca's position fields into the structure account.js expects.
+    """
+    symbol = clean_symbol(
+        position.get("symbol")
+    )
+
+    qty = safe_float(
+        position.get("qty")
+    )
+
+    entry_price = safe_float(
+        position.get(
+            "avg_entry_price"
+        )
+    )
+
+    current_price = safe_float(
+        position.get(
+            "current_price"
+        )
+    )
+
+    market_value = safe_float(
+        position.get(
+            "market_value"
+        )
+    )
+
+    cost_basis = safe_float(
+        position.get(
+            "cost_basis"
+        )
+    )
+
+    unrealized_pl = safe_float(
+        position.get(
+            "unrealized_pl"
+        )
+    )
+
+    unrealized_plpc = safe_float(
+        position.get(
+            "unrealized_plpc"
+        )
+    )
+
+    side = str(
+        position.get(
+            "side",
+            "",
+        )
+    ).strip().lower()
+
+    shares = qty or 0.0
+
+    if side == "short" and shares > 0:
+        shares = -shares
+
+    return {
+        "symbol": symbol,
+        "shares": shares,
+        "qty": shares,
+        "side": side,
+        "entry_price": entry_price or 0.0,
+        "avg_entry_price": entry_price or 0.0,
+        "current_price": current_price or 0.0,
+        "market_price": current_price or 0.0,
+        "position_value": (
+            abs(market_value)
+            if market_value is not None
+            else abs(
+                shares
+                * (
+                    current_price
+                    or 0.0
+                )
+            )
+        ),
+        "market_value": (
+            market_value
+            if market_value is not None
+            else shares
+            * (
+                current_price
+                or 0.0
+            )
+        ),
+        "cost_basis": (
+            abs(cost_basis)
+            if cost_basis is not None
+            else abs(
+                shares
+                * (
+                    entry_price
+                    or 0.0
+                )
+            )
+        ),
+        "unrealized_profit": (
+            unrealized_pl
+            if unrealized_pl is not None
+            else 0.0
+        ),
+        "unrealized_profit_percent": (
+            unrealized_plpc * 100
+            if unrealized_plpc is not None
+            else 0.0
+        ),
+        "asset_id": position.get(
+            "asset_id"
+        ),
+        "exchange": position.get(
+            "exchange"
+        ),
+    }
+
+
+def normalize_alpaca_order_for_history(
+    order: dict[str, Any],
+) -> dict[str, Any] | None:
+    """
+    Convert filled Alpaca PAPER orders into account.js trade-history rows.
+    """
+    status = str(
+        order.get(
+            "status",
+            "",
+        )
+    ).strip().lower()
+
+    filled_qty = safe_float(
+        order.get(
+            "filled_qty"
+        )
+    )
+
+    filled_price = safe_float(
+        order.get(
+            "filled_avg_price"
+        )
+    )
+
+    if (
+        status != "filled"
+        or filled_qty is None
+        or filled_qty <= 0
+        or filled_price is None
+        or filled_price <= 0
+    ):
+        return None
+
+    symbol = clean_symbol(
+        order.get(
+            "symbol"
+        )
+    )
+
+    side = str(
+        order.get(
+            "side",
+            "",
+        )
+    ).strip().upper()
+
+    total = round(
+        filled_qty
+        * filled_price,
+        2,
+    )
+
+    timestamp = (
+        order.get(
+            "filled_at"
+        )
+        or order.get(
+            "submitted_at"
+        )
+        or order.get(
+            "created_at"
+        )
+    )
+
+    return {
+        "id": order.get("id"),
+        "symbol": symbol,
+        "side": side,
+        "action": side,
+        "shares": filled_qty,
+        "qty": filled_qty,
+        "price": round(
+            filled_price,
+            4,
+        ),
+        "execution_price": round(
+            filled_price,
+            4,
+        ),
+        "total": total,
+        "timestamp": timestamp,
+        "executed_at": timestamp,
+        "status": status,
+        "paper": True,
+    }
+
+
+def build_alpaca_dashboard_account() -> dict[str, Any]:
+    """
+    Build the /account response entirely from Alpaca PAPER data.
+
+    This keeps the existing frontend working while making Alpaca the
+    source of truth for cash, equity, open positions, and recent fills.
+    """
+    account = fetch_alpaca_paper_account()
+
+    raw_positions = (
+        fetch_alpaca_paper_positions()
+    )
+
+    raw_orders = fetch_alpaca_paper_orders(
+        limit=100
+    )
+
+    positions = [
+        normalize_alpaca_position(
+            position
+        )
+        for position in raw_positions
+    ]
+
+    positions = [
+        position
+        for position in positions
+        if position.get("symbol")
+    ]
+
+    history: list[dict[str, Any]] = []
+
+    for order in raw_orders:
+        trade = (
+            normalize_alpaca_order_for_history(
+                order
+            )
+        )
+
+        if trade is not None:
+            history.append(trade)
+
+    cash = safe_float(
+        account.get("cash")
+    ) or 0.0
+
+    equity = safe_float(
+        account.get("equity")
+    )
+
+    portfolio_value = (
+        equity
+        if equity is not None
+        else cash
+    )
+
+    last_equity = safe_float(
+        account.get(
+            "last_equity"
+        )
+    )
+
+    if (
+        last_equity is None
+        or last_equity <= 0
+    ):
+        last_equity = portfolio_value
+
+    unrealized_profit_loss = sum(
+        safe_float(
+            position.get(
+                "unrealized_profit"
+            )
+        ) or 0.0
+        for position in positions
+    )
+
+    # Alpaca's account endpoint exposes current and prior equity, but
+    # not a simple all-time realized-P/L field. For now the dashboard's
+    # realized metric remains zero until we add activity-based accounting.
+    realized_profit_loss = 0.0
+
+    profit_loss = (
+        portfolio_value
+        - last_equity
+    )
+
+    profit_loss_percent = (
+        (
+            profit_loss
+            / last_equity
+        )
+        * 100
+        if last_equity > 0
+        else 0.0
+    )
+
+    invested_value = sum(
+        abs(
+            safe_float(
+                position.get(
+                    "position_value"
+                )
+            ) or 0.0
+        )
+        for position in positions
+    )
+
+    allocation_total = (
+        cash
+        + invested_value
+    )
+
+    cash_percent = (
+        (
+            cash
+            / allocation_total
+        )
+        * 100
+        if allocation_total > 0
+        else 0.0
+    )
+
+    invested_percent = (
+        (
+            invested_value
+            / allocation_total
+        )
+        * 100
+        if allocation_total > 0
+        else 0.0
+    )
+
+    closed_sells = sum(
+        1
+        for trade in history
+        if str(
+            trade.get(
+                "side",
+                "",
+            )
+        ).upper() == "SELL"
+    )
+
+    return {
+        "source": "alpaca_paper",
+        "paper": True,
+        "account_id": account.get("id"),
+        "status": account.get("status"),
+        "cash": round(cash, 2),
+        "buying_power": safe_float(
+            account.get(
+                "buying_power"
+            )
+        ) or 0.0,
+        "portfolio_value": round(
+            portfolio_value,
+            2,
+        ),
+        "total_value": round(
+            portfolio_value,
+            2,
+        ),
+        "equity": round(
+            portfolio_value,
+            2,
+        ),
+        "starting_balance": round(
+            last_equity,
+            2,
+        ),
+        "starting_cash": round(
+            last_equity,
+            2,
+        ),
+        "profit_loss": round(
+            profit_loss,
+            2,
+        ),
+        "total_profit_loss": round(
+            profit_loss,
+            2,
+        ),
+        "profit_loss_percent": round(
+            profit_loss_percent,
+            4,
+        ),
+        "total_return_percent": round(
+            profit_loss_percent,
+            4,
+        ),
+        "realized_profit_loss": round(
+            realized_profit_loss,
+            2,
+        ),
+        "unrealized_profit_loss": round(
+            unrealized_profit_loss,
+            2,
+        ),
+        "win_rate": 0.0,
+        "closed_trades": closed_sells,
+        "cash_percent": round(
+            cash_percent,
+            4,
+        ),
+        "invested_percent": round(
+            invested_percent,
+            4,
+        ),
+        "positions": positions,
+        "history": history,
+        "trades": history,
+        "performance": {
+            "highest_value": round(
+                max(
+                    portfolio_value,
+                    last_equity,
+                ),
+                2,
+            ),
+        },
+    }
+
+
+def fetch_alpaca_portfolio_history() -> list[dict[str, Any]]:
+    """
+    Return Alpaca PAPER portfolio equity history in the shape portfolio.js
+    already expects: timestamp + value.
+    """
+    payload = alpaca_paper_request(
+        "GET",
+        "/v2/account/portfolio/history",
+        params={
+            "period": "1A",
+            "timeframe": "1D",
+        },
+    )
+
+    if not isinstance(payload, dict):
+        return []
+
+    timestamps = payload.get(
+        "timestamp"
+    )
+
+    equity_values = payload.get(
+        "equity"
+    )
+
+    if (
+        not isinstance(
+            timestamps,
+            list,
+        )
+        or not isinstance(
+            equity_values,
+            list,
+        )
+    ):
+        return []
+
+    history: list[dict[str, Any]] = []
+
+    for timestamp, value in zip(
+        timestamps,
+        equity_values,
+    ):
+        equity = safe_float(value)
+
+        if (
+            equity is None
+            or equity <= 0
+        ):
+            continue
+
+        history.append({
+            "timestamp": timestamp,
+            "time": timestamp,
+            "value": round(
+                equity,
+                2,
+            ),
+            "equity": round(
+                equity,
+                2,
+            ),
+        })
+
+    return history
+
+
+# =========================================================
 # Yahoo Finance helpers
 # =========================================================
 
@@ -1164,29 +1743,32 @@ def health() -> dict[str, str]:
 @app.get("/account")
 def account() -> dict[str, Any]:
     try:
-        refresh_portfolio_prices()
-        return trader.account()
+        return build_alpaca_dashboard_account()
 
     except Exception as error:
         print(
-            "Account endpoint error: "
+            "Alpaca PAPER account endpoint error: "
             f"{clean_error_message(error)}"
         )
+
         return {
-            "error": "The account could not be loaded."
+            "error": (
+                "The Alpaca paper account could not be loaded."
+            )
         }
 
 
 @app.get("/portfolio-history")
 def portfolio_history() -> Any:
     try:
-        return trader.get_portfolio_history()
+        return fetch_alpaca_portfolio_history()
 
     except Exception as error:
         print(
-            "Portfolio-history endpoint error: "
+            "Alpaca PAPER portfolio-history error: "
             f"{clean_error_message(error)}"
         )
+
         return []
 
 
