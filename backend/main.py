@@ -75,6 +75,9 @@ AUTO_TRADER_EXIT_CONFIDENCE_MIN = 80
 AUTO_TRADER_ENTRY_EQUITY_PERCENT = 0.50
 AUTO_TRADER_STOP_LOSS_PERCENT = 2.0
 AUTO_TRADER_TAKE_PROFIT_PERCENT = 4.0
+AUTO_TRADER_PROFIT_LOCK_TRIGGER_PERCENT = 2.0
+AUTO_TRADER_PROFIT_LOCK_PERCENT = 0.5
+AUTO_TRADER_PROFIT_TRAIL_PERCENT = 2.0
 AUTO_TRADER_SYMBOL_COOLDOWN_SECONDS = 60 * 60
 AUTO_TRADER_MAX_NEW_POSITIONS_PER_CYCLE = 1
 AUTO_TRADER_LOG_LIMIT = 250
@@ -3342,6 +3345,245 @@ def get_scanner_result_by_symbol(
         )
     }
 
+def get_open_protective_stop_order(
+    symbol: str,
+) -> dict[str, Any] | None:
+    normalized_symbol = clean_symbol(
+        symbol
+    )
+
+    if not normalized_symbol:
+        return None
+
+    try:
+        open_orders = (
+            fetch_alpaca_open_orders_for_symbol(
+                normalized_symbol
+            )
+        )
+    except Exception:
+        return None
+
+    for order in open_orders:
+        if not isinstance(
+            order,
+            dict,
+        ):
+            continue
+
+        side = str(
+            order.get(
+                "side",
+                "",
+            )
+        ).strip().lower()
+
+        order_type = str(
+            order.get(
+                "type",
+                "",
+            )
+        ).strip().lower()
+
+        stop_price = safe_float(
+            order.get(
+                "stop_price"
+            )
+        )
+
+        if (
+            side == "sell"
+            and order_type == "stop"
+            and stop_price is not None
+            and stop_price > 0
+        ):
+            return order
+
+    return None
+
+def calculate_profit_lock_stop(
+    *,
+    entry_price: float,
+    current_price: float,
+    existing_stop_price: float | None,
+) -> float | None:
+    if (
+        entry_price <= 0
+        or current_price <= 0
+    ):
+        return None
+
+    gain_percent = (
+        (
+            current_price
+            - entry_price
+        )
+        / entry_price
+    ) * 100
+
+    if (
+        gain_percent
+        < AUTO_TRADER_PROFIT_LOCK_TRIGGER_PERCENT
+    ):
+        return None
+
+    minimum_locked_stop = (
+        entry_price
+        * (
+            1
+            + (
+                AUTO_TRADER_PROFIT_LOCK_PERCENT
+                / 100
+            )
+        )
+    )
+
+    trailing_stop = (
+        current_price
+        * (
+            1
+            - (
+                AUTO_TRADER_PROFIT_TRAIL_PERCENT
+                / 100
+            )
+        )
+    )
+
+    new_stop = max(
+        minimum_locked_stop,
+        trailing_stop,
+    )
+
+    if (
+        existing_stop_price is not None
+        and new_stop <= existing_stop_price
+    ):
+        return None
+
+    if new_stop >= current_price:
+        return None
+
+    return round(
+        new_stop,
+        2,
+    )
+
+def raise_protective_stop(
+    *,
+    symbol: str,
+    new_stop_price: float,
+) -> dict[str, Any]:
+    normalized_symbol = clean_symbol(
+        symbol
+    )
+
+    if (
+        not normalized_symbol
+        or new_stop_price <= 0
+    ):
+        return {
+            "success": False,
+            "paper": True,
+            "error": (
+                "A valid symbol and stop price "
+                "are required."
+            ),
+        }
+
+    stop_order = (
+        get_open_protective_stop_order(
+            normalized_symbol
+        )
+    )
+
+    if stop_order is None:
+        return {
+            "success": False,
+            "paper": True,
+            "error": (
+                "No open protective stop order "
+                f"was found for {normalized_symbol}."
+            ),
+        }
+
+    order_id = str(
+        stop_order.get(
+            "id",
+            "",
+        )
+    ).strip()
+
+    old_stop_price = safe_float(
+        stop_order.get(
+            "stop_price"
+        )
+    )
+
+    if not order_id:
+        return {
+            "success": False,
+            "paper": True,
+            "error": (
+                "Protective stop order ID "
+                "was unavailable."
+            ),
+        }
+
+    if (
+        old_stop_price is not None
+        and new_stop_price <= old_stop_price
+    ):
+        return {
+            "success": True,
+            "paper": True,
+            "changed": False,
+            "symbol": normalized_symbol,
+            "old_stop_price": old_stop_price,
+            "new_stop_price": old_stop_price,
+        }
+
+    try:
+        payload = alpaca_paper_request(
+            "PATCH",
+            f"/v2/orders/{order_id}",
+            json_body={
+                "stop_price": (
+                    f"{new_stop_price:.2f}"
+                ),
+            },
+        )
+
+        if not isinstance(
+            payload,
+            dict,
+        ):
+            raise RuntimeError(
+                "Alpaca returned an invalid "
+                "stop-replacement response."
+            )
+
+        return {
+            "success": True,
+            "paper": True,
+            "changed": True,
+            "symbol": normalized_symbol,
+            "old_stop_price": old_stop_price,
+            "new_stop_price": new_stop_price,
+            "order": payload,
+        }
+
+    except Exception as error:
+        return {
+            "success": False,
+            "paper": True,
+            "changed": False,
+            "symbol": normalized_symbol,
+            "old_stop_price": old_stop_price,
+            "new_stop_price": new_stop_price,
+            "error": clean_error_message(
+                error
+            ),
+        }
 
 def run_auto_trader_cycle() -> dict[str, Any]:
     """
@@ -3625,6 +3867,122 @@ def run_auto_trader_cycle() -> dict[str, Any]:
         positions = (
             fetch_alpaca_paper_positions()
         )
+        cycle_result[
+            "profit_lock_updates"
+        ] = []
+
+        for position in positions:
+            symbol = clean_symbol(
+                position.get(
+                    "symbol"
+                )
+            )
+
+            if not symbol:
+                continue
+
+            entry_price = safe_float(
+                position.get(
+                    "avg_entry_price"
+                )
+            )
+
+            current_price = safe_float(
+                position.get(
+                    "current_price"
+                )
+            )
+
+            if (
+                entry_price is None
+                or entry_price <= 0
+                or current_price is None
+                or current_price <= 0
+            ):
+                continue
+
+            stop_order = (
+                get_open_protective_stop_order(
+                    symbol
+                )
+            )
+
+            if stop_order is None:
+                continue
+
+            existing_stop_price = (
+                safe_float(
+                    stop_order.get(
+                        "stop_price"
+                    )
+                )
+            )
+
+            new_stop_price = (
+                calculate_profit_lock_stop(
+                    entry_price=entry_price,
+                    current_price=current_price,
+                    existing_stop_price=(
+                        existing_stop_price
+                    ),
+                )
+            )
+
+            if new_stop_price is None:
+                continue
+
+            update_result = (
+                raise_protective_stop(
+                    symbol=symbol,
+                    new_stop_price=(
+                        new_stop_price
+                    ),
+                )
+            )
+
+            cycle_result[
+                "profit_lock_updates"
+            ].append({
+                "symbol": symbol,
+                "entry_price": entry_price,
+                "current_price": current_price,
+                "old_stop_price": (
+                    existing_stop_price
+                ),
+                "new_stop_price": (
+                    new_stop_price
+                ),
+                "result": update_result,
+            })
+
+            if (
+                update_result.get(
+                    "success"
+                )
+                and update_result.get(
+                    "changed"
+                )
+            ):
+                add_auto_trader_log(
+                    "profit_lock_updated",
+                    symbol=symbol,
+                    message=(
+                        "Automatic PAPER profit lock "
+                        "raised the protective stop."
+                    ),
+                    details={
+                        "entry_price": entry_price,
+                        "current_price": (
+                            current_price
+                        ),
+                        "old_stop_price": (
+                            existing_stop_price
+                        ),
+                        "new_stop_price": (
+                            new_stop_price
+                        ),
+                    },
+                )
 
         existing_symbols = {
             clean_symbol(
