@@ -105,6 +105,7 @@ _auto_trader_last_cycle_at: float | None = None
 _auto_trader_last_cycle_result: dict[str, Any] | None = None
 _auto_trader_symbol_cooldowns: dict[str, float] = {}
 _auto_trader_log: list[dict[str, Any]] = []
+_auto_trader_seen_exit_order_ids: set[str] = set()
 
 
 
@@ -132,6 +133,7 @@ async def portfolio_refresh_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_auto_trader_log()
+    initialize_seen_exit_order_ids()
 
     refresh_task = asyncio.create_task(
         portfolio_refresh_loop()
@@ -3652,6 +3654,265 @@ def should_hard_max_loss_exit(
         return_percent
         <= -AUTO_TRADER_HARD_MAX_LOSS_PERCENT
     )
+def detect_new_broker_exit_fills() -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+
+    try:
+        orders = fetch_alpaca_paper_orders(
+            limit=100
+        )
+    except Exception as error:
+        add_auto_trader_log(
+            "broker_exit_scan_error",
+            message=(
+                "Could not scan recent PAPER sell fills."
+            ),
+            details={
+                "error": clean_error_message(
+                    error
+                ),
+            },
+        )
+        return results
+
+    for order in orders:
+        if not isinstance(
+            order,
+            dict,
+        ):
+            continue
+
+        order_id = str(
+            order.get(
+                "id",
+                "",
+            )
+        ).strip()
+
+        if not order_id:
+            continue
+
+        side = str(
+            order.get(
+                "side",
+                "",
+            )
+        ).strip().lower()
+
+        status = str(
+            order.get(
+                "status",
+                "",
+            )
+        ).strip().lower()
+
+        filled_qty = safe_float(
+            order.get(
+                "filled_qty"
+            )
+        )
+
+        filled_price = safe_float(
+            order.get(
+                "filled_avg_price"
+            )
+        )
+
+        if (
+            side != "sell"
+            or status != "filled"
+            or filled_qty is None
+            or filled_qty <= 0
+            or filled_price is None
+            or filled_price <= 0
+        ):
+            continue
+
+        if (
+            order_id
+            in _auto_trader_seen_exit_order_ids
+        ):
+            continue
+
+        symbol = clean_symbol(
+            order.get(
+                "symbol"
+            )
+        )
+
+        order_type = str(
+            order.get(
+                "type",
+                "",
+            )
+        ).strip().lower()
+
+        stop_price = safe_float(
+            order.get(
+                "stop_price"
+            )
+        )
+
+        limit_price = safe_float(
+            order.get(
+                "limit_price"
+            )
+        )
+
+        exit_reason = "broker_sell_fill"
+
+        if order_type == "stop":
+            exit_reason = "protective_stop_fill"
+        elif (
+            order_type == "limit"
+            and limit_price is not None
+        ):
+            exit_reason = "take_profit_fill"
+
+        result = {
+            "order_id": order_id,
+            "symbol": symbol,
+            "shares": filled_qty,
+            "filled_price": filled_price,
+            "filled_at": order.get(
+                "filled_at"
+            ),
+            "order_type": order_type,
+            "stop_price": stop_price,
+            "limit_price": limit_price,
+            "reason": exit_reason,
+        }
+
+        _auto_trader_seen_exit_order_ids.add(
+            order_id
+        )
+
+        results.append(
+            result
+        )
+
+    return results
+
+def log_new_broker_exit_fills() -> list[dict[str, Any]]:
+    fills = detect_new_broker_exit_fills()
+
+    for fill in fills:
+        symbol = clean_symbol(
+            fill.get(
+                "symbol"
+            )
+        )
+
+        reason = str(
+            fill.get(
+                "reason",
+                "broker_sell_fill",
+            )
+        )
+
+        filled_price = safe_float(
+            fill.get(
+                "filled_price"
+            )
+        )
+
+        shares = safe_float(
+            fill.get(
+                "shares"
+            )
+        )
+
+        if reason == "protective_stop_fill":
+            message = (
+                "Protective stop filled and "
+                "closed the PAPER position."
+            )
+        elif reason == "take_profit_fill":
+            message = (
+                "Take-profit order filled and "
+                "closed the PAPER position."
+            )
+        else:
+            message = (
+                "Broker sell order filled and "
+                "closed the PAPER position."
+            )
+
+        add_auto_trader_log(
+            reason,
+            symbol=symbol,
+            message=message,
+            details={
+                "shares": shares,
+                "filled_price": filled_price,
+                "filled_at": fill.get(
+                    "filled_at"
+                ),
+                "order_id": fill.get(
+                    "order_id"
+                ),
+                "order_type": fill.get(
+                    "order_type"
+                ),
+                "stop_price": fill.get(
+                    "stop_price"
+                ),
+                "limit_price": fill.get(
+                    "limit_price"
+                ),
+            },
+        )
+
+    return fills
+
+def initialize_seen_exit_order_ids() -> None:
+    try:
+        orders = fetch_alpaca_paper_orders(
+            limit=100
+        )
+    except Exception as error:
+        print(
+            "Could not initialize broker exit history: "
+            f"{clean_error_message(error)}"
+        )
+        return
+
+    for order in orders:
+        if not isinstance(
+            order,
+            dict,
+        ):
+            continue
+
+        side = str(
+            order.get(
+                "side",
+                "",
+            )
+        ).strip().lower()
+
+        status = str(
+            order.get(
+                "status",
+                "",
+            )
+        ).strip().lower()
+
+        order_id = str(
+            order.get(
+                "id",
+                "",
+            )
+        ).strip()
+
+        if (
+            side == "sell"
+            and status == "filled"
+            and order_id
+        ):
+            _auto_trader_seen_exit_order_ids.add(
+                order_id
+            )
 
 def run_auto_trader_cycle() -> dict[str, Any]:
     """
@@ -3736,6 +3997,12 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             })
 
             return cycle_result
+
+        cycle_result[
+            "broker_exit_fills"
+        ] = (
+            log_new_broker_exit_fills()
+        )
 
         scanner_results = scan_market(
             force_refresh=False
