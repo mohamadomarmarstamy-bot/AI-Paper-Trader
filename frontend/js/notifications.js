@@ -5,10 +5,14 @@ const NOTIFICATION_LIMIT = 100;
 const NOTIFICATION_STORAGE_KEY =
     "ai-paper-trader-last-read-notification";
 
-const NOTIFICATION_API_BASE =
-    window.API_BASE_URL ||
-    window.API_BASE ||
-    "";
+function getNotificationApiUrl() {
+    const apiUrl =
+        typeof window.API_URL === "string"
+            ? window.API_URL.trim()
+            : "";
+
+    return apiUrl.replace(/\/+$/, "");
+}
 
 let notificationItems = [];
 let notificationTimer = null;
@@ -16,12 +20,7 @@ let lastSeenNewestTimestamp = 0;
 
 
 function notificationApiUrl(path) {
-    const base =
-        String(
-            NOTIFICATION_API_BASE || ""
-        ).replace(/\/+$/, "");
-
-    return `${base}${path}`;
+    return `${getNotificationApiUrl()}${path}`;
 }
 
 
