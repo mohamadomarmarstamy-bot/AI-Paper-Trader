@@ -2790,7 +2790,7 @@ def submit_alpaca_auto_bracket_buy(
         "qty": str(shares),
         "side": "buy",
         "type": "market",
-        "time_in_force": "day",
+        "time_in_force": "gtc",
         "order_class": "bracket",
         "take_profit": {
             "limit_price": (
