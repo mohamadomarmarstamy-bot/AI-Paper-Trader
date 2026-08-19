@@ -45,39 +45,6 @@
         href="style.css"
     >
 
-    <style>
-        .stat-card-clickable {
-            cursor: pointer;
-            transition:
-                transform 160ms ease,
-                border-color 160ms ease,
-                box-shadow 160ms ease;
-        }
-
-        .stat-card-clickable:hover {
-            transform: translateY(-2px);
-        }
-
-        .stat-card-clickable:focus-visible {
-            outline: 3px solid currentColor;
-            outline-offset: 3px;
-        }
-
-        .stat-card-clickable .stat-caption::after {
-            content: "  →";
-            font-weight: 700;
-        }
-
-        @media (prefers-reduced-motion: reduce) {
-            .stat-card-clickable {
-                transition: none;
-            }
-
-            .stat-card-clickable:hover {
-                transform: none;
-            }
-        }
-    </style>
 </head>
 
 <body>
@@ -121,36 +88,13 @@
                 class="main-nav"
                 aria-label="Application sections"
             >
-                <button
-                    type="button"
-                    class="nav-button active"
-                    data-section="dashboard-section"
-                    aria-controls="dashboard-section"
-                    aria-current="page"
-                >
-                    <span aria-hidden="true">
-                        📊
-                    </span>
-
-                    <span>
-                        Dashboard
-                    </span>
-                </button>
-
-                <button
-                    type="button"
-                    class="nav-button"
-                    data-section="strategy-section"
-                    aria-controls="strategy-section"
-                >
-                    <span aria-hidden="true">
-                        🤖
-                    </span>
-
-                    <span>
-                        Research Lab
-                    </span>
-                </button>
+                <button type="button" class="nav-button active" data-section="dashboard-section" aria-controls="dashboard-section" aria-current="page"><span aria-hidden="true">🏠</span><span>Dashboard</span></button>
+                <button type="button" class="nav-button" data-section="trade-section" aria-controls="trade-section"><span aria-hidden="true">💹</span><span>Trade</span></button>
+                <button type="button" class="nav-button" data-section="positions-section" aria-controls="positions-section"><span aria-hidden="true">🧾</span><span>Positions</span></button>
+                <button type="button" class="nav-button" data-section="performance-section" aria-controls="performance-section"><span aria-hidden="true">📈</span><span>Performance</span></button>
+                <button type="button" class="nav-button" data-section="activity-section" aria-controls="activity-section"><span aria-hidden="true">🔔</span><span>Activity</span></button>
+                <button type="button" class="nav-button" data-section="scanner-section" aria-controls="scanner-section"><span aria-hidden="true">🔎</span><span>Scanner</span></button>
+                <button type="button" class="nav-button" data-section="strategy-section" aria-controls="strategy-section"><span aria-hidden="true">🤖</span><span>Research Lab</span></button>
             </nav>
 
             <div class="sidebar-footer">
@@ -221,17 +165,12 @@
                      Dashboard section
                 ====================================== -->
 
-                <section
-                    id="dashboard-section"
-                    class="dashboard app-section"
-                    aria-labelledby="dashboard-title"
-                >
-                    <div class="section-heading visually-hidden">
-                        <h2 id="dashboard-title">
-                            Dashboard
-                        </h2>
+                <section id="dashboard-section" class="dashboard app-section" aria-labelledby="dashboard-title">
+                    <div class="section-heading">
+                        <p class="panel-kicker">Home</p>
+                        <h2 id="dashboard-title">Account Overview</h2>
+                        <p>Live account status and the numbers that matter most.</p>
                     </div>
-
                     <!-- Account summary -->
 
                     <section
@@ -239,11 +178,7 @@
                         aria-label="Account summary"
                     >
                         <article
-                            class="stat-card stat-card-clickable"
-                            role="button"
-                            tabindex="0"
-                            data-scroll-target="#cash-percent"
-                            aria-label="View cash and allocation details"
+                            class="stat-card stat-card-clickable" role="button" tabindex="0" data-open-section="performance-section" aria-label="View cash and account performance"
                         >
                             <div class="stat-card-heading">
                                 <p>
@@ -265,11 +200,7 @@
                         </article>
 
                         <article
-                            class="stat-card stat-card-clickable"
-                            role="button"
-                            tabindex="0"
-                            data-scroll-target="#portfolio-chart"
-                            aria-label="View portfolio performance"
+                            class="stat-card stat-card-clickable" role="button" tabindex="0" data-open-section="performance-section" aria-label="View portfolio performance"
                         >
                             <div class="stat-card-heading">
                                 <p>
@@ -291,11 +222,7 @@
                         </article>
 
                         <article
-                            class="stat-card stat-card-clickable"
-                            role="button"
-                            tabindex="0"
-                            data-scroll-target="#performance-snapshot-title"
-                            aria-label="View profit and loss details"
+                            class="stat-card stat-card-clickable" role="button" tabindex="0" data-open-section="performance-section" aria-label="View profit and loss details"
                         >
                             <div class="stat-card-heading">
                                 <p>
@@ -317,11 +244,7 @@
                         </article>
 
                         <article
-                            class="stat-card stat-card-clickable"
-                            role="button"
-                            tabindex="0"
-                            data-scroll-target=".positions-panel"
-                            aria-label="View open positions"
+                            class="stat-card stat-card-clickable" role="button" tabindex="0" data-open-section="positions-section" aria-label="View open positions"
                         >
                             <div class="stat-card-heading">
                                 <p>
@@ -344,82 +267,32 @@
                     </section>
 
 
-                    <!-- Performance snapshot -->
-
-                    <section
-                        class="panel performance-snapshot-panel"
-                        aria-labelledby="performance-snapshot-title"
-                    >
-                        <div class="panel-header">
-                            <div>
-                                <p class="panel-kicker">
-                                    Account Analytics
-                                </p>
-
-                                <h2 id="performance-snapshot-title">
-                                    Performance Snapshot
-                                </h2>
+                    <section class="home-overview-grid" aria-label="Account overview">
+                        <article class="panel home-overview-card">
+                            <p class="panel-kicker">Live Account</p>
+                            <h2>Account at a glance</h2>
+                            <div class="home-mini-metrics">
+                                <div><span>Unrealized P / L</span><strong id="home-unrealized-profit-loss">—</strong></div>
+                                <div><span>Cash Allocation</span><strong id="home-cash-percent">—</strong></div>
+                                <div><span>Invested</span><strong id="home-invested-percent">—</strong></div>
                             </div>
-                        </div>
-
-                        <div class="performance-metrics-grid">
-                            <article class="performance-metric">
-                                <p class="performance-metric-label">Total Return</p>
-                                <strong id="total-return-percent" class="performance-metric-value neutral">0.00%</strong>
-                                <span class="performance-metric-caption">Since account start</span>
-                            </article>
-
-                            <article class="performance-metric">
-                                <p class="performance-metric-label">Realized P / L</p>
-                                <strong id="realized-profit-loss" class="performance-metric-value neutral">$0.00</strong>
-                                <span class="performance-metric-caption">Closed trades</span>
-                            </article>
-
-                            <article class="performance-metric">
-                                <p class="performance-metric-label">Unrealized P / L</p>
-                                <strong id="unrealized-profit-loss" class="performance-metric-value neutral">$0.00</strong>
-                                <span class="performance-metric-caption">Open positions</span>
-                            </article>
-
-                            <article class="performance-metric">
-                                <p class="performance-metric-label">Win Rate</p>
-                                <strong id="win-rate" class="performance-metric-value">0.00%</strong>
-                                <span class="performance-metric-caption">Winning vs. losing closes</span>
-                            </article>
-
-                            <article class="performance-metric">
-                                <p class="performance-metric-label">Closed Trades</p>
-                                <strong id="closed-trades" class="performance-metric-value">0</strong>
-                                <span class="performance-metric-caption">Completed sells</span>
-                            </article>
-
-                            <article class="performance-metric">
-                                <p class="performance-metric-label">Cash Allocation</p>
-                                <strong id="cash-percent" class="performance-metric-value">100.00%</strong>
-                                <span class="performance-metric-caption">Portfolio held in cash</span>
-                            </article>
-
-                            <article class="performance-metric">
-                                <p class="performance-metric-label">Invested</p>
-                                <strong id="invested-percent" class="performance-metric-value">0.00%</strong>
-                                <span class="performance-metric-caption">Portfolio currently deployed</span>
-                            </article>
-
-                            <article class="performance-metric">
-                                <p class="performance-metric-label">High Water Mark</p>
-                                <strong id="highest-portfolio-value" class="performance-metric-value">$0.00</strong>
-                                <span class="performance-metric-caption">Highest recorded value</span>
-                            </article>
-                        </div>
+                        </article>
+                        <article class="panel home-overview-card">
+                            <p class="panel-kicker">Quick Access</p>
+                            <h2>Workspace</h2>
+                            <div class="home-quick-actions">
+                                <button type="button" class="secondary-button" data-open-section="positions-section">Open positions</button>
+                                <button type="button" class="secondary-button" data-open-section="performance-section">Performance</button>
+                                <button type="button" class="secondary-button" data-open-section="scanner-section">Market scanner</button>
+                                <button type="button" class="secondary-button" data-open-section="activity-section">Trade activity</button>
+                            </div>
+                        </article>
                     </section>
+                </section>
 
-                    <!-- Trading workspace -->
-
-                    <section
-                        class="workspace-grid"
-                        aria-label="Trading workspace"
-                    >
-
+                <section id="trade-section" class="app-section hidden" hidden aria-labelledby="trade-section-title">
+                    <div class="section-heading"><p class="panel-kicker">Execution</p><h2 id="trade-section-title">Trade Workspace</h2><p>Research a symbol, review risk, and place paper trades.</p></div>
+                    <section class="workspace-grid trade-workspace-only">
                         <!-- Trade Center -->
 
                         <article
@@ -588,143 +461,12 @@
                             </div>
                         </article>
 
-                        <!-- Watchlist -->
-
-                        <article class="panel watchlist-panel">
-                            <div class="panel-header">
-                                <div>
-                                    <p class="panel-kicker">
-                                        Tracking
-                                    </p>
-
-                                    <h2>
-                                        Watchlist
-                                    </h2>
-                                </div>
-
-                                <div class="panel-actions">
-                                    <button
-                                        id="reset-watchlist-button"
-                                        type="button"
-                                        class="secondary-button"
-                                        data-action="reset-watchlist"
-                                    >
-                                        Reset
-                                    </button>
-
-                                    <button
-                                        id="refresh-watchlist-button"
-                                        type="button"
-                                        class="secondary-button"
-                                        data-action="refresh-watchlist"
-                                    >
-                                        Refresh
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div
-                                id="watchlist"
-                                class="watchlist"
-                                aria-live="polite"
-                            >
-                                <p class="watchlist-status">
-                                    Loading watchlist…
-                                </p>
-                            </div>
-                        </article>
-
-                        <!-- Scanner -->
-
-                        <article class="panel scanner-panel">
-                            <div class="panel-header">
-                                <div>
-                                    <p class="panel-kicker">
-                                        Discovery
-                                    </p>
-
-                                    <h2>
-                                        AI Market Scanner
-                                    </h2>
-                                </div>
-
-                                <button
-                                    id="run-scanner-button"
-                                    type="button"
-                                    class="primary-button"
-                                    data-action="run-scanner"
-                                >
-                                    Run Scanner
-                                </button>
-                            </div>
-
-                            <div
-                                class="scanner-toolbar"
-                                aria-label="Scanner controls"
-                            >
-                                <label
-                                    class="compact-field"
-                                    for="scanner-search"
-                                >
-                                    <span>
-                                        Filter
-                                    </span>
-
-                                    <input
-                                        id="scanner-search"
-                                        type="search"
-                                        placeholder="Symbol or company"
-                                        autocomplete="off"
-                                    >
-                                </label>
-
-                                <label
-                                    class="compact-field"
-                                    for="scanner-sort"
-                                >
-                                    <span>
-                                        Sort
-                                    </span>
-
-                                    <select id="scanner-sort">
-                                        <option value="score-desc">
-                                            AI Score
-                                        </option>
-
-                                        <option value="confidence-desc">
-                                            Confidence
-                                        </option>
-
-                                        <option value="symbol-asc">
-                                            Symbol
-                                        </option>
-
-                                        <option value="price-desc">
-                                            Price
-                                        </option>
-                                    </select>
-                                </label>
-                            </div>
-
-                            <div
-                                id="scanner-results"
-                                class="scanner-results"
-                                aria-live="polite"
-                            >
-                                <p class="scanner-empty">
-                                    Run the scanner to analyze the market.
-                                </p>
-                            </div>
-                        </article>
                     </section>
+                </section>
 
-                    <!-- Portfolio details -->
-
-                    <section
-                        class="portfolio-grid"
-                        aria-label="Portfolio details"
-                    >
-
+                <section id="positions-section" class="app-section hidden" hidden aria-labelledby="positions-section-title">
+                    <div class="section-heading"><p class="panel-kicker">Holdings</p><h2 id="positions-section-title">Positions</h2><p>Monitor current holdings and portfolio allocation.</p></div>
+                    <section class="portfolio-grid">
                         <!-- Positions -->
 
                         <article class="panel positions-panel">
@@ -820,6 +562,116 @@
                             </div>
                         </article>
 
+                    </section>
+                </section>
+
+                <section id="performance-section" class="app-section hidden" hidden aria-labelledby="performance-section-title">
+                    <div class="section-heading"><p class="panel-kicker">Analytics</p><h2 id="performance-section-title">Performance</h2><p>Returns, realized and unrealized P/L, allocation, and portfolio history.</p></div>
+                    <!-- Performance snapshot -->
+
+                    <section
+                        class="panel performance-snapshot-panel"
+                        aria-labelledby="performance-snapshot-title"
+                    >
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">
+                                    Account Analytics
+                                </p>
+
+                                <h2 id="performance-snapshot-title">
+                                    Performance Snapshot
+                                </h2>
+                            </div>
+                        </div>
+
+                        <div class="performance-metrics-grid">
+                            <article class="performance-metric">
+                                <p class="performance-metric-label">Total Return</p>
+                                <strong id="total-return-percent" class="performance-metric-value neutral">0.00%</strong>
+                                <span class="performance-metric-caption">Since account start</span>
+                            </article>
+
+                            <article class="performance-metric">
+                                <p class="performance-metric-label">Realized P / L</p>
+                                <strong id="realized-profit-loss" class="performance-metric-value neutral">$0.00</strong>
+                                <span class="performance-metric-caption">Closed trades</span>
+                            </article>
+
+                            <article class="performance-metric">
+                                <p class="performance-metric-label">Unrealized P / L</p>
+                                <strong id="unrealized-profit-loss" class="performance-metric-value neutral">$0.00</strong>
+                                <span class="performance-metric-caption">Open positions</span>
+                            </article>
+
+                            <article class="performance-metric">
+                                <p class="performance-metric-label">Win Rate</p>
+                                <strong id="win-rate" class="performance-metric-value">0.00%</strong>
+                                <span class="performance-metric-caption">Winning vs. losing closes</span>
+                            </article>
+
+                            <article class="performance-metric">
+                                <p class="performance-metric-label">Closed Trades</p>
+                                <strong id="closed-trades" class="performance-metric-value">0</strong>
+                                <span class="performance-metric-caption">Completed sells</span>
+                            </article>
+
+                            <article class="performance-metric">
+                                <p class="performance-metric-label">Cash Allocation</p>
+                                <strong id="cash-percent" class="performance-metric-value">100.00%</strong>
+                                <span class="performance-metric-caption">Portfolio held in cash</span>
+                            </article>
+
+                            <article class="performance-metric">
+                                <p class="performance-metric-label">Invested</p>
+                                <strong id="invested-percent" class="performance-metric-value">0.00%</strong>
+                                <span class="performance-metric-caption">Portfolio currently deployed</span>
+                            </article>
+
+                            <article class="performance-metric">
+                                <p class="performance-metric-label">High Water Mark</p>
+                                <strong id="highest-portfolio-value" class="performance-metric-value">$0.00</strong>
+                                <span class="performance-metric-caption">Highest recorded value</span>
+                            </article>
+                        </div>
+                    </section>
+
+                    <!-- Portfolio performance -->
+
+                    <section class="panel portfolio-performance-panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">
+                                    Performance
+                                </p>
+
+                                <h2>
+                                    Portfolio Performance
+                                </h2>
+                            </div>
+
+                            <button
+                                id="refresh-portfolio-chart-button"
+                                type="button"
+                                class="secondary-button"
+                                data-action="refresh-portfolio-chart"
+                            >
+                                Refresh
+                            </button>
+                        </div>
+
+                        <div
+                            id="portfolio-chart"
+                            class="portfolio-chart"
+                            role="img"
+                            aria-label="Portfolio value over time"
+                        ></div>
+                    </section>
+                </section>
+
+                <section id="activity-section" class="app-section hidden" hidden aria-labelledby="activity-section-title">
+                    <div class="section-heading"><p class="panel-kicker">Activity</p><h2 id="activity-section-title">Trade Activity</h2><p>Review completed paper-trading activity and account history.</p></div>
+                    <section class="activity-grid">
                         <!-- History -->
 
                         <article class="panel history-panel">
@@ -872,37 +724,139 @@
                             </div>
                         </article>
                     </section>
+                </section>
 
-                    <!-- Portfolio performance -->
+                <section id="scanner-section" class="app-section hidden" hidden aria-labelledby="scanner-section-title">
+                    <div class="section-heading"><p class="panel-kicker">Discovery</p><h2 id="scanner-section-title">AI Market Scanner</h2><p>Find and filter market opportunities without cluttering the home screen.</p></div>
+                    <section class="scanner-page-grid">
+                        <!-- Scanner -->
 
-                    <section class="panel portfolio-performance-panel">
-                        <div class="panel-header">
-                            <div>
-                                <p class="panel-kicker">
-                                    Performance
-                                </p>
+                        <article class="panel scanner-panel">
+                            <div class="panel-header">
+                                <div>
+                                    <p class="panel-kicker">
+                                        Discovery
+                                    </p>
 
-                                <h2>
-                                    Portfolio Performance
-                                </h2>
+                                    <h2>
+                                        AI Market Scanner
+                                    </h2>
+                                </div>
+
+                                <button
+                                    id="run-scanner-button"
+                                    type="button"
+                                    class="primary-button"
+                                    data-action="run-scanner"
+                                >
+                                    Run Scanner
+                                </button>
                             </div>
 
-                            <button
-                                id="refresh-portfolio-chart-button"
-                                type="button"
-                                class="secondary-button"
-                                data-action="refresh-portfolio-chart"
+                            <div
+                                class="scanner-toolbar"
+                                aria-label="Scanner controls"
                             >
-                                Refresh
-                            </button>
-                        </div>
+                                <label
+                                    class="compact-field"
+                                    for="scanner-search"
+                                >
+                                    <span>
+                                        Filter
+                                    </span>
 
-                        <div
-                            id="portfolio-chart"
-                            class="portfolio-chart"
-                            role="img"
-                            aria-label="Portfolio value over time"
-                        ></div>
+                                    <input
+                                        id="scanner-search"
+                                        type="search"
+                                        placeholder="Symbol or company"
+                                        autocomplete="off"
+                                    >
+                                </label>
+
+                                <label
+                                    class="compact-field"
+                                    for="scanner-sort"
+                                >
+                                    <span>
+                                        Sort
+                                    </span>
+
+                                    <select id="scanner-sort">
+                                        <option value="score-desc">
+                                            AI Score
+                                        </option>
+
+                                        <option value="confidence-desc">
+                                            Confidence
+                                        </option>
+
+                                        <option value="symbol-asc">
+                                            Symbol
+                                        </option>
+
+                                        <option value="price-desc">
+                                            Price
+                                        </option>
+                                    </select>
+                                </label>
+                            </div>
+
+                            <div
+                                id="scanner-results"
+                                class="scanner-results"
+                                aria-live="polite"
+                            >
+                                <p class="scanner-empty">
+                                    Run the scanner to analyze the market.
+                                </p>
+                            </div>
+                        </article>
+                        <!-- Watchlist -->
+
+                        <article class="panel watchlist-panel">
+                            <div class="panel-header">
+                                <div>
+                                    <p class="panel-kicker">
+                                        Tracking
+                                    </p>
+
+                                    <h2>
+                                        Watchlist
+                                    </h2>
+                                </div>
+
+                                <div class="panel-actions">
+                                    <button
+                                        id="reset-watchlist-button"
+                                        type="button"
+                                        class="secondary-button"
+                                        data-action="reset-watchlist"
+                                    >
+                                        Reset
+                                    </button>
+
+                                    <button
+                                        id="refresh-watchlist-button"
+                                        type="button"
+                                        class="secondary-button"
+                                        data-action="refresh-watchlist"
+                                    >
+                                        Refresh
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div
+                                id="watchlist"
+                                class="watchlist"
+                                aria-live="polite"
+                            >
+                                <p class="watchlist-status">
+                                    Loading watchlist…
+                                </p>
+                            </div>
+                        </article>
+
                     </section>
                 </section>
 
@@ -1101,63 +1055,87 @@
                     () => window.loadStrategyLab?.()
                 );
 
-                bindDashboardSummaryCards();
+                bindDashboardSectionLinks();
             }
         );
 
 
-        function bindDashboardSummaryCards() {
-            const cards =
-                document.querySelectorAll(
-                    "[data-scroll-target]"
-                );
+        function bindDashboardSectionLinks() {
+            const navButtons = document.querySelectorAll(".nav-button[data-section]");
+            const sections = document.querySelectorAll(".app-section");
+            const links = document.querySelectorAll("[data-open-section]");
 
-            cards.forEach(card => {
-                const activate = () => {
-                    const selector =
-                        card.dataset.scrollTarget;
+            const openSection = sectionId => {
+                if (!sectionId) return;
 
-                    if (!selector) {
-                        return;
+                sections.forEach(section => {
+                    const isActive = section.id === sectionId;
+                    section.hidden = !isActive;
+                    section.classList.toggle("hidden", !isActive);
+                });
+
+                navButtons.forEach(button => {
+                    const isActive = button.dataset.section === sectionId;
+                    button.classList.toggle("active", isActive);
+
+                    if (isActive) {
+                        button.setAttribute("aria-current", "page");
+                    } else {
+                        button.removeAttribute("aria-current");
                     }
+                });
 
-                    const target =
-                        document.querySelector(
-                            selector
-                        );
+                window.scrollTo({ top: 0, behavior: "smooth" });
 
-                    if (!target) {
-                        console.warn(
-                            `Dashboard target not found: ${selector}`
-                        );
-                        return;
-                    }
+                if (sectionId === "performance-section") {
+                    window.setTimeout(() => window.loadPortfolioChart?.(), 80);
+                }
 
-                    target.scrollIntoView({
-                        behavior: "smooth",
-                        block: "start",
-                    });
-                };
+                if (sectionId === "scanner-section") {
+                    window.setTimeout(() => window.loadWatchlist?.(), 80);
+                }
+            };
 
-                card.addEventListener(
-                    "click",
-                    activate
-                );
+            navButtons.forEach(button => {
+                button.addEventListener("click", () => openSection(button.dataset.section));
+            });
 
-                card.addEventListener(
-                    "keydown",
-                    event => {
-                        if (
-                            event.key !== "Enter" &&
-                            event.key !== " "
-                        ) {
-                            return;
-                        }
+            links.forEach(link => {
+                const activate = () => openSection(link.dataset.openSection);
 
-                        event.preventDefault();
-                        activate();
-                    }
-                );
+                link.addEventListener("click", activate);
+                link.addEventListener("keydown", event => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    activate();
+                });
+            });
+
+            mirrorHomeMetric("unrealized-profit-loss", "home-unrealized-profit-loss");
+            mirrorHomeMetric("cash-percent", "home-cash-percent");
+            mirrorHomeMetric("invested-percent", "home-invested-percent");
+        }
+
+
+        function mirrorHomeMetric(sourceId, targetId) {
+            const source = document.getElementById(sourceId);
+            const target = document.getElementById(targetId);
+
+            if (!source || !target) return;
+
+            const sync = () => {
+                target.textContent = source.textContent;
+                target.className = source.className;
+            };
+
+            sync();
+
+            new MutationObserver(sync).observe(source, {
+                childList: true,
+                characterData: true,
+                subtree: true,
+                attributes: true,
+                attributeFilter: ["class"],
             });
         }
 

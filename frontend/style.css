@@ -2833,3 +2833,210 @@ td[colspan] {
         font-size: 1.35rem;
     }
 }
+
+/* =========================================================
+   V4 multi-section application layout
+   ========================================================= */
+
+.section-heading {
+    margin-bottom: 20px;
+}
+
+.section-heading h2 {
+    margin: 4px 0 4px;
+    color: #ffffff;
+    font-size: clamp(24px, 2.4vw, 32px);
+    line-height: 1.2;
+}
+
+.section-heading p:not(.panel-kicker) {
+    margin: 0;
+    color: var(--color-muted);
+    font-size: 14px;
+}
+
+.home-overview-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+}
+
+.home-overview-card h2 {
+    margin: 5px 0 18px;
+    color: #ffffff;
+    font-size: 20px;
+}
+
+.home-mini-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.home-mini-metrics > div {
+    min-width: 0;
+    padding: 14px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-medium);
+    background: var(--color-surface-soft);
+}
+
+.home-mini-metrics span,
+.home-mini-metrics strong {
+    display: block;
+}
+
+.home-mini-metrics span {
+    color: var(--color-muted);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.home-mini-metrics strong {
+    margin-top: 6px;
+    color: #ffffff;
+    font-size: 1.05rem;
+}
+
+.home-quick-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.home-quick-actions button {
+    width: 100%;
+}
+
+.trade-workspace-only {
+    grid-template-columns: minmax(340px, 0.9fr) minmax(480px, 1.4fr);
+}
+
+.trade-workspace-only .trade-center-panel,
+.trade-workspace-only .stock-chart-panel {
+    grid-column: auto;
+    grid-row: auto;
+}
+
+.activity-grid,
+.scanner-page-grid {
+    display: grid;
+    gap: 20px;
+}
+
+.activity-grid .history-panel,
+.scanner-page-grid .scanner-panel,
+.scanner-page-grid .watchlist-panel {
+    grid-column: auto;
+}
+
+.scanner-page-grid {
+    grid-template-columns: minmax(0, 1.6fr) minmax(300px, 0.8fr);
+}
+
+.stat-card-clickable {
+    cursor: pointer;
+}
+
+.stat-card-clickable .stat-caption::after {
+    content: "  →";
+    font-weight: 800;
+}
+
+.main-nav {
+    overflow-y: auto;
+    padding-right: 2px;
+}
+
+.nav-button span:first-child {
+    width: 22px;
+    text-align: center;
+}
+
+@media (max-width: 1200px) {
+    .scanner-page-grid,
+    .trade-workspace-only,
+    .home-overview-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 960px) {
+    .sidebar {
+        position: sticky;
+        top: 0;
+        display: block;
+        width: 100%;
+        height: auto;
+        padding: 12px 14px;
+        overflow-x: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--color-border);
+        background: rgba(9, 14, 25, 0.97);
+        backdrop-filter: blur(18px);
+    }
+
+    .brand-block {
+        padding: 0 0 10px;
+    }
+
+    .brand-block .eyebrow,
+    .sidebar-footer {
+        display: none;
+    }
+
+    .main-nav {
+        display: flex;
+        flex-direction: row;
+        justify-content: flex-start;
+        gap: 8px;
+        overflow-x: auto;
+        padding: 0 0 2px;
+        scrollbar-width: thin;
+    }
+
+    .nav-button {
+        flex: 0 0 auto;
+        width: auto;
+        min-height: 40px;
+        white-space: nowrap;
+    }
+
+    .nav-button:hover {
+        transform: none;
+    }
+}
+
+@media (max-width: 650px) {
+    .sidebar {
+        display: block;
+        padding: 10px 12px;
+    }
+
+    .brand-block {
+        justify-content: flex-start;
+    }
+
+    .main-nav {
+        display: flex;
+        grid-template-columns: none;
+    }
+
+    .nav-button {
+        justify-content: flex-start;
+        width: auto;
+        padding: 8px 11px;
+    }
+
+    .home-overview-grid,
+    .home-mini-metrics,
+    .home-quick-actions {
+        grid-template-columns: 1fr;
+    }
+
+    .section-heading {
+        margin-bottom: 16px;
+    }
+}
