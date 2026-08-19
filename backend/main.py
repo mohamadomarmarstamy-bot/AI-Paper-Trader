@@ -78,6 +78,7 @@ AUTO_TRADER_TAKE_PROFIT_PERCENT = 4.0
 AUTO_TRADER_PROFIT_LOCK_TRIGGER_PERCENT = 2.0
 AUTO_TRADER_PROFIT_LOCK_PERCENT = 0.5
 AUTO_TRADER_PROFIT_TRAIL_PERCENT = 2.0
+AUTO_TRADER_HARD_MAX_LOSS_PERCENT = 3.0
 AUTO_TRADER_SYMBOL_COOLDOWN_SECONDS = 60 * 60
 AUTO_TRADER_MAX_NEW_POSITIONS_PER_CYCLE = 1
 AUTO_TRADER_LOG_LIMIT = 250
@@ -3612,6 +3613,46 @@ def raise_protective_stop(
             ),
         }
 
+def calculate_position_return_percent(
+    *,
+    entry_price: float,
+    current_price: float,
+) -> float | None:
+    if (
+        entry_price <= 0
+        or current_price <= 0
+    ):
+        return None
+
+    return (
+        (
+            current_price
+            - entry_price
+        )
+        / entry_price
+    ) * 100
+
+
+def should_hard_max_loss_exit(
+    *,
+    entry_price: float,
+    current_price: float,
+) -> bool:
+    return_percent = (
+        calculate_position_return_percent(
+            entry_price=entry_price,
+            current_price=current_price,
+        )
+    )
+
+    if return_percent is None:
+        return False
+
+    return (
+        return_percent
+        <= -AUTO_TRADER_HARD_MAX_LOSS_PERCENT
+    )
+
 def run_auto_trader_cycle() -> dict[str, Any]:
     """
     Run one automatic PAPER-trading decision cycle.
@@ -3750,29 +3791,31 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 )
             )
 
-            if not candidate:
-                continue
+            signal = ""
+            score = None
+            confidence = None
 
-            signal = str(
-                candidate.get(
-                    "signal",
-                    "",
+            if candidate:
+                signal = str(
+                    candidate.get(
+                        "signal",
+                        "",
+                    )
+                ).strip().upper()
+
+                score = safe_float(
+                    candidate.get(
+                        "score"
+                    )
                 )
-            ).strip().upper()
 
-            score = safe_float(
-                candidate.get(
-                    "score"
+                confidence = safe_float(
+                    candidate.get(
+                        "confidence"
+                    )
                 )
-            )
 
-            confidence = safe_float(
-                candidate.get(
-                    "confidence"
-                )
-            )
-
-            if not (
+            scanner_exit = (
                 signal == "SELL"
                 and score is not None
                 and score <=
@@ -3780,8 +3823,54 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 and confidence is not None
                 and confidence >=
                     AUTO_TRADER_EXIT_CONFIDENCE_MIN
+            )
+
+            entry_price = safe_float(
+                position.get(
+                    "avg_entry_price"
+                )
+            )
+
+            current_price = safe_float(
+                position.get(
+                    "current_price"
+                )
+            )
+
+            hard_loss_exit = False
+            return_percent = None
+
+            if (
+                entry_price is not None
+                and entry_price > 0
+                and current_price is not None
+                and current_price > 0
+            ):
+                return_percent = (
+                    calculate_position_return_percent(
+                        entry_price=entry_price,
+                        current_price=current_price,
+                    )
+                )
+
+                hard_loss_exit = (
+                    should_hard_max_loss_exit(
+                        entry_price=entry_price,
+                        current_price=current_price,
+                    )
+                )
+
+            if not (
+                scanner_exit
+                or hard_loss_exit
             ):
                 continue
+
+            exit_reason = (
+                "hard_max_loss_exit"
+                if hard_loss_exit
+                else "scanner_exit"
+)
 
             qty = safe_float(
                 position.get(
@@ -3842,6 +3931,8 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             )
 
             cycle_result["exits"].append({
+                "reason": exit_reason,
+                "return_percent": return_percent,
                 "symbol": symbol,
                 "scanner": {
                     "score": score,
@@ -3857,17 +3948,25 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             })
 
             add_auto_trader_log(
-                "scanner_exit",
+                exit_reason,
                 symbol=symbol,
                 message=(
-                    "Strong SELL signal triggered an "
-                    "automatic PAPER exit."
+                    (
+                        "Hard max-loss rule triggered an "
+                        "automatic PAPER exit."
+                    )
+                    if hard_loss_exit
+                    else (
+                        "Strong SELL signal triggered an "
+                        "automatic PAPER exit."
+                    )
                 ),
                 details={
                     "score": score,
-                    "confidence": (
-                        confidence
-                    ),
+                    "confidence": confidence,
+                    "return_percent": return_percent,
+                    "hard_loss_exit": hard_loss_exit,
+                    "scanner_exit": scanner_exit,
                     "result_success": (
                         exit_result.get(
                             "success"
