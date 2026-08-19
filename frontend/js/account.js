@@ -10,7 +10,15 @@
 let allocationChart = null;
 let accountRequestController = null;
 
+let liveAccountRequestController = null;
+let liveAccountRefreshTimer = null;
+let liveAccountRefreshInProgress = false;
+let liveAccountInitialized = false;
+
 const ACCOUNT_REQUEST_TIMEOUT_MS = 15_000;
+const LIVE_ACCOUNT_REQUEST_TIMEOUT_MS = 8_000;
+const LIVE_ACCOUNT_REFRESH_MS = 2_000;
+
 const DEFAULT_STARTING_BALANCE = 100_000;
 
 const moneyFormatter = new Intl.NumberFormat("en-US", {
@@ -274,6 +282,227 @@ async function loadAccount() {
         window.clearTimeout(timeoutId);
         accountRequestController = null;
     }
+}
+
+async function refreshLiveAccountMetrics() {
+    if (
+        document.hidden ||
+        liveAccountRefreshInProgress
+    ) {
+        return;
+    }
+
+    liveAccountRefreshInProgress = true;
+
+    liveAccountRequestController?.abort();
+
+    liveAccountRequestController =
+        new AbortController();
+
+    const timeoutId = window.setTimeout(
+        () =>
+            liveAccountRequestController?.abort(),
+        LIVE_ACCOUNT_REQUEST_TIMEOUT_MS
+    );
+
+    try {
+        const account = await fetchJson(
+            `${getApiUrl()}/account/live`,
+            {
+                signal:
+                    liveAccountRequestController.signal,
+                cache: "no-store",
+            }
+        );
+
+        if (
+            !account ||
+            typeof account !== "object" ||
+            account.error
+        ) {
+            throw new Error(
+                account?.error ??
+                "Live account snapshot was unavailable."
+            );
+        }
+
+        const cash =
+            toNumber(account.cash);
+
+        const portfolioValue =
+            toNumber(
+                account.portfolio_value ??
+                account.total_value ??
+                account.equity ??
+                cash
+            );
+
+        const startingBalance =
+            toNumber(
+                account.starting_cash ??
+                account.starting_balance ??
+                DEFAULT_STARTING_BALANCE
+            );
+
+        const profitLoss =
+            toNumber(
+                account.profit_loss ??
+                account.total_profit_loss ??
+                portfolioValue -
+                    startingBalance
+            );
+
+        const profitLossPercent =
+            toNumber(
+                account.profit_loss_percent ??
+                account.total_return_percent
+            );
+
+        const unrealizedProfitLoss =
+            toNumber(
+                account.unrealized_profit_loss
+            );
+
+        const cashPercent =
+            toNumber(account.cash_percent);
+
+        const investedPercent =
+            toNumber(account.invested_percent);
+
+        const positions =
+            normalizePositions(
+                account.positions
+            );
+
+        setText(
+            "cash",
+            formatMoney(cash)
+        );
+
+        setText(
+            "portfolio-value",
+            formatMoney(portfolioValue)
+        );
+
+        setText(
+            "profit-loss",
+            formatSignedMoney(profitLoss)
+        );
+
+        setText(
+            "position-count",
+            String(
+                account.position_count ??
+                account.open_positions ??
+                positions.length
+            )
+        );
+
+        setText(
+            "total-return-percent",
+            formatSignedPercentage(
+                profitLossPercent
+            )
+        );
+
+        setText(
+            "unrealized-profit-loss",
+            formatSignedMoney(
+                unrealizedProfitLoss
+            )
+        );
+
+        setText(
+            "cash-percent",
+            `${cashPercent.toFixed(2)}%`
+        );
+
+        setText(
+            "invested-percent",
+            `${investedPercent.toFixed(2)}%`
+        );
+
+        updateProfitLossColor(
+            profitLoss
+        );
+
+        updateMetricColor(
+            "total-return-percent",
+            profitLossPercent
+        );
+
+        updateMetricColor(
+            "unrealized-profit-loss",
+            unrealizedProfitLoss
+        );
+
+        renderPositions(
+            document.getElementById(
+                "positions-table"
+            ),
+            positions
+        );
+
+        renderAllocationChart(
+            positions,
+            cash
+        );
+
+    } catch (error) {
+        if (error?.name !== "AbortError") {
+            console.warn(
+                "Live account refresh failed:",
+                error
+            );
+        }
+    } finally {
+        window.clearTimeout(timeoutId);
+
+        liveAccountRequestController = null;
+        liveAccountRefreshInProgress = false;
+    }
+}
+
+
+function startLiveAccountRefresh() {
+    if (liveAccountInitialized) {
+        return;
+    }
+
+    liveAccountInitialized = true;
+
+    refreshLiveAccountMetrics();
+
+    liveAccountRefreshTimer =
+        window.setInterval(
+            refreshLiveAccountMetrics,
+            LIVE_ACCOUNT_REFRESH_MS
+        );
+
+    document.addEventListener(
+        "visibilitychange",
+        () => {
+            if (!document.hidden) {
+                refreshLiveAccountMetrics();
+            }
+        }
+    );
+
+    window.addEventListener(
+        "beforeunload",
+        () => {
+            if (liveAccountRefreshTimer) {
+                window.clearInterval(
+                    liveAccountRefreshTimer
+                );
+            }
+
+            liveAccountRequestController?.abort();
+        },
+        {
+            once: true,
+        }
+    );
 }
 
 async function fetchJson(
@@ -1271,3 +1500,15 @@ document.addEventListener(
 
 window.loadAccount =
     loadAccount;
+
+if (document.readyState === "loading") {
+    document.addEventListener(
+        "DOMContentLoaded",
+        startLiveAccountRefresh,
+        {
+            once: true,
+        }
+    );
+} else {
+    startLiveAccountRefresh();
+}

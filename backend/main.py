@@ -24,7 +24,7 @@ from paper_trader import PaperTrader
 from scanner import scan_market
 
 
-APP_VERSION = "2.7.0"
+APP_VERSION = "2.7.1"
 
 AUTO_PORTFOLIO_REFRESH_SECONDS = 300
 
@@ -1583,6 +1583,87 @@ def normalize_alpaca_order_for_history(
         "executed_at": timestamp,
         "status": status,
         "paper": True,
+    }
+
+
+def build_alpaca_live_account_snapshot() -> dict[str, Any]:
+    """
+    Lightweight read-only dashboard snapshot for frequent frontend polling.
+    This does not download recent order history and does not change trading logic.
+    """
+    account = fetch_alpaca_paper_account()
+    raw_positions = fetch_alpaca_paper_positions()
+
+    positions = [
+        normalize_alpaca_position(position)
+        for position in raw_positions
+        if isinstance(position, dict)
+    ]
+
+    positions = [
+        position
+        for position in positions
+        if position.get("symbol")
+    ]
+
+    cash = safe_float(account.get("cash")) or 0.0
+    equity = safe_float(account.get("equity"))
+    portfolio_value = equity if equity is not None else cash
+
+    last_equity = safe_float(account.get("last_equity"))
+    if last_equity is None or last_equity <= 0:
+        last_equity = portfolio_value
+
+    unrealized_profit_loss = sum(
+        safe_float(position.get("unrealized_profit")) or 0.0
+        for position in positions
+    )
+
+    profit_loss = portfolio_value - last_equity
+    profit_loss_percent = (
+        (profit_loss / last_equity) * 100
+        if last_equity > 0
+        else 0.0
+    )
+
+    invested_value = sum(
+        abs(safe_float(position.get("position_value")) or 0.0)
+        for position in positions
+    )
+
+    allocation_total = cash + invested_value
+
+    return {
+        "source": "alpaca_paper",
+        "paper": True,
+        "timestamp": time.time(),
+        "cash": round(cash, 2),
+        "buying_power": safe_float(account.get("buying_power")) or 0.0,
+        "portfolio_value": round(portfolio_value, 2),
+        "total_value": round(portfolio_value, 2),
+        "equity": round(portfolio_value, 2),
+        "starting_balance": round(last_equity, 2),
+        "starting_cash": round(last_equity, 2),
+        "profit_loss": round(profit_loss, 2),
+        "total_profit_loss": round(profit_loss, 2),
+        "profit_loss_percent": round(profit_loss_percent, 4),
+        "total_return_percent": round(profit_loss_percent, 4),
+        "unrealized_profit_loss": round(unrealized_profit_loss, 2),
+        "cash_percent": round(
+            (cash / allocation_total) * 100
+            if allocation_total > 0
+            else 0.0,
+            4,
+        ),
+        "invested_percent": round(
+            (invested_value / allocation_total) * 100
+            if allocation_total > 0
+            else 0.0,
+            4,
+        ),
+        "open_positions": len(positions),
+        "position_count": len(positions),
+        "positions": positions,
     }
 
 
@@ -3451,6 +3532,26 @@ def health() -> dict[str, str]:
 # =========================================================
 # Account and portfolio routes
 # =========================================================
+
+@app.get("/account/live")
+def account_live() -> dict[str, Any]:
+    """Read-only live account snapshot for dashboard polling."""
+    try:
+        return build_alpaca_live_account_snapshot()
+
+    except Exception as error:
+        print(
+            "Alpaca PAPER live-account endpoint error: "
+            f"{clean_error_message(error)}"
+        )
+
+        return {
+            "error": (
+                "The live Alpaca paper account snapshot "
+                "could not be loaded."
+            )
+        }
+
 
 @app.get("/account")
 def account() -> dict[str, Any]:
