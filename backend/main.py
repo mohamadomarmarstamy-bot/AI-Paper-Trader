@@ -1,4 +1,5 @@
 import asyncio
+import json
 import math
 import os
 import time
@@ -78,6 +79,11 @@ AUTO_TRADER_SYMBOL_COOLDOWN_SECONDS = 60 * 60
 AUTO_TRADER_MAX_NEW_POSITIONS_PER_CYCLE = 1
 AUTO_TRADER_LOG_LIMIT = 250
 
+AUTO_TRADER_LOG_FILE = os.getenv(
+    "AUTO_TRADER_LOG_FILE",
+    "/tmp/auto_trader_log.json",
+)
+
 _auto_trader_enabled = (
     os.getenv(
         "AUTO_TRADER_START_ENABLED",
@@ -121,6 +127,8 @@ async def portfolio_refresh_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    load_auto_trader_log()
+
     refresh_task = asyncio.create_task(
         portfolio_refresh_loop()
     )
@@ -2536,6 +2544,77 @@ def auto_trader_control_authorized(
         == configured_token
     )
 
+def save_auto_trader_log() -> None:
+    try:
+        directory = os.path.dirname(
+            AUTO_TRADER_LOG_FILE
+        )
+
+        if directory:
+            os.makedirs(
+                directory,
+                exist_ok=True,
+            )
+
+        with open(
+            AUTO_TRADER_LOG_FILE,
+            "w",
+            encoding="utf-8",
+        ) as file:
+            json.dump(
+                _auto_trader_log[
+                    -AUTO_TRADER_LOG_LIMIT:
+                ],
+                file,
+            )
+
+    except Exception as error:
+        print(
+            "Auto-trader log save error: "
+            f"{clean_error_message(error)}"
+        )
+
+
+def load_auto_trader_log() -> None:
+    if not os.path.exists(
+        AUTO_TRADER_LOG_FILE
+    ):
+        return
+
+    try:
+        with open(
+            AUTO_TRADER_LOG_FILE,
+            "r",
+            encoding="utf-8",
+        ) as file:
+            saved_logs = json.load(
+                file
+            )
+
+        if not isinstance(
+            saved_logs,
+            list,
+        ):
+            return
+
+        _auto_trader_log.clear()
+
+        _auto_trader_log.extend(
+            entry
+            for entry in saved_logs[
+                -AUTO_TRADER_LOG_LIMIT:
+            ]
+            if isinstance(
+                entry,
+                dict,
+            )
+        )
+
+    except Exception as error:
+        print(
+            "Auto-trader log load error: "
+            f"{clean_error_message(error)}"
+        )
 
 def add_auto_trader_log(
     event: str,
@@ -2566,6 +2645,8 @@ def add_auto_trader_log(
     _auto_trader_log.append(
         entry
     )
+
+    save_auto_trader_log()
 
     if (
         len(_auto_trader_log)
