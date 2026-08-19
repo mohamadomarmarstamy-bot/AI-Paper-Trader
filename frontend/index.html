@@ -44,6 +44,40 @@
         rel="stylesheet"
         href="style.css"
     >
+
+    <style>
+        .stat-card-clickable {
+            cursor: pointer;
+            transition:
+                transform 160ms ease,
+                border-color 160ms ease,
+                box-shadow 160ms ease;
+        }
+
+        .stat-card-clickable:hover {
+            transform: translateY(-2px);
+        }
+
+        .stat-card-clickable:focus-visible {
+            outline: 3px solid currentColor;
+            outline-offset: 3px;
+        }
+
+        .stat-card-clickable .stat-caption::after {
+            content: "  →";
+            font-weight: 700;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .stat-card-clickable {
+                transition: none;
+            }
+
+            .stat-card-clickable:hover {
+                transform: none;
+            }
+        }
+    </style>
 </head>
 
 <body>
@@ -204,7 +238,13 @@
                         class="stats-grid"
                         aria-label="Account summary"
                     >
-                        <article class="stat-card">
+                        <article
+                            class="stat-card stat-card-clickable"
+                            role="button"
+                            tabindex="0"
+                            data-scroll-target="#cash-percent"
+                            aria-label="View cash and allocation details"
+                        >
                             <div class="stat-card-heading">
                                 <p>
                                     Cash
@@ -224,7 +264,13 @@
                             </p>
                         </article>
 
-                        <article class="stat-card">
+                        <article
+                            class="stat-card stat-card-clickable"
+                            role="button"
+                            tabindex="0"
+                            data-scroll-target="#portfolio-chart"
+                            aria-label="View portfolio performance"
+                        >
                             <div class="stat-card-heading">
                                 <p>
                                     Portfolio Value
@@ -244,7 +290,13 @@
                             </p>
                         </article>
 
-                        <article class="stat-card">
+                        <article
+                            class="stat-card stat-card-clickable"
+                            role="button"
+                            tabindex="0"
+                            data-scroll-target="#performance-snapshot-title"
+                            aria-label="View profit and loss details"
+                        >
                             <div class="stat-card-heading">
                                 <p>
                                     Total Profit / Loss
@@ -264,7 +316,13 @@
                             </p>
                         </article>
 
-                        <article class="stat-card">
+                        <article
+                            class="stat-card stat-card-clickable"
+                            role="button"
+                            tabindex="0"
+                            data-scroll-target=".positions-panel"
+                            aria-label="View open positions"
+                        >
                             <div class="stat-card-heading">
                                 <p>
                                     Open Positions
@@ -1042,8 +1100,66 @@
                     "analyze-watchlist-button",
                     () => window.loadStrategyLab?.()
                 );
+
+                bindDashboardSummaryCards();
             }
         );
+
+
+        function bindDashboardSummaryCards() {
+            const cards =
+                document.querySelectorAll(
+                    "[data-scroll-target]"
+                );
+
+            cards.forEach(card => {
+                const activate = () => {
+                    const selector =
+                        card.dataset.scrollTarget;
+
+                    if (!selector) {
+                        return;
+                    }
+
+                    const target =
+                        document.querySelector(
+                            selector
+                        );
+
+                    if (!target) {
+                        console.warn(
+                            `Dashboard target not found: ${selector}`
+                        );
+                        return;
+                    }
+
+                    target.scrollIntoView({
+                        behavior: "smooth",
+                        block: "start",
+                    });
+                };
+
+                card.addEventListener(
+                    "click",
+                    activate
+                );
+
+                card.addEventListener(
+                    "keydown",
+                    event => {
+                        if (
+                            event.key !== "Enter" &&
+                            event.key !== " "
+                        ) {
+                            return;
+                        }
+
+                        event.preventDefault();
+                        activate();
+                    }
+                );
+            });
+        }
 
 
         function bindPageAction(
