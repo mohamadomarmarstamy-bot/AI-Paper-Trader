@@ -590,6 +590,7 @@ def fetch_alpaca_open_orders_for_symbol(
             "limit": 100,
             "direction": "desc",
             "symbols": normalized_symbol,
+            "nested": "true",
         },
     )
 
@@ -3364,6 +3365,10 @@ def get_open_protective_stop_order(
     except Exception:
         return None
 
+    candidate_orders: list[
+        dict[str, Any]
+    ] = []
+
     for order in open_orders:
         if not isinstance(
             order,
@@ -3371,6 +3376,28 @@ def get_open_protective_stop_order(
         ):
             continue
 
+        candidate_orders.append(
+            order
+        )
+
+        legs = order.get(
+            "legs"
+        )
+
+        if isinstance(
+            legs,
+            list,
+        ):
+            candidate_orders.extend(
+                leg
+                for leg in legs
+                if isinstance(
+                    leg,
+                    dict,
+                )
+            )
+
+    for order in candidate_orders:
         side = str(
             order.get(
                 "side",
