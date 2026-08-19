@@ -78,7 +78,18 @@ AUTO_TRADER_SYMBOL_COOLDOWN_SECONDS = 60 * 60
 AUTO_TRADER_MAX_NEW_POSITIONS_PER_CYCLE = 1
 AUTO_TRADER_LOG_LIMIT = 250
 
-_auto_trader_enabled = False
+_auto_trader_enabled = (
+    os.getenv(
+        "AUTO_TRADER_START_ENABLED",
+        "false",
+    ).strip().lower()
+    in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+)
 _auto_trader_cycle_running = False
 _auto_trader_last_cycle_at: float | None = None
 _auto_trader_last_cycle_result: dict[str, Any] | None = None
