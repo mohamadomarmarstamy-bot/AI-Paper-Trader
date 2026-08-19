@@ -2654,6 +2654,353 @@ def cancel_alpaca_open_orders_for_symbol(
 
     return canceled_ids
 
+def submit_alpaca_recovery_oco(
+    *,
+    symbol: str,
+    shares: int,
+    current_price: float,
+) -> dict[str, Any]:
+    """
+    Restore protective PAPER exits for an existing long position.
+
+    This is used when a position exists but has no open protective
+    sell orders. Recovery protection is based on the current price,
+    rather than stale entry thresholds from an expired DAY bracket.
+    """
+    normalized_symbol = clean_symbol(
+        symbol
+    )
+
+    if not normalized_symbol:
+        return {
+            "success": False,
+            "paper": True,
+            "error": "A valid symbol is required.",
+        }
+
+    if shares <= 0:
+        return {
+            "success": False,
+            "paper": True,
+            "error": (
+                "Recovery protection requires "
+                "at least one share."
+            ),
+        }
+
+    if (
+        current_price is None
+        or current_price <= 0
+    ):
+        return {
+            "success": False,
+            "paper": True,
+            "error": (
+                "A valid current price is required "
+                "for recovery protection."
+            ),
+        }
+
+    try:
+        open_orders = (
+            fetch_alpaca_open_orders_for_symbol(
+                normalized_symbol
+            )
+        )
+    except Exception as error:
+        return {
+            "success": False,
+            "paper": True,
+            "error": clean_error_message(
+                error
+            ),
+        }
+
+    protective_sell_orders = [
+        order
+        for order in open_orders
+        if str(
+            order.get(
+                "side",
+                "",
+            )
+        ).strip().lower() == "sell"
+    ]
+
+    if protective_sell_orders:
+        return {
+            "success": True,
+            "paper": True,
+            "already_protected": True,
+            "symbol": normalized_symbol,
+            "open_protective_orders": len(
+                protective_sell_orders
+            ),
+        }
+
+    if open_orders:
+        return {
+            "success": False,
+            "paper": True,
+            "error": (
+                f"{normalized_symbol} has another "
+                "open order, so recovery protection "
+                "was not added."
+            ),
+        }
+
+    stop_price = round(
+        current_price
+        * (
+            1
+            - (
+                AUTO_TRADER_STOP_LOSS_PERCENT
+                / 100
+            )
+        ),
+        2,
+    )
+
+    take_profit_price = round(
+        current_price
+        * (
+            1
+            + (
+                AUTO_TRADER_TAKE_PROFIT_PERCENT
+                / 100
+            )
+        ),
+        2,
+    )
+
+    if (
+        stop_price <= 0
+        or stop_price >= current_price
+        or take_profit_price <= current_price
+    ):
+        return {
+            "success": False,
+            "paper": True,
+            "error": (
+                "Recovery protection prices "
+                "were invalid."
+            ),
+        }
+
+    request_body = {
+        "symbol": normalized_symbol,
+        "qty": str(shares),
+        "side": "sell",
+        "type": "limit",
+        "time_in_force": "gtc",
+        "limit_price": (
+            f"{take_profit_price:.2f}"
+        ),
+        "order_class": "oco",
+        "take_profit": {
+            "limit_price": (
+                f"{take_profit_price:.2f}"
+            ),
+        },
+        "stop_loss": {
+            "stop_price": (
+                f"{stop_price:.2f}"
+            ),
+        },
+        "client_order_id": (
+            f"auto-protect-"
+            f"{normalized_symbol.lower()}-"
+            f"{uuid.uuid4().hex[:12]}"
+        ),
+    }
+
+    try:
+        payload = alpaca_paper_request(
+            "POST",
+            "/v2/orders",
+            json_body=request_body,
+        )
+
+        if not isinstance(
+            payload,
+            dict,
+        ):
+            raise RuntimeError(
+                "Alpaca returned an invalid "
+                "recovery-protection response."
+            )
+
+        return {
+            "success": True,
+            "paper": True,
+            "automatic": True,
+            "symbol": normalized_symbol,
+            "shares": shares,
+            "reference_price": round(
+                current_price,
+                4,
+            ),
+            "stop_price": stop_price,
+            "take_profit_price": (
+                take_profit_price
+            ),
+            "order": payload,
+        }
+
+    except Exception as error:
+        return {
+            "success": False,
+            "paper": True,
+            "automatic": True,
+            "symbol": normalized_symbol,
+            "error": clean_error_message(
+                error
+            ),
+        }
+
+
+def reconcile_unprotected_positions(
+    positions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """
+    Find existing PAPER positions without protective sell orders
+    and attach a GTC OCO recovery bracket.
+    """
+    results: list[
+        dict[str, Any]
+    ] = []
+
+    for position in positions:
+        if not isinstance(
+            position,
+            dict,
+        ):
+            continue
+
+        symbol = clean_symbol(
+            position.get(
+                "symbol"
+            )
+        )
+
+        if not symbol:
+            continue
+
+        qty = safe_float(
+            position.get(
+                "qty"
+            )
+        )
+
+        if (
+            qty is None
+            or qty <= 0
+        ):
+            continue
+
+        shares = math.floor(
+            qty
+        )
+
+        if shares <= 0:
+            continue
+
+        current_price = safe_float(
+            position.get(
+                "current_price"
+            )
+        )
+
+        if (
+            current_price is None
+            or current_price <= 0
+        ):
+            current_price = (
+                fetch_current_price(
+                    symbol
+                )
+            )
+
+        if (
+            current_price is None
+            or current_price <= 0
+        ):
+            result = {
+                "success": False,
+                "paper": True,
+                "symbol": symbol,
+                "error": (
+                    "Current price was unavailable."
+                ),
+            }
+        else:
+            result = (
+                submit_alpaca_recovery_oco(
+                    symbol=symbol,
+                    shares=shares,
+                    current_price=current_price,
+                )
+            )
+
+        results.append({
+            "symbol": symbol,
+            "result": result,
+        })
+
+        if result.get(
+            "already_protected"
+        ):
+            continue
+
+        if result.get(
+            "success"
+        ):
+            add_auto_trader_log(
+                "protection_restored",
+                symbol=symbol,
+                message=(
+                    "Automatic PAPER protection "
+                    "was restored with a GTC OCO."
+                ),
+                details={
+                    "shares": shares,
+                    "reference_price": (
+                        current_price
+                    ),
+                    "stop_price": (
+                        result.get(
+                            "stop_price"
+                        )
+                    ),
+                    "take_profit_price": (
+                        result.get(
+                            "take_profit_price"
+                        )
+                    ),
+                    "result_success": True,
+                },
+            )
+
+        else:
+            add_auto_trader_log(
+                "protection_restore_failed",
+                symbol=symbol,
+                message=(
+                    "Automatic PAPER protection "
+                    "could not be restored."
+                ),
+                details={
+                    "shares": shares,
+                    "result_success": False,
+                    "error": (
+                        result.get(
+                            "error"
+                        )
+                    ),
+                },
+            )
+
+    return results
 
 def calculate_auto_entry_shares(
     *,
@@ -3169,6 +3516,20 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             )
 
         # Refresh positions after any exits.
+        positions = (
+            fetch_alpaca_paper_positions()
+        )
+
+        cycle_result[
+            "protection_reconciliation"
+        ] = (
+            reconcile_unprotected_positions(
+                positions
+            )
+        )
+
+        # Refresh positions again after protection
+        # orders are restored.
         positions = (
             fetch_alpaca_paper_positions()
         )
