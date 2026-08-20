@@ -6,11 +6,16 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any
+import hashlib
+import hmac
+import secrets
 
 import requests
 import yfinance as yf
-from fastapi import FastAPI, Header, Query
+from fastapi import FastAPI, Form, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from chart_data import get_chart_data
 from database import initialize_database
@@ -100,6 +105,20 @@ _auto_trader_enabled = (
         "on",
     }
 )
+
+APP_ACCESS_PASSWORD = os.getenv(
+    "APP_ACCESS_PASSWORD",
+    "",
+)
+
+APP_SESSION_SECRET = os.getenv(
+    "APP_SESSION_SECRET",
+    "",
+)
+
+APP_SESSION_COOKIE = "ai_paper_trader_session"
+APP_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
+
 _auto_trader_cycle_running = False
 _auto_trader_last_cycle_at: float | None = None
 _auto_trader_last_cycle_result: dict[str, Any] | None = None
@@ -166,7 +185,38 @@ app = FastAPI(
         "chart data, strategy analysis, risk management, and market scanning API."
     ),
     version=APP_VERSION,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
+
+FRONTEND_DIR = os.path.abspath(
+    os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "frontend",
+    )
+)
+
+app.mount(
+    "/js",
+    StaticFiles(
+        directory=os.path.join(
+            FRONTEND_DIR,
+            "js",
+        ),
+    ),
+    name="js",
+)
+
+@app.get("/style.css")
+def frontend_style():
+    return FileResponse(
+        os.path.join(
+            FRONTEND_DIR,
+            "style.css",
+        )
+    )
 
 # Create the required SQLite tables before the API begins serving requests.
 initialize_database()
@@ -187,6 +237,155 @@ trader = PaperTrader()
 # =========================================================
 # General helpers
 # =========================================================
+
+def create_app_session_token() -> str:
+    timestamp = str(int(time.time()))
+
+    signature = hmac.new(
+        APP_SESSION_SECRET.encode("utf-8"),
+        timestamp.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+    return f"{timestamp}.{signature}"
+
+
+def verify_app_session_token(
+    token: str | None,
+) -> bool:
+    if (
+        not token
+        or not APP_SESSION_SECRET
+    ):
+        return False
+
+    try:
+        timestamp_text, signature = token.split(
+            ".",
+            1,
+        )
+        timestamp = int(timestamp_text)
+    except (ValueError, TypeError):
+        return False
+
+    if (
+        time.time() - timestamp
+        > APP_SESSION_MAX_AGE_SECONDS
+    ):
+        return False
+
+    expected_signature = hmac.new(
+        APP_SESSION_SECRET.encode("utf-8"),
+        timestamp_text.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+    return hmac.compare_digest(
+        signature,
+        expected_signature,
+    )
+
+def request_has_valid_app_session(
+    request: Request,
+) -> bool:
+    token = request.cookies.get(
+        APP_SESSION_COOKIE
+    )
+
+    return verify_app_session_token(
+        token
+    )
+
+def require_app_session(
+    request: Request,
+) -> None:
+    if not request_has_valid_app_session(
+        request
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required.",
+        )
+
+def build_login_page(
+    *,
+    error_message: str = "",
+) -> str:
+    safe_error = (
+        f"<p style='color:#ef4444;'>{error_message}</p>"
+        if error_message
+        else ""
+    )
+
+    return f"""
+    <!doctype html>
+    <html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1"
+        >
+        <title>AI Paper Trader Login</title>
+        <style>
+            body {{
+                margin: 0;
+                min-height: 100vh;
+                display: grid;
+                place-items: center;
+                font-family: Arial, sans-serif;
+                background: #0b1220;
+                color: white;
+            }}
+            .card {{
+                width: min(92vw, 420px);
+                padding: 28px;
+                border-radius: 18px;
+                background: #111827;
+                border: 1px solid #243047;
+            }}
+            input {{
+                width: 100%;
+                box-sizing: border-box;
+                padding: 12px;
+                margin-top: 10px;
+                border-radius: 10px;
+                border: 1px solid #334155;
+                background: #0f172a;
+                color: white;
+            }}
+            button {{
+                width: 100%;
+                margin-top: 14px;
+                padding: 12px;
+                border: 0;
+                border-radius: 10px;
+                font-weight: 700;
+                cursor: pointer;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>AI Paper Trader</h1>
+            <p>Enter the access password.</p>
+            {safe_error}
+            <form method="post" action="/login">
+                <input
+                    type="password"
+                    name="password"
+                    placeholder="Password"
+                    required
+                    autocomplete="current-password"
+                >
+                <button type="submit">
+                    Sign in
+                </button>
+            </form>
+        </div>
+    </body>
+    </html>
+    """
 
 def clean_symbol(symbol: Any) -> str:
     """
@@ -4705,24 +4904,102 @@ def get_auto_trader_status() -> dict[str, Any]:
 # Basic API routes
 # =========================================================
 
+@app.get(
+    "/login",
+    response_class=HTMLResponse,
+)
+def app_login_page(
+    request: Request,
+):
+    if request_has_valid_app_session(
+        request
+    ):
+        return HTMLResponse(
+            """
+            <script>
+                window.location.replace("/");
+            </script>
+            """
+        )
+
+    return HTMLResponse(
+        build_login_page()
+    )
+
+@app.post(
+    "/login",
+    response_class=HTMLResponse,
+)
+def app_login_submit(
+    request: Request,
+    password: str = Form(...),
+):
+    if (
+        not APP_ACCESS_PASSWORD
+        or not APP_SESSION_SECRET
+    ):
+        return HTMLResponse(
+            build_login_page(
+                error_message=(
+                    "App access is not configured."
+                )
+            ),
+            status_code=503,
+        )
+
+    if not hmac.compare_digest(
+        password,
+        APP_ACCESS_PASSWORD,
+    ):
+        return HTMLResponse(
+            build_login_page(
+                error_message=(
+                    "Incorrect password."
+                )
+            ),
+            status_code=401,
+        )
+
+    response = HTMLResponse(
+        """
+        <script>
+            window.location.replace("/");
+        </script>
+        """
+    )
+
+    response.set_cookie(
+        key=APP_SESSION_COOKIE,
+        value=create_app_session_token(),
+        max_age=APP_SESSION_MAX_AGE_SECONDS,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+    )
+
+    return response
+
 @app.get("/")
-def home() -> dict[str, Any]:
-    return {
-        "message": "AI Paper Trader API is running.",
-        "version": APP_VERSION,
-        "docs": "/docs",
-        "health": "/health",
-        "features": [
-            "paper trading",
-            "portfolio tracking",
-            "stock search",
-            "technical strategy analysis",
-            "chart data",
-            "automatic market scanning",
-            "risk-based position sizing",
-            "stop-loss and take-profit planning",
-        ],
-    }
+def home(
+    request: Request,
+):
+    if not request_has_valid_app_session(
+        request
+    ):
+        return HTMLResponse(
+            """
+            <script>
+                window.location.replace("/login");
+            </script>
+            """
+        )
+
+    return FileResponse(
+        os.path.join(
+            FRONTEND_DIR,
+            "index.html",
+        )
+    )
 
 
 @app.get("/health")
@@ -4738,7 +5015,12 @@ def health() -> dict[str, str]:
 # =========================================================
 
 @app.get("/account/live")
-def account_live() -> dict[str, Any]:
+def account_live(
+    request: Request,
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
     """Read-only live account snapshot for dashboard polling."""
     try:
         return build_alpaca_live_account_snapshot()
@@ -4758,7 +5040,12 @@ def account_live() -> dict[str, Any]:
 
 
 @app.get("/account")
-def account() -> dict[str, Any]:
+def account(
+    request: Request,
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
     try:
         return build_alpaca_dashboard_account()
 
@@ -4776,7 +5063,13 @@ def account() -> dict[str, Any]:
 
 
 @app.get("/portfolio-history")
-def portfolio_history() -> Any:
+def portfolio_history(
+    request: Request,
+) -> Any:
+    require_app_session(
+        request
+    )
+
     try:
         return fetch_alpaca_portfolio_history()
 
@@ -4795,10 +5088,14 @@ def portfolio_history() -> Any:
 
 @app.get("/market-scan")
 def market_scan(
+    request: Request,
     limit: int = Query(default=10, ge=1, le=30),
     signal: str | None = Query(default=None),
     refresh: bool = Query(default=False),
 ) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
     try:
         results = scan_market(
             force_refresh=refresh
@@ -4858,18 +5155,23 @@ def market_scan(
 
 @app.get("/scanner")
 def scanner(
+    request: Request,
     limit: int = Query(default=10, ge=1, le=30),
     signal: str | None = Query(default=None),
     refresh: bool = Query(default=False),
 ) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
     """
     Backward-compatible alias for /market-scan.
     """
     return market_scan(
+        request=request,
         limit=limit,
         signal=signal,
         refresh=refresh,
-    )
+)
 
 
 # =========================================================
@@ -4877,18 +5179,28 @@ def scanner(
 # =========================================================
 
 @app.get("/auto-trader/status")
-def auto_trader_status() -> dict[str, Any]:
+def auto_trader_status(
+    request: Request,
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
     return get_auto_trader_status()
 
 
 @app.get("/auto-trader/logs")
 def auto_trader_logs(
+    request: Request,
     limit: int = Query(
         default=50,
         ge=1,
         le=AUTO_TRADER_LOG_LIMIT,
     ),
 ) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
     return {
         "paper": True,
         "count": min(
@@ -4907,10 +5219,14 @@ def auto_trader_logs(
 
 @app.post("/auto-trader/enable")
 def auto_trader_enable(
+    request: Request,
     x_auto_trader_token: str | None = Header(
         default=None
     ),
 ) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
     global _auto_trader_enabled
 
     if not auto_trader_control_authorized(
@@ -4949,10 +5265,14 @@ def auto_trader_enable(
 
 @app.post("/auto-trader/disable")
 def auto_trader_disable(
+    request: Request,
     x_auto_trader_token: str | None = Header(
         default=None
     ),
 ) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
     global _auto_trader_enabled
 
     if not auto_trader_control_authorized(
@@ -4982,10 +5302,14 @@ def auto_trader_disable(
 
 @app.post("/auto-trader/run-once")
 def auto_trader_run_once(
+    request: Request,
     x_auto_trader_token: str | None = Header(
         default=None
     ),
 ) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
     if not auto_trader_control_authorized(
         x_auto_trader_token
     ):
@@ -5004,7 +5328,14 @@ def auto_trader_run_once(
 # =========================================================
 
 @app.get("/chart/{symbol}")
-def chart(symbol: str) -> dict[str, Any]:
+def chart(
+    request: Request,
+    symbol: str,
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
     normalized_symbol = clean_symbol(symbol)
 
     if not normalized_symbol:
@@ -5038,7 +5369,13 @@ def chart(symbol: str) -> dict[str, Any]:
 
 
 @app.get("/quote/{symbol}")
-def get_quote(symbol: str) -> dict[str, Any]:
+def get_quote(
+    request: Request,
+    symbol: str,
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
     normalized_symbol = clean_symbol(symbol)
 
     if not normalized_symbol:
@@ -5068,8 +5405,12 @@ def get_quote(symbol: str) -> dict[str, Any]:
 
 @app.get("/search")
 def search_stocks(
+    request: Request,
     query: str = Query(min_length=1),
 ) -> list[dict[str, str]]:
+    require_app_session(
+        request
+    )
     clean_query = str(query or "").strip()
 
     if not clean_query:
@@ -5170,8 +5511,17 @@ def search_stocks(
 # =========================================================
 
 @app.get("/strategy/{symbol}")
-def get_strategy(symbol: str) -> dict[str, Any]:
-    return analyze_symbol(symbol)
+def get_strategy(
+    request: Request,
+    symbol: str,
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    return analyze_symbol(
+        symbol
+    )
 
 
 # =========================================================
@@ -5179,7 +5529,13 @@ def get_strategy(symbol: str) -> dict[str, Any]:
 # =========================================================
 
 @app.get("/risk-plan/{symbol}")
-def get_risk_plan(symbol: str) -> dict[str, Any]:
+def get_risk_plan(
+    request: Request,
+    symbol: str,
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
     """
     Return a suggested position size, stop-loss, take-profit,
     risk/reward ratio, and maximum allowed position value.
@@ -5238,6 +5594,7 @@ def get_risk_plan(symbol: str) -> dict[str, Any]:
 
 @app.get("/execution-risk/{symbol}")
 def execution_risk(
+    request: Request,
     symbol: str,
     shares: int = Query(
         default=1,
@@ -5251,6 +5608,10 @@ def execution_risk(
     """
     Preview the PAPER execution risk decision without placing an order.
     """
+    require_app_session(
+        request
+    )
+
     normalized_symbol = clean_symbol(
         symbol
     )
@@ -5333,7 +5694,13 @@ def parse_trade_request(
 
 
 @app.post("/buy")
-def buy(data: dict[str, Any]) -> dict[str, Any]:
+def buy(
+    data: dict[str, Any],
+    request: Request,
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
     symbol, shares = parse_trade_request(data)
 
     if symbol is None or shares is None:
@@ -5353,7 +5720,13 @@ def buy(data: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.post("/sell")
-def sell(data: dict[str, Any]) -> dict[str, Any]:
+def sell(
+    data: dict[str, Any],
+    request: Request,
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
     symbol, shares = parse_trade_request(data)
 
     if symbol is None or shares is None:
