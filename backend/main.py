@@ -50,7 +50,7 @@ ALPACA_ORDER_POLL_TIMEOUT_SECONDS = 8.0
 RISK_MAX_ORDER_EQUITY_PERCENT = 2.0
 RISK_MAX_POSITION_EQUITY_PERCENT = 5.0
 RISK_MAX_OPEN_POSITIONS = 50
-RISK_MAX_SPREAD_PERCENT = 1.0
+RISK_MAX_SPREAD_PERCENT = 4.0
 RISK_BUYING_POWER_BUFFER_DOLLARS = 25.0
 
 # For now, market orders are submitted only during the regular market
@@ -72,7 +72,7 @@ RISK_BLOCK_SHORT_SELLING = True
 #   - Enable/disable/run-once controls require a secret header token.
 #   - At most one new automatic position is opened per scan cycle.
 #   - Broker-native bracket exits are attached to automatic entries.
-AUTO_TRADER_SCAN_SECONDS = 300
+AUTO_TRADER_SCAN_SECONDS = 60
 AUTO_TRADER_ENTRY_SCORE_MIN = 70
 AUTO_TRADER_ENTRY_CONFIDENCE_MIN = 80
 AUTO_TRADER_EXIT_SCORE_MAX = 40
