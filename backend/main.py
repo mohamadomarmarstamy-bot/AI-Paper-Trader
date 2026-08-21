@@ -6297,6 +6297,46 @@ def auto_trader_debug_open_orders(
         "orders": orders,
     }
 
+@app.post("/auto-trader/reconcile-protection")
+def auto_trader_reconcile_protection(
+    request: Request,
+    x_auto_trader_token: str | None = Header(
+        default=None
+    ),
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    if not auto_trader_control_authorized(
+        x_auto_trader_token
+    ):
+        return {
+            "success": False,
+            "error": (
+                "Auto-trader control authorization failed."
+            ),
+        }
+
+    positions = (
+        fetch_alpaca_paper_positions()
+    )
+
+    results = (
+        reconcile_unprotected_positions(
+            positions
+        )
+    )
+
+    return {
+        "success": True,
+        "paper": True,
+        "position_count": len(
+            positions
+        ),
+        "results": results,
+    }
+
 @app.post("/auto-trader/enable")
 def auto_trader_enable(
     request: Request,
