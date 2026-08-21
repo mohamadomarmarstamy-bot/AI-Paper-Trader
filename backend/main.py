@@ -6053,47 +6053,80 @@ def auto_trader_protection_audit(
             unprotected_count += 1
             continue
 
+        all_open_orders = []
+
+        for order in open_orders:
+            if not isinstance(
+                order,
+                dict,
+            ):
+                continue
+
+            all_open_orders.append(
+                order
+            )
+
+            legs = order.get(
+                "legs"
+            )
+
+            if isinstance(
+                legs,
+                list,
+            ):
+                all_open_orders.extend(
+                    leg
+                    for leg in legs
+                    if isinstance(
+                        leg,
+                        dict,
+                    )
+                )
+
         protective_sell_orders = [
             order
-            for order in open_orders
-            if (
-                isinstance(
-                    order,
-                    dict,
+            for order in all_open_orders
+            if str(
+                order.get(
+                    "side",
+                    "",
                 )
-                and str(
-                    order.get(
-                        "side",
-                        "",
-                    )
-                ).strip().lower() == "sell"
-            )
+            ).strip().lower() == "sell"
         ]
 
         stop_orders = [
             order
             for order in protective_sell_orders
-            if safe_float(
-                order.get(
-                    "stop_price"
-                )
-            ) is not None
+            if (
+                str(
+                    order.get(
+                        "type",
+                        "",
+                    )
+                ).strip().lower() == "stop"
+                or safe_float(
+                    order.get(
+                        "stop_price"
+                    )
+                ) is not None
+            )
         ]
 
         take_profit_orders = [
             order
             for order in protective_sell_orders
             if (
-                safe_float(
+                str(
+                    order.get(
+                        "type",
+                        "",
+                    )
+                ).strip().lower() == "limit"
+                and safe_float(
                     order.get(
                         "limit_price"
                     )
                 ) is not None
-                and safe_float(
-                    order.get(
-                        "stop_price"
-                    )
-                ) is None
             )
         ]
 
