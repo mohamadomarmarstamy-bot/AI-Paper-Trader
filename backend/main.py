@@ -5002,6 +5002,46 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         "shares": shares,
                         "score": score,
                         "confidence": confidence,
+                        "signal": candidate.get(
+                            "signal"
+                        ),
+                        "scanner_rank": (
+                            candidate.get(
+                                "scanner_rank"
+                            )
+                            or candidate.get(
+                                "rank"
+                            )
+                        ),
+                        "reference_price": reference_price,
+                        "spread_percent": (
+                            entry_result.get(
+                                "risk",
+                                {},
+                            ).get(
+                                "quote",
+                                {},
+                            ).get(
+                                "spread_percent"
+                            )
+                            if isinstance(
+                                entry_result.get("risk"),
+                                dict,
+                            )
+                            else None
+                        ),
+                        "stop_loss_percent": (
+                            AUTO_TRADER_STOP_LOSS_PERCENT
+                        ),
+                        "take_profit_percent": (
+                            AUTO_TRADER_TAKE_PROFIT_PERCENT
+                        ),
+                        "daily_pl_at_entry": (
+                            current_daily_pl
+                        ),
+                        "daily_pl_high_water": (
+                            _auto_trader_daily_pl_high_water
+                        ),
                         "entry_price": (
                             entry_result.get("trade", {}).get(
                                 "execution_price"
