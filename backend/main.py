@@ -6135,6 +6135,32 @@ def auto_trader_protection_audit(
         "positions": results,
     }
 
+@app.get("/auto-trader/debug-open-orders/{symbol}")
+def auto_trader_debug_open_orders(
+    request: Request,
+    symbol: str,
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    normalized_symbol = clean_symbol(
+        symbol
+    )
+
+    orders = (
+        fetch_alpaca_open_orders_for_symbol(
+            normalized_symbol
+        )
+    )
+
+    return {
+        "paper": True,
+        "symbol": normalized_symbol,
+        "count": len(orders),
+        "orders": orders,
+    }
+
 @app.post("/auto-trader/enable")
 def auto_trader_enable(
     request: Request,
