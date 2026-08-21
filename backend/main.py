@@ -96,6 +96,13 @@ AUTO_TRADER_LOG_FILE = os.getenv(
     "/tmp/auto_trader_log.json",
 )
 
+AUTO_TRADER_JOURNAL_FILE = os.getenv(
+    "AUTO_TRADER_JOURNAL_FILE",
+    "/data/auto_trader_journal.json",
+)
+
+AUTO_TRADER_JOURNAL_LIMIT = 5000
+
 _auto_trader_enabled = (
     os.getenv(
         "AUTO_TRADER_START_ENABLED",
@@ -127,6 +134,7 @@ _auto_trader_last_cycle_at: float | None = None
 _auto_trader_last_cycle_result: dict[str, Any] | None = None
 _auto_trader_symbol_cooldowns: dict[str, float] = {}
 _auto_trader_log: list[dict[str, Any]] = []
+_auto_trader_journal: list[dict[str, Any]] = []
 _auto_trader_seen_exit_order_ids: set[str] = set()
 _auto_trader_daily_pl_high_water = 0.0
 _auto_trader_daily_pl_date: str | None = None
@@ -157,6 +165,7 @@ async def portfolio_refresh_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_auto_trader_log()
+    load_auto_trader_journal()
     initialize_seen_exit_order_ids()
 
     refresh_task = asyncio.create_task(
@@ -2784,6 +2793,35 @@ def save_auto_trader_log() -> None:
             f"{clean_error_message(error)}"
         )
 
+def save_auto_trader_journal() -> None:
+    try:
+        directory = os.path.dirname(
+            AUTO_TRADER_JOURNAL_FILE
+        )
+
+        if directory:
+            os.makedirs(
+                directory,
+                exist_ok=True,
+            )
+
+        with open(
+            AUTO_TRADER_JOURNAL_FILE,
+            "w",
+            encoding="utf-8",
+        ) as file:
+            json.dump(
+                _auto_trader_journal[
+                    -AUTO_TRADER_JOURNAL_LIMIT:
+                ],
+                file,
+            )
+
+    except Exception as error:
+        print(
+            "Auto-trader journal save error: "
+            f"{clean_error_message(error)}"
+        )
 
 def load_auto_trader_log() -> None:
     if not os.path.exists(
@@ -2823,6 +2861,47 @@ def load_auto_trader_log() -> None:
     except Exception as error:
         print(
             "Auto-trader log load error: "
+            f"{clean_error_message(error)}"
+        )
+
+def load_auto_trader_journal() -> None:
+    if not os.path.exists(
+        AUTO_TRADER_JOURNAL_FILE
+    ):
+        return
+
+    try:
+        with open(
+            AUTO_TRADER_JOURNAL_FILE,
+            "r",
+            encoding="utf-8",
+        ) as file:
+            saved_journal = json.load(
+                file
+            )
+
+        if not isinstance(
+            saved_journal,
+            list,
+        ):
+            return
+
+        _auto_trader_journal.clear()
+
+        _auto_trader_journal.extend(
+            entry
+            for entry in saved_journal[
+                -AUTO_TRADER_JOURNAL_LIMIT:
+            ]
+            if isinstance(
+                entry,
+                dict,
+            )
+        )
+
+    except Exception as error:
+        print(
+            "Auto-trader journal load error: "
             f"{clean_error_message(error)}"
         )
 
@@ -2866,6 +2945,36 @@ def add_auto_trader_log(
             :-AUTO_TRADER_LOG_LIMIT
         ]
 
+def add_auto_trader_journal_entry(
+    *,
+    symbol: str,
+    event: str,
+    details: dict[str, Any] | None = None,
+) -> None:
+    entry = {
+        "timestamp": time.time(),
+        "symbol": clean_symbol(symbol),
+        "event": str(event),
+        "details": (
+            details
+            if isinstance(details, dict)
+            else {}
+        ),
+    }
+
+    _auto_trader_journal.append(
+        entry
+    )
+
+    if (
+        len(_auto_trader_journal)
+        > AUTO_TRADER_JOURNAL_LIMIT
+    ):
+        del _auto_trader_journal[
+            :-AUTO_TRADER_JOURNAL_LIMIT
+        ]
+
+    save_auto_trader_journal()
 
 def auto_trader_symbol_on_cooldown(
     symbol: str,
@@ -4516,6 +4625,41 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     },
                 )
 
+            if exit_result.get("success"):
+                add_auto_trader_journal_entry(
+                    symbol=symbol,
+                    event="exit",
+                    details={
+                        "reason": exit_reason,
+                        "return_percent": return_percent,
+                        "score": score,
+                        "confidence": confidence,
+                        "signal": signal,
+                        "shares": shares,
+                        "entry_price": entry_price,
+                        "exit_price": (
+                            exit_result.get("trade", {}).get(
+                                "execution_price"
+                            )
+                            if isinstance(
+                                exit_result.get("trade"),
+                                dict,
+                            )
+                            else None
+                        ),
+                        "order_id": (
+                            exit_result.get("trade", {}).get(
+                                "id"
+                            )
+                            if isinstance(
+                                exit_result.get("trade"),
+                                dict,
+                            )
+                            else None
+                        ),
+                    },
+                )
+
         # Refresh positions after any exits.
         positions = (
             fetch_alpaca_paper_positions()
@@ -4850,6 +4994,36 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     ),
                 },
             )
+            if entry_result.get("success"):
+                add_auto_trader_journal_entry(
+                    symbol=symbol,
+                    event="entry",
+                    details={
+                        "shares": shares,
+                        "score": score,
+                        "confidence": confidence,
+                        "entry_price": (
+                            entry_result.get("trade", {}).get(
+                                "execution_price"
+                            )
+                            if isinstance(
+                                entry_result.get("trade"),
+                                dict,
+                            )
+                            else None
+                        ),
+                        "order_id": (
+                            entry_result.get("trade", {}).get(
+                                "id"
+                            )
+                            if isinstance(
+                                entry_result.get("trade"),
+                                dict,
+                            )
+                            else None
+                        ),
+                    },
+                )
 
             if entry_result.get(
                 "success"
