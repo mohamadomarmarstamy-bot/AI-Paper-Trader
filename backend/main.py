@@ -4635,8 +4635,41 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         "score": score,
                         "confidence": confidence,
                         "signal": signal,
+                        "daily_pl_at_exit": (
+                            current_daily_pl
+                        ),
+                        "daily_pl_high_water": (
+                            _auto_trader_daily_pl_high_water
+                        ),
+                        "defensive_mode": (
+                            _auto_trader_defensive_mode
+                        ),
                         "shares": shares,
                         "entry_price": entry_price,
+                        "profit_loss_dollars": (
+                            (
+                                (
+                                    exit_result.get("trade", {}).get(
+                                        "execution_price"
+                                    )
+                                    - entry_price
+                                )
+                                * shares
+                            )
+                            if (
+                                isinstance(
+                                    exit_result.get("trade"),
+                                    dict,
+                                )
+                                and safe_float(
+                                    exit_result.get("trade", {}).get(
+                                        "execution_price"
+                                    )
+                                ) is not None
+                                and entry_price is not None
+                            )
+                            else None
+                        ),
                         "exit_price": (
                             exit_result.get("trade", {}).get(
                                 "execution_price"
