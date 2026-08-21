@@ -3234,23 +3234,31 @@ def submit_alpaca_recovery_oco(
                 ),
             }
 
-        try:
-            remaining_open_orders = (
-                fetch_alpaca_open_orders_for_symbol(
-                    normalized_symbol
+        remaining_open_orders = []
+
+        for _ in range(10):
+            try:
+                remaining_open_orders = (
+                    fetch_alpaca_open_orders_for_symbol(
+                        normalized_symbol
+                    )
                 )
-            )
-        except Exception as error:
-            return {
-                "success": False,
-                "paper": True,
-                "error": (
-                    "Existing protection was canceled, "
-                    "but Alpaca could not confirm the "
-                    "order state before replacement: "
-                    f"{clean_error_message(error)}"
-                ),
-            }
+            except Exception as error:
+                return {
+                    "success": False,
+                    "paper": True,
+                    "error": (
+                        "Existing protection was canceled, "
+                        "but Alpaca could not confirm the "
+                        "order state before replacement: "
+                        f"{clean_error_message(error)}"
+                    ),
+                }
+
+            if not remaining_open_orders:
+                break
+
+            time.sleep(0.5)
 
         if remaining_open_orders:
             return {
