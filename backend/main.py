@@ -4175,6 +4175,32 @@ def log_new_broker_exit_fills() -> list[dict[str, Any]]:
             },
         )
 
+        add_auto_trader_journal_entry(
+            symbol=symbol,
+            event="exit",
+            details={
+                "reason": reason,
+                "shares": shares,
+                "exit_price": filled_price,
+                "filled_at": fill.get(
+                    "filled_at"
+                ),
+                "order_id": fill.get(
+                    "order_id"
+                ),
+                "order_type": fill.get(
+                    "order_type"
+                ),
+                "stop_price": fill.get(
+                    "stop_price"
+                ),
+                "limit_price": fill.get(
+                    "limit_price"
+                ),
+                "broker_detected": True,
+            },
+        )
+
     return fills
 
 def initialize_seen_exit_order_ids() -> None:
@@ -4625,7 +4651,22 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     },
                 )
 
-            if exit_result.get("success"):
+            if (
+                exit_result.get("success")
+                and isinstance(
+                    exit_result.get("trade"),
+                    dict,
+                )
+                and str(
+                    exit_result.get(
+                        "trade",
+                        {},
+                    ).get(
+                        "status",
+                        "",
+                    )
+                ).strip().lower() == "filled"
+            ):
                 add_auto_trader_journal_entry(
                     symbol=symbol,
                     event="exit",
@@ -4692,6 +4733,20 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         ),
                     },
                 )
+                exit_order_id = str(
+                    exit_result.get(
+                        "trade",
+                        {},
+                    ).get(
+                        "id",
+                        "",
+                    )
+                ).strip()
+
+                if exit_order_id:
+                    _auto_trader_seen_exit_order_ids.add(
+                        exit_order_id
+                    )
 
         # Refresh positions after any exits.
         positions = (
@@ -5575,6 +5630,246 @@ def auto_trader_journal(
             _auto_trader_journal[
                 -limit:
             ][::-1]
+        ),
+    }
+
+@app.get("/auto-trader/learning-summary")
+def auto_trader_learning_summary(
+    request: Request,
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    entries = [
+        item
+        for item in _auto_trader_journal
+        if (
+            isinstance(item, dict)
+            and item.get("event") == "entry"
+        )
+    ]
+
+    exits = [
+        item
+        for item in _auto_trader_journal
+        if (
+            isinstance(item, dict)
+            and item.get("event") == "exit"
+        )
+    ]
+
+    completed_returns = []
+    open_entries: dict[
+        str,
+        dict[str, Any],
+    ] = {}
+
+    for item in _auto_trader_journal:
+        if not isinstance(
+            item,
+            dict,
+        ):
+            continue
+
+        symbol = clean_symbol(
+            item.get("symbol")
+        )
+
+        if not symbol:
+            continue
+
+        event = str(
+            item.get(
+                "event",
+                "",
+            )
+        )
+
+        details = (
+            item.get("details", {})
+            if isinstance(
+                item.get("details"),
+                dict,
+            )
+            else {}
+        )
+
+        if event == "entry":
+            open_entries[symbol] = item
+            continue
+
+        if event != "exit":
+            continue
+
+        entry_item = open_entries.pop(
+            symbol,
+            None,
+        )
+
+        return_percent = None
+
+        if entry_item is not None:
+            entry_details = (
+                entry_item.get(
+                    "details",
+                    {},
+                )
+                if isinstance(
+                    entry_item.get("details"),
+                    dict,
+                )
+                else {}
+            )
+
+            entry_price = safe_float(
+                entry_details.get(
+                    "entry_price"
+                )
+            )
+
+            exit_price = safe_float(
+                details.get(
+                    "exit_price"
+                )
+            )
+
+            if (
+                entry_price is not None
+                and entry_price > 0
+                and exit_price is not None
+                and exit_price > 0
+            ):
+                return_percent = (
+                    calculate_position_return_percent(
+                        entry_price=entry_price,
+                        current_price=exit_price,
+                    )
+                )
+
+        if return_percent is None:
+            return_percent = safe_float(
+                details.get(
+                    "return_percent"
+                )
+            )
+
+        if return_percent is not None:
+            completed_returns.append(
+                return_percent
+            )
+
+    wins = sum(
+        1
+        for value in completed_returns
+        if value > 0
+    )
+
+    losses = sum(
+        1
+        for value in completed_returns
+        if value < 0
+    )
+
+    average_return = (
+        sum(completed_returns)
+        / len(completed_returns)
+        if completed_returns
+        else 0.0
+    )
+
+    win_rate = (
+        (
+            wins
+            / len(completed_returns)
+        )
+        * 100
+        if completed_returns
+        else 0.0
+    )
+    recommendations = []
+
+    minimum_sample_size = 10
+
+    if len(completed_returns) < minimum_sample_size:
+        recommendations.append({
+            "type": "collect_more_data",
+            "confidence": "low",
+            "message": (
+                "Not enough completed trades "
+                "for strategy changes yet."
+            ),
+            "completed_trades": len(
+                completed_returns
+            ),
+            "minimum_required": (
+                minimum_sample_size
+            ),
+        })
+
+    else:
+        if win_rate < 45:
+            recommendations.append({
+                "type": "review_entry_quality",
+                "confidence": "medium",
+                "message": (
+                    "Win rate is below 45%. "
+                    "Review entry filters before "
+                    "loosening trade criteria."
+                ),
+            })
+
+        if average_return < 0:
+            recommendations.append({
+                "type": "negative_expectancy_warning",
+                "confidence": "medium",
+                "message": (
+                    "Average completed-trade "
+                    "return is negative. "
+                    "Do not increase risk."
+                ),
+            })
+
+        if (
+            win_rate >= 55
+            and average_return > 0
+        ):
+            recommendations.append({
+                "type": "positive_performance",
+                "confidence": "medium",
+                "message": (
+                    "Current paper-trading sample "
+                    "is showing positive results. "
+                    "Continue collecting data "
+                    "before changing risk limits."
+                ),
+            })
+    return {
+        "paper": True,
+        "shadow_mode": True,
+        "recommendations": recommendations,
+        "journal_entries": len(
+            _auto_trader_journal
+        ),
+        "entry_records": len(entries),
+        "exit_records": len(exits),
+        "completed_returns": len(
+            completed_returns
+        ),
+        "wins": wins,
+        "losses": losses,
+        "win_rate_percent": round(
+            win_rate,
+            2,
+        ),
+        "average_return_percent": round(
+            average_return,
+            4,
+        ),
+        "message": (
+            "Learning engine is collecting "
+            "paper-trading outcomes. "
+            "Recommendations remain read-only."
         ),
     }
 
