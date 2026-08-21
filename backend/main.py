@@ -5477,6 +5477,33 @@ def auto_trader_logs(
         ),
     }
 
+@app.get("/auto-trader/journal")
+def auto_trader_journal(
+    request: Request,
+    limit: int = Query(
+        default=100,
+        ge=1,
+        le=AUTO_TRADER_JOURNAL_LIMIT,
+    ),
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    return {
+        "paper": True,
+        "count": min(
+            limit,
+            len(
+                _auto_trader_journal
+            ),
+        ),
+        "journal": (
+            _auto_trader_journal[
+                -limit:
+            ][::-1]
+        ),
+    }
 
 @app.post("/auto-trader/enable")
 def auto_trader_enable(
