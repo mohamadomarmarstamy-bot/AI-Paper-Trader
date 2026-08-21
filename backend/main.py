@@ -6004,6 +6004,137 @@ def auto_trader_learning_summary(
         ),
     }
 
+@app.get("/auto-trader/protection-audit")
+def auto_trader_protection_audit(
+    request: Request,
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    raw_positions = (
+        fetch_alpaca_paper_positions()
+    )
+
+    results = []
+    protected_count = 0
+    unprotected_count = 0
+
+    for position in raw_positions:
+        if not isinstance(
+            position,
+            dict,
+        ):
+            continue
+
+        symbol = clean_symbol(
+            position.get(
+                "symbol"
+            )
+        )
+
+        if not symbol:
+            continue
+
+        try:
+            open_orders = (
+                fetch_alpaca_open_orders_for_symbol(
+                    symbol
+                )
+            )
+        except Exception as error:
+            results.append({
+                "symbol": symbol,
+                "protected": False,
+                "error": clean_error_message(
+                    error
+                ),
+            })
+            unprotected_count += 1
+            continue
+
+        protective_sell_orders = [
+            order
+            for order in open_orders
+            if (
+                isinstance(
+                    order,
+                    dict,
+                )
+                and str(
+                    order.get(
+                        "side",
+                        "",
+                    )
+                ).strip().lower() == "sell"
+            )
+        ]
+
+        stop_orders = [
+            order
+            for order in protective_sell_orders
+            if safe_float(
+                order.get(
+                    "stop_price"
+                )
+            ) is not None
+        ]
+
+        take_profit_orders = [
+            order
+            for order in protective_sell_orders
+            if (
+                safe_float(
+                    order.get(
+                        "limit_price"
+                    )
+                ) is not None
+                and safe_float(
+                    order.get(
+                        "stop_price"
+                    )
+                ) is None
+            )
+        ]
+
+        is_protected = bool(
+            stop_orders
+        )
+
+        if is_protected:
+            protected_count += 1
+        else:
+            unprotected_count += 1
+
+        results.append({
+            "symbol": symbol,
+            "protected": is_protected,
+            "stop_order_count": len(
+                stop_orders
+            ),
+            "take_profit_order_count": len(
+                take_profit_orders
+            ),
+            "open_sell_order_count": len(
+                protective_sell_orders
+            ),
+        })
+
+    return {
+        "paper": True,
+        "position_count": len(
+            results
+        ),
+        "protected_count": protected_count,
+        "unprotected_count": (
+            unprotected_count
+        ),
+        "all_positions_protected": (
+            unprotected_count == 0
+        ),
+        "positions": results,
+    }
+
 @app.post("/auto-trader/enable")
 def auto_trader_enable(
     request: Request,
