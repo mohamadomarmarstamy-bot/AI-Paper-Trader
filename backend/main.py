@@ -5450,6 +5450,137 @@ def account(
             )
         }
 
+@app.get("/account/pl-audit")
+def account_pl_audit(
+    request: Request,
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    account = fetch_alpaca_paper_account()
+    raw_positions = (
+        fetch_alpaca_paper_positions()
+    )
+
+    equity = safe_float(
+        account.get("equity")
+    )
+
+    last_equity = safe_float(
+        account.get("last_equity")
+    )
+
+    cash = safe_float(
+        account.get("cash")
+    )
+
+    if equity is None:
+        equity = cash or 0.0
+
+    if (
+        last_equity is None
+        or last_equity <= 0
+    ):
+        last_equity = equity
+
+    daily_pl = (
+        equity
+        - last_equity
+    )
+
+    daily_pl_percent = (
+        (
+            daily_pl
+            / last_equity
+        )
+        * 100
+        if last_equity > 0
+        else 0.0
+    )
+
+    raw_unrealized_pl = sum(
+        safe_float(
+            position.get(
+                "unrealized_pl"
+            )
+        ) or 0.0
+        for position in raw_positions
+        if isinstance(
+            position,
+            dict,
+        )
+    )
+
+    normalized_positions = [
+        normalize_alpaca_position(
+            position
+        )
+        for position in raw_positions
+        if isinstance(
+            position,
+            dict,
+        )
+    ]
+
+    normalized_unrealized_pl = sum(
+        safe_float(
+            position.get(
+                "unrealized_profit"
+            )
+        ) or 0.0
+        for position in normalized_positions
+    )
+
+    unrealized_difference = (
+        normalized_unrealized_pl
+        - raw_unrealized_pl
+    )
+
+    return {
+        "paper": True,
+        "source": "alpaca_paper",
+        "equity": round(
+            equity,
+            2,
+        ),
+        "last_equity": round(
+            last_equity,
+            2,
+        ),
+        "daily_pl": round(
+            daily_pl,
+            2,
+        ),
+        "daily_pl_percent": round(
+            daily_pl_percent,
+            4,
+        ),
+        "alpaca_unrealized_pl": round(
+            raw_unrealized_pl,
+            2,
+        ),
+        "dashboard_unrealized_pl": round(
+            normalized_unrealized_pl,
+            2,
+        ),
+        "unrealized_difference": round(
+            unrealized_difference,
+            4,
+        ),
+        "position_count": len(
+            normalized_positions
+        ),
+        "unrealized_matches": (
+            abs(
+                unrealized_difference
+            ) < 0.01
+        ),
+        "note": (
+            "Daily P/L is equity minus prior-day equity. "
+            "Unrealized P/L is open-position P/L since entry."
+        ),
+    }
 
 @app.get("/portfolio-history")
 def portfolio_history(
