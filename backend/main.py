@@ -3127,38 +3127,141 @@ def submit_alpaca_recovery_oco(
             ),
         }
 
-    protective_sell_orders = [
-        order
-        for order in open_orders
-        if str(
-            order.get(
-                "side",
-                "",
+    all_open_orders = []
+
+    for order in open_orders:
+        if not isinstance(
+            order,
+            dict,
+        ):
+            continue
+
+        all_open_orders.append(
+            order
+        )
+
+        legs = order.get(
+            "legs"
+        )
+
+        if isinstance(
+            legs,
+            list,
+        ):
+            all_open_orders.extend(
+                leg
+                for leg in legs
+                if isinstance(
+                    leg,
+                    dict,
+                )
             )
-        ).strip().lower() == "sell"
+
+    protective_stop_orders = [
+        order
+        for order in all_open_orders
+        if (
+            str(
+                order.get(
+                    "side",
+                    "",
+                )
+            ).strip().lower() == "sell"
+            and (
+                str(
+                    order.get(
+                        "type",
+                        "",
+                    )
+                ).strip().lower() == "stop"
+                or safe_float(
+                    order.get(
+                        "stop_price"
+                    )
+                ) is not None
+            )
+        )
     ]
 
-    if protective_sell_orders:
+    if protective_stop_orders:
         return {
             "success": True,
             "paper": True,
             "already_protected": True,
             "symbol": normalized_symbol,
             "open_protective_orders": len(
-                protective_sell_orders
+                protective_stop_orders
             ),
         }
 
     if open_orders:
-        return {
-            "success": False,
-            "paper": True,
-            "error": (
-                f"{normalized_symbol} has another "
-                "open order, so recovery protection "
-                "was not added."
-            ),
-        }
+        non_sell_open_orders = [
+            order
+            for order in open_orders
+            if str(
+                order.get(
+                    "side",
+                    "",
+                )
+            ).strip().lower() != "sell"
+        ]
+
+        if non_sell_open_orders:
+            return {
+                "success": False,
+                "paper": True,
+                "error": (
+                    f"{normalized_symbol} has a non-sell "
+                    "open order, so recovery protection "
+                    "was not changed."
+                ),
+            }
+
+        canceled_ids = (
+            cancel_alpaca_open_orders_for_symbol(
+                normalized_symbol
+            )
+        )
+
+        if not canceled_ids:
+            return {
+                "success": False,
+                "paper": True,
+                "error": (
+                    f"{normalized_symbol} had incomplete "
+                    "sell protection, but the existing "
+                    "order could not be canceled."
+                ),
+            }
+
+        try:
+            remaining_open_orders = (
+                fetch_alpaca_open_orders_for_symbol(
+                    normalized_symbol
+                )
+            )
+        except Exception as error:
+            return {
+                "success": False,
+                "paper": True,
+                "error": (
+                    "Existing protection was canceled, "
+                    "but Alpaca could not confirm the "
+                    "order state before replacement: "
+                    f"{clean_error_message(error)}"
+                ),
+            }
+
+        if remaining_open_orders:
+            return {
+                "success": False,
+                "paper": True,
+                "error": (
+                    f"{normalized_symbol} still has an "
+                    "open order after cancellation, so "
+                    "replacement protection was not added."
+                ),
+            }
 
     stop_price = round(
         current_price
