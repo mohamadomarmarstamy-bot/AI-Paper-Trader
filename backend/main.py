@@ -84,6 +84,9 @@ AUTO_TRADER_PROFIT_LOCK_TRIGGER_PERCENT = 2.0
 AUTO_TRADER_PROFIT_LOCK_PERCENT = 0.5
 AUTO_TRADER_PROFIT_TRAIL_PERCENT = 2.0
 AUTO_TRADER_HARD_MAX_LOSS_PERCENT = 2.5
+AUTO_TRADER_DAILY_PROFIT_ARM_DOLLARS = 25.0
+AUTO_TRADER_DAILY_PROFIT_GIVEBACK_DOLLARS = 15.0
+AUTO_TRADER_DAILY_PROFIT_GIVEBACK_PERCENT = 40.0
 AUTO_TRADER_SYMBOL_COOLDOWN_SECONDS = 60 * 60
 AUTO_TRADER_MAX_NEW_POSITIONS_PER_CYCLE = 1
 AUTO_TRADER_LOG_LIMIT = 250
@@ -125,7 +128,9 @@ _auto_trader_last_cycle_result: dict[str, Any] | None = None
 _auto_trader_symbol_cooldowns: dict[str, float] = {}
 _auto_trader_log: list[dict[str, Any]] = []
 _auto_trader_seen_exit_order_ids: set[str] = set()
-
+_auto_trader_daily_pl_high_water = 0.0
+_auto_trader_daily_pl_date: str | None = None
+_auto_trader_defensive_mode = False
 
 
 async def portfolio_refresh_loop() -> None:
@@ -4225,6 +4230,81 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             fetch_alpaca_paper_account()
         )
 
+        global _auto_trader_daily_pl_high_water
+        global _auto_trader_daily_pl_date
+        global _auto_trader_defensive_mode
+
+        current_equity = safe_float(
+            account.get("equity")
+        ) or 0.0
+
+        last_equity = safe_float(
+            account.get("last_equity")
+        ) or current_equity
+
+        current_daily_pl = (
+            current_equity
+            - last_equity
+        )
+
+        current_date = str(
+            clock.get("timestamp", "")
+        )[:10]
+
+        if (
+            _auto_trader_daily_pl_date
+            != current_date
+        ):
+            _auto_trader_daily_pl_date = (
+                current_date
+            )
+            _auto_trader_daily_pl_high_water = (
+                max(
+                    0.0,
+                    current_daily_pl,
+                )
+            )
+            _auto_trader_defensive_mode = False
+
+        if (
+            current_daily_pl
+            > _auto_trader_daily_pl_high_water
+        ):
+            _auto_trader_daily_pl_high_water = (
+                current_daily_pl
+            )
+
+        high_water_armed = (
+            _auto_trader_daily_pl_high_water
+            >= AUTO_TRADER_DAILY_PROFIT_ARM_DOLLARS
+        )
+
+        giveback_dollars = (
+            _auto_trader_daily_pl_high_water
+            - current_daily_pl
+        )
+
+        giveback_percent = (
+            (
+                giveback_dollars
+                / _auto_trader_daily_pl_high_water
+            )
+            * 100
+            if _auto_trader_daily_pl_high_water > 0
+            else 0.0
+        )
+
+        if (
+            high_water_armed
+            and (
+                giveback_dollars
+                >= AUTO_TRADER_DAILY_PROFIT_GIVEBACK_DOLLARS
+                or giveback_percent
+                >= AUTO_TRADER_DAILY_PROFIT_GIVEBACK_PERCENT
+            )
+        ):
+            _auto_trader_defensive_mode = True
+
         positions = (
             fetch_alpaca_paper_positions()
         )
@@ -4325,17 +4405,28 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     )
                 )
 
+            defensive_exit = (
+                _auto_trader_defensive_mode
+                and return_percent is not None
+                and return_percent <= 0
+            )
+
             if not (
                 scanner_exit
                 or hard_loss_exit
+                or defensive_exit
             ):
                 continue
 
             exit_reason = (
                 "hard_max_loss_exit"
                 if hard_loss_exit
-                else "scanner_exit"
-)
+                else (
+                    "defensive_portfolio_exit"
+                    if defensive_exit
+                    else "scanner_exit"
+                )
+            )
 
             qty = safe_float(
                 position.get(
@@ -4355,28 +4446,6 @@ def run_auto_trader_cycle() -> dict[str, Any]:
 
             if shares <= 0:
                 continue
-
-            cooldown, remaining = (
-                auto_trader_symbol_on_cooldown(
-                    symbol
-                )
-            )
-
-            if cooldown:
-                cycle_result[
-                    "skipped_candidates"
-                ].append({
-                    "symbol": symbol,
-                    "reason": (
-                        "symbol cooldown"
-                    ),
-                    "cooldown_seconds": round(
-                        remaining,
-                        1,
-                    ),
-                })
-                continue
-
             canceled_orders = (
                 cancel_alpaca_open_orders_for_symbol(
                     symbol
@@ -4422,8 +4491,15 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     )
                     if hard_loss_exit
                     else (
-                        "Strong SELL signal triggered an "
-                        "automatic PAPER exit."
+                        (
+                            "Daily profit giveback protection "
+                            "triggered an automatic PAPER exit."
+                        )
+                        if defensive_exit
+                        else (
+                            "Strong SELL signal triggered an "
+                            "automatic PAPER exit."
+                        )
                     )
                 ),
                 details={
@@ -4432,13 +4508,13 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     "return_percent": return_percent,
                     "hard_loss_exit": hard_loss_exit,
                     "scanner_exit": scanner_exit,
-                    "result_success": (
-                        exit_result.get(
-                            "success"
-                        )
-                    ),
-                },
-            )
+                        "result_success": (
+                            exit_result.get(
+                                "success"
+                            )
+                        ),
+                    },
+                )
 
         # Refresh positions after any exits.
         positions = (
@@ -4595,6 +4671,18 @@ def run_auto_trader_cycle() -> dict[str, Any]:
         new_positions = 0
 
         for candidate in scanner_results:
+
+            if _auto_trader_defensive_mode:
+                cycle_result[
+                    "entries_paused"
+                ] = True
+                cycle_result[
+                    "entries_paused_reason"
+                ] = (
+                    "Daily profit giveback protection is active."
+                )
+                break
+
             if (
                 new_positions
                 >= AUTO_TRADER_MAX_NEW_POSITIONS_PER_CYCLE
