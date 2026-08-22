@@ -3315,9 +3315,7 @@ def submit_alpaca_recovery_oco(
         "side": "sell",
         "type": "limit",
         "time_in_force": "gtc",
-        "limit_price": (
-            f"{take_profit_price:.2f}"
-        ),
+
         "order_class": "oco",
         "take_profit": {
             "limit_price": (
