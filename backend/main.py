@@ -5097,12 +5097,44 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             if not (
                 signal == "BUY"
                 and score is not None
-                and score >=
-                    AUTO_TRADER_ENTRY_SCORE_MIN
+                and score >= AUTO_TRADER_ENTRY_SCORE_MIN
                 and confidence is not None
-                and confidence >=
-                    AUTO_TRADER_ENTRY_CONFIDENCE_MIN
+                and confidence >= AUTO_TRADER_ENTRY_CONFIDENCE_MIN
             ):
+                failed_requirements = []
+
+                if signal != "BUY":
+                    failed_requirements.append(
+                        "signal_not_buy"
+                    )
+
+                if (
+                    score is None
+                    or score < AUTO_TRADER_ENTRY_SCORE_MIN
+                ):
+                    failed_requirements.append(
+                        "score_below_minimum"
+                    )
+
+                if (
+                    confidence is None
+                    or confidence < AUTO_TRADER_ENTRY_CONFIDENCE_MIN
+                ):
+                    failed_requirements.append(
+                        "confidence_below_minimum"
+                    )
+
+                cycle_result[
+                    "skipped_candidates"
+                ].append({
+                    "symbol": symbol,
+                    "reason": "entry requirements not met",
+                    "failed_requirements": failed_requirements,
+                    "signal": signal,
+                    "score": score,
+                    "confidence": confidence,
+                })
+
                 continue
 
             if symbol in existing_symbols:
