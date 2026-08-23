@@ -60,7 +60,7 @@ async function loadAccount() {
 
     setTableMessage(
         historyTable,
-        4,
+        5,
         "Loading trade history…"
     );
 
@@ -273,7 +273,7 @@ async function loadAccount() {
 
         setTableMessage(
             historyTable,
-            4,
+            5,
             "Could not load trade history."
         );
 
@@ -1060,6 +1060,22 @@ function normalizeHistory(history) {
                 shares * price
             );
 
+            const profitLossDollars =
+                trade.profit_loss_dollars === null ||
+                trade.profit_loss_dollars === undefined
+                    ? null
+                    : toNumber(
+                        trade.profit_loss_dollars
+                    );
+
+            const profitLossPercent =
+                trade.profit_loss_percent === null ||
+                trade.profit_loss_percent === undefined
+                    ? null
+                    : toNumber(
+                        trade.profit_loss_percent
+                    );
+
             const timestamp =
                 trade.timestamp ??
                 trade.created_at ??
@@ -1079,6 +1095,8 @@ function normalizeHistory(history) {
                 shares,
                 price,
                 total,
+                profitLossDollars,
+                profitLossPercent,
                 timestamp,
 
                 timestampValue:
@@ -1108,7 +1126,7 @@ function renderHistory(
     if (history.length === 0) {
         setTableMessage(
             table,
-            4,
+            5,
             "No trades yet"
         );
 
@@ -1123,6 +1141,24 @@ function renderHistory(
                     : trade.side === "SELL"
                         ? "negative"
                         : "";
+
+            const profitLossClass =
+                trade.profitLossDollars === null
+                    ? ""
+                    : trade.profitLossDollars > 0
+                        ? "positive"
+                        : trade.profitLossDollars < 0
+                            ? "negative"
+                            : "";
+
+            const profitLossDisplay =
+                trade.profitLossDollars === null
+                    ? "—"
+                    : `${trade.profitLossDollars >= 0 ? "+" : ""}${formatMoney(
+                        trade.profitLossDollars
+                    )} (${trade.profitLossPercent >= 0 ? "+" : ""}${trade.profitLossPercent.toFixed(
+                        2
+                    )}%)`;
 
             return `
                 <tr>
@@ -1166,6 +1202,10 @@ function renderHistory(
                         ${formatMoney(
                             trade.total
                         )}
+                    </td>
+
+                    <td class="${profitLossClass}">
+                        ${profitLossDisplay}
                     </td>
                 </tr>
             `;

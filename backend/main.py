@@ -2030,6 +2030,123 @@ def build_alpaca_dashboard_account() -> dict[str, Any]:
         if trade is not None:
             history.append(trade)
 
+    buy_lots_by_symbol: dict[str, list[dict[str, float]]] = {}
+
+    for trade in sorted(
+        history,
+        key=lambda item: str(
+            item.get("timestamp") or ""
+        ),
+    ):
+        symbol = clean_symbol(
+            trade.get("symbol")
+        )
+
+        side = str(
+            trade.get("side", "")
+        ).strip().upper()
+
+        shares = safe_float(
+            trade.get("shares")
+        )
+
+        price = safe_float(
+            trade.get("price")
+        )
+
+        if (
+            not symbol
+            or shares is None
+            or shares <= 0
+            or price is None
+            or price <= 0
+        ):
+            continue
+
+        if side == "BUY":
+            buy_lots_by_symbol.setdefault(
+                symbol,
+                [],
+            ).append({
+                "shares": shares,
+                "price": price,
+            })
+
+            trade["profit_loss_dollars"] = None
+            trade["profit_loss_percent"] = None
+
+            continue
+
+        if side != "SELL":
+            continue
+
+        remaining_to_match = shares
+        realized_pl = 0.0
+        matched_cost = 0.0
+
+        lots = buy_lots_by_symbol.setdefault(
+            symbol,
+            [],
+        )
+
+        while (
+            remaining_to_match > 0
+            and lots
+        ):
+            lot = lots[0]
+
+            lot_shares = safe_float(
+                lot.get("shares")
+            ) or 0.0
+
+            lot_price = safe_float(
+                lot.get("price")
+            ) or 0.0
+
+            matched_shares = min(
+                remaining_to_match,
+                lot_shares,
+            )
+
+            realized_pl += (
+                price - lot_price
+            ) * matched_shares
+
+            matched_cost += (
+                lot_price
+                * matched_shares
+            )
+
+            remaining_to_match -= (
+                matched_shares
+            )
+
+            lot["shares"] = (
+                lot_shares
+                - matched_shares
+            )
+
+            if lot["shares"] <= 0:
+                lots.pop(0)
+
+        if matched_cost > 0:
+            trade["profit_loss_dollars"] = round(
+                realized_pl,
+                2,
+            )
+
+            trade["profit_loss_percent"] = round(
+                (
+                    realized_pl
+                    / matched_cost
+                )
+                * 100,
+                4,
+            )
+        else:
+            trade["profit_loss_dollars"] = None
+            trade["profit_loss_percent"] = None
+
     cash = safe_float(
         account.get("cash")
     ) or 0.0
