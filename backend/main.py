@@ -3097,7 +3097,30 @@ def cancel_alpaca_open_orders_for_symbol(
             )
 
     if canceled_ids:
-        time.sleep(0.35)
+        remaining_orders = []
+
+        for _ in range(10):
+            try:
+                remaining_orders = (
+                    fetch_alpaca_open_orders_for_symbol(
+                        symbol
+                    )
+                )
+            except Exception as error:
+                print(
+                    f"Could not confirm PAPER order "
+                    f"cancellation for {symbol}: "
+                    f"{clean_error_message(error)}"
+                )
+                return []
+
+            if not remaining_orders:
+                break
+
+            time.sleep(0.5)
+
+        if remaining_orders:
+            return []
 
     return canceled_ids
 
@@ -4726,19 +4749,47 @@ def run_auto_trader_cycle() -> dict[str, Any]:
 
             if shares <= 0:
                 continue
-            canceled_orders = (
-                cancel_alpaca_open_orders_for_symbol(
+            existing_open_orders = (
+                fetch_alpaca_open_orders_for_symbol(
                     symbol
                 )
             )
 
-            exit_result = (
-                submit_alpaca_paper_market_order(
-                    symbol=symbol,
-                    shares=shares,
-                    side="sell",
+            canceled_orders = []
+
+            if existing_open_orders:
+                canceled_orders = (
+                    cancel_alpaca_open_orders_for_symbol(
+                        symbol
+                    )
                 )
-            )
+
+                if not canceled_orders:
+                    exit_result = {
+                        "success": False,
+                        "paper": True,
+                        "error": (
+                            f"{symbol} had open protective orders, "
+                            "but their cancellation could not be "
+                            "confirmed before the automatic exit."
+                        ),
+                    }
+                else:
+                    exit_result = (
+                        submit_alpaca_paper_market_order(
+                            symbol=symbol,
+                            shares=shares,
+                            side="sell",
+                        )
+                    )
+            else:
+                exit_result = (
+                    submit_alpaca_paper_market_order(
+                        symbol=symbol,
+                        shares=shares,
+                        side="sell",
+                    )
+                )
 
             mark_auto_trader_symbol_cooldown(
                 symbol
