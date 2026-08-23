@@ -90,15 +90,24 @@ function notificationTitle(item) {
             : "";
 
     if (category === "trade") {
+        const event =
+            item.event.toLowerCase();
+
         if (
-            item.event
-                .toLowerCase()
-                .includes("exit")
+            event.includes("exit") ||
+            event.includes("sell")
         ) {
             return `SELL${symbolSuffix}`;
         }
 
-        return `BUY${symbolSuffix}`;
+        if (
+            event.includes("entry") ||
+            event.includes("buy")
+        ) {
+            return `BUY${symbolSuffix}`;
+        }
+
+        return `TRADE${symbolSuffix}`;
     }
 
     if (category === "blocked") {
