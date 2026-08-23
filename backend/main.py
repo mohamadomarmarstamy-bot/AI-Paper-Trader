@@ -1614,6 +1614,42 @@ def fetch_alpaca_paper_orders(
         if isinstance(order, dict)
     ]
 
+def fetch_alpaca_paper_trade_history(
+    *,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    """
+    Fetch a deeper Alpaca PAPER order history for dashboard trade history.
+    """
+
+    safe_limit = max(
+        1,
+        min(
+            int(limit),
+            500,
+        ),
+    )
+
+    payload = alpaca_paper_request(
+        "GET",
+        "/v2/orders",
+        params={
+            "status": "all",
+            "limit": safe_limit,
+            "direction": "desc",
+        },
+    )
+
+    if not isinstance(payload, list):
+        raise RuntimeError(
+            "Alpaca returned an invalid trade-history response."
+        )
+
+    return [
+        order
+        for order in payload
+        if isinstance(order, dict)
+    ]
 
 def normalize_alpaca_position(
     position: dict[str, Any],
@@ -1918,8 +1954,8 @@ def build_alpaca_dashboard_account() -> dict[str, Any]:
         fetch_alpaca_paper_positions()
     )
 
-    raw_orders = fetch_alpaca_paper_orders(
-        limit=100
+    raw_orders = fetch_alpaca_paper_trade_history(
+        limit=500
     )
 
     positions = [
