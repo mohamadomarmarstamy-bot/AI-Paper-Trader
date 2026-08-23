@@ -41,6 +41,9 @@ ALPACA_PAPER_BASE_URL = "https://paper-api.alpaca.markets"
 ALPACA_ORDER_POLL_SECONDS = 0.25
 ALPACA_ORDER_POLL_TIMEOUT_SECONDS = 8.0
 
+ALPACA_READ_RETRY_ATTEMPTS = 3
+ALPACA_READ_RETRY_DELAY_SECONDS = 0.75
+
 # =========================================================
 # Paper execution risk controls
 # =========================================================
@@ -511,21 +514,49 @@ def alpaca_paper_request(
             "Paper-trading safety check failed."
         )
 
-    response = requests.request(
-        method=method,
-        url=f"{ALPACA_PAPER_BASE_URL}{path}",
-        headers=get_alpaca_headers(),
-        json=json_body,
-        params=params,
-        timeout=timeout,
+    normalized_method = str(method).strip().upper()
+
+    attempts = (
+        ALPACA_READ_RETRY_ATTEMPTS
+        if normalized_method == "GET"
+        else 1
     )
 
-    try:
-        payload = response.json()
-    except ValueError:
-        payload = None
+    last_error: Exception | None = None
 
-    if not response.ok:
+    for attempt in range(attempts):
+        try:
+            response = requests.request(
+                method=normalized_method,
+                url=f"{ALPACA_PAPER_BASE_URL}{path}",
+                headers=get_alpaca_headers(),
+                json=json_body,
+                params=params,
+                timeout=timeout,
+            )
+        except requests.RequestException as error:
+            last_error = error
+
+            if (
+                normalized_method == "GET"
+                and attempt < attempts - 1
+            ):
+                time.sleep(
+                    ALPACA_READ_RETRY_DELAY_SECONDS
+                    * (attempt + 1)
+                )
+                continue
+
+            raise
+
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+
+        if response.ok:
+            return payload
+
         request_id = response.headers.get(
             "X-Request-ID",
             "",
@@ -541,9 +572,25 @@ def alpaca_paper_request(
                 f"(Alpaca request ID: {request_id})"
             )
 
+        if (
+            normalized_method == "GET"
+            and response.status_code >= 500
+            and attempt < attempts - 1
+        ):
+            time.sleep(
+                ALPACA_READ_RETRY_DELAY_SECONDS
+                * (attempt + 1)
+            )
+            continue
+
         raise RuntimeError(message)
 
-    return payload
+    if last_error is not None:
+        raise last_error
+
+    raise RuntimeError(
+        "Alpaca request failed without a response."
+    )
 
 
 def get_alpaca_paper_order(
