@@ -53,23 +53,31 @@ ALPACA_ORDER_POLL_TIMEOUT_SECONDS = 8.0
 ALPACA_READ_RETRY_ATTEMPTS = 3
 ALPACA_READ_RETRY_DELAY_SECONDS = 0.75
 
+
 # =========================================================
 # Paper execution risk controls
 # =========================================================
 #
-# These limits apply only to Alpaca PAPER orders. They are deliberately
-# conservative while the strategy and execution pipeline are being tested.
-RISK_MAX_ORDER_EQUITY_PERCENT = 2.0
+# Aggressive PAPER-testing configuration.
+#
+# The bot may hold up to 50 positions, but individual orders and
+# positions remain capped so one trade cannot consume too much of
+# the simulated account.
+RISK_MAX_ORDER_EQUITY_PERCENT = 2.5
 RISK_MAX_POSITION_EQUITY_PERCENT = 5.0
 RISK_MAX_OPEN_POSITIONS = 50
-RISK_MAX_SPREAD_PERCENT = 4.0
+
+# Do not accept extremely wide bid/ask spreads. This becomes especially
+# important now that the scanner can consider lower-priced stocks.
+RISK_MAX_SPREAD_PERCENT = 2.0
+
 RISK_BUYING_POWER_BUFFER_DOLLARS = 25.0
 
 # For now, market orders are submitted only during the regular market
 # session. Alpaca requires limit orders for extended-hours eligibility.
 RISK_REQUIRE_REGULAR_MARKET_OPEN = True
 
-# The first version of the bot is long-only.
+# The bot remains long-only.
 RISK_BLOCK_SHORT_SELLING = True
 
 
@@ -77,31 +85,62 @@ RISK_BLOCK_SHORT_SELLING = True
 # Automatic PAPER-trading controls
 # =========================================================
 #
-# Safety design:
-#   - PAPER endpoint remains hard-coded.
-#   - Automation is OFF after every process restart.
-#   - Railway must explicitly set AUTO_TRADER_ALLOW_AUTOMATION=true.
-#   - Enable/disable/run-once controls require a secret header token.
-#   - At most one new automatic position is opened per scan cycle.
-#   - Broker-native bracket exits are attached to automatic entries.
+# Aggressive PAPER-testing configuration:
+#
+#   - Scan every 60 seconds.
+#   - BUY candidates require score >= 65.
+#   - BUY candidates require confidence >= 70.
+#   - Target approximately 2% of account equity per new position.
+#   - Allow up to 3 new positions per scan cycle.
+#   - Allow up to 50 total open positions through the global risk layer.
+#   - A symbol can become eligible again after a 15-minute cooldown.
+#   - Existing stop-loss, take-profit, profit-lock, and hard-loss
+#     protections remain enabled.
+#
+# PAPER endpoint remains hard-coded while this configuration is tested.
+
 AUTO_TRADER_SCAN_SECONDS = 60
-AUTO_TRADER_ENTRY_SCORE_MIN = 70
-AUTO_TRADER_ENTRY_CONFIDENCE_MIN = 80
+
+AUTO_TRADER_ENTRY_SCORE_MIN = 65
+AUTO_TRADER_ENTRY_CONFIDENCE_MIN = 70
+
 AUTO_TRADER_EXIT_SCORE_MAX = 40
 AUTO_TRADER_EXIT_CONFIDENCE_MIN = 80
-AUTO_TRADER_ENTRY_EQUITY_PERCENT = 0.50
+
+# Target 2% of account equity for each automatic entry.
+# Example: $100,000 equity -> approximately $2,000 target position.
+AUTO_TRADER_ENTRY_EQUITY_PERCENT = 2.0
+
+# Protective exit configuration.
 AUTO_TRADER_STOP_LOSS_PERCENT = 2.0
 AUTO_TRADER_TAKE_PROFIT_PERCENT = 4.0
+
+# Profit-protection system.
 AUTO_TRADER_PROFIT_LOCK_TRIGGER_PERCENT = 0.75
 AUTO_TRADER_PROFIT_LOCK_PERCENT = 0.25
 AUTO_TRADER_PROFIT_TRAIL_PERCENT = 1.0
+
+# Emergency maximum-loss protection.
 AUTO_TRADER_HARD_MAX_LOSS_PERCENT = 2.5
+
+# Daily profit-protection system.
 AUTO_TRADER_DAILY_PROFIT_ARM_DOLLARS = 25.0
 AUTO_TRADER_DAILY_PROFIT_GIVEBACK_DOLLARS = 15.0
 AUTO_TRADER_DAILY_PROFIT_GIVEBACK_PERCENT = 40.0
-AUTO_TRADER_SYMBOL_COOLDOWN_SECONDS = 60 * 60
-AUTO_TRADER_MAX_NEW_POSITIONS_PER_CYCLE = 1
+
+# Reduce the old one-hour cooldown to 15 minutes.
+AUTO_TRADER_SYMBOL_COOLDOWN_SECONDS = 15 * 60
+
+# Allow the bot to establish several positions when multiple
+# qualifying opportunities appear during the same scan.
+AUTO_TRADER_MAX_NEW_POSITIONS_PER_CYCLE = 3
+
 AUTO_TRADER_LOG_LIMIT = 250
+
+
+# =========================================================
+# Automatic trader persistence
+# =========================================================
 
 AUTO_TRADER_LOG_FILE = os.getenv(
     "AUTO_TRADER_LOG_FILE",
@@ -6054,6 +6093,67 @@ def get_auto_trader_status() -> dict[str, Any]:
 # =========================================================
 # Basic API routes
 # =========================================================
+
+@app.get("/learning-summary")
+def learning_summary(
+    request: Request,
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    summary = calculate_learning_summary(
+        minimum_required=20
+    )
+
+    enough_data = bool(
+        summary.get("enough_data")
+    )
+
+    win_rate = safe_float(
+        summary.get(
+            "win_rate_percent"
+        )
+    ) or 0.0
+
+    average_return = safe_float(
+        summary.get(
+            "average_return_percent"
+        )
+    ) or 0.0
+
+    tightened = (
+        enough_data
+        and (
+            win_rate < 45.0
+            or average_return < 0
+        )
+    )
+
+    return {
+        "success": True,
+        "paper": True,
+        "learning": summary,
+        "entry_adjustment": {
+            "active": tightened,
+            "base_score_min": (
+                AUTO_TRADER_ENTRY_SCORE_MIN
+            ),
+            "base_confidence_min": (
+                AUTO_TRADER_ENTRY_CONFIDENCE_MIN
+            ),
+            "current_score_min": (
+                AUTO_TRADER_ENTRY_SCORE_MIN + 5
+                if tightened
+                else AUTO_TRADER_ENTRY_SCORE_MIN
+            ),
+            "current_confidence_min": (
+                AUTO_TRADER_ENTRY_CONFIDENCE_MIN + 5
+                if tightened
+                else AUTO_TRADER_ENTRY_CONFIDENCE_MIN
+            ),
+        },
+    }
 
 @app.get(
     "/login",
