@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # Scanner configuration
 # =========================================================
 
-SCAN_CACHE_SECONDS = 15 * 60
+SCAN_CACHE_SECONDS = 1 * 60
 
 DOWNLOAD_PERIOD = "6mo"
 DOWNLOAD_INTERVAL = "1d"

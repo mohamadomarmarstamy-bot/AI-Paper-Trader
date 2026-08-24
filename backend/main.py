@@ -99,7 +99,7 @@ RISK_BLOCK_SHORT_SELLING = True
 #
 # PAPER endpoint remains hard-coded while this configuration is tested.
 
-AUTO_TRADER_SCAN_SECONDS = 60
+AUTO_TRADER_SCAN_SECONDS = 15
 
 AUTO_TRADER_ENTRY_SCORE_MIN = 65
 AUTO_TRADER_ENTRY_CONFIDENCE_MIN = 70
@@ -133,7 +133,7 @@ AUTO_TRADER_SYMBOL_COOLDOWN_SECONDS = 15 * 60
 
 # Allow the bot to establish several positions when multiple
 # qualifying opportunities appear during the same scan.
-AUTO_TRADER_MAX_NEW_POSITIONS_PER_CYCLE = 3
+AUTO_TRADER_MAX_NEW_POSITIONS_PER_CYCLE = 5
 
 AUTO_TRADER_LOG_LIMIT = 250
 
