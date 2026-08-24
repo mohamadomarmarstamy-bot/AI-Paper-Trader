@@ -4888,6 +4888,15 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 scanner_results
             )
         )
+        learning_summary = (
+            calculate_learning_summary(
+                minimum_required=20
+            )
+        )
+
+        cycle_result["learning"] = (
+            learning_summary
+        )
 
         # -------------------------------------------------
         # Strong scanner SELL = early exit.
@@ -5209,226 +5218,226 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         "",
                     )
                 ).strip()
-            try:
-                trade_result = (
-                    exit_result.get("trade")
-                    if isinstance(
-                        exit_result.get("trade"),
-                        dict,
-                    )
-                    else {}
-                )
-
-                exit_price = safe_float(
-                    trade_result.get("execution_price")
-                )
-
-                exit_timestamp = str(
-                    trade_result.get("filled_at")
-                    or exit_result.get("order", {}).get(
-                        "filled_at"
-                    )
-                    or ""
-                ).strip()
-
-                open_book_entry = (
-                    load_open_trade_book_entry(
-                        symbol
-                    )
-                )
-
-                if (
-                    open_book_entry
-                    and exit_price is not None
-                    and exit_price > 0
-                    and exit_timestamp
-                ):
-                    trade_book_id = int(
-                        open_book_entry["id"]
+                try:
+                    trade_result = (
+                        exit_result.get("trade")
+                        if isinstance(
+                            exit_result.get("trade"),
+                            dict,
+                        )
+                        else {}
                     )
 
-                    closed_book_entry = (
-                        close_trade_book_entry(
-                            trade_book_id,
-                            exit_price=exit_price,
-                            exit_timestamp=exit_timestamp,
-                            updated_at=exit_timestamp,
-                            exit_order_id=(
-                                trade_result.get("id")
-                                or None
-                            ),
-                            exit_reason=exit_reason,
+                    exit_price = safe_float(
+                        trade_result.get("execution_price")
+                    )
+
+                    exit_timestamp = str(
+                        trade_result.get("filled_at")
+                        or exit_result.get("order", {}).get(
+                            "filled_at"
+                        )
+                        or ""
+                    ).strip()
+
+                    open_book_entry = (
+                        load_open_trade_book_entry(
+                            symbol
                         )
                     )
 
-                    record_trade_book_event(
-                        trade_book_id=trade_book_id,
-                        symbol=symbol,
-                        event="exit",
-                        timestamp=exit_timestamp,
-                        details={
-                            "exit_reason": exit_reason,
-                            "score": score,
-                            "confidence": confidence,
-                            "signal": signal,
-                            "return_percent": (
-                                return_percent
-                            ),
-                            "daily_pl_at_exit": (
-                                current_daily_pl
-                            ),
-                            "daily_pl_high_water": (
-                                _auto_trader_daily_pl_high_water
-                            ),
-                            "defensive_mode": (
-                                _auto_trader_defensive_mode
-                            ),
-                        },
-                    )
+                    if (
+                        open_book_entry
+                        and exit_price is not None
+                        and exit_price > 0
+                        and exit_timestamp
+                    ):
+                        trade_book_id = int(
+                            open_book_entry["id"]
+                        )
 
-                    entry_events = (
-                        load_trade_book_events(
+                        closed_book_entry = (
+                            close_trade_book_entry(
+                                trade_book_id,
+                                exit_price=exit_price,
+                                exit_timestamp=exit_timestamp,
+                                updated_at=exit_timestamp,
+                                exit_order_id=(
+                                    trade_result.get("id")
+                                    or None
+                                ),
+                                exit_reason=exit_reason,
+                            )
+                        )
+
+                        record_trade_book_event(
                             trade_book_id=trade_book_id,
-                            limit=50,
+                            symbol=symbol,
+                            event="exit",
+                            timestamp=exit_timestamp,
+                            details={
+                                "exit_reason": exit_reason,
+                                "score": score,
+                                "confidence": confidence,
+                                "signal": signal,
+                                "return_percent": (
+                                    return_percent
+                                ),
+                                "daily_pl_at_exit": (
+                                    current_daily_pl
+                                ),
+                                "daily_pl_high_water": (
+                                    _auto_trader_daily_pl_high_water
+                                ),
+                                "defensive_mode": (
+                                    _auto_trader_defensive_mode
+                                ),
+                            },
                         )
-                    )
 
-                    entry_details: dict[str, Any] = {}
-
-                    for event in entry_events:
-                        if (
-                            str(
-                                event.get(
-                                    "event",
-                                    "",
-                                )
-                            ).strip().lower()
-                            == "entry"
-                        ):
-                            details = event.get(
-                                "details"
+                        entry_events = (
+                            load_trade_book_events(
+                                trade_book_id=trade_book_id,
+                                limit=50,
                             )
+                        )
 
-                            if isinstance(
-                                details,
-                                dict,
+                        entry_details: dict[str, Any] = {}
+
+                        for event in entry_events:
+                            if (
+                                str(
+                                    event.get(
+                                        "event",
+                                        "",
+                                    )
+                                ).strip().lower()
+                                == "entry"
                             ):
-                                entry_details = details
+                                details = event.get(
+                                    "details"
+                                )
 
-                            break
+                                if isinstance(
+                                    details,
+                                    dict,
+                                ):
+                                    entry_details = details
 
-                    save_learning_outcome(
-                        trade_book_id=trade_book_id,
-                        symbol=symbol,
-                        entry_price=float(
-                            closed_book_entry[
-                                "entry_price"
-                            ]
-                        ),
-                        exit_price=float(
-                            closed_book_entry[
-                                "exit_price"
-                            ]
-                        ),
-                        shares=float(
-                            closed_book_entry[
-                                "shares"
-                            ]
-                        ),
-                        realized_profit_loss=float(
-                            closed_book_entry[
-                                "realized_profit_loss"
-                            ]
-                        ),
-                        realized_return_percent=float(
-                            closed_book_entry[
-                                "realized_return_percent"
-                            ]
-                        ),
-                        created_at=exit_timestamp,
-                        entry_score=safe_float(
-                            entry_details.get(
-                                "score"
-                            )
-                        ),
-                        entry_confidence=safe_float(
-                            entry_details.get(
-                                "confidence"
-                            )
-                        ),
-                        entry_signal=str(
-                            entry_details.get(
-                                "signal",
-                                "",
-                            )
-                        ).strip()
-                        or None,
-                        scanner_rank=safe_float(
-                            entry_details.get(
-                                "scanner_rank"
-                            )
-                        ),
-                        stop_loss_percent=safe_float(
-                            entry_details.get(
-                                "stop_loss_percent"
-                            )
-                        ),
-                        take_profit_percent=safe_float(
-                            entry_details.get(
-                                "take_profit_percent"
-                            )
-                        ),
-                        exit_reason=exit_reason,
-                        metadata={
-                            "daily_pl_at_exit": (
-                                current_daily_pl
-                            ),
-                            "daily_pl_high_water": (
-                                _auto_trader_daily_pl_high_water
-                            ),
-                            "defensive_mode": (
-                                _auto_trader_defensive_mode
-                            ),
-                        },
-                    )
+                                break
 
-                    learning_summary = (
-                        calculate_learning_summary()
-                    )
-
-                    add_auto_trader_log(
-                        "learning_outcome_recorded",
-                        symbol=symbol,
-                        message=(
-                            "Completed trade was added "
-                            "to learning memory."
-                        ),
-                        details={
-                            "trade_book_id": (
-                                trade_book_id
+                        save_learning_outcome(
+                            trade_book_id=trade_book_id,
+                            symbol=symbol,
+                            entry_price=float(
+                                closed_book_entry[
+                                    "entry_price"
+                                ]
                             ),
-                            "realized_profit_loss": (
+                            exit_price=float(
+                                closed_book_entry[
+                                    "exit_price"
+                                ]
+                            ),
+                            shares=float(
+                                closed_book_entry[
+                                    "shares"
+                                ]
+                            ),
+                            realized_profit_loss=float(
                                 closed_book_entry[
                                     "realized_profit_loss"
                                 ]
                             ),
-                            "realized_return_percent": (
+                            realized_return_percent=float(
                                 closed_book_entry[
                                     "realized_return_percent"
                                 ]
                             ),
-                            "learning_summary": (
-                                learning_summary
+                            created_at=exit_timestamp,
+                            entry_score=safe_float(
+                                entry_details.get(
+                                    "score"
+                                )
                             ),
-                        },
-                    )
+                            entry_confidence=safe_float(
+                                entry_details.get(
+                                    "confidence"
+                                )
+                            ),
+                            entry_signal=str(
+                                entry_details.get(
+                                    "signal",
+                                    "",
+                                )
+                            ).strip()
+                            or None,
+                            scanner_rank=safe_float(
+                                entry_details.get(
+                                    "scanner_rank"
+                                )
+                            ),
+                            stop_loss_percent=safe_float(
+                                entry_details.get(
+                                    "stop_loss_percent"
+                                )
+                            ),
+                            take_profit_percent=safe_float(
+                                entry_details.get(
+                                    "take_profit_percent"
+                                )
+                            ),
+                            exit_reason=exit_reason,
+                            metadata={
+                                "daily_pl_at_exit": (
+                                    current_daily_pl
+                                ),
+                                "daily_pl_high_water": (
+                                    _auto_trader_daily_pl_high_water
+                                ),
+                                "defensive_mode": (
+                                    _auto_trader_defensive_mode
+                                ),
+                            },
+                        )
 
-            except Exception as error:
-                print(
-                    f"Could not close trade book "
-                    f"for {symbol}: "
-                    f"{clean_error_message(error)}"
-                )
+                        learning_summary = (
+                            calculate_learning_summary()
+                        )
+
+                        add_auto_trader_log(
+                            "learning_outcome_recorded",
+                            symbol=symbol,
+                            message=(
+                                "Completed trade was added "
+                                "to learning memory."
+                            ),
+                            details={
+                                "trade_book_id": (
+                                    trade_book_id
+                                ),
+                                "realized_profit_loss": (
+                                    closed_book_entry[
+                                        "realized_profit_loss"
+                                    ]
+                                ),
+                                "realized_return_percent": (
+                                    closed_book_entry[
+                                        "realized_return_percent"
+                                    ]
+                                ),
+                                "learning_summary": (
+                                    learning_summary
+                                ),
+                            },
+                        )
+
+                except Exception as error:
+                    print(
+                        f"Could not close trade book "
+                        f"for {symbol}: "
+                        f"{clean_error_message(error)}"
+                    )
                 if exit_order_id:
                     _auto_trader_seen_exit_order_ids.add(
                         exit_order_id
@@ -5649,9 +5658,44 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         "signal_not_buy"
                     )
 
+                learning_score_min = (
+                    AUTO_TRADER_ENTRY_SCORE_MIN
+                )
+
+                learning_confidence_min = (
+                    AUTO_TRADER_ENTRY_CONFIDENCE_MIN
+                )
+
+                if learning_summary.get("enough_data"):
+                    win_rate = safe_float(
+                        learning_summary.get(
+                            "win_rate_percent"
+                        )
+                    ) or 0.0
+
+                    average_return = safe_float(
+                        learning_summary.get(
+                            "average_return_percent"
+                        )
+                    ) or 0.0
+
+                    if (
+                        win_rate < 45.0
+                        or average_return < 0
+                    ):
+                        learning_score_min = max(
+                            learning_score_min,
+                            AUTO_TRADER_ENTRY_SCORE_MIN + 5,
+                        )
+
+                        learning_confidence_min = max(
+                            learning_confidence_min,
+                            AUTO_TRADER_ENTRY_CONFIDENCE_MIN + 5,
+                        )
+
                 if (
                     score is None
-                    or score < AUTO_TRADER_ENTRY_SCORE_MIN
+                    or score < learning_score_min
                 ):
                     failed_requirements.append(
                         "score_below_minimum"
@@ -5659,7 +5703,7 @@ def run_auto_trader_cycle() -> dict[str, Any]:
 
                 if (
                     confidence is None
-                    or confidence < AUTO_TRADER_ENTRY_CONFIDENCE_MIN
+                    or confidence < learning_confidence_min
                 ):
                     failed_requirements.append(
                         "confidence_below_minimum"
