@@ -1,11 +1,30 @@
 import json
 import math
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
 
 
-DATABASE_PATH = Path(__file__).resolve().parent / "trader.db"
+LOCAL_DATABASE_PATH = (
+    Path(__file__).resolve().parent
+    / "trader.db"
+)
+
+PERSISTENT_DATABASE_PATH = Path(
+    "/data/trader.db"
+)
+
+DATABASE_PATH = Path(
+    os.getenv(
+        "DATABASE_PATH",
+        str(
+            PERSISTENT_DATABASE_PATH
+            if Path("/data").exists()
+            else LOCAL_DATABASE_PATH
+        ),
+    )
+)
 
 DEFAULT_STARTING_CASH = 100_000.0
 SQLITE_TIMEOUT_SECONDS = 30

@@ -4840,6 +4840,20 @@ def log_new_broker_exit_fills() -> list[dict[str, Any]]:
             )
         )
 
+        filled_at = str(
+            fill.get(
+                "filled_at"
+            )
+            or ""
+        ).strip()
+
+        order_id = str(
+            fill.get(
+                "order_id"
+            )
+            or ""
+        ).strip()
+
         if reason == "protective_stop_fill":
             message = (
                 "Protective stop filled and "
@@ -4863,12 +4877,8 @@ def log_new_broker_exit_fills() -> list[dict[str, Any]]:
             details={
                 "shares": shares,
                 "filled_price": filled_price,
-                "filled_at": fill.get(
-                    "filled_at"
-                ),
-                "order_id": fill.get(
-                    "order_id"
-                ),
+                "filled_at": filled_at,
+                "order_id": order_id,
                 "order_type": fill.get(
                     "order_type"
                 ),
@@ -4888,12 +4898,8 @@ def log_new_broker_exit_fills() -> list[dict[str, Any]]:
                 "reason": reason,
                 "shares": shares,
                 "exit_price": filled_price,
-                "filled_at": fill.get(
-                    "filled_at"
-                ),
-                "order_id": fill.get(
-                    "order_id"
-                ),
+                "filled_at": filled_at,
+                "order_id": order_id,
                 "order_type": fill.get(
                     "order_type"
                 ),
@@ -4906,6 +4912,217 @@ def log_new_broker_exit_fills() -> list[dict[str, Any]]:
                 "broker_detected": True,
             },
         )
+
+        # -------------------------------------------------
+        # Close the matching trade-book record and save the
+        # completed broker exit into learning memory.
+        # -------------------------------------------------
+        try:
+            open_book_entry = (
+                load_open_trade_book_entry(
+                    symbol
+                )
+            )
+
+            if (
+                open_book_entry
+                and filled_price is not None
+                and filled_price > 0
+                and filled_at
+            ):
+                trade_book_id = int(
+                    open_book_entry["id"]
+                )
+
+                closed_book_entry = (
+                    close_trade_book_entry(
+                        trade_book_id,
+                        exit_price=filled_price,
+                        exit_timestamp=filled_at,
+                        updated_at=filled_at,
+                        exit_order_id=(
+                            order_id
+                            or None
+                        ),
+                        exit_reason=reason,
+                    )
+                )
+
+                record_trade_book_event(
+                    trade_book_id=trade_book_id,
+                    symbol=symbol,
+                    event="exit",
+                    timestamp=filled_at,
+                    details={
+                        "exit_reason": reason,
+                        "broker_detected": True,
+                        "shares": shares,
+                        "exit_price": filled_price,
+                        "order_id": order_id,
+                        "order_type": fill.get(
+                            "order_type"
+                        ),
+                        "stop_price": fill.get(
+                            "stop_price"
+                        ),
+                        "limit_price": fill.get(
+                            "limit_price"
+                        ),
+                    },
+                )
+
+                entry_events = (
+                    load_trade_book_events(
+                        trade_book_id=trade_book_id,
+                        limit=50,
+                    )
+                )
+
+                entry_details: dict[str, Any] = {}
+
+                for event in entry_events:
+                    if (
+                        str(
+                            event.get(
+                                "event",
+                                "",
+                            )
+                        ).strip().lower()
+                        == "entry"
+                    ):
+                        details = event.get(
+                            "details"
+                        )
+
+                        if isinstance(
+                            details,
+                            dict,
+                        ):
+                            entry_details = details
+
+                        break
+
+                save_learning_outcome(
+                    trade_book_id=trade_book_id,
+                    symbol=symbol,
+                    entry_price=float(
+                        closed_book_entry[
+                            "entry_price"
+                        ]
+                    ),
+                    exit_price=float(
+                        closed_book_entry[
+                            "exit_price"
+                        ]
+                    ),
+                    shares=float(
+                        closed_book_entry[
+                            "shares"
+                        ]
+                    ),
+                    realized_profit_loss=float(
+                        closed_book_entry[
+                            "realized_profit_loss"
+                        ]
+                    ),
+                    realized_return_percent=float(
+                        closed_book_entry[
+                            "realized_return_percent"
+                        ]
+                    ),
+                    created_at=filled_at,
+                    entry_score=safe_float(
+                        entry_details.get(
+                            "score"
+                        )
+                    ),
+                    entry_confidence=safe_float(
+                        entry_details.get(
+                            "confidence"
+                        )
+                    ),
+                    entry_signal=str(
+                        entry_details.get(
+                            "signal",
+                            "",
+                        )
+                    ).strip()
+                    or None,
+                    scanner_rank=safe_float(
+                        entry_details.get(
+                            "scanner_rank"
+                        )
+                    ),
+                    spread_percent=safe_float(
+                        entry_details.get(
+                            "spread_percent"
+                        )
+                    ),
+                    stop_loss_percent=safe_float(
+                        entry_details.get(
+                            "stop_loss_percent"
+                        )
+                    ),
+                    take_profit_percent=safe_float(
+                        entry_details.get(
+                            "take_profit_percent"
+                        )
+                    ),
+                    exit_reason=reason,
+                    metadata={
+                        "broker_detected": True,
+                        "order_id": order_id,
+                        "order_type": fill.get(
+                            "order_type"
+                        ),
+                        "stop_price": fill.get(
+                            "stop_price"
+                        ),
+                        "limit_price": fill.get(
+                            "limit_price"
+                        ),
+                    },
+                )
+
+                learning_summary = (
+                    calculate_learning_summary(
+                        minimum_required=20
+                    )
+                )
+
+                add_auto_trader_log(
+                    "learning_outcome_recorded",
+                    symbol=symbol,
+                    message=(
+                        "Broker exit was added "
+                        "to learning memory."
+                    ),
+                    details={
+                        "trade_book_id": (
+                            trade_book_id
+                        ),
+                        "realized_profit_loss": (
+                            closed_book_entry[
+                                "realized_profit_loss"
+                            ]
+                        ),
+                        "realized_return_percent": (
+                            closed_book_entry[
+                                "realized_return_percent"
+                            ]
+                        ),
+                        "learning_summary": (
+                            learning_summary
+                        ),
+                    },
+                )
+
+        except Exception as error:
+            print(
+                f"Could not record broker exit "
+                f"learning outcome for {symbol}: "
+                f"{clean_error_message(error)}"
+            )
 
         mark_auto_trader_symbol_cooldown(
             symbol
