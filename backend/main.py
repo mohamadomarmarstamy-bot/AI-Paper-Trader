@@ -6301,8 +6301,102 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         + 5.0,
                     )
 
+            learning_adjusted = (
+                learning_score_min
+                > AUTO_TRADER_ENTRY_SCORE_MIN
+            )
+
+            # -------------------------------------------------
+            # Broad-market regime adjustment.
+            # -------------------------------------------------
+            #
+            # Market context may only TIGHTEN the entry
+            # requirement. It never lowers the normal or
+            # learning-adjusted minimum.
+            market_regime_name = str(
+                market_regime.get(
+                    "regime"
+                )
+                or "UNKNOWN"
+            ).upper()
+
+            market_regime_adjusted = False
+
+            if market_regime_name == "BEARISH":
+                previous_score_min = (
+                    learning_score_min
+                )
+
+                learning_score_min = min(
+                    90.0,
+                    learning_score_min + 5.0,
+                )
+
+                market_regime_adjusted = (
+                    learning_score_min
+                    > previous_score_min
+                )
+
+            # -------------------------------------------------
+            # Recent symbol-news adjustment.
+            # -------------------------------------------------
+            #
+            # Only fetch news for a candidate that already
+            # passes the technical, learning, and market
+            # requirements. This avoids requesting news for
+            # every symbol returned by the scanner.
+            #
+            # Negative news may only TIGHTEN the required
+            # score. Positive news never lowers the minimum
+            # or creates a BUY signal by itself.
+            news_context = None
+            news_score = None
+            news_adjusted = False
+
+            preliminary_entry_pass = (
+                signal == "BUY"
+                and score is not None
+                and score >= learning_score_min
+                and confidence is not None
+                and confidence
+                >= learning_confidence_min
+            )
+
+            if preliminary_entry_pass:
+                news_context = (
+                    get_symbol_news_context(
+                        symbol,
+                        force_refresh=False,
+                    )
+                )
+
+                news_score = (
+                    score_symbol_news_context(
+                        news_context
+                    )
+                )
+
+                if (
+                    news_score.get("sentiment")
+                    == "NEGATIVE"
+                ):
+                    previous_score_min = (
+                        learning_score_min
+                    )
+
+                    learning_score_min = min(
+                        90.0,
+                        learning_score_min + 5.0,
+                    )
+
+                    news_adjusted = (
+                        learning_score_min
+                        > previous_score_min
+                    )
+
             # Every candidate must pass the FINAL,
-            # learning-adjusted requirements.
+            # learning, regime, and news-adjusted
+            # requirements.
             if not (
                 signal == "BUY"
                 and score is not None
@@ -6323,7 +6417,7 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     or score < learning_score_min
                 ):
                     failed_requirements.append(
-                        "score_below_learning_minimum"
+                        "score_below_adjusted_minimum"
                     )
 
                 if (
@@ -6355,8 +6449,30 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         learning_confidence_min
                     ),
                     "learning_adjusted": (
-                        learning_score_min
-                        > AUTO_TRADER_ENTRY_SCORE_MIN
+                        learning_adjusted
+                    ),
+                    "market_regime": (
+                        market_regime_name
+                    ),
+                    "market_regime_adjusted": (
+                        market_regime_adjusted
+                    ),
+                    "news_sentiment": (
+                        news_score.get(
+                            "sentiment"
+                        )
+                        if news_score
+                        else None
+                    ),
+                    "news_score": (
+                        news_score.get(
+                            "score"
+                        )
+                        if news_score
+                        else None
+                    ),
+                    "news_adjusted": (
+                        news_adjusted
                     ),
                 })
 
@@ -6682,6 +6798,51 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         ),
                         "daily_pl_high_water": (
                             _auto_trader_daily_pl_high_water
+                        ),
+
+                        # Market / catalyst context.
+                        "market_regime": (
+                            market_regime_name
+                        ),
+                        "market_regime_score": (
+                            market_regime.get(
+                                "score"
+                            )
+                        ),
+                        "news_sentiment": (
+                            news_score.get(
+                                "sentiment"
+                            )
+                            if news_score
+                            else None
+                        ),
+                        "news_score": (
+                            news_score.get(
+                                "score"
+                            )
+                            if news_score
+                            else None
+                        ),
+                        "news_raw_score": (
+                            news_score.get(
+                                "raw_score"
+                            )
+                            if news_score
+                            else None
+                        ),
+                        "news_positive_hits": (
+                            news_score.get(
+                                "positive_hits"
+                            )
+                            if news_score
+                            else []
+                        ),
+                        "news_negative_hits": (
+                            news_score.get(
+                                "negative_hits"
+                            )
+                            if news_score
+                            else []
                         ),
 
                         # Actual broker execution.
