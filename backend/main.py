@@ -37,7 +37,11 @@ from indicators import (
     safe_float,
 )
 from paper_trader import PaperTrader
-from scanner import get_market_regime, scan_market
+from scanner import (
+    get_market_regime,
+    get_symbol_news_context,
+    scan_market,
+)
 
 
 APP_VERSION = "2.7.1"
@@ -7324,6 +7328,26 @@ def market_regime(
 
     result = get_market_regime(
         force_refresh=refresh
+    )
+
+    return {
+        "paper": True,
+        **result,
+    }
+
+@app.get("/symbol-news/{symbol}")
+def symbol_news(
+    symbol: str,
+    request: Request,
+    refresh: bool = Query(default=False),
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    result = get_symbol_news_context(
+        symbol,
+        force_refresh=refresh,
     )
 
     return {

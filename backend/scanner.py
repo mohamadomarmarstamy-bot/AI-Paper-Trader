@@ -5,6 +5,7 @@ import logging
 import math
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from collections.abc import Iterator
 from typing import Any
 
@@ -41,6 +42,11 @@ MARKET_REGIME_SYMBOLS = ("SPY", "QQQ")
 MARKET_REGIME_CACHE_SECONDS = 5 * 60
 MARKET_REGIME_MINIMUM_HISTORY_DAYS = 55
 
+# Recent company-news context.
+NEWS_CACHE_SECONDS = 5 * 60
+NEWS_MAX_ARTICLES = 8
+NEWS_LOOKBACK_HOURS = 72
+
 # Preserve a useful mix of BUY, HOLD, and SELL candidates.
 MAX_RESULTS_PER_SIGNAL = 30
 SIGNAL_ORDER = ("BUY", "HOLD", "SELL")
@@ -59,6 +65,8 @@ _market_regime_cache: dict[str, Any] = {
     "result": None,
     "updated_at": 0.0,
 }
+
+_news_cache: dict[str, dict[str, Any]] = {}
 
 _cache_lock = threading.RLock()
 
@@ -1273,5 +1281,139 @@ def get_market_regime(
     with _cache_lock:
         _market_regime_cache["result"] = copy.deepcopy(result)
         _market_regime_cache["updated_at"] = time.time()
+
+    return result
+
+def get_symbol_news_context(
+    symbol: str,
+    *,
+    force_refresh: bool = False,
+) -> dict[str, Any]:
+    """
+    Load recent Yahoo Finance news for one symbol.
+
+    This is observation-only context. It does not place,
+    block, or modify trades by itself.
+    """
+    normalized_symbol = clean_symbol(symbol)
+    current_time = time.time()
+
+    with _cache_lock:
+        cached = _news_cache.get(normalized_symbol)
+
+        if cached is not None:
+            cached_time = float(
+                cached.get("updated_at", 0.0) or 0.0
+            )
+
+            if (
+                not force_refresh
+                and current_time - cached_time
+                < NEWS_CACHE_SECONDS
+            ):
+                return copy.deepcopy(
+                    cached["result"]
+                )
+
+    try:
+        raw_news = yf.Ticker(
+            normalized_symbol
+        ).news
+    except Exception:
+        logger.exception(
+            "News download failed for %s.",
+            normalized_symbol,
+        )
+        raw_news = []
+
+    cutoff = (
+        datetime.now(timezone.utc)
+        - timedelta(hours=NEWS_LOOKBACK_HOURS)
+    )
+
+    articles: list[dict[str, Any]] = []
+
+    for item in raw_news or []:
+        if not isinstance(item, dict):
+            continue
+
+        content = item.get("content")
+
+        if not isinstance(content, dict):
+            continue
+
+        title = str(
+            content.get("title") or ""
+        ).strip()
+
+        summary = str(
+            content.get("summary") or ""
+        ).strip()
+
+        published_text = str(
+            content.get("pubDate") or ""
+        ).strip()
+
+        try:
+            published_at = datetime.fromisoformat(
+                published_text.replace(
+                    "Z",
+                    "+00:00",
+                )
+            )
+        except ValueError:
+            continue
+
+        if published_at < cutoff:
+            continue
+
+        provider = content.get("provider")
+        provider_name = None
+
+        if isinstance(provider, dict):
+            provider_name = (
+                provider.get("displayName")
+            )
+
+        canonical_url = content.get(
+            "canonicalUrl"
+        )
+        url = None
+
+        if isinstance(canonical_url, dict):
+            url = canonical_url.get("url")
+
+        articles.append({
+            "title": title,
+            "summary": summary,
+            "published_at": (
+                published_at.isoformat()
+            ),
+            "provider": provider_name,
+            "url": url,
+            "content_type": (
+                content.get("contentType")
+            ),
+        })
+
+        if len(articles) >= NEWS_MAX_ARTICLES:
+            break
+
+    result = {
+        "symbol": normalized_symbol,
+        "available": bool(articles),
+        "article_count": len(articles),
+        "lookback_hours": NEWS_LOOKBACK_HOURS,
+        "articles": articles,
+        "updated_at": time.time(),
+    }
+
+    with _cache_lock:
+        _news_cache[
+            normalized_symbol
+        ] = {
+            "result": copy.deepcopy(result),
+            "updated_at": time.time(),
+        }
 
     return result
