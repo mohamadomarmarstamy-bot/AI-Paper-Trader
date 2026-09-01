@@ -24,6 +24,7 @@ from database import (
     create_trade_book_entry,
     initialize_database,
     load_open_trade_book_entry,
+    load_trade_book,
     load_trade_book_events,
     record_trade_book_event,
     save_learning_outcome,
@@ -7673,6 +7674,34 @@ def auto_trader_learning_summary(
             "Recommendations remain read-only."
         ),
     }
+
+@app.get("/auto-trader/trade-book")
+def auto_trader_trade_book(
+    request: Request,
+    status: str | None = None,
+    symbol: str | None = None,
+    limit: int = Query(
+        default=100,
+        ge=1,
+        le=500,
+    ),
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    records = load_trade_book(
+        status=status,
+        symbol=symbol,
+        limit=limit,
+    )
+
+    return {
+        "paper": True,
+        "count": len(records),
+        "records": records,
+    }
+
 
 @app.get("/auto-trader/protection-audit")
 def auto_trader_protection_audit(
