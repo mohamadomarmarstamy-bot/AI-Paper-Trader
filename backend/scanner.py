@@ -47,6 +47,41 @@ NEWS_CACHE_SECONDS = 5 * 60
 NEWS_MAX_ARTICLES = 8
 NEWS_LOOKBACK_HOURS = 72
 
+NEWS_POSITIVE_TERMS = (
+    "beats",
+    "beat estimates",
+    "raises guidance",
+    "raised guidance",
+    "upgrade",
+    "upgraded",
+    "price target raised",
+    "record revenue",
+    "record profit",
+    "strong demand",
+    "partnership",
+    "contract win",
+    "approval",
+    "approved",
+    "launch",
+)
+
+NEWS_NEGATIVE_TERMS = (
+    "misses",
+    "missed estimates",
+    "cuts guidance",
+    "cut guidance",
+    "downgrade",
+    "downgraded",
+    "price target cut",
+    "lawsuit",
+    "investigation",
+    "recall",
+    "layoffs",
+    "weak demand",
+    "warning",
+    "fraud",
+)
+
 # Preserve a useful mix of BUY, HOLD, and SELL candidates.
 MAX_RESULTS_PER_SIGNAL = 30
 SIGNAL_ORDER = ("BUY", "HOLD", "SELL")
@@ -1417,3 +1452,63 @@ def get_symbol_news_context(
         }
 
     return result
+
+def score_symbol_news_context(
+    news_context: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Score recent headlines using simple bounded keyword matching.
+
+    This is observation-only context and does not directly
+    place, block, or modify trades.
+    """
+    articles = news_context.get("articles") or []
+
+    positive_hits: list[str] = []
+    negative_hits: list[str] = []
+    raw_score = 0
+
+    for article in articles:
+        title = str(
+            article.get("title") or ""
+        ).lower()
+
+        summary = str(
+            article.get("summary") or ""
+        ).lower()
+
+        combined_text = f"{title} {summary}"
+
+        for term in NEWS_POSITIVE_TERMS:
+            if term in combined_text:
+                positive_hits.append(term)
+                raw_score += 1
+
+        for term in NEWS_NEGATIVE_TERMS:
+            if term in combined_text:
+                negative_hits.append(term)
+                raw_score -= 1
+
+    bounded_score = max(
+        -5,
+        min(5, raw_score),
+    )
+
+    if bounded_score >= 2:
+        sentiment = "POSITIVE"
+    elif bounded_score <= -2:
+        sentiment = "NEGATIVE"
+    else:
+        sentiment = "NEUTRAL"
+
+    return {
+        "sentiment": sentiment,
+        "score": bounded_score,
+        "raw_score": raw_score,
+        "positive_hits": sorted(
+            set(positive_hits)
+        ),
+        "negative_hits": sorted(
+            set(negative_hits)
+        ),
+    }

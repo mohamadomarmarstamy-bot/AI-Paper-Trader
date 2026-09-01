@@ -41,6 +41,7 @@ from scanner import (
     get_market_regime,
     get_symbol_news_context,
     scan_market,
+    score_symbol_news_context,
 )
 
 
@@ -7350,9 +7351,14 @@ def symbol_news(
         force_refresh=refresh,
     )
 
+    news_score = score_symbol_news_context(
+        result
+    )
+
     return {
         "paper": True,
         **result,
+        "news_score": news_score,
     }
 
 # =========================================================
