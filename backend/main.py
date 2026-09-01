@@ -5270,6 +5270,14 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             log_new_broker_exit_fills()
         )
 
+        market_regime = get_market_regime(
+            force_refresh=False
+        )
+
+        cycle_result[
+            "market_regime"
+        ] = market_regime
+
         scanner_results = scan_market(
             force_refresh=False
         )
