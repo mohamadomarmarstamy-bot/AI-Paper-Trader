@@ -5376,11 +5376,80 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 scanner_results
             )
         )
-        learning_summary = (
+        sqlite_learning_summary = (
             calculate_learning_summary(
                 minimum_required=20
             )
         )
+
+        journal_learning_summary = (
+            calculate_auto_trader_journal_learning_summary(
+                minimum_required=20
+            )
+        )
+
+        if (
+            not sqlite_learning_summary.get(
+                "enough_data"
+            )
+            and journal_learning_summary.get(
+                "enough_data"
+            )
+        ):
+            learning_summary = {
+                "completed_trades": (
+                    journal_learning_summary.get(
+                        "completed_trades",
+                        0,
+                    )
+                ),
+                "minimum_required": (
+                    journal_learning_summary.get(
+                        "minimum_required",
+                        20,
+                    )
+                ),
+                "enough_data": True,
+                "wins": (
+                    journal_learning_summary.get(
+                        "wins",
+                        0,
+                    )
+                ),
+                "losses": (
+                    journal_learning_summary.get(
+                        "losses",
+                        0,
+                    )
+                ),
+                "win_rate_percent": (
+                    journal_learning_summary.get(
+                        "win_rate_percent",
+                        0.0,
+                    )
+                ),
+                "average_return_percent": (
+                    journal_learning_summary.get(
+                        "average_return_percent",
+                        0.0,
+                    )
+                ),
+                "average_profit_loss": (
+                    sqlite_learning_summary.get(
+                        "average_profit_loss",
+                        0.0,
+                    )
+                ),
+                "source": "journal_fallback",
+            }
+        else:
+            learning_summary = dict(
+                sqlite_learning_summary
+            )
+
+            learning_summary[
+                "source"
+            ] = "sqlite"
 
         cycle_result["learning"] = (
             learning_summary
@@ -7306,14 +7375,10 @@ def auto_trader_journal(
         ),
     }
 
-@app.get("/auto-trader/learning-summary")
-def auto_trader_learning_summary(
-    request: Request,
+def calculate_auto_trader_journal_learning_summary(
+    *,
+    minimum_required: int = 10,
 ) -> dict[str, Any]:
-    require_app_session(
-        request
-    )
-
     entries = [
         item
         for item in _auto_trader_journal
@@ -7332,7 +7397,8 @@ def auto_trader_learning_summary(
         )
     ]
 
-    completed_returns = []
+    completed_returns: list[float] = []
+
     open_entries: dict[
         str,
         dict[str, Any],
@@ -7460,11 +7526,15 @@ def auto_trader_learning_summary(
         if completed_returns
         else 0.0
     )
+
+    minimum = max(
+        1,
+        int(minimum_required),
+    )
+
     recommendations = []
 
-    minimum_sample_size = 10
-
-    if len(completed_returns) < minimum_sample_size:
+    if len(completed_returns) < minimum:
         recommendations.append({
             "type": "collect_more_data",
             "confidence": "low",
@@ -7475,9 +7545,7 @@ def auto_trader_learning_summary(
             "completed_trades": len(
                 completed_returns
             ),
-            "minimum_required": (
-                minimum_sample_size
-            ),
+            "minimum_required": minimum,
         })
 
     else:
@@ -7517,17 +7585,20 @@ def auto_trader_learning_summary(
                     "before changing risk limits."
                 ),
             })
+
     return {
-        "paper": True,
-        "shadow_mode": True,
-        "recommendations": recommendations,
         "journal_entries": len(
             _auto_trader_journal
         ),
         "entry_records": len(entries),
         "exit_records": len(exits),
-        "completed_returns": len(
+        "completed_trades": len(
             completed_returns
+        ),
+        "minimum_required": minimum,
+        "enough_data": (
+            len(completed_returns)
+            >= minimum
         ),
         "wins": wins,
         "losses": losses,
@@ -7538,6 +7609,63 @@ def auto_trader_learning_summary(
         "average_return_percent": round(
             average_return,
             4,
+        ),
+        "recommendations": recommendations,
+    }
+
+
+@app.get("/auto-trader/learning-summary")
+def auto_trader_learning_summary(
+    request: Request,
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    summary = (
+        calculate_auto_trader_journal_learning_summary(
+            minimum_required=10,
+        )
+    )
+
+    return {
+        "paper": True,
+        "shadow_mode": True,
+        "recommendations": summary.get(
+            "recommendations",
+            [],
+        ),
+        "journal_entries": summary.get(
+            "journal_entries",
+            0,
+        ),
+        "entry_records": summary.get(
+            "entry_records",
+            0,
+        ),
+        "exit_records": summary.get(
+            "exit_records",
+            0,
+        ),
+        "completed_returns": summary.get(
+            "completed_trades",
+            0,
+        ),
+        "wins": summary.get(
+            "wins",
+            0,
+        ),
+        "losses": summary.get(
+            "losses",
+            0,
+        ),
+        "win_rate_percent": summary.get(
+            "win_rate_percent",
+            0.0,
+        ),
+        "average_return_percent": summary.get(
+            "average_return_percent",
+            0.0,
         ),
         "message": (
             "Learning engine is collecting "
