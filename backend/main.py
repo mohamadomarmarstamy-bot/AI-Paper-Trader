@@ -40,107 +40,110 @@ from scanner import scan_market
 
 
 APP_VERSION = "2.7.1"
-
 AUTO_PORTFOLIO_REFRESH_SECONDS = 300
 
-# Paper trading only. This intentionally does not read a live-trading
-# base URL from an environment variable, which prevents an accidental
-# switch to the live brokerage endpoint while we are testing.
+# Alpaca paper trading only.
 ALPACA_PAPER_BASE_URL = "https://paper-api.alpaca.markets"
 ALPACA_ORDER_POLL_SECONDS = 0.25
 ALPACA_ORDER_POLL_TIMEOUT_SECONDS = 8.0
-
 ALPACA_READ_RETRY_ATTEMPTS = 3
 ALPACA_READ_RETRY_DELAY_SECONDS = 0.75
 
 
-# =========================================================
-# Paper execution risk controls
-# =========================================================
-#
-# Aggressive PAPER-testing configuration.
-#
-# The bot may hold up to 50 positions, but individual orders and
-# positions remain capped so one trade cannot consume too much of
-# the simulated account.
+# ============================================================
+# RISK CONTROLS
+# ============================================================
+
 RISK_MAX_ORDER_EQUITY_PERCENT = 2.5
 RISK_MAX_POSITION_EQUITY_PERCENT = 5.0
 RISK_MAX_OPEN_POSITIONS = 50
-
-# Do not accept extremely wide bid/ask spreads. This becomes especially
-# important now that the scanner can consider lower-priced stocks.
 RISK_MAX_SPREAD_PERCENT = 2.0
-
 RISK_BUYING_POWER_BUFFER_DOLLARS = 25.0
-
-# For now, market orders are submitted only during the regular market
-# session. Alpaca requires limit orders for extended-hours eligibility.
 RISK_REQUIRE_REGULAR_MARKET_OPEN = True
-
-# The bot remains long-only.
 RISK_BLOCK_SHORT_SELLING = True
 
 
-# =========================================================
-# Automatic PAPER-trading controls
-# =========================================================
-#
-# Aggressive PAPER-testing configuration:
-#
-#   - Scan every 60 seconds.
-#   - BUY candidates require score >= 65.
-#   - BUY candidates require confidence >= 70.
-#   - Target approximately 2% of account equity per new position.
-#   - Allow up to 3 new positions per scan cycle.
-#   - Allow up to 50 total open positions through the global risk layer.
-#   - A symbol can become eligible again after a 15-minute cooldown.
-#   - Existing stop-loss, take-profit, profit-lock, and hard-loss
-#     protections remain enabled.
-#
-# PAPER endpoint remains hard-coded while this configuration is tested.
+# ============================================================
+# AUTO TRADER
+# ============================================================
 
+# How often the trader checks the latest scanner results.
 AUTO_TRADER_SCAN_SECONDS = 15
 
-AUTO_TRADER_ENTRY_SCORE_MIN = 65
+# Base entry requirements.
+AUTO_TRADER_ENTRY_SCORE_MIN = 75
 AUTO_TRADER_ENTRY_CONFIDENCE_MIN = 70
 
+# Exit signal requirements.
 AUTO_TRADER_EXIT_SCORE_MAX = 40
 AUTO_TRADER_EXIT_CONFIDENCE_MIN = 80
 
-# Target 2% of account equity for each automatic entry.
-# Example: $100,000 equity -> approximately $2,000 target position.
+# Target entry size.
+# On a ~$100k paper account this is roughly $2,000.
 AUTO_TRADER_ENTRY_EQUITY_PERCENT = 2.0
 
-# Protective exit configuration.
+# Initial protection.
 AUTO_TRADER_STOP_LOSS_PERCENT = 2.0
 AUTO_TRADER_TAKE_PROFIT_PERCENT = 4.0
 
-# Profit-protection system.
+# Profit protection.
 AUTO_TRADER_PROFIT_LOCK_TRIGGER_PERCENT = 0.75
 AUTO_TRADER_PROFIT_LOCK_PERCENT = 0.25
 AUTO_TRADER_PROFIT_TRAIL_PERCENT = 1.0
 
-# Emergency maximum-loss protection.
+# Emergency individual-position loss protection.
 AUTO_TRADER_HARD_MAX_LOSS_PERCENT = 2.5
 
-# Daily profit-protection system.
+
+# ============================================================
+# DAILY PORTFOLIO PROTECTION
+# ============================================================
+
 AUTO_TRADER_DAILY_PROFIT_ARM_DOLLARS = 25.0
 AUTO_TRADER_DAILY_PROFIT_GIVEBACK_DOLLARS = 15.0
 AUTO_TRADER_DAILY_PROFIT_GIVEBACK_PERCENT = 40.0
 
-# Reduce the old one-hour cooldown to 15 minutes.
-AUTO_TRADER_SYMBOL_COOLDOWN_SECONDS = 15 * 60
+# NEW:
+# Once the paper account loses this much during the trading day,
+# stop opening NEW positions for the rest of that daily session.
+# Existing positions can still be managed/exited.
+AUTO_TRADER_DAILY_LOSS_LIMIT_DOLLARS = 300.0
 
-# Allow the bot to establish several positions when multiple
-# qualifying opportunities appear during the same scan.
-AUTO_TRADER_MAX_NEW_POSITIONS_PER_CYCLE = 5
+
+# ============================================================
+# COOLDOWNS / OVERTRADING PROTECTION
+# ============================================================
+
+# Normal cooldown after interacting with a symbol.
+AUTO_TRADER_SYMBOL_COOLDOWN_SECONDS = 60 * 60
+
+# NEW:
+# A losing symbol will eventually receive a longer cooldown.
+# We will wire this into the entry/exit logic in the next step.
+AUTO_TRADER_LOSS_COOLDOWN_SECONDS = 4 * 60 * 60
+
+# Don't let one scanner cycle flood the portfolio.
+AUTO_TRADER_MAX_NEW_POSITIONS_PER_CYCLE = 2
+
+
+# ============================================================
+# AUTOMATIC ENTRY QUALITY FILTERS
+# ============================================================
+
+# The global risk system still allows up to 2% spread,
+# but the automatic trader will eventually use the tighter 1%.
+AUTO_TRADER_MAX_ENTRY_SPREAD_PERCENT = 1.0
+
+# Avoid extremely volatile automatic entries.
+# We will wire ATR into the entry logic after the basic fixes.
+AUTO_TRADER_MAX_ENTRY_ATR_PERCENT = 5.0
+
+
+# ============================================================
+# LOGGING / LEARNING JOURNAL
+# ============================================================
 
 AUTO_TRADER_LOG_LIMIT = 250
-
-
-# =========================================================
-# Automatic trader persistence
-# =========================================================
 
 AUTO_TRADER_LOG_FILE = os.getenv(
     "AUTO_TRADER_LOG_FILE",
@@ -3224,44 +3227,269 @@ def add_auto_trader_journal_entry(
 
     save_auto_trader_journal()
 
-def auto_trader_symbol_on_cooldown(
+def get_auto_trader_last_symbol_action_time(
     symbol: str,
-) -> tuple[bool, float]:
+) -> float | None:
+    """
+    Return the most recent automatic-trader action time
+    for a symbol.
+
+    This checks both the in-memory cooldown dictionary and
+    the persisted trading journal so cooldown protection
+    survives Railway/app restarts.
+    """
     normalized_symbol = clean_symbol(
         symbol
     )
 
-    last_action = (
+    if not normalized_symbol:
+        return None
+
+    latest_timestamp = (
         _auto_trader_symbol_cooldowns.get(
             normalized_symbol
         )
     )
 
+    for journal_entry in reversed(
+        _auto_trader_journal
+    ):
+        if not isinstance(
+            journal_entry,
+            dict,
+        ):
+            continue
+
+        journal_symbol = clean_symbol(
+            journal_entry.get(
+                "symbol"
+            )
+        )
+
+        if (
+            journal_symbol
+            != normalized_symbol
+        ):
+            continue
+
+        event = str(
+            journal_entry.get(
+                "event",
+                "",
+            )
+        ).strip().lower()
+
+        if event not in {
+            "entry",
+            "exit",
+        }:
+            continue
+
+        timestamp = safe_float(
+            journal_entry.get(
+                "timestamp"
+            )
+        )
+
+        if timestamp is None:
+            continue
+
+        if (
+            latest_timestamp is None
+            or timestamp
+            > latest_timestamp
+        ):
+            latest_timestamp = (
+                timestamp
+            )
+
+        # Because the journal is newest-first when
+        # scanning in reverse order, once we find the
+        # newest matching action we do not need to keep
+        # searching.
+        break
+
+    return latest_timestamp
+
+
+def get_auto_trader_last_protective_exit_time(
+    symbol: str,
+) -> float | None:
+    """
+    Return the most recent stop/loss-related exit for a
+    symbol.
+
+    These exits receive a longer cooldown so the bot
+    cannot immediately buy the same daily BUY signal
+    again after being stopped out.
+    """
+    normalized_symbol = clean_symbol(
+        symbol
+    )
+
+    if not normalized_symbol:
+        return None
+
+    protected_exit_reasons = {
+        "protective_stop_fill",
+        "hard_max_loss_exit",
+        "defensive_portfolio_exit",
+    }
+
+    for journal_entry in reversed(
+        _auto_trader_journal
+    ):
+        if not isinstance(
+            journal_entry,
+            dict,
+        ):
+            continue
+
+        if clean_symbol(
+            journal_entry.get(
+                "symbol"
+            )
+        ) != normalized_symbol:
+            continue
+
+        if str(
+            journal_entry.get(
+                "event",
+                "",
+            )
+        ).strip().lower() != "exit":
+            continue
+
+        details = journal_entry.get(
+            "details"
+        )
+
+        if not isinstance(
+            details,
+            dict,
+        ):
+            continue
+
+        reason = str(
+            details.get(
+                "reason",
+                "",
+            )
+        ).strip().lower()
+
+        if reason not in (
+            protected_exit_reasons
+        ):
+            continue
+
+        timestamp = safe_float(
+            journal_entry.get(
+                "timestamp"
+            )
+        )
+
+        if timestamp is not None:
+            return timestamp
+
+    return None
+
+
+def auto_trader_symbol_on_cooldown(
+    symbol: str,
+) -> tuple[bool, float, str]:
+    """
+    Check both normal and longer protective-exit
+    cooldowns.
+
+    Returns:
+        (
+            cooldown_active,
+            seconds_remaining,
+            cooldown_type,
+        )
+    """
+    normalized_symbol = clean_symbol(
+        symbol
+    )
+
+    if not normalized_symbol:
+        return False, 0.0, ""
+
+    now = time.time()
+
+    # -------------------------------------------------
+    # Longer cooldown after stop/loss-related exits.
+    # -------------------------------------------------
+    last_protective_exit = (
+        get_auto_trader_last_protective_exit_time(
+            normalized_symbol
+        )
+    )
+
+    if last_protective_exit is not None:
+        remaining = (
+            AUTO_TRADER_LOSS_COOLDOWN_SECONDS
+            - (
+                now
+                - last_protective_exit
+            )
+        )
+
+        if remaining > 0:
+            return (
+                True,
+                remaining,
+                "protective_exit_cooldown",
+            )
+
+    # -------------------------------------------------
+    # Normal symbol cooldown.
+    # -------------------------------------------------
+    last_action = (
+        get_auto_trader_last_symbol_action_time(
+            normalized_symbol
+        )
+    )
+
     if last_action is None:
-        return False, 0.0
+        return False, 0.0, ""
 
     remaining = (
         AUTO_TRADER_SYMBOL_COOLDOWN_SECONDS
         - (
-            time.time()
+            now
             - last_action
         )
     )
 
-    return (
-        remaining > 0,
-        max(
-            0.0,
+    if remaining > 0:
+        return (
+            True,
             remaining,
-        ),
-    )
+            "symbol_cooldown",
+        )
+
+    return False, 0.0, ""
 
 
 def mark_auto_trader_symbol_cooldown(
     symbol: str,
 ) -> None:
+    """
+    Mark a symbol action immediately in memory.
+
+    The persisted journal provides restart-safe
+    cooldown history.
+    """
+    normalized_symbol = clean_symbol(
+        symbol
+    )
+
+    if not normalized_symbol:
+        return
+
     _auto_trader_symbol_cooldowns[
-        clean_symbol(symbol)
+        normalized_symbol
     ] = time.time()
 
 
@@ -4679,6 +4907,10 @@ def log_new_broker_exit_fills() -> list[dict[str, Any]]:
             },
         )
 
+        mark_auto_trader_symbol_cooldown(
+            symbol
+        )
+
     return fills
 
 def initialize_seen_exit_order_ids() -> None:
@@ -5634,19 +5866,59 @@ def run_auto_trader_cycle() -> dict[str, Any]:
         # -------------------------------------------------
         # Entries.
         # -------------------------------------------------
+
+        # Daily loss circuit breaker.
+        #
+        # This ONLY prevents new positions from being opened.
+        # All exit management above this section still runs,
+        # including protective stops, profit locks, scanner exits,
+        # defensive exits, and the hard maximum-loss protection.
+        daily_loss_limit_hit = (
+            current_daily_pl
+            <= -AUTO_TRADER_DAILY_LOSS_LIMIT_DOLLARS
+        )
+
+        cycle_result["daily_pl"] = round(
+            current_daily_pl,
+            2,
+        )
+
+        cycle_result["daily_loss_limit"] = (
+            AUTO_TRADER_DAILY_LOSS_LIMIT_DOLLARS
+        )
+
+        cycle_result["daily_loss_limit_hit"] = (
+            daily_loss_limit_hit
+        )
+
         new_positions = 0
 
         for candidate in scanner_results:
+
+            if daily_loss_limit_hit:
+                cycle_result[
+                    "entries_paused"
+                ] = True
+
+                cycle_result[
+                    "entries_paused_reason"
+                ] = (
+                    "Daily paper-trading loss limit reached."
+                )
+
+                break
 
             if _auto_trader_defensive_mode:
                 cycle_result[
                     "entries_paused"
                 ] = True
+
                 cycle_result[
                     "entries_paused_reason"
                 ] = (
                     "Daily profit giveback protection is active."
                 )
+
                 break
 
             if (
@@ -5683,12 +5955,61 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 )
             )
 
+            # -------------------------------------------------
+            # Learning-adjusted entry requirements.
+            # -------------------------------------------------
+            #
+            # Start with the normal configured requirements.
+            # If the learning history has enough completed
+            # trades and performance is weak, become more
+            # selective about NEW entries.
+            #
+            # This is intentionally bounded. The learner can
+            # tighten entry quality, but it cannot freely
+            # rewrite the strategy or make large uncontrolled
+            # changes.
+            learning_score_min = (
+                AUTO_TRADER_ENTRY_SCORE_MIN
+            )
+
+            learning_confidence_min = (
+                AUTO_TRADER_ENTRY_CONFIDENCE_MIN
+            )
+
+            if learning_summary.get(
+                "enough_data"
+            ):
+                win_rate = safe_float(
+                    learning_summary.get(
+                        "win_rate_percent"
+                    )
+                ) or 0.0
+
+                average_return = safe_float(
+                    learning_summary.get(
+                        "average_return_percent"
+                    )
+                ) or 0.0
+
+                if (
+                    win_rate < 45.0
+                    or average_return < 0
+                ):
+                    learning_score_min = min(
+                        90.0,
+                        AUTO_TRADER_ENTRY_SCORE_MIN
+                        + 5.0,
+                    )
+
+            # Every candidate must pass the FINAL,
+            # learning-adjusted requirements.
             if not (
                 signal == "BUY"
                 and score is not None
-                and score >= AUTO_TRADER_ENTRY_SCORE_MIN
+                and score >= learning_score_min
                 and confidence is not None
-                and confidence >= AUTO_TRADER_ENTRY_CONFIDENCE_MIN
+                and confidence
+                >= learning_confidence_min
             ):
                 failed_requirements = []
 
@@ -5697,52 +6018,18 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         "signal_not_buy"
                     )
 
-                learning_score_min = (
-                    AUTO_TRADER_ENTRY_SCORE_MIN
-                )
-
-                learning_confidence_min = (
-                    AUTO_TRADER_ENTRY_CONFIDENCE_MIN
-                )
-
-                if learning_summary.get("enough_data"):
-                    win_rate = safe_float(
-                        learning_summary.get(
-                            "win_rate_percent"
-                        )
-                    ) or 0.0
-
-                    average_return = safe_float(
-                        learning_summary.get(
-                            "average_return_percent"
-                        )
-                    ) or 0.0
-
-                    if (
-                        win_rate < 45.0
-                        or average_return < 0
-                    ):
-                        learning_score_min = max(
-                            learning_score_min,
-                            AUTO_TRADER_ENTRY_SCORE_MIN + 5,
-                        )
-
-                        learning_confidence_min = max(
-                            learning_confidence_min,
-                            AUTO_TRADER_ENTRY_CONFIDENCE_MIN + 5,
-                        )
-
                 if (
                     score is None
                     or score < learning_score_min
                 ):
                     failed_requirements.append(
-                        "score_below_minimum"
+                        "score_below_learning_minimum"
                     )
 
                 if (
                     confidence is None
-                    or confidence < learning_confidence_min
+                    or confidence
+                    < learning_confidence_min
                 ):
                     failed_requirements.append(
                         "confidence_below_minimum"
@@ -5752,11 +6039,25 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     "skipped_candidates"
                 ].append({
                     "symbol": symbol,
-                    "reason": "entry requirements not met",
-                    "failed_requirements": failed_requirements,
+                    "reason": (
+                        "entry requirements not met"
+                    ),
+                    "failed_requirements": (
+                        failed_requirements
+                    ),
                     "signal": signal,
                     "score": score,
                     "confidence": confidence,
+                    "required_score": (
+                        learning_score_min
+                    ),
+                    "required_confidence": (
+                        learning_confidence_min
+                    ),
+                    "learning_adjusted": (
+                        learning_score_min
+                        > AUTO_TRADER_ENTRY_SCORE_MIN
+                    ),
                 })
 
                 continue
@@ -5772,25 +6073,36 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 })
                 continue
 
-            cooldown, remaining = (
-                auto_trader_symbol_on_cooldown(
-                    symbol
-                )
+            (
+                cooldown_active,
+                cooldown_seconds_remaining,
+                cooldown_type,
+            ) = auto_trader_symbol_on_cooldown(
+                symbol
             )
 
-            if cooldown:
+            if cooldown_active:
                 cycle_result[
                     "skipped_candidates"
                 ].append({
                     "symbol": symbol,
                     "reason": (
-                        "symbol cooldown"
+                        "symbol cooldown active"
                     ),
-                    "cooldown_seconds": round(
-                        remaining,
+                    "cooldown_type": (
+                        cooldown_type
+                    ),
+                    "cooldown_seconds_remaining": round(
+                        cooldown_seconds_remaining,
+                        1,
+                    ),
+                    "cooldown_minutes_remaining": round(
+                        cooldown_seconds_remaining
+                        / 60.0,
                         1,
                     ),
                 })
+
                 continue
 
             try:
@@ -5806,6 +6118,66 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         "ask"
                     )
                 )
+
+                spread_percent = safe_float(
+                    quote.get(
+                        "spread_percent"
+                    )
+                )
+
+                atr_percent = safe_float(
+                    candidate.get(
+                        "atr_percent"
+                    )
+                )
+
+                if (
+                    atr_percent is not None
+                    and atr_percent
+                    > AUTO_TRADER_MAX_ENTRY_ATR_PERCENT
+                ):
+                    cycle_result[
+                        "skipped_candidates"
+                    ].append({
+                        "symbol": symbol,
+                        "reason": (
+                            "automatic entry volatility too high"
+                        ),
+                        "atr_percent": round(
+                            atr_percent,
+                            4,
+                        ),
+                        "maximum_atr_percent": (
+                            AUTO_TRADER_MAX_ENTRY_ATR_PERCENT
+                        ),
+                    })
+                    continue
+
+                if (
+                    spread_percent is None
+                    or spread_percent
+                    > AUTO_TRADER_MAX_ENTRY_SPREAD_PERCENT
+                ):
+                    cycle_result[
+                        "skipped_candidates"
+                    ].append({
+                        "symbol": symbol,
+                        "reason": (
+                            "automatic entry spread too wide"
+                        ),
+                        "spread_percent": (
+                            round(
+                                spread_percent,
+                                4,
+                            )
+                            if spread_percent is not None
+                            else None
+                        ),
+                        "maximum_spread_percent": (
+                            AUTO_TRADER_MAX_ENTRY_SPREAD_PERCENT
+                        ),
+                    })
+                    continue
 
                 if (
                     shares <= 0
@@ -5889,6 +6261,8 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     event="entry",
                     details={
                         "shares": shares,
+
+                        # Entry decision.
                         "score": score,
                         "confidence": confidence,
                         "signal": candidate.get(
@@ -5902,58 +6276,147 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                                 "rank"
                             )
                         ),
+
+                        # Execution / market quality.
                         "reference_price": reference_price,
-                        "spread_percent": (
-                            entry_result.get(
-                                "risk",
-                                {},
-                            ).get(
-                                "quote",
-                                {},
-                            ).get(
-                                "spread_percent"
+                        "spread_percent": spread_percent,
+
+                        # Technical indicators at entry.
+                        "rsi": safe_float(
+                            candidate.get(
+                                "rsi"
                             )
-                            if isinstance(
-                                entry_result.get("risk"),
-                                dict,
-                            )
-                            else None
                         ),
+                        "macd": safe_float(
+                            candidate.get(
+                                "macd"
+                            )
+                        ),
+                        "macd_signal": safe_float(
+                            candidate.get(
+                                "macd_signal"
+                            )
+                        ),
+                        "macd_histogram": safe_float(
+                            candidate.get(
+                                "macd_histogram"
+                            )
+                        ),
+                        "volume_ratio": safe_float(
+                            candidate.get(
+                                "volume_ratio"
+                            )
+                        ),
+                        "average_volume": safe_float(
+                            candidate.get(
+                                "average_volume"
+                            )
+                        ),
+
+                        # Momentum at entry.
+                        "one_day_change": safe_float(
+                            candidate.get(
+                                "change"
+                            )
+                        ),
+                        "five_day_change": safe_float(
+                            candidate.get(
+                                "five_day_change"
+                            )
+                        ),
+                        "twenty_day_change": safe_float(
+                            candidate.get(
+                                "twenty_day_change"
+                            )
+                        ),
+
+                        # Volatility / trend.
+                        "atr": safe_float(
+                            candidate.get(
+                                "atr"
+                            )
+                        ),
+                        "atr_percent": safe_float(
+                            candidate.get(
+                                "atr_percent"
+                            )
+                        ),
+                        "trend": candidate.get(
+                            "trend"
+                        ),
+                        "trend_strength": candidate.get(
+                            "trend_strength"
+                        ),
+                        "risk": (
+                            candidate.get(
+                                "risk"
+                            )
+                            or candidate.get(
+                                "risk_level"
+                            )
+                        ),
+
+                        # Moving averages.
+                        "ma20": safe_float(
+                            candidate.get(
+                                "ma20"
+                            )
+                        ),
+                        "ma50": safe_float(
+                            candidate.get(
+                                "ma50"
+                            )
+                        ),
+
+                        # Trade protection.
                         "stop_loss_percent": (
                             AUTO_TRADER_STOP_LOSS_PERCENT
                         ),
                         "take_profit_percent": (
                             AUTO_TRADER_TAKE_PROFIT_PERCENT
                         ),
+
+                        # Portfolio state at entry.
                         "daily_pl_at_entry": (
                             current_daily_pl
                         ),
                         "daily_pl_high_water": (
                             _auto_trader_daily_pl_high_water
                         ),
+
+                        # Actual broker execution.
                         "entry_price": (
-                            entry_result.get("trade", {}).get(
+                            entry_result.get(
+                                "trade",
+                                {},
+                            ).get(
                                 "execution_price"
                             )
                             if isinstance(
-                                entry_result.get("trade"),
+                                entry_result.get(
+                                    "trade"
+                                ),
                                 dict,
                             )
                             else None
                         ),
                         "order_id": (
-                            entry_result.get("trade", {}).get(
+                            entry_result.get(
+                                "trade",
+                                {},
+                            ).get(
                                 "id"
                             )
                             if isinstance(
-                                entry_result.get("trade"),
+                                entry_result.get(
+                                    "trade"
+                                ),
                                 dict,
                             )
                             else None
                         ),
                     },
                 )
-
             if entry_result.get(
                 "success"
             ):
