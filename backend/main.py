@@ -37,7 +37,7 @@ from indicators import (
     safe_float,
 )
 from paper_trader import PaperTrader
-from scanner import scan_market
+from scanner import get_market_regime, scan_market
 
 
 APP_VERSION = "2.7.1"
@@ -7305,6 +7305,23 @@ def scanner(
         refresh=refresh,
 )
 
+@app.get("/market-regime")
+def market_regime(
+    request: Request,
+    refresh: bool = Query(default=False),
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    result = get_market_regime(
+        force_refresh=refresh
+    )
+
+    return {
+        "paper": True,
+        **result,
+    }
 
 # =========================================================
 # Automatic PAPER trader routes

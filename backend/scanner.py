@@ -36,6 +36,11 @@ MINIMUM_HISTORY_DAYS = 55
 MINIMUM_PRICE = 0.25
 MINIMUM_AVERAGE_VOLUME = 50_000
 
+# Broad-market context used by the auto-trader.
+MARKET_REGIME_SYMBOLS = ("SPY", "QQQ")
+MARKET_REGIME_CACHE_SECONDS = 5 * 60
+MARKET_REGIME_MINIMUM_HISTORY_DAYS = 55
+
 # Preserve a useful mix of BUY, HOLD, and SELL candidates.
 MAX_RESULTS_PER_SIGNAL = 30
 SIGNAL_ORDER = ("BUY", "HOLD", "SELL")
@@ -47,6 +52,11 @@ SIGNAL_ORDER = ("BUY", "HOLD", "SELL")
 
 _scan_cache: dict[str, Any] = {
     "results": [],
+    "updated_at": 0.0,
+}
+
+_market_regime_cache: dict[str, Any] = {
+    "result": None,
     "updated_at": 0.0,
 }
 
@@ -1083,3 +1093,185 @@ def clear_scanner_cache() -> None:
     with _cache_lock:
         _scan_cache["results"] = []
         _scan_cache["updated_at"] = 0.0
+
+def get_market_regime(
+    *,
+    force_refresh: bool = False,
+) -> dict[str, Any]:
+    """
+    Classify the broad U.S. market using SPY and QQQ daily trend data.
+
+    Returns one of:
+    - BULLISH
+    - NEUTRAL
+    - BEARISH
+    - UNKNOWN
+    """
+    current_time = time.time()
+
+    with _cache_lock:
+        cached_result = _market_regime_cache.get("result")
+        cached_time = float(
+            _market_regime_cache.get("updated_at", 0.0) or 0.0
+        )
+
+        cache_is_fresh = (
+            cached_result is not None
+            and current_time - cached_time
+            < MARKET_REGIME_CACHE_SECONDS
+        )
+
+        if cache_is_fresh and not force_refresh:
+            return copy.deepcopy(cached_result)
+
+    downloaded_data = download_batch(
+        list(MARKET_REGIME_SYMBOLS)
+    )
+
+    if downloaded_data is None:
+        with _cache_lock:
+            cached_result = _market_regime_cache.get("result")
+
+        if cached_result is not None:
+            return copy.deepcopy(cached_result)
+
+        return {
+            "regime": "UNKNOWN",
+            "score": 0,
+            "symbols": {},
+            "reason": "Market data download failed.",
+        }
+
+    symbol_results: dict[str, Any] = {}
+    market_score = 0
+
+    for symbol in MARKET_REGIME_SYMBOLS:
+        history = extract_symbol_history(
+            downloaded_data,
+            symbol,
+            len(MARKET_REGIME_SYMBOLS),
+        )
+
+        if (
+            history is None
+            or len(history) < MARKET_REGIME_MINIMUM_HISTORY_DAYS
+        ):
+            symbol_results[symbol] = {
+                "available": False,
+            }
+            continue
+
+        closes = pd.to_numeric(
+            history["Close"],
+            errors="coerce",
+        ).dropna()
+
+        if len(closes) < MARKET_REGIME_MINIMUM_HISTORY_DAYS:
+            symbol_results[symbol] = {
+                "available": False,
+            }
+            continue
+
+        price = safe_float(closes.iloc[-1])
+        sma_20 = safe_float(
+            closes.rolling(20).mean().iloc[-1]
+        )
+        sma_50 = safe_float(
+            closes.rolling(50).mean().iloc[-1]
+        )
+
+        change_5d = None
+        change_20d = None
+
+        if len(closes) >= 6:
+            change_5d = percentage_change(
+                float(closes.iloc[-1]),
+                float(closes.iloc[-6]),
+            )
+
+        if len(closes) >= 21:
+            change_20d = percentage_change(
+                float(closes.iloc[-1]),
+                float(closes.iloc[-21]),
+            )
+
+        symbol_score = 0
+
+        if (
+            price is not None
+            and sma_20 is not None
+            and price > sma_20
+        ):
+            symbol_score += 1
+        else:
+            symbol_score -= 1
+
+        if (
+            sma_20 is not None
+            and sma_50 is not None
+            and sma_20 > sma_50
+        ):
+            symbol_score += 1
+        else:
+            symbol_score -= 1
+
+        if change_20d is not None:
+            if change_20d > 0:
+                symbol_score += 1
+            elif change_20d < 0:
+                symbol_score -= 1
+
+        market_score += symbol_score
+
+        symbol_results[symbol] = {
+            "available": True,
+            "price": round(price, 2)
+            if price is not None
+            else None,
+            "sma_20": round(sma_20, 2)
+            if sma_20 is not None
+            else None,
+            "sma_50": round(sma_50, 2)
+            if sma_50 is not None
+            else None,
+            "change_5d_percent": round(change_5d, 2)
+            if change_5d is not None
+            else None,
+            "change_20d_percent": round(change_20d, 2)
+            if change_20d is not None
+            else None,
+            "score": symbol_score,
+        }
+
+    available_count = sum(
+        1
+        for result in symbol_results.values()
+        if result.get("available")
+    )
+
+    if available_count == 0:
+        regime = "UNKNOWN"
+        reason = "No usable SPY or QQQ history."
+    elif market_score >= 4:
+        regime = "BULLISH"
+        reason = "SPY and QQQ show strong positive trend alignment."
+    elif market_score <= -4:
+        regime = "BEARISH"
+        reason = "SPY and QQQ show strong negative trend alignment."
+    else:
+        regime = "NEUTRAL"
+        reason = "Broad-market trend signals are mixed."
+
+    result = {
+        "regime": regime,
+        "score": market_score,
+        "symbols": symbol_results,
+        "reason": reason,
+        "updated_at": time.time(),
+    }
+
+    with _cache_lock:
+        _market_regime_cache["result"] = copy.deepcopy(result)
+        _market_regime_cache["updated_at"] = time.time()
+
+    return result
