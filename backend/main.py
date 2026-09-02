@@ -7667,6 +7667,147 @@ def auto_trader_journal(
         ),
     }
 
+@app.get("/auto-trader/history")
+def auto_trader_history(
+    request: Request,
+    limit: int = Query(
+        default=200,
+        ge=1,
+        le=5000,
+    ),
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    trades = load_trade_book(
+        status="CLOSED",
+        limit=limit,
+    )
+
+    history: list[dict[str, Any]] = []
+    wins = 0
+    losses = 0
+    breakeven = 0
+    total_profit_loss = 0.0
+    return_values: list[float] = []
+
+    for trade in trades:
+        realized_profit_loss = trade.get(
+            "realized_profit_loss"
+        )
+        realized_return_percent = trade.get(
+            "realized_return_percent"
+        )
+
+        if isinstance(
+            realized_profit_loss,
+            (int, float),
+        ):
+            profit_loss = float(
+                realized_profit_loss
+            )
+            total_profit_loss += profit_loss
+
+            if profit_loss > 0:
+                wins += 1
+            elif profit_loss < 0:
+                losses += 1
+            else:
+                breakeven += 1
+
+        if isinstance(
+            realized_return_percent,
+            (int, float),
+        ):
+            return_values.append(
+                float(
+                    realized_return_percent
+                )
+            )
+
+        history.append(
+            {
+                "id": trade.get("id"),
+                "symbol": trade.get("symbol"),
+                "status": trade.get("status"),
+                "shares": trade.get("shares"),
+                "entry_price": trade.get(
+                    "entry_price"
+                ),
+                "exit_price": trade.get(
+                    "exit_price"
+                ),
+                "realized_profit_loss": (
+                    realized_profit_loss
+                ),
+                "realized_return_percent": (
+                    realized_return_percent
+                ),
+                "entry_timestamp": trade.get(
+                    "entry_timestamp"
+                ),
+                "exit_timestamp": trade.get(
+                    "exit_timestamp"
+                ),
+                "entry_reason": trade.get(
+                    "entry_reason"
+                ),
+                "exit_reason": trade.get(
+                    "exit_reason"
+                ),
+                "strategy": trade.get(
+                    "strategy"
+                ),
+                "entry_order_id": trade.get(
+                    "entry_order_id"
+                ),
+                "exit_order_id": trade.get(
+                    "exit_order_id"
+                ),
+            }
+        )
+
+    completed = len(history)
+
+    win_rate_percent = (
+        (wins / completed) * 100.0
+        if completed > 0
+        else 0.0
+    )
+
+    average_return_percent = (
+        sum(return_values) / len(return_values)
+        if return_values
+        else 0.0
+    )
+
+    return {
+        "paper": True,
+        "read_only": True,
+        "source": "sqlite_trade_book",
+        "count": completed,
+        "summary": {
+            "completed_trades": completed,
+            "wins": wins,
+            "losses": losses,
+            "breakeven": breakeven,
+            "win_rate_percent": round(
+                win_rate_percent,
+                2,
+            ),
+            "total_realized_profit_loss": round(
+                total_profit_loss,
+                2,
+            ),
+            "average_return_percent": round(
+                average_return_percent,
+                4,
+            ),
+        },
+        "trades": history,
+    }
+
 def calculate_auto_trader_journal_learning_summary(
     *,
     minimum_required: int = 10,
