@@ -4115,6 +4115,7 @@ def submit_alpaca_auto_bracket_buy(
     shares: int,
     reference_price: float,
     scanner_result: dict[str, Any],
+    entry_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Submit an automatic PAPER buy with broker-native stop-loss and
@@ -4322,40 +4323,50 @@ def submit_alpaca_auto_bracket_buy(
                         )
                     )
 
+                    entry_event_details = {
+                        "score": scanner_result.get(
+                            "score"
+                        ),
+                        "confidence": scanner_result.get(
+                            "confidence"
+                        ),
+                        "signal": scanner_result.get(
+                            "signal"
+                        ),
+                        "scanner_rank": (
+                            scanner_result.get(
+                                "scanner_rank"
+                            )
+                            or scanner_result.get(
+                                "rank"
+                            )
+                        ),
+                        "stop_loss_percent": (
+                            AUTO_TRADER_STOP_LOSS_PERCENT
+                        ),
+                        "take_profit_percent": (
+                            AUTO_TRADER_TAKE_PROFIT_PERCENT
+                        ),
+                        "stop_price": stop_price,
+                        "take_profit_price": (
+                            take_profit_price
+                        ),
+                    }
+
+                    if isinstance(
+                        entry_context,
+                        dict,
+                    ):
+                        entry_event_details.update(
+                            entry_context
+                        )
+
                     record_trade_book_event(
                         trade_book_id=trade_book_id,
                         symbol=normalized_symbol,
                         event="entry",
                         timestamp=entry_timestamp,
-                        details={
-                            "score": scanner_result.get(
-                                "score"
-                            ),
-                            "confidence": scanner_result.get(
-                                "confidence"
-                            ),
-                            "signal": scanner_result.get(
-                                "signal"
-                            ),
-                            "scanner_rank": (
-                                scanner_result.get(
-                                    "scanner_rank"
-                                )
-                                or scanner_result.get(
-                                    "rank"
-                                )
-                            ),
-                            "stop_loss_percent": (
-                                AUTO_TRADER_STOP_LOSS_PERCENT
-                            ),
-                            "take_profit_percent": (
-                                AUTO_TRADER_TAKE_PROFIT_PERCENT
-                            ),
-                            "stop_price": stop_price,
-                            "take_profit_price": (
-                                take_profit_price
-                            ),
-                        },
+                        details=entry_event_details,
                     )
 
                     result["trade_book_id"] = (
@@ -6647,6 +6658,148 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                             reference_price
                         ),
                         scanner_result=candidate,
+                        entry_context={
+                            # Execution / market quality.
+                            "reference_price": (
+                                reference_price
+                            ),
+                            "spread_percent": (
+                                spread_percent
+                            ),
+
+                            # Technical indicators.
+                            "rsi": safe_float(
+                                candidate.get("rsi")
+                            ),
+                            "macd": safe_float(
+                                candidate.get("macd")
+                            ),
+                            "macd_signal": safe_float(
+                                candidate.get(
+                                    "macd_signal"
+                                )
+                            ),
+                            "macd_histogram": safe_float(
+                                candidate.get(
+                                    "macd_histogram"
+                                )
+                            ),
+                            "volume_ratio": safe_float(
+                                candidate.get(
+                                    "volume_ratio"
+                                )
+                            ),
+                            "average_volume": safe_float(
+                                candidate.get(
+                                    "average_volume"
+                                )
+                            ),
+
+                            # Momentum.
+                            "one_day_change": safe_float(
+                                candidate.get("change")
+                            ),
+                            "five_day_change": safe_float(
+                                candidate.get(
+                                    "five_day_change"
+                                )
+                            ),
+                            "twenty_day_change": safe_float(
+                                candidate.get(
+                                    "twenty_day_change"
+                                )
+                            ),
+
+                            # Volatility / trend.
+                            "atr": safe_float(
+                                candidate.get("atr")
+                            ),
+                            "atr_percent": (
+                                atr_percent
+                            ),
+                            "trend": candidate.get(
+                                "trend"
+                            ),
+                            "trend_strength": (
+                                candidate.get(
+                                    "trend_strength"
+                                )
+                            ),
+                            "risk": (
+                                candidate.get("risk")
+                                or candidate.get(
+                                    "risk_level"
+                                )
+                            ),
+
+                            # Moving averages.
+                            "ma20": safe_float(
+                                candidate.get("ma20")
+                            ),
+                            "ma50": safe_float(
+                                candidate.get("ma50")
+                            ),
+
+                            # Entry requirements.
+                            "required_score": (
+                                learning_score_min
+                            ),
+                            "required_confidence": (
+                                learning_confidence_min
+                            ),
+                            "learning_adjusted": (
+                                learning_adjusted
+                            ),
+                            "market_regime_adjusted": (
+                                market_regime_adjusted
+                            ),
+                            "news_adjusted": (
+                                news_adjusted
+                            ),
+
+                            # Market / catalyst context.
+                            "market_regime": (
+                                market_regime_name
+                            ),
+                            "market_regime_score": (
+                                market_regime.get(
+                                    "score"
+                                )
+                            ),
+                            "news_sentiment": (
+                                news_score.get(
+                                    "sentiment"
+                                )
+                                if news_score
+                                else None
+                            ),
+                            "news_score": (
+                                news_score.get("score")
+                                if news_score
+                                else None
+                            ),
+                            "news_raw_score": (
+                                news_score.get(
+                                    "raw_score"
+                                )
+                                if news_score
+                                else None
+                            ),
+                            "news_positive_hits": (
+                                news_score.get(
+                                    "positive_hits"
+                                )
+                                if news_score
+                                else []
+                            ),
+                            "news_negative_hits": (
+                                news_score.get(
+                                    "negative_hits"
+                                )
+                                if news_score
+                                else []
+                            ),
+                        },
                     )
                 )
 
