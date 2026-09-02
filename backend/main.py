@@ -3688,14 +3688,42 @@ def submit_alpaca_recovery_oco(
         )
     ]
 
-    if protective_stop_orders:
+    matching_protective_stop_orders = []
+
+    for order in protective_stop_orders:
+        protective_qty = safe_float(
+            order.get(
+                "qty"
+            )
+        )
+
+        if (
+            protective_qty is not None
+            and abs(
+                protective_qty - shares
+            ) < 0.000001
+        ):
+            matching_protective_stop_orders.append(
+                order
+            )
+
+    if (
+        len(protective_stop_orders) == 1
+        and len(
+            matching_protective_stop_orders
+        ) == 1
+    ):
         return {
             "success": True,
             "paper": True,
             "already_protected": True,
             "symbol": normalized_symbol,
+            "position_shares": shares,
             "open_protective_orders": len(
                 protective_stop_orders
+            ),
+            "matching_protective_orders": len(
+                matching_protective_stop_orders
             ),
         }
 
