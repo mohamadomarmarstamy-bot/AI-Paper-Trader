@@ -27,6 +27,7 @@ from database import (
     load_open_trade_book_entry,
     load_trade_book,
     load_trade_book_events,
+    load_learning_outcomes,
     record_trade_book_event,
     save_learning_outcome,
 )
@@ -7897,6 +7898,28 @@ def auto_trader_history(
         limit=limit,
     )
 
+    learning_outcomes = load_learning_outcomes(
+        limit=10000,
+    )
+
+    learning_by_trade_id: dict[
+        int,
+        dict[str, Any],
+    ] = {}
+
+    for outcome in learning_outcomes:
+        trade_book_id = outcome.get(
+            "trade_book_id"
+        )
+
+        if isinstance(
+            trade_book_id,
+            int,
+        ):
+            learning_by_trade_id[
+                trade_book_id
+            ] = outcome
+
     history: list[dict[str, Any]] = []
     wins = 0
     losses = 0
@@ -7905,6 +7928,19 @@ def auto_trader_history(
     return_values: list[float] = []
 
     for trade in trades:
+        trade_id = trade.get("id")
+
+        learning_outcome = (
+            learning_by_trade_id.get(
+                trade_id
+            )
+            if isinstance(
+                trade_id,
+                int,
+            )
+            else None
+        )
+
         realized_profit_loss = trade.get(
             "realized_profit_loss"
         )
@@ -7977,6 +8013,70 @@ def auto_trader_history(
                 "exit_order_id": trade.get(
                     "exit_order_id"
                 ),
+                "learning": (
+                    {
+                        "entry_score": (
+                            learning_outcome.get(
+                                "entry_score"
+                            )
+                        ),
+                        "entry_confidence": (
+                            learning_outcome.get(
+                                "entry_confidence"
+                            )
+                        ),
+                        "entry_signal": (
+                            learning_outcome.get(
+                                "entry_signal"
+                            )
+                        ),
+                        "scanner_rank": (
+                            learning_outcome.get(
+                                "scanner_rank"
+                            )
+                        ),
+                        "spread_percent": (
+                            learning_outcome.get(
+                                "spread_percent"
+                            )
+                        ),
+                        "stop_loss_percent": (
+                            learning_outcome.get(
+                                "stop_loss_percent"
+                            )
+                        ),
+                        "take_profit_percent": (
+                            learning_outcome.get(
+                                "take_profit_percent"
+                            )
+                        ),
+                        "holding_seconds": (
+                            learning_outcome.get(
+                                "holding_seconds"
+                            )
+                        ),
+                        "won": (
+                            learning_outcome.get(
+                                "won"
+                            )
+                        ),
+                        "exit_reason": (
+                            learning_outcome.get(
+                                "exit_reason"
+                            )
+                        ),
+                        "metadata": (
+                            learning_outcome.get(
+                                "metadata"
+                            )
+                        ),
+                    }
+                    if isinstance(
+                        learning_outcome,
+                        dict,
+                    )
+                    else None
+                ),
             }
         )
 
@@ -7997,7 +8097,7 @@ def auto_trader_history(
     return {
         "paper": True,
         "read_only": True,
-        "source": "sqlite_trade_book",
+        "source": "sqlite_trade_book+learning_outcomes",
         "count": completed,
         "summary": {
             "completed_trades": completed,
