@@ -7149,9 +7149,7 @@ def learning_summary(
                 else AUTO_TRADER_ENTRY_SCORE_MIN
             ),
             "current_confidence_min": (
-                AUTO_TRADER_ENTRY_CONFIDENCE_MIN + 5
-                if tightened
-                else AUTO_TRADER_ENTRY_CONFIDENCE_MIN
+                AUTO_TRADER_ENTRY_CONFIDENCE_MIN
             ),
         },
     }
