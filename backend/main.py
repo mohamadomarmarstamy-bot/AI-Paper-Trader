@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import json
 import math
 import os
@@ -8104,6 +8104,17 @@ def auto_trader_history(
                         "holding_seconds": (
                             learning_outcome.get(
                                 "holding_seconds"
+                            )
+                            if learning_outcome.get(
+                                "holding_seconds"
+                            ) is not None
+                            else calculate_holding_seconds(
+                                trade.get(
+                                    "entry_timestamp"
+                                ),
+                                trade.get(
+                                    "exit_timestamp"
+                                ),
                             )
                         ),
                         "won": (
