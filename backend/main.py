@@ -7902,6 +7902,11 @@ def auto_trader_history(
         limit=10000,
     )
 
+    entry_events = load_trade_book_events(
+        event="entry",
+        limit=5000,
+    )
+
     learning_by_trade_id: dict[
         int,
         dict[str, Any],
@@ -7920,6 +7925,33 @@ def auto_trader_history(
                 trade_book_id
             ] = outcome
 
+    entry_by_trade_id: dict[
+        int,
+        dict[str, Any],
+    ] = {}
+
+    for event in entry_events:
+        trade_book_id = event.get(
+            "trade_book_id"
+        )
+        details = event.get("details")
+
+        if (
+            isinstance(
+                trade_book_id,
+                int,
+            )
+            and isinstance(
+                details,
+                dict,
+            )
+            and trade_book_id
+            not in entry_by_trade_id
+        ):
+            entry_by_trade_id[
+                trade_book_id
+            ] = details
+
     history: list[dict[str, Any]] = []
     wins = 0
     losses = 0
@@ -7932,6 +7964,17 @@ def auto_trader_history(
 
         learning_outcome = (
             learning_by_trade_id.get(
+                trade_id
+            )
+            if isinstance(
+                trade_id,
+                int,
+            )
+            else None
+        )
+
+        entry_details = (
+            entry_by_trade_id.get(
                 trade_id
             )
             if isinstance(
@@ -8012,6 +8055,14 @@ def auto_trader_history(
                 ),
                 "exit_order_id": trade.get(
                     "exit_order_id"
+                ),
+                "entry_diagnostics": (
+                    entry_details
+                    if isinstance(
+                        entry_details,
+                        dict,
+                    )
+                    else None
                 ),
                 "learning": (
                     {
@@ -8097,7 +8148,10 @@ def auto_trader_history(
     return {
         "paper": True,
         "read_only": True,
-        "source": "sqlite_trade_book+learning_outcomes",
+        "source": (
+            "sqlite_trade_book+learning_outcomes"
+            "+trade_book_events"
+        ),
         "count": completed,
         "summary": {
             "completed_trades": completed,

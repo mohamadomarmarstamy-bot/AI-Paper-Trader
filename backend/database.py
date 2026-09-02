@@ -1102,6 +1102,7 @@ def load_trade_book_events(
     *,
     trade_book_id: int | None = None,
     symbol: str | None = None,
+    event: str | None = None,
     limit: int = 1000,
 ) -> list[dict[str, Any]]:
     """Load saved trade-book events newest first."""
@@ -1116,6 +1117,14 @@ def load_trade_book_events(
     if symbol is not None:
         clauses.append("symbol = ?")
         params.append(_normalize_symbol(symbol))
+
+    if event is not None:
+        normalized_event = str(event).strip().lower()
+        if not normalized_event:
+            raise ValueError("Event cannot be empty.")
+
+        clauses.append("event = ?")
+        params.append(normalized_event)
 
     where_sql = (
         " WHERE " + " AND ".join(clauses)
