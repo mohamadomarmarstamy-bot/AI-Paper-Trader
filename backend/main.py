@@ -6643,6 +6643,38 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 "confidence": (
                     confidence
                 ),
+                "required_score": (
+                    learning_score_min
+                ),
+                "required_confidence": (
+                    learning_confidence_min
+                ),
+                "learning_adjusted": (
+                    learning_adjusted
+                ),
+                "market_regime": (
+                    market_regime_name
+                ),
+                "market_regime_adjusted": (
+                    market_regime_adjusted
+                ),
+                "news_sentiment": (
+                    news_score.get(
+                        "sentiment"
+                    )
+                    if news_score
+                    else None
+                ),
+                "news_score": (
+                    news_score.get(
+                        "score"
+                    )
+                    if news_score
+                    else None
+                ),
+                "news_adjusted": (
+                    news_adjusted
+                ),
                 "result": entry_result,
             })
 
@@ -6798,6 +6830,23 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         ),
                         "daily_pl_high_water": (
                             _auto_trader_daily_pl_high_water
+                        ),
+
+                        # Entry requirement context.
+                        "required_score": (
+                            learning_score_min
+                        ),
+                        "required_confidence": (
+                            learning_confidence_min
+                        ),
+                        "learning_adjusted": (
+                            learning_adjusted
+                        ),
+                        "market_regime_adjusted": (
+                            market_regime_adjusted
+                        ),
+                        "news_adjusted": (
+                            news_adjusted
                         ),
 
                         # Market / catalyst context.
