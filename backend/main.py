@@ -5,6 +5,7 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any
 import hashlib
 import hmac
@@ -47,6 +48,43 @@ from scanner import (
 
 APP_VERSION = "2.7.1"
 AUTO_PORTFOLIO_REFRESH_SECONDS = 300
+
+
+def calculate_holding_seconds(
+    entry_timestamp: Any,
+    exit_timestamp: Any,
+) -> float | None:
+    if not isinstance(entry_timestamp, str):
+        return None
+
+    if not isinstance(exit_timestamp, str):
+        return None
+
+    try:
+        entry_time = datetime.fromisoformat(
+            entry_timestamp.replace(
+                "Z",
+                "+00:00",
+            )
+        )
+        exit_time = datetime.fromisoformat(
+            exit_timestamp.replace(
+                "Z",
+                "+00:00",
+            )
+        )
+
+        holding_seconds = (
+            exit_time - entry_time
+        ).total_seconds()
+
+        if holding_seconds < 0:
+            return None
+
+        return holding_seconds
+
+    except (TypeError, ValueError):
+        return None
 
 # Alpaca paper trading only.
 ALPACA_PAPER_BASE_URL = "https://paper-api.alpaca.markets"
@@ -5113,6 +5151,14 @@ def log_new_broker_exit_fills() -> list[dict[str, Any]]:
                             "take_profit_percent"
                         )
                     ),
+                    holding_seconds=(
+                        calculate_holding_seconds(
+                            closed_book_entry.get(
+                                "entry_timestamp"
+                            ),
+                            filled_at,
+                        )
+                    ),
                     exit_reason=reason,
                     metadata={
                         "broker_detected": True,
@@ -5987,6 +6033,11 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                                     "scanner_rank"
                                 )
                             ),
+                            spread_percent=safe_float(
+                                entry_details.get(
+                                    "spread_percent"
+                                )
+                            ),
                             stop_loss_percent=safe_float(
                                 entry_details.get(
                                     "stop_loss_percent"
@@ -5995,6 +6046,14 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                             take_profit_percent=safe_float(
                                 entry_details.get(
                                     "take_profit_percent"
+                                )
+                            ),
+                            holding_seconds=(
+                                calculate_holding_seconds(
+                                    closed_book_entry.get(
+                                        "entry_timestamp"
+                                    ),
+                                    exit_timestamp,
                                 )
                             ),
                             exit_reason=exit_reason,
