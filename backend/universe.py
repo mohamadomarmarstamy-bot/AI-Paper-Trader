@@ -117,6 +117,9 @@ def load_momentum_universe(
         if not symbol:
             continue
 
+        if not symbol.isalpha():
+            continue
+
         if symbol in seen:
             continue
 
@@ -142,3 +145,5 @@ def load_momentum_universe(
     ] = time.time()
 
     return symbols.copy()
+
+
