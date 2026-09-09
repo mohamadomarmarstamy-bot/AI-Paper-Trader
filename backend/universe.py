@@ -15,6 +15,7 @@ _universe_cache: dict[str, Any] = {
 def load_momentum_universe(
     *,
     request_func: Callable[..., Any],
+    market_data_request_func: Callable[..., Any] | None = None,
     force_refresh: bool = False,
 ) -> list[str]:
     """
@@ -120,6 +121,30 @@ def load_momentum_universe(
         if not symbol.isalpha():
             continue
 
+        asset_name = str(
+            asset.get(
+                "name",
+                "",
+            )
+        ).strip().lower()
+
+        excluded_name_terms = (
+            " warrant",
+            " warrants",
+            " right",
+            " rights",
+            " unit",
+            " units",
+            " preferred",
+            " depositary preferred",
+        )
+
+        if any(
+            term in asset_name
+            for term in excluded_name_terms
+        ):
+            continue
+
         if symbol in seen:
             continue
 
@@ -136,6 +161,89 @@ def load_momentum_universe(
             "were returned by Alpaca."
         )
 
+    allowed_symbols = set(symbols)
+    candidate_symbols: list[str] = []
+    candidate_seen: set[str] = set()
+
+    if market_data_request_func is not None:
+        try:
+            most_active_payload = market_data_request_func(
+                "GET",
+                "/v1beta1/screener/stocks/most-actives",
+                params={
+                    "by": "volume",
+                    "top": 100,
+                },
+                timeout=15.0,
+            )
+
+            if isinstance(most_active_payload, dict):
+                for item in most_active_payload.get(
+                    "most_actives",
+                    [],
+                ):
+                    if not isinstance(item, dict):
+                        continue
+
+                    symbol = str(
+                        item.get(
+                            "symbol",
+                            "",
+                        )
+                    ).strip().upper()
+
+                    if (
+                        symbol in allowed_symbols
+                        and symbol not in candidate_seen
+                    ):
+                        candidate_symbols.append(symbol)
+                        candidate_seen.add(symbol)
+
+        except Exception:
+            pass
+
+        try:
+            movers_payload = market_data_request_func(
+                "GET",
+                "/v1beta1/screener/stocks/movers",
+                params={
+                    "top": 50,
+                },
+                timeout=15.0,
+            )
+
+            if isinstance(movers_payload, dict):
+                for group_name in (
+                    "gainers",
+                    "losers",
+                ):
+                    for item in movers_payload.get(
+                        group_name,
+                        [],
+                    ):
+                        if not isinstance(item, dict):
+                            continue
+
+                        symbol = str(
+                            item.get(
+                                "symbol",
+                                "",
+                            )
+                        ).strip().upper()
+
+                        if (
+                            symbol in allowed_symbols
+                            and symbol not in candidate_seen
+                        ):
+                            candidate_symbols.append(symbol)
+                            candidate_seen.add(symbol)
+
+        except Exception:
+            pass
+
+    if candidate_symbols:
+        symbols = candidate_symbols
+
     _universe_cache[
         "symbols"
     ] = symbols.copy()
@@ -145,5 +253,9 @@ def load_momentum_universe(
     ] = time.time()
 
     return symbols.copy()
+
+
+
+
 
 

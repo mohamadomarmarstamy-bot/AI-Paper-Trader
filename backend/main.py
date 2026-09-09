@@ -689,6 +689,92 @@ def alpaca_paper_request(
     )
 
 
+def alpaca_market_data_request(
+    method: str,
+    path: str,
+    *,
+    params: dict[str, Any] | None = None,
+    timeout: float = 10.0,
+) -> Any:
+    """
+    Call Alpaca's Market Data API.
+
+    This helper is read-only and is used for market-data
+    requests such as movers and most-active symbols.
+    """
+    normalized_method = str(method).strip().upper()
+
+    if normalized_method != "GET":
+        raise RuntimeError(
+            "Alpaca market-data helper only supports GET requests."
+        )
+
+    attempts = ALPACA_READ_RETRY_ATTEMPTS
+    last_error: Exception | None = None
+
+    for attempt in range(attempts):
+        try:
+            response = requests.request(
+                method=normalized_method,
+                url=f"https://data.alpaca.markets{path}",
+                headers=get_alpaca_headers(),
+                params=params,
+                timeout=timeout,
+            )
+        except requests.RequestException as error:
+            last_error = error
+
+            if attempt < attempts - 1:
+                time.sleep(
+                    ALPACA_READ_RETRY_DELAY_SECONDS
+                    * (attempt + 1)
+                )
+                continue
+
+            raise
+
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+
+        if response.ok:
+            return payload
+
+        request_id = response.headers.get(
+            "X-Request-ID",
+            "",
+        )
+
+        message = extract_alpaca_error(
+            payload
+        )
+
+        if request_id:
+            message = (
+                f"{message} "
+                f"(Alpaca request ID: {request_id})"
+            )
+
+        if (
+            response.status_code >= 500
+            and attempt < attempts - 1
+        ):
+            time.sleep(
+                ALPACA_READ_RETRY_DELAY_SECONDS
+                * (attempt + 1)
+            )
+            continue
+
+        raise RuntimeError(message)
+
+    if last_error is not None:
+        raise last_error
+
+    raise RuntimeError(
+        "Alpaca market-data request failed without a response."
+    )
+
 def get_alpaca_paper_order(
     order_id: str,
 ) -> dict[str, Any]:
@@ -5372,6 +5458,7 @@ def run_auto_trader_cycle() -> dict[str, Any]:
         scanner_results = scan_market(
             force_refresh=False,
             request_func=alpaca_paper_request,
+            market_data_request_func=alpaca_market_data_request,
         )
 
         if not isinstance(
@@ -7695,6 +7782,7 @@ def market_scan(
         results = scan_market(
             force_refresh=refresh,
             request_func=alpaca_paper_request,
+            market_data_request_func=alpaca_market_data_request,
         )
 
         if not isinstance(results, list):
@@ -9270,5 +9358,7 @@ def sell(
         shares=shares,
         side="sell",
     )
+
+
 
 

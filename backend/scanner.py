@@ -976,6 +976,7 @@ def _select_balanced_results(
 def scan_market(
     force_refresh: bool = False,
     request_func: Callable[..., Any] | None = None,
+    market_data_request_func: Callable[..., Any] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Scan the market universe, rank valid stocks, and return balanced results.
@@ -1009,6 +1010,7 @@ def scan_market(
                 try:
                     raw_symbols = load_momentum_universe(
                         request_func=request_func,
+                        market_data_request_func=market_data_request_func,
                         force_refresh=force_refresh,
                     )
                     logger.info(
@@ -1532,6 +1534,8 @@ def score_symbol_news_context(
             set(negative_hits)
         ),
     }
+
+
 
 
 
