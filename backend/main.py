@@ -15,7 +15,7 @@ import requests
 import yfinance as yf
 from fastapi import FastAPI, Form, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from chart_data import get_chart_data
@@ -41,6 +41,7 @@ from indicators import (
     safe_float,
 )
 from paper_trader import PaperTrader
+from trade_reports import build_trade_report_pdf
 from scanner import (
     get_market_regime,
     get_symbol_news_context,
@@ -8350,6 +8351,212 @@ def auto_trader_history(
         },
         "trades": history,
     }
+
+
+
+def _trade_report_history(
+    request: Request,
+) -> list[dict[str, Any]]:
+    """
+    Reuse the existing persistent trade-history endpoint
+    so PDF reports contain the same enriched trade data
+    shown in the Trade Journal.
+    """
+    payload = auto_trader_history(
+        request=request,
+        limit=5000,
+    )
+
+    trades = payload.get(
+        "trades",
+        [],
+    )
+
+    if not isinstance(trades, list):
+        return []
+
+    return [
+        trade
+        for trade in trades
+        if isinstance(trade, dict)
+    ]
+
+
+def _trade_report_local_date(
+    timestamp: Any,
+) -> str | None:
+    """
+    Convert a stored timestamp to the server's local
+    calendar date for report grouping.
+    """
+    if not timestamp:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(
+            str(timestamp).replace(
+                "Z",
+                "+00:00",
+            )
+        )
+
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone()
+
+        return parsed.strftime(
+            "%Y-%m-%d"
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return None
+
+
+@app.get("/auto-trader/report/daily.pdf")
+def auto_trader_daily_report(
+    request: Request,
+    date: str = Query(
+        ...,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+    ),
+) -> Response:
+    require_app_session(
+        request
+    )
+
+    trades = _trade_report_history(
+        request
+    )
+
+    selected = [
+        trade
+        for trade in trades
+        if _trade_report_local_date(
+            trade.get("exit_timestamp")
+            or trade.get("entry_timestamp")
+        ) == date
+    ]
+
+    if not selected:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No completed trades found "
+                f"for {date}."
+            ),
+        )
+
+    try:
+        display_date = datetime.strptime(
+            date,
+            "%Y-%m-%d",
+        ).strftime(
+            "%B %d, %Y"
+        )
+    except ValueError:
+        display_date = date
+
+    pdf = build_trade_report_pdf(
+        title="AI Paper Trader - Daily Report",
+        subtitle=display_date,
+        trades=selected,
+    )
+
+    filename = (
+        f"ai-paper-trader-{date}.pdf"
+    )
+
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{filename}"'
+            ),
+        },
+    )
+
+
+@app.get("/auto-trader/report/monthly.pdf")
+def auto_trader_monthly_report(
+    request: Request,
+    month: str = Query(
+        ...,
+        pattern=r"^\d{4}-\d{2}$",
+    ),
+) -> Response:
+    require_app_session(
+        request
+    )
+
+    try:
+        month_date = datetime.strptime(
+            month,
+            "%Y-%m",
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid month.",
+        )
+
+    trades = _trade_report_history(
+        request
+    )
+
+    selected = []
+
+    for trade in trades:
+        local_date = _trade_report_local_date(
+            trade.get("exit_timestamp")
+            or trade.get("entry_timestamp")
+        )
+
+        if (
+            local_date
+            and local_date.startswith(
+                month + "-"
+            )
+        ):
+            selected.append(
+                trade
+            )
+
+    if not selected:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No completed trades found "
+                f"for {month}."
+            ),
+        )
+
+    display_month = month_date.strftime(
+        "%B %Y"
+    )
+
+    pdf = build_trade_report_pdf(
+        title="AI Paper Trader - Monthly Report",
+        subtitle=display_month,
+        trades=selected,
+    )
+
+    filename = (
+        f"ai-paper-trader-{month}.pdf"
+    )
+
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{filename}"'
+            ),
+        },
+    )
+
 
 def calculate_auto_trader_journal_learning_summary(
     *,

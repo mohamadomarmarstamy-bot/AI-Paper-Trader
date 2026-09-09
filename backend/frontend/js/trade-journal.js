@@ -737,11 +737,30 @@
             pdfButton.textContent =
                 "Daily PDF";
 
-            pdfButton.disabled =
-                true;
-
             pdfButton.title =
-                "Daily PDF export will be connected next.";
+                "Download daily trade report";
+
+            pdfButton.addEventListener(
+                "click",
+                (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+
+                    if (
+                        !dayKey ||
+                        dayKey === "unknown"
+                    ) {
+                        return;
+                    }
+
+                    window.location.href =
+                        "/auto-trader/report/daily.pdf"
+                        + "?date="
+                        + encodeURIComponent(
+                            dayKey
+                        );
+                }
+            );
 
             const clickHint =
                 document.createElement(
@@ -793,6 +812,17 @@
                 dayBody
             );
 
+            dayDetails.addEventListener(
+                "toggle",
+                () => {
+                    clickHint.textContent =
+                        dayDetails.open
+                            ? "Click to unexpand"
+                            : "Click to expand";
+                }
+            );
+
+
             container.appendChild(
                 dayDetails
             );
@@ -800,8 +830,75 @@
     }
 
 
+    function initializeTradeJournalReports() {
+        const monthInput =
+            document.getElementById(
+                "trade-journal-month"
+            );
+
+        const monthlyButton =
+            document.getElementById(
+                "trade-journal-monthly-pdf-button"
+            );
+
+        if (
+            !monthInput ||
+            !monthlyButton
+        ) {
+            return;
+        }
+
+        if (!monthInput.value) {
+            const now = new Date();
+
+            const year =
+                now.getFullYear();
+
+            const month =
+                String(
+                    now.getMonth() + 1
+                ).padStart(2, "0");
+
+            monthInput.value =
+                `${year}-${month}`;
+        }
+
+        if (
+            monthlyButton.dataset
+                .reportInitialized === "true"
+        ) {
+            return;
+        }
+
+        monthlyButton.dataset
+            .reportInitialized = "true";
+
+        monthlyButton.addEventListener(
+            "click",
+            () => {
+                const month =
+                    monthInput.value;
+
+                if (!month) {
+                    return;
+                }
+
+                window.location.href =
+                    "/auto-trader/report/monthly.pdf"
+                    + "?month="
+                    + encodeURIComponent(
+                        month
+                    );
+            }
+        );
+    }
+
+
     async function loadTradeJournal(
         {
+
+        initializeTradeJournalReports();
+
             force = false,
         } = {}
     ) {

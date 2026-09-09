@@ -284,6 +284,286 @@
         );
     }
 
+    function getTaxDayKey(trade) {
+        const timestamp =
+            trade?.exit_timestamp;
+
+        if (!timestamp) {
+            return "unknown";
+        }
+
+        const date = new Date(timestamp);
+
+        if (Number.isNaN(date.getTime())) {
+            return "unknown";
+        }
+
+        const year =
+            date.getFullYear();
+
+        const month =
+            String(
+                date.getMonth() + 1
+            ).padStart(2, "0");
+
+        const day =
+            String(
+                date.getDate()
+            ).padStart(2, "0");
+
+        return `${year}-${month}-${day}`;
+    }
+
+
+    function formatTaxDayLabel(trade) {
+        const timestamp =
+            trade?.exit_timestamp;
+
+        if (!timestamp) {
+            return "Unknown Date";
+        }
+
+        const date =
+            new Date(timestamp);
+
+        if (Number.isNaN(date.getTime())) {
+            return "Unknown Date";
+        }
+
+        return date.toLocaleDateString(
+            "en-US",
+            {
+                month: "long",
+                day: "numeric",
+                year: "numeric",
+            }
+        );
+    }
+
+
+    function groupTaxTradesByDay(trades) {
+        const grouped =
+            new Map();
+
+        for (const trade of trades) {
+            const key =
+                getTaxDayKey(trade);
+
+            if (!grouped.has(key)) {
+                grouped.set(
+                    key,
+                    []
+                );
+            }
+
+            grouped
+                .get(key)
+                .push(trade);
+        }
+
+        return Array.from(
+            grouped.entries()
+        ).sort(
+            ([left], [right]) =>
+                String(right)
+                    .localeCompare(
+                        String(left)
+                    )
+        );
+    }
+
+
+    function createTaxTradeRow(trade) {
+        const details =
+            document.createElement(
+                "details"
+            );
+
+        details.className =
+            "trade-journal-trade-row";
+
+        const summary =
+            document.createElement(
+                "summary"
+            );
+
+        summary.className =
+            "trade-journal-trade-summary";
+
+        const symbol =
+            document.createElement(
+                "strong"
+            );
+
+        symbol.className =
+            "trade-journal-row-symbol";
+
+        symbol.textContent =
+            trade.symbol ??
+            "Unknown";
+
+        const shares =
+            document.createElement(
+                "span"
+            );
+
+        shares.textContent =
+            `${trade.shares ?? "-"} sh`;
+
+        const prices =
+            document.createElement(
+                "span"
+            );
+
+        prices.textContent =
+            `${formatCurrency(
+                trade.entry_price
+            )} -> ${formatCurrency(
+                trade.exit_price
+            )}`;
+
+        const pnl =
+            document.createElement(
+                "strong"
+            );
+
+        const pnlValue =
+            Number(
+                trade.realized_profit_loss
+            );
+
+        pnl.className =
+            "trade-journal-pnl";
+
+        pnl.textContent =
+            formatCurrency(
+                pnlValue
+            );
+
+        if (pnlValue > 0) {
+            pnl.classList.add(
+                "positive"
+            );
+        } else if (pnlValue < 0) {
+            pnl.classList.add(
+                "negative"
+            );
+        }
+
+        const returnValue =
+            document.createElement(
+                "span"
+            );
+
+        returnValue.textContent =
+            formatPercent(
+                trade.realized_return_percent
+            );
+
+        summary.append(
+            symbol,
+            shares,
+            prices,
+            pnl,
+            returnValue
+        );
+
+        const expanded =
+            document.createElement(
+                "div"
+            );
+
+        expanded.className =
+            "trade-journal-trade-expanded";
+
+        const entryValue =
+            Number(trade.entry_price);
+
+        const exitValue =
+            Number(trade.exit_price);
+
+        const shareValue =
+            Number(trade.shares);
+
+        const costBasis =
+            Number.isFinite(entryValue) &&
+            Number.isFinite(shareValue)
+                ? entryValue * shareValue
+                : null;
+
+        const proceeds =
+            Number.isFinite(exitValue) &&
+            Number.isFinite(shareValue)
+                ? exitValue * shareValue
+                : null;
+
+        const metrics =
+            document.createElement(
+                "div"
+            );
+
+        metrics.className =
+            "trade-journal-metrics-grid";
+
+        metrics.append(
+            createMetric(
+                "Exit Date",
+                formatDate(
+                    trade.exit_timestamp
+                )
+            ),
+            createMetric(
+                "Cost Basis",
+                formatCurrency(
+                    costBasis
+                )
+            ),
+            createMetric(
+                "Proceeds",
+                formatCurrency(
+                    proceeds
+                )
+            ),
+            createMetric(
+                "Realized P/L",
+                formatCurrency(
+                    trade.realized_profit_loss
+                )
+            ),
+            createMetric(
+                "Return",
+                formatPercent(
+                    trade.realized_return_percent
+                )
+            )
+        );
+
+        const note =
+            document.createElement(
+                "p"
+            );
+
+        note.className =
+            "trade-journal-timestamps";
+
+        note.textContent =
+            "Paper-trading estimate only. "
+            + "Not an official broker tax record.";
+
+        expanded.append(
+            metrics,
+            note
+        );
+
+        details.append(
+            summary,
+            expanded
+        );
+
+        return details;
+    }
+
+
     function renderTaxTrades(trades) {
         const container =
             document.getElementById(
@@ -298,7 +578,9 @@
 
         if (!trades.length) {
             const empty =
-                document.createElement("p");
+                document.createElement(
+                    "p"
+                );
 
             empty.textContent =
                 "No closed trades found for this tax year.";
@@ -310,117 +592,172 @@
             return;
         }
 
-        for (const trade of trades) {
-            const card =
+        const groupedDays =
+            groupTaxTradesByDay(
+                trades
+            );
+
+        for (
+            const [
+                dayKey,
+                dayTrades,
+            ]
+            of groupedDays
+        ) {
+            const dayDetails =
                 document.createElement(
-                    "article"
+                    "details"
                 );
 
-            card.className =
-                "trade-journal-card";
+            dayDetails.className =
+                "trade-journal-day";
 
-            const header =
+            dayDetails.dataset.day =
+                dayKey;
+
+            const daySummary =
                 document.createElement(
-                    "div"
+                    "summary"
                 );
 
-            header.className =
-                "trade-journal-card-header";
+            daySummary.className =
+                "trade-journal-day-summary";
 
-            const title =
-                document.createElement("h3");
+            const dayLabel =
+                document.createElement(
+                    "strong"
+                );
 
-            title.textContent =
-                trade.symbol ?? "Unknown";
+            dayLabel.className =
+                "trade-journal-day-date";
+
+            dayLabel.textContent =
+                formatTaxDayLabel(
+                    dayTrades[0]
+                );
+
+            const dayPnl =
+                dayTrades.reduce(
+                    (total, trade) => {
+                        const value =
+                            Number(
+                                trade.realized_profit_loss
+                            );
+
+                        return total + (
+                            Number.isFinite(value)
+                                ? value
+                                : 0
+                        );
+                    },
+                    0
+                );
 
             const pnl =
                 document.createElement(
                     "strong"
                 );
 
-            const pnlValue =
-                Number(
-                    trade.realized_profit_loss
-                );
-
-            pnl.textContent =
-                formatCurrency(pnlValue);
-
             pnl.className =
                 "trade-journal-pnl";
 
-            if (pnlValue > 0) {
+            pnl.textContent =
+                formatCurrency(
+                    dayPnl
+                );
+
+            if (dayPnl > 0) {
                 pnl.classList.add(
                     "positive"
                 );
-            } else if (pnlValue < 0) {
+            } else if (dayPnl < 0) {
                 pnl.classList.add(
                     "negative"
                 );
             }
 
-            header.append(
-                title,
-                pnl
+            const count =
+                document.createElement(
+                    "span"
+                );
+
+            count.textContent =
+                `${dayTrades.length} trade${
+                    dayTrades.length === 1
+                        ? ""
+                        : "s"
+                }`;
+
+            const hint =
+                document.createElement(
+                    "span"
+                );
+
+            hint.className =
+                "trade-journal-day-hint";
+
+            hint.textContent =
+                "Click to expand";
+
+            const mainLine =
+                document.createElement(
+                    "span"
+                );
+
+            mainLine.className =
+                "trade-journal-day-main";
+
+            mainLine.append(
+                dayLabel,
+                pnl,
+                count
             );
 
-            const metrics =
+            daySummary.append(
+                mainLine,
+                hint
+            );
+
+            dayDetails.addEventListener(
+                "toggle",
+                () => {
+                    hint.textContent =
+                        dayDetails.open
+                            ? "Click to unexpand"
+                            : "Click to expand";
+                }
+            );
+
+            const body =
                 document.createElement(
                     "div"
                 );
 
-            metrics.className =
-                "trade-journal-metrics-grid";
+            body.className =
+                "trade-journal-day-body";
 
-            metrics.append(
-                createMetric(
-                    "Exit Date",
-                    formatDate(
-                        trade.exit_timestamp
+            for (
+                const trade
+                of dayTrades
+            ) {
+                body.appendChild(
+                    createTaxTradeRow(
+                        trade
                     )
-                ),
-                createMetric(
-                    "Shares",
-                    String(
-                        trade.shares ?? "—"
-                    )
-                ),
-                createMetric(
-                    "Entry",
-                    formatCurrency(
-                        trade.entry_price
-                    )
-                ),
-                createMetric(
-                    "Exit",
-                    formatCurrency(
-                        trade.exit_price
-                    )
-                ),
-                createMetric(
-                    "Return",
-                    formatPercent(
-                        trade.realized_return_percent
-                    )
-                ),
-                createMetric(
-                    "P/L",
-                    formatCurrency(
-                        trade.realized_profit_loss
-                    )
-                )
-            );
+                );
+            }
 
-            card.append(
-                header,
-                metrics
+            dayDetails.append(
+                daySummary,
+                body
             );
 
             container.appendChild(
-                card
+                dayDetails
             );
         }
     }
+
 
     function renderSelectedTaxYear() {
         const trades =
@@ -539,4 +876,4 @@
 
     window.loadTaxes =
         loadTaxes;
-})();
+})();
