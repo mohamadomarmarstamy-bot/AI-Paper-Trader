@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import math
 import os
@@ -5370,7 +5370,8 @@ def run_auto_trader_cycle() -> dict[str, Any]:
         ] = market_regime
 
         scanner_results = scan_market(
-            force_refresh=False
+            force_refresh=False,
+            request_func=alpaca_paper_request,
         )
 
         if not isinstance(
@@ -7692,7 +7693,8 @@ def market_scan(
     )
     try:
         results = scan_market(
-            force_refresh=refresh
+            force_refresh=refresh,
+            request_func=alpaca_paper_request,
         )
 
         if not isinstance(results, list):
@@ -9268,3 +9270,5 @@ def sell(
         shares=shares,
         side="sell",
     )
+
+

@@ -7,12 +7,13 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 import yfinance as yf
 
 from market_universe import load_market_universe
+from universe import load_momentum_universe
 
 
 # =========================================================
@@ -974,6 +975,7 @@ def _select_balanced_results(
 
 def scan_market(
     force_refresh: bool = False,
+    request_func: Callable[..., Any] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Scan the market universe, rank valid stocks, and return balanced results.
@@ -1003,7 +1005,25 @@ def scan_market(
         stale_cache = _get_cached_results(allow_stale=True)
 
         try:
-            raw_symbols = load_market_universe()
+            if request_func is not None:
+                try:
+                    raw_symbols = load_momentum_universe(
+                        request_func=request_func,
+                        force_refresh=force_refresh,
+                    )
+                    logger.info(
+                        "Loaded momentum universe with %s symbols.",
+                        len(raw_symbols),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Momentum universe load failed; "
+                        "falling back to legacy market universe."
+                    )
+                    raw_symbols = load_market_universe()
+            else:
+                raw_symbols = load_market_universe()
+
         except Exception:
             logger.exception("The scanner could not load its market universe.")
 
@@ -1512,3 +1532,9 @@ def score_symbol_news_context(
             set(negative_hits)
         ),
     }
+
+
+
+
+
+
