@@ -3346,3 +3346,138 @@ td[colspan] {
     }
 }
 
+
+/* =========================================================
+   Compact Daily Trade Journal
+========================================================= */
+
+.trade-journal-day {
+    margin-bottom: 0.75rem;
+    border: 1px solid var(--border-color, rgba(255,255,255,0.1));
+    border-radius: 12px;
+    overflow: hidden;
+    background: rgba(255,255,255,0.025);
+}
+
+.trade-journal-day-summary {
+    cursor: pointer;
+    padding: 1rem 1.1rem;
+    list-style: none;
+    user-select: none;
+}
+
+.trade-journal-day-summary::-webkit-details-marker {
+    display: none;
+}
+
+.trade-journal-day-summary::before {
+    content: "\25B6";
+    display: inline-block;
+    margin-right: 0.65rem;
+    transition: transform 0.15s ease;
+}
+
+.trade-journal-day[open] > .trade-journal-day-summary::before {
+    transform: rotate(90deg);
+}
+
+.trade-journal-day-main {
+    display: grid;
+    grid-template-columns:
+        minmax(180px, 1fr)
+        minmax(90px, auto)
+        minmax(80px, auto)
+        auto;
+    gap: 1.25rem;
+    align-items: center;
+}
+
+.trade-journal-day-date {
+    font-size: 1rem;
+}
+
+.trade-journal-day-hint {
+    display: block;
+    margin-top: 0.3rem;
+    margin-left: 1.6rem;
+    font-size: 0.78rem;
+    opacity: 0.65;
+}
+
+.trade-journal-day-body {
+    border-top: 1px solid var(--border-color, rgba(255,255,255,0.08));
+}
+
+.trade-journal-trade-row {
+    border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.07));
+}
+
+.trade-journal-trade-row:last-child {
+    border-bottom: 0;
+}
+
+.trade-journal-trade-summary {
+    cursor: pointer;
+    display: grid;
+    grid-template-columns:
+        minmax(75px, 0.7fr)
+        minmax(70px, 0.7fr)
+        minmax(190px, 1.5fr)
+        minmax(90px, 0.8fr)
+        minmax(80px, 0.7fr);
+    gap: 1rem;
+    align-items: center;
+    padding: 0.8rem 1.1rem;
+    list-style: none;
+}
+
+.trade-journal-trade-summary::-webkit-details-marker {
+    display: none;
+}
+
+.trade-journal-trade-summary::before {
+    content: "\25B6";
+    font-size: 0.7rem;
+    margin-right: 0.4rem;
+}
+
+.trade-journal-trade-row[open]
+> .trade-journal-trade-summary::before {
+    transform: rotate(90deg);
+}
+
+.trade-journal-trade-summary:hover,
+.trade-journal-day-summary:hover {
+    background: rgba(255,255,255,0.035);
+}
+
+.trade-journal-row-symbol {
+    font-size: 1rem;
+}
+
+.trade-journal-trade-expanded {
+    padding: 1rem 1.25rem 1.25rem;
+    background: rgba(0,0,0,0.08);
+}
+
+.trade-journal-pdf-button {
+    white-space: nowrap;
+}
+
+.trade-journal-pdf-button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+@media (max-width: 850px) {
+    .trade-journal-day-main {
+        grid-template-columns: 1fr auto;
+        gap: 0.6rem 1rem;
+    }
+
+    .trade-journal-trade-summary {
+        grid-template-columns: 1fr 1fr;
+        gap: 0.55rem 1rem;
+    }
+}
+

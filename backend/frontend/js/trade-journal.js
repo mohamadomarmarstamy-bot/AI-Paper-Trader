@@ -319,6 +319,294 @@
         );
     }
 
+    function getTradeDayKey(trade) {
+        const value =
+            trade?.exit_timestamp ??
+            trade?.entry_timestamp;
+
+        if (!value) {
+            return "unknown";
+        }
+
+        const date = new Date(value);
+
+        if (Number.isNaN(date.getTime())) {
+            return "unknown";
+        }
+
+        const year = date.getFullYear();
+
+        const month = String(
+            date.getMonth() + 1
+        ).padStart(2, "0");
+
+        const day = String(
+            date.getDate()
+        ).padStart(2, "0");
+
+        return `${year}-${month}-${day}`;
+    }
+
+
+    function formatTradeDayLabel(trade) {
+        const value =
+            trade?.exit_timestamp ??
+            trade?.entry_timestamp;
+
+        if (!value) {
+            return "Unknown Date";
+        }
+
+        const date = new Date(value);
+
+        if (Number.isNaN(date.getTime())) {
+            return "Unknown Date";
+        }
+
+        return date.toLocaleDateString(
+            "en-US",
+            {
+                month: "long",
+                day: "numeric",
+                year: "numeric",
+            }
+        );
+    }
+
+
+    function groupTradesByDay(trades) {
+        const grouped = new Map();
+
+        for (const trade of trades) {
+            const key =
+                getTradeDayKey(trade);
+
+            if (!grouped.has(key)) {
+                grouped.set(key, []);
+            }
+
+            grouped
+                .get(key)
+                .push(trade);
+        }
+
+        return Array.from(
+            grouped.entries()
+        ).sort(
+            ([left], [right]) =>
+                String(right).localeCompare(
+                    String(left)
+                )
+        );
+    }
+
+
+    function createTradeRow(trade) {
+        const details =
+            document.createElement(
+                "details"
+            );
+
+        details.className =
+            "trade-journal-trade-row";
+
+        const summary =
+            document.createElement(
+                "summary"
+            );
+
+        summary.className =
+            "trade-journal-trade-summary";
+
+        const symbol =
+            document.createElement(
+                "strong"
+            );
+
+        symbol.className =
+            "trade-journal-row-symbol";
+
+        symbol.textContent =
+            trade.symbol ?? "Unknown";
+
+        const shares =
+            document.createElement("span");
+
+        shares.textContent =
+            `${trade.shares ?? "-"} sh`;
+
+        const prices =
+            document.createElement("span");
+
+        prices.textContent =
+            `${formatCurrency(
+                trade.entry_price
+            )} -> ${formatCurrency(
+                trade.exit_price
+            )}`;
+
+        const pnl =
+            document.createElement(
+                "strong"
+            );
+
+        const pnlValue =
+            Number(
+                trade.realized_profit_loss
+            );
+
+        pnl.className =
+            "trade-journal-pnl";
+
+        pnl.textContent =
+            formatCurrency(pnlValue);
+
+        if (pnlValue > 0) {
+            pnl.classList.add(
+                "positive"
+            );
+        } else if (pnlValue < 0) {
+            pnl.classList.add(
+                "negative"
+            );
+        }
+
+        const returnValue =
+            document.createElement("span");
+
+        returnValue.textContent =
+            formatPercent(
+                trade.realized_return_percent
+            );
+
+        summary.append(
+            symbol,
+            shares,
+            prices,
+            pnl,
+            returnValue
+        );
+
+        const expanded =
+            document.createElement("div");
+
+        expanded.className =
+            "trade-journal-trade-expanded";
+
+        const learning =
+            trade.learning ?? {};
+
+        const metrics =
+            document.createElement("div");
+
+        metrics.className =
+            "trade-journal-metrics-grid";
+
+        metrics.append(
+            createMetric(
+                "Held",
+                formatHoldingTime(
+                    learning.holding_seconds
+                )
+            ),
+            createMetric(
+                "Score",
+                learning.entry_score ??
+                trade.entry_diagnostics?.score ??
+                "-"
+            ),
+            createMetric(
+                "Confidence",
+                learning.entry_confidence !== null &&
+                learning.entry_confidence !== undefined
+                    ? `${learning.entry_confidence}%`
+                    : "-"
+            ),
+            createMetric(
+                "Scanner Rank",
+                learning.scanner_rank
+                    ? `#${learning.scanner_rank}`
+                    : "-"
+            ),
+            createMetric(
+                "MFE",
+                formatPercent(
+                    learning.mfe_percent
+                )
+            ),
+            createMetric(
+                "MAE",
+                formatPercent(
+                    learning.mae_percent
+                )
+            )
+        );
+
+        const explanation =
+            document.createElement("div");
+
+        explanation.className =
+            "trade-journal-explanation";
+
+        const buyHeading =
+            document.createElement("h4");
+
+        buyHeading.textContent =
+            "Why the AI bought";
+
+        const buyText =
+            document.createElement("p");
+
+        buyText.textContent =
+            buildBuyExplanation(trade);
+
+        const sellHeading =
+            document.createElement("h4");
+
+        sellHeading.textContent =
+            "Why the AI sold";
+
+        const sellText =
+            document.createElement("p");
+
+        sellText.textContent =
+            buildSellExplanation(trade);
+
+        const timing =
+            document.createElement("p");
+
+        timing.className =
+            "trade-journal-timestamps";
+
+        timing.textContent =
+            `Bought: ${formatDateTime(
+                trade.entry_timestamp
+            )} | Sold: ${formatDateTime(
+                trade.exit_timestamp
+            )}`;
+
+        explanation.append(
+            buyHeading,
+            buyText,
+            sellHeading,
+            sellText,
+            timing
+        );
+
+        expanded.append(
+            metrics,
+            explanation
+        );
+
+        details.append(
+            summary,
+            expanded
+        );
+
+        return details;
+    }
+
+
     function renderTrades(trades) {
         const container =
             document.getElementById(
@@ -331,222 +619,186 @@
 
         container.replaceChildren();
 
-        if (!Array.isArray(trades) ||
-            !trades.length) {
+        if (
+            !Array.isArray(trades) ||
+            !trades.length
+        ) {
             const empty =
                 document.createElement("p");
 
             empty.textContent =
                 "No completed trades found.";
 
-            container.appendChild(
-                empty
-            );
+            container.appendChild(empty);
 
             return;
         }
 
-        for (const trade of trades) {
-            const card =
+        const groupedDays =
+            groupTradesByDay(trades);
+
+        for (
+            const [dayKey, dayTrades]
+            of groupedDays
+        ) {
+            const dayDetails =
                 document.createElement(
-                    "article"
+                    "details"
                 );
 
-            card.className =
-                "trade-journal-card";
+            dayDetails.className =
+                "trade-journal-day";
 
-            const header =
+            dayDetails.dataset.day =
+                dayKey;
+
+            const daySummary =
                 document.createElement(
-                    "div"
+                    "summary"
                 );
 
-            header.className =
-                "trade-journal-card-header";
+            daySummary.className =
+                "trade-journal-day-summary";
 
-            const title =
-                document.createElement("h3");
+            const dayLabel =
+                document.createElement(
+                    "strong"
+                );
 
-            title.textContent =
-                trade.symbol ?? "Unknown";
+            dayLabel.className =
+                "trade-journal-day-date";
+
+            dayLabel.textContent =
+                formatTradeDayLabel(
+                    dayTrades[0]
+                );
+
+            const dayPnl =
+                dayTrades.reduce(
+                    (total, trade) => {
+                        const value =
+                            Number(
+                                trade.realized_profit_loss
+                            );
+
+                        return total + (
+                            Number.isFinite(value)
+                                ? value
+                                : 0
+                        );
+                    },
+                    0
+                );
 
             const pnl =
                 document.createElement(
                     "strong"
                 );
 
-            const pnlValue =
-                Number(
-                    trade.realized_profit_loss
-                );
-
-            pnl.textContent =
-                formatCurrency(
-                    pnlValue
-                );
-
             pnl.className =
                 "trade-journal-pnl";
 
-            if (pnlValue > 0) {
+            pnl.textContent =
+                formatCurrency(dayPnl);
+
+            if (dayPnl > 0) {
                 pnl.classList.add(
                     "positive"
                 );
-            } else if (pnlValue < 0) {
+            } else if (dayPnl < 0) {
                 pnl.classList.add(
                     "negative"
                 );
             }
 
-            header.append(
-                title,
-                pnl
+            const count =
+                document.createElement(
+                    "span"
+                );
+
+            count.textContent =
+                `${dayTrades.length} trade${
+                    dayTrades.length === 1
+                        ? ""
+                        : "s"
+                }`;
+
+            const pdfButton =
+                document.createElement(
+                    "button"
+                );
+
+            pdfButton.type =
+                "button";
+
+            pdfButton.className =
+                "secondary-button trade-journal-pdf-button";
+
+            pdfButton.textContent =
+                "Daily PDF";
+
+            pdfButton.disabled =
+                true;
+
+            pdfButton.title =
+                "Daily PDF export will be connected next.";
+
+            const clickHint =
+                document.createElement(
+                    "span"
+                );
+
+            clickHint.className =
+                "trade-journal-day-hint";
+
+            clickHint.textContent =
+                "Click to expand";
+
+            const mainLine =
+                document.createElement(
+                    "span"
+                );
+
+            mainLine.className =
+                "trade-journal-day-main";
+
+            mainLine.append(
+                dayLabel,
+                pnl,
+                count,
+                pdfButton
             );
 
-            const metrics =
+            daySummary.append(
+                mainLine,
+                clickHint
+            );
+
+            const dayBody =
                 document.createElement(
                     "div"
                 );
 
-            metrics.className =
-                "trade-journal-metrics-grid";
+            dayBody.className =
+                "trade-journal-day-body";
 
-            metrics.append(
-                createMetric(
-                    "Shares",
-                    String(
-                        trade.shares ?? "—"
-                    )
-                ),
-                createMetric(
-                    "Buy",
-                    formatCurrency(
-                        trade.entry_price
-                    )
-                ),
-                createMetric(
-                    "Sell",
-                    formatCurrency(
-                        trade.exit_price
-                    )
-                ),
-                createMetric(
-                    "Return",
-                    formatPercent(
-                        trade.realized_return_percent
-                    )
-                ),
-                createMetric(
-                    "Held",
-                    formatHoldingTime(
-                        trade.learning
-                            ?.holding_seconds
-                    )
-                ),
-                createMetric(
-                    "MFE",
-                    formatPercent(
-                        trade.learning
-                            ?.mfe_percent
-                    )
-                ),
-                createMetric(
-                    "MAE",
-                    formatPercent(
-                        trade.learning
-                            ?.mae_percent
-                    )
-                )
-            );
-
-            const details =
-                document.createElement(
-                    "details"
+            for (const trade of dayTrades) {
+                dayBody.appendChild(
+                    createTradeRow(trade)
                 );
+            }
 
-            details.className =
-                "trade-journal-details";
-
-            const summary =
-                document.createElement(
-                    "summary"
-                );
-
-            summary.textContent =
-                "View AI Explanation";
-
-            const explanation =
-                document.createElement(
-                    "div"
-                );
-
-            explanation.className =
-                "trade-journal-explanation";
-
-            const buyHeading =
-                document.createElement("h4");
-
-            buyHeading.textContent =
-                "Why the AI bought";
-
-            const buyText =
-                document.createElement("p");
-
-            buyText.textContent =
-                buildBuyExplanation(
-                    trade
-                );
-
-            const sellHeading =
-                document.createElement("h4");
-
-            sellHeading.textContent =
-                "Why the AI sold";
-
-            const sellText =
-                document.createElement("p");
-
-            sellText.textContent =
-                buildSellExplanation(
-                    trade
-                );
-
-            const timing =
-                document.createElement("p");
-
-            timing.className =
-                "trade-journal-timestamps";
-
-            timing.textContent =
-                `Bought: ${formatDateTime(
-                    trade.entry_timestamp
-                )} | Sold: ${formatDateTime(
-                    trade.exit_timestamp
-                )}`;
-
-            explanation.append(
-                buyHeading,
-                buyText,
-                sellHeading,
-                sellText,
-                timing
-            );
-
-            details.append(
-                summary,
-                explanation
-            );
-
-            card.append(
-                header,
-                metrics,
-                details
+            dayDetails.append(
+                daySummary,
+                dayBody
             );
 
             container.appendChild(
-                card
+                dayDetails
             );
         }
     }
+
 
     async function loadTradeJournal(
         {
