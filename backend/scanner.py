@@ -1013,7 +1013,7 @@ def scan_market(
                         market_data_request_func=market_data_request_func,
                         force_refresh=force_refresh,
                     )
-                    logger.warning(
+                    logger.info(
                         "Loaded momentum universe with %s symbols.",
                         len(raw_symbols),
                     )
@@ -1534,6 +1534,7 @@ def score_symbol_news_context(
             set(negative_hits)
         ),
     }
+
 
 
 

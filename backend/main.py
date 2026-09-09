@@ -7816,7 +7816,7 @@ def market_scan(
         return {
             "results": final_results,
             "count": len(final_results),
-            "scanned_universe": "S&P 500",
+            "scanned_universe": "Alpaca Momentum Candidates",
             "refresh_requested": refresh,
         }
 
@@ -7832,7 +7832,7 @@ def market_scan(
             ),
             "results": [],
             "count": 0,
-            "scanned_universe": "S&P 500",
+            "scanned_universe": "Alpaca Momentum Candidates",
             "refresh_requested": refresh,
         }
 
@@ -9358,6 +9358,7 @@ def sell(
         shares=shares,
         side="sell",
     )
+
 
 
 
