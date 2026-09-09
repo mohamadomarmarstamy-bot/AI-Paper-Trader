@@ -2,6 +2,76 @@
     let taxDataLoaded = false;
     let cachedTrades = [];
 
+    async function downloadTaxReport(
+        url,
+        fallbackFilename
+    ) {
+        try {
+            const response = await fetch(
+                url,
+                {
+                    credentials: "include",
+                }
+            );
+
+            if (!response.ok) {
+                let message =
+                    `Report download failed (${response.status}).`;
+
+                try {
+                    const payload =
+                        await response.json();
+
+                    message =
+                        payload?.detail ??
+                        payload?.message ??
+                        message;
+                } catch {
+                    // Keep fallback message.
+                }
+
+                throw new Error(message);
+            }
+
+            const blob =
+                await response.blob();
+
+            const objectUrl =
+                URL.createObjectURL(blob);
+
+            const link =
+                document.createElement("a");
+
+            link.href =
+                objectUrl;
+
+            link.download =
+                fallbackFilename;
+
+            document.body.appendChild(
+                link
+            );
+
+            link.click();
+            link.remove();
+
+            window.setTimeout(
+                () => URL.revokeObjectURL(
+                    objectUrl
+                ),
+                1000
+            );
+
+        } catch (error) {
+            window.alert(
+                error instanceof Error
+                    ? error.message
+                    : "Could not download report."
+            );
+        }
+    }
+
+
     function getApiUrl() {
         return String(
             window.API_URL ?? ""
@@ -707,10 +777,52 @@
             mainLine.className =
                 "trade-journal-day-main";
 
+            const pdfButton =
+                document.createElement(
+                    "button"
+                );
+
+            pdfButton.type =
+                "button";
+
+            pdfButton.className =
+                "secondary-button trade-journal-pdf-button";
+
+            pdfButton.textContent =
+                "Daily PDF";
+
+            pdfButton.title =
+                "Download daily tax trade report";
+
+            pdfButton.addEventListener(
+                "click",
+                (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+
+                    if (
+                        !dayKey ||
+                        dayKey === "unknown"
+                    ) {
+                        return;
+                    }
+
+                    downloadTaxReport(
+                        "/auto-trader/report/daily.pdf"
+                        + "?date="
+                        + encodeURIComponent(
+                            dayKey
+                        ),
+                        `ai-paper-trader-${dayKey}.pdf`
+                    );
+                }
+            );
+
             mainLine.append(
                 dayLabel,
                 pnl,
-                count
+                count,
+                pdfButton
             );
 
             daySummary.append(
@@ -873,6 +985,58 @@
             "change",
             renderSelectedTaxYear
         );
+
+    const taxMonthInput =
+        document.getElementById(
+            "tax-month"
+        );
+
+    if (taxMonthInput) {
+        taxMonthInput.value =
+            String(
+                new Date().getMonth() + 1
+            ).padStart(2, "0");
+    }
+
+    document
+        .getElementById(
+            "tax-monthly-pdf-button"
+        )
+        ?.addEventListener(
+            "click",
+            () => {
+                const year =
+                    document
+                        .getElementById(
+                            "tax-year"
+                        )
+                        ?.value;
+
+                const month =
+                    document
+                        .getElementById(
+                            "tax-month"
+                        )
+                        ?.value;
+
+                if (!year || !month) {
+                    return;
+                }
+
+                const monthKey =
+                    `${year}-${month}`;
+
+                downloadTaxReport(
+                    "/auto-trader/report/monthly.pdf"
+                    + "?month="
+                    + encodeURIComponent(
+                        monthKey
+                    ),
+                    `ai-paper-trader-${monthKey}.pdf`
+                );
+            }
+        );
+
 
     window.loadTaxes =
         loadTaxes;

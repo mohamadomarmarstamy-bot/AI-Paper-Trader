@@ -753,12 +753,14 @@
                         return;
                     }
 
-                    window.location.href =
+                    downloadTradeReport(
                         "/auto-trader/report/daily.pdf"
                         + "?date="
                         + encodeURIComponent(
                             dayKey
-                        );
+                        ),
+                        `ai-paper-trader-${dayKey}.pdf`
+                    );
                 }
             );
 
@@ -830,6 +832,91 @@
     }
 
 
+    async function downloadTradeReport(
+        url,
+        fallbackFilename
+    ) {
+        try {
+            const response = await fetch(
+                url,
+                {
+                    credentials: "include",
+                }
+            );
+
+            if (!response.ok) {
+                let message =
+                    `Report download failed (${response.status}).`;
+
+                try {
+                    const payload =
+                        await response.json();
+
+                    message =
+                        payload?.detail ??
+                        payload?.message ??
+                        message;
+                } catch {
+                    // Keep fallback message.
+                }
+
+                throw new Error(message);
+            }
+
+            const blob =
+                await response.blob();
+
+            const disposition =
+                response.headers.get(
+                    "Content-Disposition"
+                ) ?? "";
+
+            const match =
+                disposition.match(
+                    /filename="?([^"]+)"?/i
+                );
+
+            const filename =
+                match?.[1] ??
+                fallbackFilename;
+
+            const objectUrl =
+                URL.createObjectURL(blob);
+
+            const link =
+                document.createElement("a");
+
+            link.href =
+                objectUrl;
+
+            link.download =
+                filename;
+
+            document.body.appendChild(
+                link
+            );
+
+            link.click();
+            link.remove();
+
+            window.setTimeout(
+                () => URL.revokeObjectURL(
+                    objectUrl
+                ),
+                1000
+            );
+
+        } catch (error) {
+            const message =
+                error instanceof Error
+                    ? error.message
+                    : "Could not download report.";
+
+            window.alert(message);
+        }
+    }
+
+
     function initializeTradeJournalReports() {
         const monthInput =
             document.getElementById(
@@ -883,12 +970,14 @@
                     return;
                 }
 
-                window.location.href =
+                downloadTradeReport(
                     "/auto-trader/report/monthly.pdf"
                     + "?month="
                     + encodeURIComponent(
                         month
-                    );
+                    ),
+                    `ai-paper-trader-${month}.pdf`
+                );
             }
         );
     }
@@ -896,12 +985,10 @@
 
     async function loadTradeJournal(
         {
-
-        initializeTradeJournalReports();
-
             force = false,
         } = {}
     ) {
+        initializeTradeJournalReports();
         if (
             tradeJournalLoaded &&
             !force
