@@ -28,6 +28,7 @@ from database import (
     load_trade_book,
     load_trade_book_events,
     load_learning_outcomes,
+    load_trade_excursions,
     record_trade_book_event,
     save_learning_outcome,
     upsert_trade_excursion,
@@ -7794,6 +7795,26 @@ def portfolio_history(
         return []
 
 
+@app.get("/auto-trader/excursions")
+def auto_trader_excursions(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    rows = load_trade_excursions(
+        limit=limit
+    )
+
+    return {
+        "count": len(rows),
+        "results": rows,
+    }
+
+
+
 # =========================================================
 # Market scanner routes
 # =========================================================
@@ -9388,6 +9409,7 @@ def sell(
         shares=shares,
         side="sell",
     )
+
 
 
 

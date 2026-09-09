@@ -1294,6 +1294,35 @@ def upsert_trade_excursion(
         "last_observed_at": normalized_observed_at,
     }
 
+def load_trade_excursions(
+    *,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Load recent passive MFE/MAE tracking rows."""
+    normalized_limit = max(
+        1,
+        min(
+            int(limit),
+            1000,
+        ),
+    )
+
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM trade_excursions
+            ORDER BY last_observed_at DESC
+            LIMIT ?
+            """,
+            (normalized_limit,),
+        ).fetchall()
+
+    return [
+        dict(row)
+        for row in rows
+    ]
+
 def load_trade_book_events(
     *,
     trade_book_id: int | None = None,
