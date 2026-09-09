@@ -100,6 +100,8 @@
                 </button>
                 <button type="button" class="nav-button" data-section="scanner-section" aria-controls="scanner-section"><span aria-hidden="true">🔎</span><span>Scanner</span></button>
                 <button type="button" class="nav-button" data-section="strategy-section" aria-controls="strategy-section"><span aria-hidden="true">🤖</span><span>Research Lab</span></button>
+                <button type="button" class="nav-button" data-section="trade-journal-section" aria-controls="trade-journal-section"><span aria-hidden="true">TJ</span><span>Trade Journal</span></button>
+                <button type="button" class="nav-button" data-section="taxes-section" aria-controls="taxes-section"><span aria-hidden="true">TX</span><span>Taxes</span></button>
             </nav>
 
             <div class="sidebar-footer">
@@ -924,7 +926,128 @@
                      Research Lab section
                 ====================================== -->
 
+                
                 <section
+                    id="trade-journal-section"
+                    class="app-section hidden"
+                    hidden
+                    aria-labelledby="trade-journal-section-title"
+                >
+                    <div class="section-heading">
+                        <p class="panel-kicker">AI Trade Review</p>
+                        <h2 id="trade-journal-section-title">Trade Journal</h2>
+                        <p>
+                            Review each completed trade with entry and exit details,
+                            AI reasoning, realized results, and learning evidence.
+                        </p>
+                    </div>
+
+                    <section class="trade-journal-grid">
+                        <article class="panel trade-journal-summary-panel">
+                            <div class="panel-header">
+                                <div>
+                                    <p class="panel-kicker">Summary</p>
+                                    <h2>Completed Trade Review</h2>
+                                </div>
+
+                                <button
+                                    id="refresh-trade-journal-button"
+                                    type="button"
+                                    class="secondary-button"
+                                >
+                                    Refresh
+                                </button>
+                            </div>
+
+                            <div
+                                id="trade-journal-summary"
+                                class="trade-journal-summary"
+                                aria-live="polite"
+                            >
+                                <p>No completed trade data loaded yet.</p>
+                            </div>
+                        </article>
+
+                        <article class="panel trade-journal-list-panel">
+                            <div class="panel-header">
+                                <div>
+                                    <p class="panel-kicker">History</p>
+                                    <h2>Buy / Sell Explanations</h2>
+                                </div>
+                            </div>
+
+                            <div
+                                id="trade-journal-list"
+                                class="trade-journal-list"
+                                aria-live="polite"
+                            >
+                                <p>No completed trades loaded yet.</p>
+                            </div>
+                        </article>
+                    </section>
+                </section>
+
+                <section
+                    id="taxes-section"
+                    class="app-section hidden"
+                    hidden
+                    aria-labelledby="taxes-section-title"
+                >
+                    <div class="section-heading">
+                        <p class="panel-kicker">Tax Tracking</p>
+                        <h2 id="taxes-section-title">Taxes</h2>
+                        <p>
+                            Review realized paper-trading gains and losses by year.
+                            This is tracking support, not an official tax document.
+                        </p>
+                    </div>
+
+                    <section class="taxes-grid">
+                        <article class="panel taxes-summary-panel">
+                            <div class="panel-header">
+                                <div>
+                                    <p class="panel-kicker">Year Summary</p>
+                                    <h2>Realized Results</h2>
+                                </div>
+
+                                <label class="compact-field" for="tax-year">
+                                    <span>Tax Year</span>
+                                    <select id="tax-year">
+                                        <option value="2026">2026</option>
+                                    </select>
+                                </label>
+                            </div>
+
+                            <div
+                                id="tax-summary"
+                                class="tax-summary"
+                                aria-live="polite"
+                            >
+                                <p>No tax summary loaded yet.</p>
+                            </div>
+                        </article>
+
+                        <article class="panel taxes-trades-panel">
+                            <div class="panel-header">
+                                <div>
+                                    <p class="panel-kicker">Closed Trades</p>
+                                    <h2>Realized Gain / Loss Detail</h2>
+                                </div>
+                            </div>
+
+                            <div
+                                id="tax-trades-list"
+                                class="tax-trades-list"
+                                aria-live="polite"
+                            >
+                                <p>No closed trades loaded yet.</p>
+                            </div>
+                        </article>
+                    </section>
+                </section>
+
+
+<section
                     id="strategy-section"
                     class="strategy-section app-section hidden"
                     aria-labelledby="strategy-title"
@@ -1055,6 +1178,8 @@
     <script src="js/notifications.js"></script>
     <script src="js/charts.js"></script>
     <script src="js/trades.js"></script>
+    <script src="js/trade-journal.js"></script>
+    <script src="js/taxes.js"></script>
     <script src="js/scanner.js"></script>
     <script src="js/search.js"></script>
     <script src="js/watchlist.js"></script>
@@ -1164,6 +1289,20 @@
 
                 if (sectionId === "scanner-section") {
                     window.setTimeout(() => window.loadWatchlist?.(), 80);
+                }
+
+                if (sectionId === "trade-journal-section") {
+                    window.setTimeout(
+                        () => window.loadTradeJournal?.(),
+                        80
+                    );
+                }
+
+                if (sectionId === "taxes-section") {
+                    window.setTimeout(
+                        () => window.loadTaxes?.(),
+                        80
+                    );
                 }
 
                 if (sectionId === "notifications-section") {

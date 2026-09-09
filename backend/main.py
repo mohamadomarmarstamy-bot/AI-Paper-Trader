@@ -8242,6 +8242,31 @@ def auto_trader_history(
                                 "take_profit_percent"
                             )
                         ),
+                        "mfe_percent": (
+                            learning_outcome.get(
+                                "mfe_percent"
+                            )
+                        ),
+                        "mae_percent": (
+                            learning_outcome.get(
+                                "mae_percent"
+                            )
+                        ),
+                        "excursion_max_price": (
+                            learning_outcome.get(
+                                "excursion_max_price"
+                            )
+                        ),
+                        "excursion_min_price": (
+                            learning_outcome.get(
+                                "excursion_min_price"
+                            )
+                        ),
+                        "excursion_observation_count": (
+                            learning_outcome.get(
+                                "excursion_observation_count"
+                            )
+                        ),
                         "holding_seconds": (
                             learning_outcome.get(
                                 "holding_seconds"

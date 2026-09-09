@@ -3223,3 +3223,126 @@ td[colspan] {
         flex-shrink: 1;
     }
 }
+
+/* =========================================================
+   Trade Journal
+========================================================= */
+
+.trade-journal-grid,
+.taxes-grid {
+    display: grid;
+    gap: 1.25rem;
+}
+
+.trade-journal-summary-grid,
+.trade-journal-metrics-grid,
+.tax-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(
+        auto-fit,
+        minmax(140px, 1fr)
+    );
+    gap: 0.9rem;
+}
+
+.trade-journal-summary {
+    margin-top: 1rem;
+}
+
+.trade-journal-list {
+    display: grid;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.trade-journal-card {
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+    border-radius: 14px;
+    padding: 1rem;
+    background: rgba(255, 255, 255, 0.025);
+}
+
+.trade-journal-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.trade-journal-card-header h3 {
+    margin: 0;
+}
+
+.trade-journal-pnl {
+    font-size: 1.05rem;
+}
+
+.trade-journal-pnl.positive {
+    color: var(--positive-color, #4ade80);
+}
+
+.trade-journal-pnl.negative {
+    color: var(--negative-color, #f87171);
+}
+
+.trade-journal-metric {
+    display: grid;
+    gap: 0.25rem;
+    min-width: 0;
+}
+
+.trade-journal-metric span {
+    font-size: 0.78rem;
+    opacity: 0.7;
+}
+
+.trade-journal-metric strong {
+    font-size: 0.95rem;
+    overflow-wrap: anywhere;
+}
+
+.trade-journal-details {
+    margin-top: 1rem;
+    border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+    padding-top: 0.85rem;
+}
+
+.trade-journal-details summary {
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.trade-journal-explanation {
+    display: grid;
+    gap: 0.55rem;
+    margin-top: 0.85rem;
+}
+
+.trade-journal-explanation h4 {
+    margin: 0.35rem 0 0;
+}
+
+.trade-journal-explanation p {
+    margin: 0;
+    line-height: 1.55;
+}
+
+.trade-journal-timestamps {
+    opacity: 0.7;
+    font-size: 0.82rem;
+    margin-top: 0.5rem !important;
+}
+
+.tax-summary,
+.tax-trades-list {
+    margin-top: 1rem;
+}
+
+@media (max-width: 720px) {
+    .trade-journal-card-header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+}
+
