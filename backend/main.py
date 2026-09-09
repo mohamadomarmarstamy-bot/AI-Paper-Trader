@@ -5,7 +5,7 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 import hashlib
 import hmac
@@ -30,6 +30,7 @@ from database import (
     load_learning_outcomes,
     record_trade_book_event,
     save_learning_outcome,
+    upsert_trade_excursion,
 )
 from indicators import (
     calculate_rsi,
@@ -5719,6 +5720,35 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 and current_price is not None
                 and current_price > 0
             ):
+                try:
+                    open_book_entry = (
+                        load_open_trade_book_entry(
+                            symbol
+                        )
+                    )
+
+                    if open_book_entry:
+                        upsert_trade_excursion(
+                            trade_book_id=int(
+                                open_book_entry["id"]
+                            ),
+                            symbol=symbol,
+                            entry_price=entry_price,
+                            current_price=current_price,
+                            observed_at=(
+                                datetime.now(
+                                    timezone.utc
+                                ).isoformat()
+                            ),
+                        )
+
+                except Exception as error:
+                    print(
+                        "Could not update trade excursion "
+                        f"for {symbol}: "
+                        f"{clean_error_message(error)}"
+                    )
+
                 return_percent = (
                     calculate_position_return_percent(
                         entry_price=entry_price,
@@ -9358,6 +9388,9 @@ def sell(
         shares=shares,
         side="sell",
     )
+
+
+
 
 
 

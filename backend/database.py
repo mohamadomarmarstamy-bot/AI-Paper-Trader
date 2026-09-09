@@ -335,6 +335,26 @@ def initialize_database() -> None:
 
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS trade_excursions (
+                trade_book_id INTEGER PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                max_price REAL NOT NULL,
+                min_price REAL NOT NULL,
+                mfe_percent REAL NOT NULL,
+                mae_percent REAL NOT NULL,
+                observation_count INTEGER NOT NULL DEFAULT 1,
+                first_observed_at TEXT NOT NULL,
+                last_observed_at TEXT NOT NULL,
+                FOREIGN KEY(trade_book_id)
+                    REFERENCES trade_book(id)
+                    ON DELETE CASCADE
+            )
+            """
+        )
+
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS account (
                 id INTEGER PRIMARY KEY CHECK(id = 1),
                 cash REAL NOT NULL
@@ -424,6 +444,13 @@ def initialize_database() -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_trade_book_events_symbol
             ON trade_book_events(symbol)
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_trade_excursions_symbol
+            ON trade_excursions(symbol)
             """
         )
 
@@ -1097,6 +1124,175 @@ def record_trade_book_event(
         raise RuntimeError("The trade-book event was saved without an ID.")
     return int(event_id)
 
+def upsert_trade_excursion(
+    *,
+    trade_book_id: int,
+    symbol: str,
+    entry_price: float,
+    current_price: float,
+    observed_at: str,
+) -> dict[str, Any]:
+    """Create or update passive MFE/MAE tracking for one trade."""
+    normalized_trade_book_id = _validate_positive_integer(
+        trade_book_id,
+        "Trade-book ID",
+    )
+    normalized_symbol = _normalize_symbol(symbol)
+    normalized_entry_price = _validate_finite_number(
+        entry_price,
+        "Entry price",
+        allow_zero=False,
+    )
+    normalized_current_price = _validate_finite_number(
+        current_price,
+        "Current price",
+        allow_zero=False,
+    )
+    normalized_observed_at = _validate_timestamp(
+        observed_at
+    )
+
+    return_percent = (
+        (
+            normalized_current_price
+            - normalized_entry_price
+        )
+        / normalized_entry_price
+    ) * 100
+
+    with get_connection() as connection:
+        existing = connection.execute(
+            """
+            SELECT *
+            FROM trade_excursions
+            WHERE trade_book_id = ?
+            """,
+            (normalized_trade_book_id,),
+        ).fetchone()
+
+        if existing is None:
+            max_price = max(
+                normalized_entry_price,
+                normalized_current_price,
+            )
+            min_price = min(
+                normalized_entry_price,
+                normalized_current_price,
+            )
+            mfe_percent = max(
+                0.0,
+                return_percent,
+            )
+            mae_percent = min(
+                0.0,
+                return_percent,
+            )
+            observation_count = 1
+            first_observed_at = normalized_observed_at
+
+            connection.execute(
+                """
+                INSERT INTO trade_excursions (
+                    trade_book_id,
+                    symbol,
+                    entry_price,
+                    max_price,
+                    min_price,
+                    mfe_percent,
+                    mae_percent,
+                    observation_count,
+                    first_observed_at,
+                    last_observed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    normalized_trade_book_id,
+                    normalized_symbol,
+                    normalized_entry_price,
+                    max_price,
+                    min_price,
+                    mfe_percent,
+                    mae_percent,
+                    observation_count,
+                    first_observed_at,
+                    normalized_observed_at,
+                ),
+            )
+
+        else:
+            max_price = max(
+                float(existing["max_price"]),
+                normalized_current_price,
+            )
+            min_price = min(
+                float(existing["min_price"]),
+                normalized_current_price,
+            )
+
+            mfe_percent = (
+                (
+                    max_price
+                    - normalized_entry_price
+                )
+                / normalized_entry_price
+            ) * 100
+
+            mae_percent = (
+                (
+                    min_price
+                    - normalized_entry_price
+                )
+                / normalized_entry_price
+            ) * 100
+
+            observation_count = (
+                int(existing["observation_count"])
+                + 1
+            )
+
+            first_observed_at = str(
+                existing["first_observed_at"]
+            )
+
+            connection.execute(
+                """
+                UPDATE trade_excursions
+                SET symbol = ?,
+                    entry_price = ?,
+                    max_price = ?,
+                    min_price = ?,
+                    mfe_percent = ?,
+                    mae_percent = ?,
+                    observation_count = ?,
+                    last_observed_at = ?
+                WHERE trade_book_id = ?
+                """,
+                (
+                    normalized_symbol,
+                    normalized_entry_price,
+                    max_price,
+                    min_price,
+                    mfe_percent,
+                    mae_percent,
+                    observation_count,
+                    normalized_observed_at,
+                    normalized_trade_book_id,
+                ),
+            )
+
+    return {
+        "trade_book_id": normalized_trade_book_id,
+        "symbol": normalized_symbol,
+        "entry_price": normalized_entry_price,
+        "max_price": max_price,
+        "min_price": min_price,
+        "mfe_percent": mfe_percent,
+        "mae_percent": mae_percent,
+        "observation_count": observation_count,
+        "first_observed_at": first_observed_at,
+        "last_observed_at": normalized_observed_at,
+    }
 
 def load_trade_book_events(
     *,
