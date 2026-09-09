@@ -1505,35 +1505,75 @@ def load_learning_outcomes(
     symbol: str | None = None,
     limit: int = 5000,
 ) -> list[dict[str, Any]]:
-    """Load completed learning outcomes newest first."""
-    safe_limit = max(1, min(int(limit), 10000))
+    """
+    Load completed learning outcomes newest first,
+    including passive MFE/MAE excursion evidence when available.
+    """
+    safe_limit = max(
+        1,
+        min(
+            int(limit),
+            10000,
+        ),
+    )
+
     params: list[Any] = []
     where_sql = ""
+
     if symbol is not None:
-        where_sql = " WHERE symbol = ?"
-        params.append(_normalize_symbol(symbol))
-    params.append(safe_limit)
+        where_sql = " WHERE lo.symbol = ?"
+        params.append(
+            _normalize_symbol(symbol)
+        )
+
+    params.append(
+        safe_limit
+    )
 
     with get_connection() as connection:
         rows = connection.execute(
             f"""
-            SELECT *
-            FROM learning_outcomes
+            SELECT
+                lo.*,
+                te.max_price AS excursion_max_price,
+                te.min_price AS excursion_min_price,
+                te.mfe_percent,
+                te.mae_percent,
+                te.observation_count AS excursion_observation_count,
+                te.first_observed_at AS excursion_first_observed_at,
+                te.last_observed_at AS excursion_last_observed_at
+            FROM learning_outcomes AS lo
+            LEFT JOIN trade_excursions AS te
+                ON te.trade_book_id = lo.trade_book_id
             {where_sql}
-            ORDER BY id DESC
+            ORDER BY lo.id DESC
             LIMIT ?
             """,
             tuple(params),
         ).fetchall()
 
     results: list[dict[str, Any]] = []
+
     for row in rows:
         item = dict(row)
-        item["won"] = bool(item.get("won"))
-        item["metadata"] = _deserialize_json_object(
-            item.pop("metadata_json", "{}")
+
+        item["won"] = bool(
+            item.get("won")
         )
-        results.append(item)
+
+        item["metadata"] = (
+            _deserialize_json_object(
+                item.pop(
+                    "metadata_json",
+                    "{}",
+                )
+            )
+        )
+
+        results.append(
+            item
+        )
+
     return results
 
 
@@ -1541,10 +1581,21 @@ def calculate_learning_summary(
     *,
     minimum_required: int = 10,
 ) -> dict[str, Any]:
-    """Summarize learning evidence without mutating strategy settings."""
-    outcomes = load_learning_outcomes(limit=10000)
+    """
+    Summarize completed learning evidence, including
+    passive MFE/MAE excursion behavior.
+
+    This function does not change strategy settings.
+    """
+    outcomes = load_learning_outcomes(
+        limit=10000
+    )
+
     completed = len(outcomes)
-    minimum = max(1, int(minimum_required))
+    minimum = max(
+        1,
+        int(minimum_required),
+    )
 
     if completed == 0:
         return {
@@ -1556,18 +1607,158 @@ def calculate_learning_summary(
             "win_rate_percent": 0.0,
             "average_return_percent": 0.0,
             "average_profit_loss": 0.0,
+            "excursion_trade_count": 0,
+            "average_mfe_percent": None,
+            "average_mae_percent": None,
+            "winner_average_mfe_percent": None,
+            "winner_average_mae_percent": None,
+            "loser_average_mfe_percent": None,
+            "loser_average_mae_percent": None,
+            "gave_back_profit_count": 0,
+            "gave_back_profit_percent": 0.0,
+            "never_profitable_count": 0,
+            "never_profitable_percent": 0.0,
         }
 
-    wins = sum(1 for outcome in outcomes if bool(outcome.get("won")))
+    wins = sum(
+        1
+        for outcome in outcomes
+        if bool(outcome.get("won"))
+    )
+
     losses = completed - wins
-    average_return = sum(
-        float(outcome.get("realized_return_percent", 0.0) or 0.0)
+
+    average_return = (
+        sum(
+            float(
+                outcome.get(
+                    "realized_return_percent",
+                    0.0,
+                )
+                or 0.0
+            )
+            for outcome in outcomes
+        )
+        / completed
+    )
+
+    average_profit_loss = (
+        sum(
+            float(
+                outcome.get(
+                    "realized_profit_loss",
+                    0.0,
+                )
+                or 0.0
+            )
+            for outcome in outcomes
+        )
+        / completed
+    )
+
+    excursion_outcomes = [
+        outcome
         for outcome in outcomes
-    ) / completed
-    average_profit_loss = sum(
-        float(outcome.get("realized_profit_loss", 0.0) or 0.0)
-        for outcome in outcomes
-    ) / completed
+        if outcome.get("mfe_percent") is not None
+        and outcome.get("mae_percent") is not None
+    ]
+
+    excursion_trade_count = len(
+        excursion_outcomes
+    )
+
+    winner_excursions = [
+        outcome
+        for outcome in excursion_outcomes
+        if bool(outcome.get("won"))
+    ]
+
+    loser_excursions = [
+        outcome
+        for outcome in excursion_outcomes
+        if not bool(outcome.get("won"))
+    ]
+
+    def average_field(
+        rows: list[dict[str, Any]],
+        field: str,
+    ) -> float | None:
+        if not rows:
+            return None
+
+        return sum(
+            float(row.get(field) or 0.0)
+            for row in rows
+        ) / len(rows)
+
+    average_mfe = average_field(
+        excursion_outcomes,
+        "mfe_percent",
+    )
+
+    average_mae = average_field(
+        excursion_outcomes,
+        "mae_percent",
+    )
+
+    winner_average_mfe = average_field(
+        winner_excursions,
+        "mfe_percent",
+    )
+
+    winner_average_mae = average_field(
+        winner_excursions,
+        "mae_percent",
+    )
+
+    loser_average_mfe = average_field(
+        loser_excursions,
+        "mfe_percent",
+    )
+
+    loser_average_mae = average_field(
+        loser_excursions,
+        "mae_percent",
+    )
+
+    gave_back_profit = [
+        outcome
+        for outcome in excursion_outcomes
+        if float(
+            outcome.get(
+                "mfe_percent",
+                0.0,
+            )
+            or 0.0
+        ) >= 0.5
+        and float(
+            outcome.get(
+                "realized_return_percent",
+                0.0,
+            )
+            or 0.0
+        ) <= 0.0
+    ]
+
+    never_profitable = [
+        outcome
+        for outcome in excursion_outcomes
+        if float(
+            outcome.get(
+                "mfe_percent",
+                0.0,
+            )
+            or 0.0
+        ) <= 0.0
+    ]
+
+    gave_back_profit_count = len(
+        gave_back_profit
+    )
+
+    never_profitable_count = len(
+        never_profitable
+    )
 
     return {
         "completed_trades": completed,
@@ -1575,9 +1766,81 @@ def calculate_learning_summary(
         "enough_data": completed >= minimum,
         "wins": wins,
         "losses": losses,
-        "win_rate_percent": round((wins / completed) * 100, 4),
-        "average_return_percent": round(average_return, 4),
-        "average_profit_loss": round(average_profit_loss, 4),
+        "win_rate_percent": round(
+            (wins / completed) * 100,
+            4,
+        ),
+        "average_return_percent": round(
+            average_return,
+            4,
+        ),
+        "average_profit_loss": round(
+            average_profit_loss,
+            4,
+        ),
+        "excursion_trade_count": (
+            excursion_trade_count
+        ),
+        "average_mfe_percent": (
+            round(average_mfe, 4)
+            if average_mfe is not None
+            else None
+        ),
+        "average_mae_percent": (
+            round(average_mae, 4)
+            if average_mae is not None
+            else None
+        ),
+        "winner_average_mfe_percent": (
+            round(winner_average_mfe, 4)
+            if winner_average_mfe is not None
+            else None
+        ),
+        "winner_average_mae_percent": (
+            round(winner_average_mae, 4)
+            if winner_average_mae is not None
+            else None
+        ),
+        "loser_average_mfe_percent": (
+            round(loser_average_mfe, 4)
+            if loser_average_mfe is not None
+            else None
+        ),
+        "loser_average_mae_percent": (
+            round(loser_average_mae, 4)
+            if loser_average_mae is not None
+            else None
+        ),
+        "gave_back_profit_count": (
+            gave_back_profit_count
+        ),
+        "gave_back_profit_percent": (
+            round(
+                (
+                    gave_back_profit_count
+                    / excursion_trade_count
+                )
+                * 100,
+                4,
+            )
+            if excursion_trade_count
+            else 0.0
+        ),
+        "never_profitable_count": (
+            never_profitable_count
+        ),
+        "never_profitable_percent": (
+            round(
+                (
+                    never_profitable_count
+                    / excursion_trade_count
+                )
+                * 100,
+                4,
+            )
+            if excursion_trade_count
+            else 0.0
+        ),
     }
 
 
