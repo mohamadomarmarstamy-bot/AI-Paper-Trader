@@ -4137,6 +4137,51 @@ def submit_alpaca_recovery_oco(
         )
 
         if not canceled_ids:
+            try:
+                current_positions = (
+                    fetch_alpaca_paper_positions()
+                )
+
+                position_still_open = any(
+                    clean_symbol(
+                        item.get("symbol")
+                    ) == normalized_symbol
+                    and (
+                        safe_float(
+                            item.get("qty")
+                        ) or 0
+                    ) > 0
+                    for item in current_positions
+                    if isinstance(item, dict)
+                )
+
+            except Exception as error:
+                return {
+                    "success": False,
+                    "paper": True,
+                    "error": (
+                        f"{normalized_symbol} had incomplete "
+                        "sell protection and the existing "
+                        "order could not be canceled. "
+                        "The position state also could not "
+                        "be confirmed: "
+                        f"{clean_error_message(error)}"
+                    ),
+                }
+
+            if not position_still_open:
+                return {
+                    "success": True,
+                    "paper": True,
+                    "symbol": normalized_symbol,
+                    "position_closed": True,
+                    "reconciled": True,
+                    "message": (
+                        "The position closed while recovery "
+                        "protection was being reconciled."
+                    ),
+                }
+
             return {
                 "success": False,
                 "paper": True,
@@ -4383,6 +4428,25 @@ def reconcile_unprotected_positions(
         if result.get(
             "already_protected"
         ):
+            continue
+
+        if result.get(
+            "position_closed"
+        ):
+            add_auto_trader_log(
+                "protection_reconciled",
+                symbol=symbol,
+                message=(
+                    "Position closed while automatic PAPER "
+                    "protection was being reconciled."
+                ),
+                details={
+                    "shares": shares,
+                    "result_success": True,
+                    "position_closed": True,
+                    "reconciled": True,
+                },
+            )
             continue
 
         if result.get(
