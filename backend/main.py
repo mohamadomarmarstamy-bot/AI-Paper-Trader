@@ -3,6 +3,7 @@ import json
 import math
 import os
 import time
+from zoneinfo import ZoneInfo
 import threading
 import uuid
 from contextlib import asynccontextmanager
@@ -244,9 +245,11 @@ APP_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
 
 _auto_trader_cycle_running = False
 _auto_trader_last_cycle_at: float | None = None
+_auto_trader_last_successful_cycle_at: float | None = None
 _auto_trader_last_cycle_result: dict[str, Any] | None = None
 _auto_trader_last_scan_at: float | None = None
 _auto_trader_last_trade_at: float | None = None
+_auto_trader_daily_health_email_date: str | None = None
 _auto_trader_health_alert_active = False
 _auto_trader_health_alerted_at: float | None = None
 
@@ -5523,6 +5526,7 @@ def run_auto_trader_cycle() -> dict[str, Any]:
     """
     global _auto_trader_cycle_running
     global _auto_trader_last_cycle_at
+    global _auto_trader_last_successful_cycle_at
     global _auto_trader_last_cycle_result
 
     if _auto_trader_cycle_running:
@@ -7454,6 +7458,10 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             "new_positions_opened"
         ] = new_positions
 
+        _auto_trader_last_successful_cycle_at = (
+            time.time()
+        )
+
         return cycle_result
 
     except Exception as error:
@@ -7676,6 +7684,126 @@ def send_auto_trader_health_notifications(
     }
 
 
+def maybe_send_daily_auto_trader_health_email() -> None:
+    global _auto_trader_daily_health_email_date
+
+    eastern_now = datetime.now(
+        ZoneInfo("America/New_York")
+    )
+
+    today = eastern_now.date().isoformat()
+
+    if eastern_now.hour != 8:
+        return
+
+    if (
+        _auto_trader_daily_health_email_date
+        == today
+    ):
+        return
+
+    _auto_trader_daily_health_email_date = today
+
+    now = time.time()
+
+    successful_cycle_age = (
+        now - _auto_trader_last_successful_cycle_at
+        if _auto_trader_last_successful_cycle_at
+        is not None
+        else None
+    )
+
+    scan_age = (
+        now - _auto_trader_last_scan_at
+        if _auto_trader_last_scan_at is not None
+        else None
+    )
+
+    # Allow for weekends when deciding whether the
+    # most recent successful scanner activity is recent.
+    recent_scan = (
+        scan_age is not None
+        and scan_age <= 72 * 60 * 60
+    )
+
+    recent_successful_cycle = (
+        successful_cycle_age is not None
+        and successful_cycle_age <= 72 * 60 * 60
+    )
+
+    scanner_good = (
+        _auto_trader_enabled
+        and not _auto_trader_health_alert_active
+        and recent_scan
+        and recent_successful_cycle
+    )
+
+    status = (
+        "GOOD"
+        if scanner_good
+        else "CHECK NEEDED"
+    )
+
+    def format_age(
+        seconds: float | None,
+    ) -> str:
+        if seconds is None:
+            return "Never"
+
+        minutes = max(
+            0,
+            int(seconds // 60),
+        )
+
+        if minutes < 60:
+            return f"{minutes} minutes ago"
+
+        hours = minutes // 60
+
+        if hours < 48:
+            return f"{hours} hours ago"
+
+        days = hours // 24
+        return f"{days} days ago"
+
+    message = "\n".join(
+        [
+            "AI Paper Trader Daily Health Report",
+            "",
+            f"Scanner status: {status}",
+            (
+                "Auto trader enabled: "
+                f"{_auto_trader_enabled}"
+            ),
+            (
+                "Health alert active: "
+                f"{_auto_trader_health_alert_active}"
+            ),
+            (
+                "Last successful cycle: "
+                f"{format_age(successful_cycle_age)}"
+            ),
+            (
+                "Last successful scan: "
+                f"{format_age(scan_age)}"
+            ),
+            "",
+            (
+                "This is your automatic "
+                "8:00 AM Eastern health report."
+            ),
+        ]
+    )
+
+    send_health_alert_email(
+        (
+            "AI Paper Trader - "
+            f"Morning Scanner Status: {status}"
+        ),
+        message,
+    )
+
+
 async def auto_trader_health_watchdog() -> None:
     """
     Watch the PAPER auto-trader independently from its trading loop.
@@ -7687,8 +7815,14 @@ async def auto_trader_health_watchdog() -> None:
     global _auto_trader_health_alert_active
     global _auto_trader_health_alerted_at
 
+    market_open_observed_at: float | None = None
+
     while True:
         try:
+            await asyncio.to_thread(
+                maybe_send_daily_auto_trader_health_email
+            )
+
             should_monitor = (
                 _auto_trader_enabled
                 and auto_trader_automation_allowed()
@@ -7706,47 +7840,36 @@ async def auto_trader_health_watchdog() -> None:
                 if market_is_open:
                     now = time.time()
 
-                    cycle_reference_at = (
-                        _auto_trader_last_cycle_at
-                        if _auto_trader_last_cycle_at is not None
-                        else _auto_trader_enabled_at
-                    )
+                    if market_open_observed_at is None:
+                        market_open_observed_at = now
 
-                    scan_reference_at = (
-                        _auto_trader_last_scan_at
-                        if _auto_trader_last_scan_at is not None
-                        else _auto_trader_enabled_at
+                    # Use the newest relevant timestamp so a
+                    # restart, market open, or newly enabled trader
+                    # receives a fresh grace period.
+                    reference_candidates = [
+                        timestamp
+                        for timestamp in (
+                            market_open_observed_at,
+                            _auto_trader_enabled_at,
+                            _auto_trader_last_successful_cycle_at,
+                        )
+                        if timestamp is not None
+                    ]
+
+                    cycle_reference_at = (
+                        max(reference_candidates)
+                        if reference_candidates
+                        else now
                     )
 
                     cycle_age_seconds = (
                         now - cycle_reference_at
-                        if cycle_reference_at is not None
-                        else None
                     )
 
-                    scan_age_seconds = (
-                        now - scan_reference_at
-                        if scan_reference_at is not None
-                        else None
-                    )
-
-                    cycle_stalled = (
-                        cycle_age_seconds is not None
-                        and cycle_age_seconds
+                    stalled = (
+                        cycle_age_seconds
                         >= AUTO_TRADER_HEALTH_STALE_SECONDS
                     )
-
-                    scan_stalled = (
-                        scan_age_seconds is not None
-                        and scan_age_seconds
-                        >= AUTO_TRADER_HEALTH_STALE_SECONDS
-                    )
-
-                    # The cycle heartbeat is the authoritative
-                    # health trigger. A hung scanner also prevents the
-                    # cycle heartbeat from advancing, while an old scan
-                    # can be completely normal outside market hours.
-                    stalled = cycle_stalled
 
                     if (
                         stalled
@@ -7757,10 +7880,10 @@ async def auto_trader_health_watchdog() -> None:
 
                         alert_message = (
                             "AI Paper Trader ALERT: "
-                            "No trading cycle has started for "
-                            "at least 30 minutes while the "
-                            "market is open. Check the trader "
-                            "and scanner."
+                            "No successful trading cycle has "
+                            "completed for at least 30 minutes "
+                            "while the market is open. "
+                            "Check the trader and scanner."
                         )
 
                         add_auto_trader_log(
@@ -7783,9 +7906,9 @@ async def auto_trader_health_watchdog() -> None:
 
                         recovery_message = (
                             "AI Paper Trader RECOVERED: "
-                            "Trading-cycle activity has resumed "
-                            "and the trader health watchdog is "
-                            "back to normal."
+                            "A successful trading cycle has "
+                            "completed and the trader health "
+                            "watchdog is back to normal."
                         )
 
                         add_auto_trader_log(
@@ -7798,6 +7921,9 @@ async def auto_trader_health_watchdog() -> None:
                             "AI Paper Trader - Recovered",
                             recovery_message,
                         )
+
+                else:
+                    market_open_observed_at = None
 
         except Exception as error:
             error_message = clean_error_message(
