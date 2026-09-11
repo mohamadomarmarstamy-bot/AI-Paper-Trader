@@ -3334,6 +3334,7 @@ def auto_trader_event_needs_error_email(
             "cycle_error",
             "background_error",
             "broker_exit_scan_error",
+            "health_watchdog_error",
         }
         or normalized_event.endswith("_failed")
     )
@@ -7799,9 +7800,18 @@ async def auto_trader_health_watchdog() -> None:
                         )
 
         except Exception as error:
+            error_message = clean_error_message(
+                error
+            )
+
             print(
                 "Auto-trader health watchdog error: "
-                f"{clean_error_message(error)}"
+                f"{error_message}"
+            )
+
+            add_auto_trader_log(
+                "health_watchdog_error",
+                message=error_message,
             )
 
         await asyncio.sleep(
