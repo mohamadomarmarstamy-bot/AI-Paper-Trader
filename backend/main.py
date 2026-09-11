@@ -8178,10 +8178,17 @@ def get_auto_trader_status() -> dict[str, Any]:
         else None
     )
 
+    latest_cycle_failed = (
+        isinstance(_auto_trader_last_cycle_result, dict)
+        and _auto_trader_last_cycle_result.get("success") is False
+    )
+
     if not _auto_trader_enabled:
         health = "disabled"
     elif _auto_trader_health_alert_active:
         health = "stalled"
+    elif latest_cycle_failed:
+        health = "degraded"
     elif (
         _auto_trader_last_successful_cycle_at is None
         or _auto_trader_last_scan_at is None
