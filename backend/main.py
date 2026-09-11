@@ -6767,19 +6767,28 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 ) or 0.0
 
                 if (
-                    win_rate < 45.0
-                    or average_return < 0
+                    win_rate < 35.0
+                    or average_return < -1.0
                 ):
                     learning_score_min = min(
                         90.0,
                         AUTO_TRADER_ENTRY_SCORE_MIN
                         + 5.0,
                     )
-
+                elif (
+                    win_rate < 45.0
+                    or average_return < 0
+                ):
+                    learning_score_min = min(
+                        90.0,
+                        AUTO_TRADER_ENTRY_SCORE_MIN
+                        + 2.0,
+                    )
             learning_adjusted = (
                 learning_score_min
                 > AUTO_TRADER_ENTRY_SCORE_MIN
             )
+
 
             # -------------------------------------------------
             # Broad-market regime adjustment.
