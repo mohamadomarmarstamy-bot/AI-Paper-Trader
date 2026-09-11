@@ -3,6 +3,7 @@ import json
 import math
 import os
 import time
+import threading
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -248,6 +249,9 @@ _auto_trader_last_scan_at: float | None = None
 _auto_trader_last_trade_at: float | None = None
 _auto_trader_health_alert_active = False
 _auto_trader_health_alerted_at: float | None = None
+
+AUTO_TRADER_ERROR_EMAIL_COOLDOWN_SECONDS = 30 * 60
+_auto_trader_error_email_last_sent: dict[str, float] = {}
 _auto_trader_symbol_cooldowns: dict[str, float] = {}
 _auto_trader_log: list[dict[str, Any]] = []
 _auto_trader_journal: list[dict[str, Any]] = []
@@ -685,6 +689,11 @@ def alpaca_paper_request(
             payload
         )
 
+        message = (
+            f"{normalized_method} {path} failed with "
+            f"HTTP {response.status_code}: {message}"
+        )
+
         if request_id:
             message = (
                 f"{message} "
@@ -771,6 +780,11 @@ def alpaca_market_data_request(
 
         message = extract_alpaca_error(
             payload
+        )
+
+        message = (
+            f"{normalized_method} {path} failed with "
+            f"HTTP {response.status_code}: {message}"
         )
 
         if request_id:
@@ -3310,6 +3324,110 @@ def load_auto_trader_journal() -> None:
             f"{clean_error_message(error)}"
         )
 
+def auto_trader_event_needs_error_email(
+    event: str,
+) -> bool:
+    normalized_event = str(event).strip().lower()
+
+    return (
+        normalized_event in {
+            "cycle_error",
+            "background_error",
+            "broker_exit_scan_error",
+        }
+        or normalized_event.endswith("_failed")
+    )
+
+
+def maybe_send_auto_trader_error_email(
+    *,
+    event: str,
+    symbol: str | None,
+    message: str,
+) -> None:
+    if not auto_trader_event_needs_error_email(
+        event
+    ):
+        return
+
+    if not health_alert_env_enabled(
+        "HEALTH_ALERT_EMAIL_ENABLED"
+    ):
+        return
+
+    normalized_event = str(event).strip().lower()
+
+    normalized_symbol = (
+        clean_symbol(symbol)
+        if symbol
+        else ""
+    )
+
+    throttle_key = (
+        f"{normalized_event}:"
+        f"{normalized_symbol}"
+    )
+
+    now = time.time()
+
+    last_sent_at = (
+        _auto_trader_error_email_last_sent.get(
+            throttle_key
+        )
+    )
+
+    if (
+        last_sent_at is not None
+        and now - last_sent_at
+        < AUTO_TRADER_ERROR_EMAIL_COOLDOWN_SECONDS
+    ):
+        return
+
+    _auto_trader_error_email_last_sent[
+        throttle_key
+    ] = now
+
+    subject = (
+        "AI Paper Trader - Error Alert"
+    )
+
+    details = [
+        f"Event: {event}",
+    ]
+
+    if normalized_symbol:
+        details.append(
+            f"Symbol: {normalized_symbol}"
+        )
+
+    details.append(
+        f"Message: {message}"
+    )
+
+    email_message = "\n".join(
+        details
+    )
+
+    def send_email() -> None:
+        success = send_health_alert_email(
+            subject,
+            email_message,
+        )
+
+        if not success:
+            # Allow the next occurrence to retry instead
+            # of suppressing it for the full cooldown.
+            _auto_trader_error_email_last_sent.pop(
+                throttle_key,
+                None,
+            )
+
+    threading.Thread(
+        target=send_email,
+        daemon=True,
+    ).start()
+
+
 def add_auto_trader_log(
     event: str,
     *,
@@ -3338,6 +3456,12 @@ def add_auto_trader_log(
 
     _auto_trader_log.append(
         entry
+    )
+
+    maybe_send_auto_trader_error_email(
+        event=str(event),
+        symbol=symbol,
+        message=str(message),
     )
 
     save_auto_trader_log()
