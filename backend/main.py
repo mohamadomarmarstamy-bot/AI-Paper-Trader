@@ -30,6 +30,7 @@ from database import (
     load_trade_book,
     load_trade_book_events,
     load_learning_outcomes,
+    load_pro_ticker_research,
     load_trade_excursions,
     record_trade_book_event,
     save_learning_outcome,
@@ -44,6 +45,7 @@ from indicators import (
 )
 from paper_trader import PaperTrader
 from trade_reports import build_trade_report_pdf
+from pro_ticker_collector import collect_pro_ticker_article
 from scanner import (
     get_market_regime,
     get_symbol_news_context,
@@ -8813,6 +8815,103 @@ def auto_trader_excursions(
         "results": rows,
     }
 
+
+
+
+# =========================================================
+# Pro Ticker research routes
+# =========================================================
+
+@app.get("/auto-trader/pro-ticker-research")
+def auto_trader_pro_ticker_research(
+    request: Request,
+    symbol: str | None = Query(
+        default=None
+    ),
+    limit: int = Query(
+        default=100,
+        ge=1,
+        le=1000,
+    ),
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    rows = load_pro_ticker_research(
+        symbol=symbol,
+        limit=limit,
+    )
+
+    return {
+        "paper": True,
+        "research_only": True,
+        "count": len(rows),
+        "results": rows,
+    }
+
+
+@app.post("/auto-trader/pro-ticker-research/collect")
+def auto_trader_collect_pro_ticker_research(
+    request: Request,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    article_url = str(
+        payload.get(
+            "article_url",
+            "",
+        )
+    ).strip()
+
+    if not article_url:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "article_url is required."
+            ),
+        )
+
+    try:
+        result = (
+            collect_pro_ticker_article(
+                article_url
+            )
+        )
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        ) from error
+
+    except requests.RequestException as error:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Pro Ticker article "
+                f"request failed: {error}"
+            ),
+        ) from error
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Pro Ticker research "
+                f"collection failed: {error}"
+            ),
+        ) from error
+
+    return {
+        "paper": True,
+        "research_only": True,
+        "success": True,
+        "result": result,
+    }
 
 
 # =========================================================
