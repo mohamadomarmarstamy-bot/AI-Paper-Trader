@@ -13,7 +13,7 @@
         const number = Number(value);
 
         if (!Number.isFinite(number)) {
-            return "—";
+            return "\u2014";
         }
 
         return number.toLocaleString(
@@ -29,7 +29,7 @@
         const number = Number(value);
 
         if (!Number.isFinite(number)) {
-            return "—";
+            return "\u2014";
         }
 
         return `${number.toFixed(2)}%`;
@@ -37,7 +37,7 @@
 
     function formatDateTime(value) {
         if (!value) {
-            return "—";
+            return "\u2014";
         }
 
         const date = new Date(value);
@@ -53,7 +53,7 @@
         const value = Number(seconds);
 
         if (!Number.isFinite(value) || value < 0) {
-            return "—";
+            return "\u2014";
         }
 
         if (value < 60) {
@@ -1053,12 +1053,12 @@
 
         if (summaryContainer) {
             summaryContainer.textContent =
-                "Loading trade summary…";
+                "Loading trade summary\u2026";
         }
 
         if (listContainer) {
             listContainer.textContent =
-                "Loading completed trades…";
+                "Loading completed trades\u2026";
         }
 
         try {
