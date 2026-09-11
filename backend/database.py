@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 import math
 import os
 import sqlite3
@@ -1379,6 +1380,291 @@ def load_trade_excursions(
         dict(row)
         for row in rows
     ]
+
+
+def upsert_pro_ticker_research(
+    *,
+    article_url: str,
+    symbol: str | None = None,
+    article_title: str | None = None,
+    published_date: str | None = None,
+    alert_date: str | None = None,
+    alert_time: str | None = None,
+    direction: str | None = None,
+    long_level: float | None = None,
+    short_level: float | None = None,
+    reported_high: float | None = None,
+    reported_low: float | None = None,
+    reported_move_percent: float | None = None,
+    setup_type: str | None = None,
+    relative_volume: str | None = None,
+    vwap_context: str | None = None,
+    vwma_context: str | None = None,
+    rsi_context: str | None = None,
+    volume_context: str | None = None,
+    consolidation_context: str | None = None,
+    higher_lows: bool | None = None,
+    breakout_context: str | None = None,
+    continuation_context: str | None = None,
+    exhaustion_context: str | None = None,
+    article_summary: str | None = None,
+    raw_features: dict[str, Any] | None = None,
+    our_scanner_seen: bool | None = None,
+    our_scanner_score: float | None = None,
+    our_scanner_confidence: float | None = None,
+    our_scanner_rank: int | None = None,
+    our_bot_action: str | None = None,
+    our_skip_reason: str | None = None,
+) -> dict[str, Any]:
+    """Insert or update one external Pro Ticker research record."""
+
+    normalized_url = str(article_url).strip()
+
+    if not normalized_url:
+        raise ValueError("Article URL cannot be empty.")
+
+    normalized_symbol = (
+        _normalize_symbol(symbol)
+        if symbol is not None and str(symbol).strip()
+        else None
+    )
+
+    def optional_text(value: Any) -> str | None:
+        if value is None:
+            return None
+
+        normalized = str(value).strip()
+        return normalized or None
+
+    def optional_number(value: Any) -> float | None:
+        if value is None:
+            return None
+
+        return _validate_finite_number(
+            value,
+            "Research numeric value",
+            allow_zero=True,
+        )
+
+    now = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    raw_features_json = _serialize_json_object(
+        raw_features
+    )
+
+    values = (
+        normalized_symbol,
+        normalized_url,
+        optional_text(article_title),
+        optional_text(published_date),
+        optional_text(alert_date),
+        optional_text(alert_time),
+        optional_text(direction),
+        optional_number(long_level),
+        optional_number(short_level),
+        optional_number(reported_high),
+        optional_number(reported_low),
+        optional_number(reported_move_percent),
+        optional_text(setup_type),
+        optional_text(relative_volume),
+        optional_text(vwap_context),
+        optional_text(vwma_context),
+        optional_text(rsi_context),
+        optional_text(volume_context),
+        optional_text(consolidation_context),
+        (
+            int(bool(higher_lows))
+            if higher_lows is not None
+            else None
+        ),
+        optional_text(breakout_context),
+        optional_text(continuation_context),
+        optional_text(exhaustion_context),
+        optional_text(article_summary),
+        raw_features_json,
+        (
+            int(bool(our_scanner_seen))
+            if our_scanner_seen is not None
+            else None
+        ),
+        optional_number(our_scanner_score),
+        optional_number(our_scanner_confidence),
+        (
+            int(our_scanner_rank)
+            if our_scanner_rank is not None
+            else None
+        ),
+        optional_text(our_bot_action),
+        optional_text(our_skip_reason),
+        now,
+        now,
+    )
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO pro_ticker_research (
+                symbol,
+                article_url,
+                article_title,
+                published_date,
+                alert_date,
+                alert_time,
+                direction,
+                long_level,
+                short_level,
+                reported_high,
+                reported_low,
+                reported_move_percent,
+                setup_type,
+                relative_volume,
+                vwap_context,
+                vwma_context,
+                rsi_context,
+                volume_context,
+                consolidation_context,
+                higher_lows,
+                breakout_context,
+                continuation_context,
+                exhaustion_context,
+                article_summary,
+                raw_features_json,
+                our_scanner_seen,
+                our_scanner_score,
+                our_scanner_confidence,
+                our_scanner_rank,
+                our_bot_action,
+                our_skip_reason,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            ON CONFLICT(article_url) DO UPDATE SET
+                symbol = excluded.symbol,
+                article_title = excluded.article_title,
+                published_date = excluded.published_date,
+                alert_date = excluded.alert_date,
+                alert_time = excluded.alert_time,
+                direction = excluded.direction,
+                long_level = excluded.long_level,
+                short_level = excluded.short_level,
+                reported_high = excluded.reported_high,
+                reported_low = excluded.reported_low,
+                reported_move_percent = excluded.reported_move_percent,
+                setup_type = excluded.setup_type,
+                relative_volume = excluded.relative_volume,
+                vwap_context = excluded.vwap_context,
+                vwma_context = excluded.vwma_context,
+                rsi_context = excluded.rsi_context,
+                volume_context = excluded.volume_context,
+                consolidation_context = excluded.consolidation_context,
+                higher_lows = excluded.higher_lows,
+                breakout_context = excluded.breakout_context,
+                continuation_context = excluded.continuation_context,
+                exhaustion_context = excluded.exhaustion_context,
+                article_summary = excluded.article_summary,
+                raw_features_json = excluded.raw_features_json,
+                our_scanner_seen = excluded.our_scanner_seen,
+                our_scanner_score = excluded.our_scanner_score,
+                our_scanner_confidence = excluded.our_scanner_confidence,
+                our_scanner_rank = excluded.our_scanner_rank,
+                our_bot_action = excluded.our_bot_action,
+                our_skip_reason = excluded.our_skip_reason,
+                updated_at = excluded.updated_at
+            """,
+            values,
+        )
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM pro_ticker_research
+            WHERE article_url = ?
+            """,
+            (normalized_url,),
+        ).fetchone()
+
+    if row is None:
+        raise RuntimeError(
+            "Pro Ticker research record could not be loaded after save."
+        )
+
+    result = dict(row)
+    result["raw_features"] = _deserialize_json_object(
+        result.pop(
+            "raw_features_json",
+            "{}",
+        )
+    )
+
+    return result
+
+
+def load_pro_ticker_research(
+    *,
+    symbol: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Load saved Pro Ticker research records newest first."""
+
+    safe_limit = max(
+        1,
+        min(
+            int(limit),
+            5000,
+        ),
+    )
+
+    params: list[Any] = []
+
+    if symbol is not None:
+        normalized_symbol = _normalize_symbol(
+            symbol
+        )
+
+        where_sql = " WHERE symbol = ?"
+        params.append(normalized_symbol)
+    else:
+        where_sql = ""
+
+    params.append(safe_limit)
+
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT *
+            FROM pro_ticker_research
+            {where_sql}
+            ORDER BY updated_at DESC, id DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+
+    results: list[dict[str, Any]] = []
+
+    for row in rows:
+        item = dict(row)
+
+        item["raw_features"] = (
+            _deserialize_json_object(
+                item.pop(
+                    "raw_features_json",
+                    "{}",
+                )
+            )
+        )
+
+        results.append(item)
+
+    return results
+
 
 def load_trade_book_events(
     *,
