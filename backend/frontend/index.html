@@ -294,6 +294,60 @@
                                 <button type="button" class="secondary-button" data-open-section="activity-section">Trade activity</button>
                             </div>
                         </article>
+
+                        <article
+                            class="panel home-overview-card auto-trader-health-card"
+                            aria-live="polite"
+                        >
+                            <p class="panel-kicker">Automatic Trader</p>
+
+                            <div class="auto-trader-health-heading">
+                                <h2>System Health</h2>
+
+                                <span
+                                    id="auto-trader-health-badge"
+                                    class="auto-trader-health-badge"
+                                >
+                                    Loading
+                                </span>
+                            </div>
+
+                            <div class="home-mini-metrics">
+                                <div>
+                                    <span>Trader</span>
+                                    <strong id="auto-trader-enabled-status">
+                                        ?
+                                    </strong>
+                                </div>
+
+                                <div>
+                                    <span>Scanner</span>
+                                    <strong id="auto-trader-scanner-status">
+                                        ?
+                                    </strong>
+                                </div>
+
+                                <div>
+                                    <span>Cycle</span>
+                                    <strong id="auto-trader-cycle-status">
+                                        ?
+                                    </strong>
+                                </div>
+                            </div>
+
+                            <p
+                                id="auto-trader-health-message"
+                                class="stat-caption auto-trader-health-message"
+                            >
+                                Loading trader health?
+                            </p>
+
+                            <p
+                                id="auto-trader-last-error"
+                                class="stat-caption auto-trader-last-error"
+                                hidden
+                            ></p>
+                        </article>
                     </section>
                 </section>
 

@@ -3481,3 +3481,78 @@ td[colspan] {
     }
 }
 
+
+/* =====================================
+   Auto Trader health card
+===================================== */
+
+.auto-trader-health-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+}
+
+.auto-trader-health-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.auto-trader-health-heading h2 {
+    margin: 0;
+}
+
+.auto-trader-health-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 6.5rem;
+    padding: 0.35rem 0.7rem;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    font-size: 0.76rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.auto-trader-health-badge[data-health="healthy"] {
+    background: rgba(34, 197, 94, 0.12);
+    border-color: rgba(34, 197, 94, 0.4);
+}
+
+.auto-trader-health-badge[data-health="waiting"] {
+    background: rgba(59, 130, 246, 0.12);
+    border-color: rgba(59, 130, 246, 0.4);
+}
+
+.auto-trader-health-badge[data-health="degraded"] {
+    background: rgba(245, 158, 11, 0.14);
+    border-color: rgba(245, 158, 11, 0.45);
+}
+
+.auto-trader-health-badge[data-health="stalled"],
+.auto-trader-health-badge[data-health="unavailable"] {
+    background: rgba(239, 68, 68, 0.14);
+    border-color: rgba(239, 68, 68, 0.45);
+}
+
+.auto-trader-health-badge[data-health="disabled"] {
+    background: rgba(100, 116, 139, 0.16);
+    border-color: rgba(100, 116, 139, 0.4);
+}
+
+.auto-trader-health-message {
+    margin: 0;
+}
+
+.auto-trader-last-error {
+    margin: 0;
+    padding: 0.7rem 0.8rem;
+    border-radius: 0.65rem;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    background: rgba(239, 68, 68, 0.08);
+    overflow-wrap: anywhere;
+}
+
