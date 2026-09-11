@@ -9322,6 +9322,10 @@ def auto_trader_history(
         else 0.0
     )
 
+    learning_summary = (
+        calculate_learning_summary()
+    )
+
     return {
         "paper": True,
         "read_only": True,
@@ -9346,6 +9350,44 @@ def auto_trader_history(
             "average_return_percent": round(
                 average_return_percent,
                 4,
+            ),
+            "excursion_trade_count": (
+                learning_summary.get(
+                    "excursion_trade_count",
+                    0,
+                )
+            ),
+            "average_mfe_percent": (
+                learning_summary.get(
+                    "average_mfe_percent"
+                )
+            ),
+            "average_mae_percent": (
+                learning_summary.get(
+                    "average_mae_percent"
+                )
+            ),
+            "winner_average_mfe_percent": (
+                learning_summary.get(
+                    "winner_average_mfe_percent"
+                )
+            ),
+            "loser_average_mfe_percent": (
+                learning_summary.get(
+                    "loser_average_mfe_percent"
+                )
+            ),
+            "never_profitable_count": (
+                learning_summary.get(
+                    "never_profitable_count",
+                    0,
+                )
+            ),
+            "never_profitable_percent": (
+                learning_summary.get(
+                    "never_profitable_percent",
+                    0.0,
+                )
             ),
         },
         "trades": history,
