@@ -190,7 +190,7 @@ AUTO_TRADER_MAX_ENTRY_SPREAD_PERCENT = 1.0
 
 # Avoid extremely volatile automatic entries.
 # We will wire ATR into the entry logic after the basic fixes.
-AUTO_TRADER_MAX_ENTRY_ATR_PERCENT = 5.0
+AUTO_TRADER_MAX_ENTRY_ATR_PERCENT = 8.0
 
 
 # ============================================================
