@@ -250,10 +250,13 @@ _auto_trader_last_cycle_result: dict[str, Any] | None = None
 _auto_trader_last_scan_at: float | None = None
 _auto_trader_last_trade_at: float | None = None
 _auto_trader_daily_health_email_date: str | None = None
+_auto_trader_last_market_clock: dict[str, Any] | None = None
+_auto_trader_last_market_clock_at: float | None = None
 _auto_trader_health_alert_active = False
 _auto_trader_health_alerted_at: float | None = None
 
 AUTO_TRADER_ERROR_EMAIL_COOLDOWN_SECONDS = 30 * 60
+AUTO_TRADER_MARKET_CLOCK_CACHE_SECONDS = 60 * 60
 _auto_trader_error_email_last_sent: dict[str, float] = {}
 _auto_trader_symbol_cooldowns: dict[str, float] = {}
 _auto_trader_log: list[dict[str, Any]] = []
@@ -915,6 +918,9 @@ def fetch_alpaca_market_clock() -> dict[str, Any]:
     """
     Return Alpaca's current US market clock for the PAPER account.
     """
+    global _auto_trader_last_market_clock
+    global _auto_trader_last_market_clock_at
+
     payload = alpaca_paper_request(
         "GET",
         "/v2/clock",
@@ -924,6 +930,9 @@ def fetch_alpaca_market_clock() -> dict[str, Any]:
         raise RuntimeError(
             "Alpaca returned an invalid market-clock response."
         )
+
+    _auto_trader_last_market_clock = dict(payload)
+    _auto_trader_last_market_clock_at = time.time()
 
     return payload
 
@@ -7829,13 +7838,59 @@ async def auto_trader_health_watchdog() -> None:
             )
 
             if should_monitor:
-                clock = await asyncio.to_thread(
-                    fetch_alpaca_market_clock
-                )
+                try:
+                    clock = await asyncio.to_thread(
+                        fetch_alpaca_market_clock
+                    )
 
-                market_is_open = bool(
-                    clock.get("is_open")
-                )
+                    market_is_open = bool(
+                        clock.get("is_open")
+                    )
+
+                except Exception as clock_error:
+                    error_message = clean_error_message(
+                        clock_error
+                    )
+
+                    print(
+                        "Auto-trader health watchdog "
+                        "clock error: "
+                        f"{error_message}"
+                    )
+
+                    add_auto_trader_log(
+                        "health_watchdog_error",
+                        message=error_message,
+                    )
+
+                    now = time.time()
+
+                    cached_clock_age = (
+                        now - _auto_trader_last_market_clock_at
+                        if _auto_trader_last_market_clock_at
+                        is not None
+                        else None
+                    )
+
+                    cached_clock_available = (
+                        _auto_trader_last_market_clock
+                        is not None
+                        and cached_clock_age is not None
+                        and cached_clock_age
+                        <= AUTO_TRADER_MARKET_CLOCK_CACHE_SECONDS
+                    )
+
+                    if not cached_clock_available:
+                        await asyncio.sleep(
+                            AUTO_TRADER_HEALTH_CHECK_SECONDS
+                        )
+                        continue
+
+                    market_is_open = bool(
+                        _auto_trader_last_market_clock.get(
+                            "is_open"
+                        )
+                    )
 
                 if market_is_open:
                     now = time.time()
@@ -7985,6 +8040,18 @@ def get_auto_trader_status() -> dict[str, Any]:
         else None
     )
 
+    successful_cycle_age_seconds = (
+        now - _auto_trader_last_successful_cycle_at
+        if _auto_trader_last_successful_cycle_at is not None
+        else None
+    )
+
+    market_clock_cache_age_seconds = (
+        now - _auto_trader_last_market_clock_at
+        if _auto_trader_last_market_clock_at is not None
+        else None
+    )
+
     scan_age_seconds = (
         now - _auto_trader_last_scan_at
         if _auto_trader_last_scan_at is not None
@@ -7996,7 +8063,7 @@ def get_auto_trader_status() -> dict[str, Any]:
     elif _auto_trader_health_alert_active:
         health = "stalled"
     elif (
-        _auto_trader_last_cycle_at is None
+        _auto_trader_last_successful_cycle_at is None
         or _auto_trader_last_scan_at is None
     ):
         health = "waiting"
@@ -8020,6 +8087,9 @@ def get_auto_trader_status() -> dict[str, Any]:
         "last_cycle_at": (
             _auto_trader_last_cycle_at
         ),
+        "last_successful_cycle_at": (
+            _auto_trader_last_successful_cycle_at
+        ),
         "last_cycle_result": (
             _auto_trader_last_cycle_result
         ),
@@ -8035,10 +8105,26 @@ def get_auto_trader_status() -> dict[str, Any]:
             if cycle_age_seconds is not None
             else None
         ),
+        "successful_cycle_age_seconds": (
+            round(successful_cycle_age_seconds, 1)
+            if successful_cycle_age_seconds is not None
+            else None
+        ),
         "scan_age_seconds": (
             round(scan_age_seconds, 1)
             if scan_age_seconds is not None
             else None
+        ),
+        "last_market_clock_at": (
+            _auto_trader_last_market_clock_at
+        ),
+        "market_clock_cache_age_seconds": (
+            round(market_clock_cache_age_seconds, 1)
+            if market_clock_cache_age_seconds is not None
+            else None
+        ),
+        "market_clock_cache_seconds": (
+            AUTO_TRADER_MARKET_CLOCK_CACHE_SECONDS
         ),
         "health_alert_active": (
             _auto_trader_health_alert_active
