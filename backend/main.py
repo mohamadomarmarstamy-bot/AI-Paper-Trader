@@ -937,6 +937,101 @@ def fetch_alpaca_market_clock() -> dict[str, Any]:
     return payload
 
 
+def fetch_alpaca_market_calendar_today() -> dict[str, Any] | None:
+    """
+    Return today's Alpaca US market calendar entry, if one exists.
+    """
+    eastern_now = datetime.now(
+        ZoneInfo("America/New_York")
+    )
+
+    today = eastern_now.date().isoformat()
+
+    payload = alpaca_paper_request(
+        "GET",
+        "/v2/calendar",
+        params={
+            "start": today,
+            "end": today,
+        },
+    )
+
+    if not isinstance(payload, list):
+        raise RuntimeError(
+            "Alpaca returned an invalid market-calendar response."
+        )
+
+    if not payload:
+        return None
+
+    entry = payload[0]
+
+    if not isinstance(entry, dict):
+        raise RuntimeError(
+            "Alpaca returned an invalid market-calendar entry."
+        )
+
+    return entry
+
+
+def market_is_open_from_calendar(
+    calendar_entry: dict[str, Any] | None,
+) -> bool:
+    if not calendar_entry:
+        return False
+
+    open_value = str(
+        calendar_entry.get("open", "")
+    ).strip()
+
+    close_value = str(
+        calendar_entry.get("close", "")
+    ).strip()
+
+    if not open_value or not close_value:
+        return False
+
+    eastern_now = datetime.now(
+        ZoneInfo("America/New_York")
+    )
+
+    try:
+        open_hour, open_minute = (
+            int(part)
+            for part in open_value.split(":", 1)
+        )
+
+        close_hour, close_minute = (
+            int(part)
+            for part in close_value.split(":", 1)
+        )
+
+    except Exception:
+        raise RuntimeError(
+            "Alpaca returned invalid calendar open/close times."
+        )
+
+    market_open = eastern_now.replace(
+        hour=open_hour,
+        minute=open_minute,
+        second=0,
+        microsecond=0,
+    )
+
+    market_close = eastern_now.replace(
+        hour=close_hour,
+        minute=close_minute,
+        second=0,
+        microsecond=0,
+    )
+
+    return (
+        market_open
+        <= eastern_now
+        < market_close
+    )
+
+
 def fetch_alpaca_risk_quote(
     symbol: str,
 ) -> dict[str, Any]:
@@ -7880,17 +7975,42 @@ async def auto_trader_health_watchdog() -> None:
                         <= AUTO_TRADER_MARKET_CLOCK_CACHE_SECONDS
                     )
 
-                    if not cached_clock_available:
-                        await asyncio.sleep(
-                            AUTO_TRADER_HEALTH_CHECK_SECONDS
+                    if cached_clock_available:
+                        market_is_open = bool(
+                            _auto_trader_last_market_clock.get(
+                                "is_open"
+                            )
                         )
-                        continue
 
-                    market_is_open = bool(
-                        _auto_trader_last_market_clock.get(
-                            "is_open"
-                        )
-                    )
+                    else:
+                        try:
+                            calendar_entry = await asyncio.to_thread(
+                                fetch_alpaca_market_calendar_today
+                            )
+
+                            market_is_open = (
+                                market_is_open_from_calendar(
+                                    calendar_entry
+                                )
+                            )
+
+                        except Exception as calendar_error:
+                            calendar_message = clean_error_message(
+                                calendar_error
+                            )
+
+                            print(
+                                "Auto-trader health watchdog "
+                                "calendar error: "
+                                f"{calendar_message}"
+                            )
+
+                            add_auto_trader_log(
+                                "health_watchdog_error",
+                                message=calendar_message,
+                            )
+
+                            continue
 
                 if market_is_open:
                     now = time.time()
