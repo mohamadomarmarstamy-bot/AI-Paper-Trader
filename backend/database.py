@@ -355,6 +355,63 @@ def initialize_database() -> None:
 
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS pro_ticker_research (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT,
+                article_url TEXT NOT NULL UNIQUE,
+                article_title TEXT,
+                published_date TEXT,
+                alert_date TEXT,
+                alert_time TEXT,
+                direction TEXT,
+                long_level REAL,
+                short_level REAL,
+                reported_high REAL,
+                reported_low REAL,
+                reported_move_percent REAL,
+                setup_type TEXT,
+                relative_volume TEXT,
+                vwap_context TEXT,
+                vwma_context TEXT,
+                rsi_context TEXT,
+                volume_context TEXT,
+                consolidation_context TEXT,
+                higher_lows INTEGER,
+                breakout_context TEXT,
+                continuation_context TEXT,
+                exhaustion_context TEXT,
+                article_summary TEXT,
+                raw_features_json TEXT,
+                our_scanner_seen INTEGER,
+                our_scanner_score REAL,
+                our_scanner_confidence REAL,
+                our_scanner_rank INTEGER,
+                our_bot_action TEXT,
+                our_skip_reason TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_pro_ticker_research_symbol
+            ON pro_ticker_research(symbol)
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_pro_ticker_research_published_date
+            ON pro_ticker_research(published_date)
+            """
+        )
+
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS account (
                 id INTEGER PRIMARY KEY CHECK(id = 1),
                 cash REAL NOT NULL
