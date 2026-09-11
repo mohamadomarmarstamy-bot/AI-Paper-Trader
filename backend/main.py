@@ -118,6 +118,10 @@ RISK_BLOCK_SHORT_SELLING = True
 # How often the trader checks the latest scanner results.
 AUTO_TRADER_SCAN_SECONDS = 15
 
+# Auto-trader health watchdog.
+AUTO_TRADER_HEALTH_STALE_SECONDS = 30 * 60
+AUTO_TRADER_HEALTH_CHECK_SECONDS = 60
+
 # Base entry requirements.
 AUTO_TRADER_ENTRY_SCORE_MIN = 75
 AUTO_TRADER_ENTRY_CONFIDENCE_MIN = 70
@@ -218,6 +222,12 @@ _auto_trader_enabled = (
     }
 )
 
+_auto_trader_enabled_at: float | None = (
+    time.time()
+    if _auto_trader_enabled
+    else None
+)
+
 APP_ACCESS_PASSWORD = os.getenv(
     "APP_ACCESS_PASSWORD",
     "",
@@ -234,6 +244,10 @@ APP_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
 _auto_trader_cycle_running = False
 _auto_trader_last_cycle_at: float | None = None
 _auto_trader_last_cycle_result: dict[str, Any] | None = None
+_auto_trader_last_scan_at: float | None = None
+_auto_trader_last_trade_at: float | None = None
+_auto_trader_health_alert_active = False
+_auto_trader_health_alerted_at: float | None = None
 _auto_trader_symbol_cooldowns: dict[str, float] = {}
 _auto_trader_log: list[dict[str, Any]] = []
 _auto_trader_journal: list[dict[str, Any]] = []
@@ -278,15 +292,21 @@ async def lifespan(app: FastAPI):
         auto_trader_loop()
     )
 
+    health_watchdog_task = asyncio.create_task(
+        auto_trader_health_watchdog()
+    )
+
     try:
         yield
     finally:
         refresh_task.cancel()
         auto_trade_task.cancel()
+        health_watchdog_task.cancel()
 
         for task in (
             refresh_task,
             auto_trade_task,
+            health_watchdog_task,
         ):
             try:
                 await task
@@ -5464,6 +5484,9 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             market_data_request_func=alpaca_market_data_request,
         )
 
+        global _auto_trader_last_scan_at
+        _auto_trader_last_scan_at = time.time()
+
         if not isinstance(
             scanner_results,
             list,
@@ -7337,6 +7360,331 @@ def run_auto_trader_cycle() -> dict[str, Any]:
         )
 
 
+def health_alert_env_enabled(name: str) -> bool:
+    return (
+        os.getenv(
+            name,
+            "false",
+        ).strip().lower()
+        in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+    )
+
+
+def send_health_alert_email(
+    subject: str,
+    message: str,
+) -> bool:
+    if not health_alert_env_enabled(
+        "HEALTH_ALERT_EMAIL_ENABLED"
+    ):
+        return False
+
+    api_key = os.getenv(
+        "RESEND_API_KEY",
+        "",
+    ).strip()
+
+    email_to = os.getenv(
+        "HEALTH_ALERT_EMAIL_TO",
+        "",
+    ).strip()
+
+    email_from = os.getenv(
+        "HEALTH_ALERT_EMAIL_FROM",
+        "",
+    ).strip()
+
+    if not (
+        api_key
+        and email_to
+        and email_from
+    ):
+        print(
+            "Health alert email enabled but "
+            "Resend configuration is incomplete."
+        )
+        return False
+
+    try:
+        response = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": (
+                    f"Bearer {api_key}"
+                ),
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": email_from,
+                "to": [email_to],
+                "subject": subject,
+                "text": message,
+            },
+            timeout=15,
+        )
+
+        response.raise_for_status()
+        return True
+
+    except Exception as error:
+        print(
+            "Health alert email failed: "
+            f"{clean_error_message(error)}"
+        )
+        return False
+
+
+def send_health_alert_sms(
+    message: str,
+) -> bool:
+    if not health_alert_env_enabled(
+        "HEALTH_ALERT_SMS_ENABLED"
+    ):
+        return False
+
+    account_sid = os.getenv(
+        "TWILIO_ACCOUNT_SID",
+        "",
+    ).strip()
+
+    auth_token = os.getenv(
+        "TWILIO_AUTH_TOKEN",
+        "",
+    ).strip()
+
+    sms_from = os.getenv(
+        "TWILIO_FROM_NUMBER",
+        "",
+    ).strip()
+
+    sms_to = os.getenv(
+        "HEALTH_ALERT_SMS_TO",
+        "",
+    ).strip()
+
+    if not (
+        account_sid
+        and auth_token
+        and sms_from
+        and sms_to
+    ):
+        print(
+            "Health alert SMS enabled but "
+            "Twilio configuration is incomplete."
+        )
+        return False
+
+    try:
+        response = requests.post(
+            (
+                "https://api.twilio.com/"
+                "2010-04-01/Accounts/"
+                f"{account_sid}/Messages.json"
+            ),
+            auth=(
+                account_sid,
+                auth_token,
+            ),
+            data={
+                "From": sms_from,
+                "To": sms_to,
+                "Body": message,
+            },
+            timeout=15,
+        )
+
+        response.raise_for_status()
+        return True
+
+    except Exception as error:
+        print(
+            "Health alert SMS failed: "
+            f"{clean_error_message(error)}"
+        )
+        return False
+
+
+def send_auto_trader_health_notifications(
+    subject: str,
+    message: str,
+) -> dict[str, Any]:
+    email_enabled = health_alert_env_enabled(
+        "HEALTH_ALERT_EMAIL_ENABLED"
+    )
+    sms_enabled = health_alert_env_enabled(
+        "HEALTH_ALERT_SMS_ENABLED"
+    )
+
+    email_sent = send_health_alert_email(
+        subject,
+        message,
+    )
+
+    sms_sent = send_health_alert_sms(
+        message,
+    )
+
+    return {
+        "email": (
+            "sent"
+            if email_sent
+            else (
+                "failed"
+                if email_enabled
+                else "disabled"
+            )
+        ),
+        "sms": (
+            "sent"
+            if sms_sent
+            else (
+                "failed"
+                if sms_enabled
+                else "disabled"
+            )
+        ),
+    }
+
+
+async def auto_trader_health_watchdog() -> None:
+    """
+    Watch the PAPER auto-trader independently from its trading loop.
+
+    A health alert is raised when the market is open, automation is
+    enabled, and the trading-cycle heartbeat has been stale for
+    at least 30 minutes.
+    """
+    global _auto_trader_health_alert_active
+    global _auto_trader_health_alerted_at
+
+    while True:
+        try:
+            should_monitor = (
+                _auto_trader_enabled
+                and auto_trader_automation_allowed()
+            )
+
+            if should_monitor:
+                clock = await asyncio.to_thread(
+                    fetch_alpaca_market_clock
+                )
+
+                market_is_open = bool(
+                    clock.get("is_open")
+                )
+
+                if market_is_open:
+                    now = time.time()
+
+                    cycle_reference_at = (
+                        _auto_trader_last_cycle_at
+                        if _auto_trader_last_cycle_at is not None
+                        else _auto_trader_enabled_at
+                    )
+
+                    scan_reference_at = (
+                        _auto_trader_last_scan_at
+                        if _auto_trader_last_scan_at is not None
+                        else _auto_trader_enabled_at
+                    )
+
+                    cycle_age_seconds = (
+                        now - cycle_reference_at
+                        if cycle_reference_at is not None
+                        else None
+                    )
+
+                    scan_age_seconds = (
+                        now - scan_reference_at
+                        if scan_reference_at is not None
+                        else None
+                    )
+
+                    cycle_stalled = (
+                        cycle_age_seconds is not None
+                        and cycle_age_seconds
+                        >= AUTO_TRADER_HEALTH_STALE_SECONDS
+                    )
+
+                    scan_stalled = (
+                        scan_age_seconds is not None
+                        and scan_age_seconds
+                        >= AUTO_TRADER_HEALTH_STALE_SECONDS
+                    )
+
+                    # The cycle heartbeat is the authoritative
+                    # health trigger. A hung scanner also prevents the
+                    # cycle heartbeat from advancing, while an old scan
+                    # can be completely normal outside market hours.
+                    stalled = cycle_stalled
+
+                    if (
+                        stalled
+                        and not _auto_trader_health_alert_active
+                    ):
+                        _auto_trader_health_alert_active = True
+                        _auto_trader_health_alerted_at = now
+
+                        alert_message = (
+                            "AI Paper Trader ALERT: "
+                            "No trading cycle has started for "
+                            "at least 30 minutes while the "
+                            "market is open. Check the trader "
+                            "and scanner."
+                        )
+
+                        add_auto_trader_log(
+                            "trader_health_stalled",
+                            message=alert_message,
+                        )
+
+                        await asyncio.to_thread(
+                            send_auto_trader_health_notifications,
+                            "AI Paper Trader - Health Alert",
+                            alert_message,
+                        )
+
+                    elif (
+                        not stalled
+                        and _auto_trader_health_alert_active
+                    ):
+                        _auto_trader_health_alert_active = False
+                        _auto_trader_health_alerted_at = None
+
+                        recovery_message = (
+                            "AI Paper Trader RECOVERED: "
+                            "Trading-cycle activity has resumed "
+                            "and the trader health watchdog is "
+                            "back to normal."
+                        )
+
+                        add_auto_trader_log(
+                            "trader_health_recovered",
+                            message=recovery_message,
+                        )
+
+                        await asyncio.to_thread(
+                            send_auto_trader_health_notifications,
+                            "AI Paper Trader - Recovered",
+                            recovery_message,
+                        )
+
+        except Exception as error:
+            print(
+                "Auto-trader health watchdog error: "
+                f"{clean_error_message(error)}"
+            )
+
+        await asyncio.sleep(
+            AUTO_TRADER_HEALTH_CHECK_SECONDS
+        )
+
+
 async def auto_trader_loop() -> None:
     """
     Background PAPER automation loop.
@@ -7369,6 +7717,32 @@ async def auto_trader_loop() -> None:
 
 
 def get_auto_trader_status() -> dict[str, Any]:
+    now = time.time()
+
+    cycle_age_seconds = (
+        now - _auto_trader_last_cycle_at
+        if _auto_trader_last_cycle_at is not None
+        else None
+    )
+
+    scan_age_seconds = (
+        now - _auto_trader_last_scan_at
+        if _auto_trader_last_scan_at is not None
+        else None
+    )
+
+    if not _auto_trader_enabled:
+        health = "disabled"
+    elif _auto_trader_health_alert_active:
+        health = "stalled"
+    elif (
+        _auto_trader_last_cycle_at is None
+        or _auto_trader_last_scan_at is None
+    ):
+        health = "waiting"
+    else:
+        health = "healthy"
+
     return {
         "paper": True,
         "enabled": (
@@ -7388,6 +7762,32 @@ def get_auto_trader_status() -> dict[str, Any]:
         ),
         "last_cycle_result": (
             _auto_trader_last_cycle_result
+        ),
+        "health": health,
+        "last_scan_at": (
+            _auto_trader_last_scan_at
+        ),
+        "last_trade_at": (
+            _auto_trader_last_trade_at
+        ),
+        "cycle_age_seconds": (
+            round(cycle_age_seconds, 1)
+            if cycle_age_seconds is not None
+            else None
+        ),
+        "scan_age_seconds": (
+            round(scan_age_seconds, 1)
+            if scan_age_seconds is not None
+            else None
+        ),
+        "health_alert_active": (
+            _auto_trader_health_alert_active
+        ),
+        "health_alerted_at": (
+            _auto_trader_health_alerted_at
+        ),
+        "health_stale_seconds": (
+            AUTO_TRADER_HEALTH_STALE_SECONDS
         ),
         "settings": {
             "scan_seconds": (
@@ -7427,6 +7827,59 @@ def get_auto_trader_status() -> dict[str, Any]:
 # =========================================================
 # Basic API routes
 # =========================================================
+
+@app.post("/auto-trader/health/test-notification")
+async def test_auto_trader_health_notification(
+    request: Request,
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    subject = (
+        "AI Paper Trader - Test Alert"
+    )
+
+    message = (
+        "AI Paper Trader TEST: "
+        "Your trader health notification system "
+        "is connected and working."
+    )
+
+    delivery = await asyncio.to_thread(
+        send_auto_trader_health_notifications,
+        subject,
+        message,
+    )
+
+    add_auto_trader_log(
+        "trader_health_test",
+        message=(
+            "A manual trader health notification "
+            "test was requested."
+        ),
+    )
+
+    return {
+        "success": True,
+        "paper": True,
+        "message": (
+            "Health notification test attempted. "
+            "Check configured email/SMS channels."
+        ),
+        "delivery": delivery,
+        "email_enabled": (
+            health_alert_env_enabled(
+                "HEALTH_ALERT_EMAIL_ENABLED"
+            )
+        ),
+        "sms_enabled": (
+            health_alert_env_enabled(
+                "HEALTH_ALERT_SMS_ENABLED"
+            )
+        ),
+    }
+
 
 @app.get("/learning-summary")
 def learning_summary(
@@ -9126,6 +9579,7 @@ def auto_trader_enable(
         request
     )
     global _auto_trader_enabled
+    global _auto_trader_enabled_at
 
     if not auto_trader_control_authorized(
         x_auto_trader_token
@@ -9147,6 +9601,7 @@ def auto_trader_enable(
         }
 
     _auto_trader_enabled = True
+    _auto_trader_enabled_at = time.time()
 
     add_auto_trader_log(
         "enabled",
@@ -9172,6 +9627,7 @@ def auto_trader_disable(
         request
     )
     global _auto_trader_enabled
+    global _auto_trader_enabled_at
 
     if not auto_trader_control_authorized(
         x_auto_trader_token
@@ -9184,6 +9640,7 @@ def auto_trader_disable(
         }
 
     _auto_trader_enabled = False
+    _auto_trader_enabled_at = None
 
     add_auto_trader_log(
         "disabled",
@@ -9641,12 +10098,3 @@ def sell(
         shares=shares,
         side="sell",
     )
-
-
-
-
-
-
-
-
-
