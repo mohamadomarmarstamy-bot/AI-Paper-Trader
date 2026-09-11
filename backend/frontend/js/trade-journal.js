@@ -311,6 +311,44 @@
                 formatPercent(
                     summary.average_return_percent
                 )
+            ),
+            createMetric(
+                "Excursion Trades",
+                String(
+                    summary.excursion_trade_count ?? 0
+                )
+            ),
+            createMetric(
+                "Avg MFE",
+                formatPercent(
+                    summary.average_mfe_percent
+                )
+            ),
+            createMetric(
+                "Avg MAE",
+                formatPercent(
+                    summary.average_mae_percent
+                )
+            ),
+            createMetric(
+                "Winner Avg MFE",
+                formatPercent(
+                    summary.winner_average_mfe_percent
+                )
+            ),
+            createMetric(
+                "Loser Avg MFE",
+                formatPercent(
+                    summary.loser_average_mfe_percent
+                )
+            ),
+            createMetric(
+                "Never Profitable",
+                `${
+                    summary.never_profitable_count ?? 0
+                } (${formatPercent(
+                    summary.never_profitable_percent
+                )})`
             )
         );
 
