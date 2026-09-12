@@ -356,6 +356,16 @@ def initialize_database() -> None:
 
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS pro_ticker_discovery_state (
+                name TEXT PRIMARY KEY,
+                page_cursor INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS pro_ticker_research (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 symbol TEXT,
@@ -1380,6 +1390,80 @@ def load_trade_excursions(
         dict(row)
         for row in rows
     ]
+
+
+def load_pro_ticker_discovery_cursor(
+    name: str = "historical_backfill",
+) -> int:
+    normalized_name = str(name).strip()
+
+    if not normalized_name:
+        normalized_name = "historical_backfill"
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT page_cursor
+            FROM pro_ticker_discovery_state
+            WHERE name = ?
+            """,
+            (normalized_name,),
+        ).fetchone()
+
+    if row is None:
+        return 1
+
+    try:
+        return max(
+            1,
+            int(row["page_cursor"]),
+        )
+    except Exception:
+        return 1
+
+
+def save_pro_ticker_discovery_cursor(
+    page_cursor: int,
+    name: str = "historical_backfill",
+) -> int:
+    normalized_name = str(name).strip()
+
+    if not normalized_name:
+        normalized_name = "historical_backfill"
+
+    normalized_cursor = max(
+        1,
+        int(page_cursor),
+    )
+
+    now = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO pro_ticker_discovery_state (
+                name,
+                page_cursor,
+                updated_at
+            )
+            VALUES (?, ?, ?)
+            ON CONFLICT(name)
+            DO UPDATE SET
+                page_cursor = excluded.page_cursor,
+                updated_at = excluded.updated_at
+            """,
+            (
+                normalized_name,
+                normalized_cursor,
+                now,
+            ),
+        )
+
+        connection.commit()
+
+    return normalized_cursor
 
 
 def upsert_pro_ticker_research(

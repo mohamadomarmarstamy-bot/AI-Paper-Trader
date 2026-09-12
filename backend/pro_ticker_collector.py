@@ -2,11 +2,18 @@
 
 import re
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import (
+    urljoin,
+    urlparse,
+)
 
 import requests
 
-from database import upsert_pro_ticker_research
+from database import (
+    load_pro_ticker_discovery_cursor,
+    save_pro_ticker_discovery_cursor,
+    upsert_pro_ticker_research,
+)
 
 
 PRO_TICKER_HOSTS = {
@@ -16,10 +23,289 @@ PRO_TICKER_HOSTS = {
 
 PRO_TICKER_TIMEOUT_SECONDS = 20
 
+PRO_TICKER_LATEST_NEWS_URL = (
+    "https://www.protickersignals.com/latestnews"
+)
+
+PRO_TICKER_DISCOVERY_MAX_PAGES = 10
+
 USER_AGENT = (
     "AI-Paper-Trader-Research/1.0 "
     "(public article research collector)"
 )
+
+
+def _fetch_public_html(
+    url: str,
+) -> str:
+    response = requests.get(
+        url,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": (
+                "text/html,"
+                "application/xhtml+xml"
+            ),
+        },
+        timeout=PRO_TICKER_TIMEOUT_SECONDS,
+    )
+
+    response.raise_for_status()
+
+    content_type = (
+        response.headers.get(
+            "Content-Type",
+            "",
+        ).lower()
+    )
+
+    if (
+        "text/html" not in content_type
+        and "application/xhtml+xml"
+        not in content_type
+    ):
+        raise RuntimeError(
+            "Pro Ticker response was not an HTML page."
+        )
+
+    return response.text
+
+
+def _is_signal_recap_candidate(
+    *,
+    url: str,
+    title: str | None,
+) -> bool:
+    parsed = urlparse(url)
+
+    if (
+        parsed.hostname is None
+        or parsed.hostname.lower()
+        not in PRO_TICKER_HOSTS
+    ):
+        return False
+
+    path = parsed.path.rstrip("/")
+
+    if (
+        not path.startswith("/latestnews/")
+        or path == "/latestnews"
+    ):
+        return False
+
+    normalized_title = (
+        str(title or "")
+        .strip()
+        .lower()
+    )
+
+    if not normalized_title:
+        return False
+
+    has_ticker = (
+        re.search(
+            r"\$[A-Z]{1,6}\b",
+            str(title or ""),
+        )
+        is not None
+    )
+
+    signal_language = (
+        "long signal",
+        "short signal",
+        "long move",
+        "short move",
+        "pro ticker",
+    )
+
+    signal_hits = sum(
+        phrase in normalized_title
+        for phrase in signal_language
+    )
+
+    return (
+        has_ticker
+        and signal_hits >= 2
+    )
+
+
+def discover_pro_ticker_articles(
+    *,
+    start_page: int = 1,
+    max_pages: int = 3,
+    max_articles: int = 50,
+) -> list[dict[str, Any]]:
+    from lxml import html as lxml_html
+
+    first_page = max(
+        1,
+        int(start_page),
+    )
+
+    page_count = max(
+        1,
+        min(
+            int(max_pages),
+            PRO_TICKER_DISCOVERY_MAX_PAGES,
+        ),
+    )
+
+    article_limit = max(
+        1,
+        min(
+            int(max_articles),
+            200,
+        ),
+    )
+
+    candidate_pages: dict[
+        str,
+        int,
+    ] = {}
+
+    for page_number in range(
+        first_page,
+        first_page + page_count,
+    ):
+        if page_number == 1:
+            page_url = (
+                PRO_TICKER_LATEST_NEWS_URL
+            )
+        else:
+            page_url = (
+                f"{PRO_TICKER_LATEST_NEWS_URL}"
+                f"?post_page={page_number}"
+            )
+
+        html = _fetch_public_html(
+            page_url
+        )
+
+        document = lxml_html.fromstring(
+            html
+        )
+
+        for link in document.xpath(
+            "//a[@href]"
+        ):
+            href = str(
+                link.get("href") or ""
+            ).strip()
+
+            if not href:
+                continue
+
+            absolute_url = urljoin(
+                PRO_TICKER_LATEST_NEWS_URL,
+                href,
+            )
+
+            parsed = urlparse(
+                absolute_url
+            )
+
+            if (
+                parsed.hostname is None
+                or parsed.hostname.lower()
+                not in PRO_TICKER_HOSTS
+            ):
+                continue
+
+            clean_path = (
+                parsed.path.rstrip("/")
+            )
+
+            if (
+                not clean_path.startswith(
+                    "/latestnews/"
+                )
+                or clean_path == "/latestnews"
+            ):
+                continue
+
+            clean_url = (
+                "https://"
+                "www.protickersignals.com"
+                f"{clean_path}"
+            )
+
+            if clean_url not in candidate_pages:
+                candidate_pages[
+                    clean_url
+                ] = page_number
+
+    discovered: list[
+        dict[str, Any]
+    ] = []
+
+    for article_url, source_page in list(
+        candidate_pages.items()
+    )[:article_limit]:
+        try:
+            article_html = (
+                _fetch_article_html(
+                    article_url
+                )
+            )
+
+            title = _extract_title(
+                article_html
+            )
+
+            article_text = _html_to_text(
+                article_html
+            )
+
+            combined = (
+                f"{title or ''} "
+                f"{article_text[:2500]}"
+            )
+
+            has_ticker = (
+                re.search(
+                    r"\$[A-Z]{1,6}\b",
+                    combined,
+                )
+                is not None
+            )
+
+            has_signal_language = any(
+                phrase in combined.lower()
+                for phrase in (
+                    "long signal",
+                    "short signal",
+                    "long move",
+                    "short move",
+                )
+            )
+
+            if (
+                not has_ticker
+                or not has_signal_language
+            ):
+                continue
+
+            symbol = _extract_symbol(
+                title=title,
+                text=article_text,
+            )
+
+            discovered.append(
+                {
+                    "article_url": article_url,
+                    "article_title": title,
+                    "symbol": symbol,
+                    "source_page": source_page,
+                }
+            )
+
+        except Exception as error:
+            print(
+                "Pro Ticker discovery skipped "
+                f"{article_url}: {error}"
+            )
+
+    return discovered
 
 
 def _validate_pro_ticker_url(url: str) -> str:
@@ -55,36 +341,15 @@ def _validate_pro_ticker_url(url: str) -> str:
 def _fetch_article_html(
     article_url: str,
 ) -> str:
-    response = requests.get(
-        article_url,
-        headers={
-            "User-Agent": USER_AGENT,
-            "Accept": (
-                "text/html,"
-                "application/xhtml+xml"
-            ),
-        },
-        timeout=PRO_TICKER_TIMEOUT_SECONDS,
-    )
-
-    response.raise_for_status()
-
-    content_type = (
-        response.headers.get(
-            "Content-Type",
-            "",
-        ).lower()
-    )
-
-    if (
-        "text/html" not in content_type
-        and "application/xhtml+xml" not in content_type
-    ):
-        raise RuntimeError(
-            "Pro Ticker response was not an HTML page."
+    normalized_url = (
+        _validate_pro_ticker_url(
+            article_url
         )
+    )
 
-    return response.text
+    return _fetch_public_html(
+        normalized_url
+    )
 
 
 def _html_to_text(
@@ -637,6 +902,132 @@ def parse_pro_ticker_article(
             "collector_version": 2,
             "text_length": len(text),
         },
+    }
+
+
+def run_pro_ticker_historical_backfill(
+    *,
+    pages_per_run: int = 10,
+) -> dict[str, Any]:
+    page_count = max(
+        1,
+        min(
+            int(pages_per_run),
+            25,
+        ),
+    )
+
+    start_page = (
+        load_pro_ticker_discovery_cursor()
+    )
+
+    end_page = (
+        start_page
+        + page_count
+        - 1
+    )
+
+    discovered = (
+        discover_pro_ticker_articles(
+            start_page=start_page,
+            max_pages=page_count,
+            max_articles=200,
+        )
+    )
+
+    batch_candidates = [
+        item
+        for item in discovered
+        if (
+            start_page
+            <= int(
+                item.get(
+                    "source_page",
+                    start_page,
+                )
+            )
+            <= end_page
+        )
+    ]
+
+    collected: list[
+        dict[str, Any]
+    ] = []
+
+    errors: list[
+        dict[str, Any]
+    ] = []
+
+    seen_urls: set[str] = set()
+
+    for item in batch_candidates:
+        article_url = str(
+            item.get(
+                "article_url",
+                "",
+            )
+        ).strip()
+
+        if (
+            not article_url
+            or article_url in seen_urls
+        ):
+            continue
+
+        seen_urls.add(
+            article_url
+        )
+
+        try:
+            saved = (
+                collect_pro_ticker_article(
+                    article_url
+                )
+            )
+
+            collected.append(
+                {
+                    "article_url": article_url,
+                    "symbol": saved.get(
+                        "symbol"
+                    ),
+                    "id": saved.get(
+                        "id"
+                    ),
+                }
+            )
+
+        except Exception as error:
+            errors.append(
+                {
+                    "article_url": article_url,
+                    "error": str(error),
+                }
+            )
+
+    next_page = (
+        end_page + 1
+    )
+
+    save_pro_ticker_discovery_cursor(
+        next_page
+    )
+
+    return {
+        "start_page": start_page,
+        "end_page": end_page,
+        "next_page": next_page,
+        "candidate_count": len(
+            batch_candidates
+        ),
+        "collected_count": len(
+            collected
+        ),
+        "error_count": len(
+            errors
+        ),
+        "collected": collected,
+        "errors": errors,
     }
 
 

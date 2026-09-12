@@ -45,7 +45,10 @@ from indicators import (
 )
 from paper_trader import PaperTrader
 from trade_reports import build_trade_report_pdf
-from pro_ticker_collector import collect_pro_ticker_article
+from pro_ticker_collector import (
+    collect_pro_ticker_article,
+    run_pro_ticker_historical_backfill,
+)
 from scanner import (
     get_market_regime,
     get_symbol_news_context,
@@ -8848,6 +8851,42 @@ def auto_trader_pro_ticker_research(
         "research_only": True,
         "count": len(rows),
         "results": rows,
+    }
+
+
+@app.post("/auto-trader/pro-ticker-research/backfill")
+def auto_trader_pro_ticker_backfill(
+    request: Request,
+    pages_per_run: int = Query(
+        default=10,
+        ge=1,
+        le=25,
+    ),
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    try:
+        result = (
+            run_pro_ticker_historical_backfill(
+                pages_per_run=pages_per_run,
+            )
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Pro Ticker historical backfill "
+                f"failed: {error}"
+            ),
+        ) from error
+
+    return {
+        "paper": True,
+        "research_only": True,
+        "success": True,
+        **result,
     }
 
 
