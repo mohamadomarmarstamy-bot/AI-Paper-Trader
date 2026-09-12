@@ -9729,7 +9729,7 @@ def auto_trader_pnl_reconciliation(
     )
 
     history_rows = (
-        history_payload.get("history")
+        history_payload.get("trades")
         if isinstance(
             history_payload,
             dict,
