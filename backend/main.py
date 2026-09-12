@@ -10207,6 +10207,422 @@ def auto_trader_journal(
         ),
     }
 
+@app.get("/auto-trader/broker-fills/pairing")
+def auto_trader_broker_fill_pairing(
+    request: Request,
+) -> dict[str, Any]:
+    """
+    Reconstruct bot round trips from the persisted broker ledger.
+
+    Diagnostic only. Does not modify trade_book.
+    """
+
+    require_app_session(request)
+
+    fills = load_broker_fills(
+        limit=10000
+    )
+
+    fills = sorted(
+        fills,
+        key=lambda item: str(
+            item.get("filled_at") or ""
+        ),
+    )
+
+    open_lots: dict[
+        str,
+        list[dict[str, Any]],
+    ] = {}
+
+    completed: list[
+        dict[str, Any]
+    ] = []
+
+    unmatched_sells: list[
+        dict[str, Any]
+    ] = []
+
+    ignored_buys: list[
+        dict[str, Any]
+    ] = []
+
+    for fill in fills:
+        symbol = str(
+            fill.get("symbol") or ""
+        ).strip().upper()
+
+        side = str(
+            fill.get("side") or ""
+        ).strip().upper()
+
+        shares = safe_float(
+            fill.get("shares")
+        )
+
+        price = safe_float(
+            fill.get("price")
+        )
+
+        if (
+            not symbol
+            or shares is None
+            or shares <= 0
+            or price is None
+            or price <= 0
+        ):
+            continue
+
+        raw_order = fill.get(
+            "raw_order"
+        )
+
+        if not isinstance(
+            raw_order,
+            dict,
+        ):
+            raw_order = {}
+
+        client_order_id = str(
+            raw_order.get(
+                "client_order_id"
+            )
+            or ""
+        ).strip()
+
+        if side == "BUY":
+            is_auto_entry = (
+                client_order_id
+                .lower()
+                .startswith(
+                    "auto-entry-"
+                )
+            )
+
+            if not is_auto_entry:
+                ignored_buys.append(
+                    {
+                        "order_id": fill.get(
+                            "order_id"
+                        ),
+                        "symbol": symbol,
+                        "shares": shares,
+                        "price": price,
+                        "filled_at": fill.get(
+                            "filled_at"
+                        ),
+                        "client_order_id": (
+                            client_order_id
+                        ),
+                        "reason": (
+                            "BUY was not identified "
+                            "as an auto-entry order."
+                        ),
+                    }
+                )
+                continue
+
+            open_lots.setdefault(
+                symbol,
+                [],
+            ).append(
+                {
+                    "order_id": fill.get(
+                        "order_id"
+                    ),
+                    "symbol": symbol,
+                    "remaining_shares": (
+                        shares
+                    ),
+                    "original_shares": (
+                        shares
+                    ),
+                    "price": price,
+                    "filled_at": fill.get(
+                        "filled_at"
+                    ),
+                    "client_order_id": (
+                        client_order_id
+                    ),
+                }
+            )
+
+            continue
+
+        if side != "SELL":
+            continue
+
+        remaining_sell = shares
+
+        symbol_lots = (
+            open_lots.get(
+                symbol,
+                [],
+            )
+        )
+
+        while (
+            remaining_sell > 0
+            and symbol_lots
+        ):
+            lot = symbol_lots[0]
+
+            lot_remaining = (
+                safe_float(
+                    lot.get(
+                        "remaining_shares"
+                    )
+                )
+                or 0.0
+            )
+
+            if lot_remaining <= 0:
+                symbol_lots.pop(0)
+                continue
+
+            matched_shares = min(
+                remaining_sell,
+                lot_remaining,
+            )
+
+            entry_price = float(
+                lot["price"]
+            )
+
+            exit_price = float(
+                price
+            )
+
+            realized_pl = (
+                exit_price
+                - entry_price
+            ) * matched_shares
+
+            realized_return = (
+                (
+                    exit_price
+                    - entry_price
+                )
+                / entry_price
+                * 100.0
+            )
+
+            completed.append(
+                {
+                    "symbol": symbol,
+                    "shares": round(
+                        matched_shares,
+                        8,
+                    ),
+                    "entry_order_id": (
+                        lot.get(
+                            "order_id"
+                        )
+                    ),
+                    "exit_order_id": (
+                        fill.get(
+                            "order_id"
+                        )
+                    ),
+                    "entry_price": (
+                        entry_price
+                    ),
+                    "exit_price": (
+                        exit_price
+                    ),
+                    "entry_timestamp": (
+                        lot.get(
+                            "filled_at"
+                        )
+                    ),
+                    "exit_timestamp": (
+                        fill.get(
+                            "filled_at"
+                        )
+                    ),
+                    "realized_profit_loss": (
+                        round(
+                            realized_pl,
+                            4,
+                        )
+                    ),
+                    "realized_return_percent": (
+                        round(
+                            realized_return,
+                            6,
+                        )
+                    ),
+                    "entry_client_order_id": (
+                        lot.get(
+                            "client_order_id"
+                        )
+                    ),
+                    "exit_client_order_id": (
+                        client_order_id
+                    ),
+                    "exit_position_intent": (
+                        raw_order.get(
+                            "position_intent"
+                        )
+                    ),
+                    "exit_order_class": (
+                        raw_order.get(
+                            "order_class"
+                        )
+                    ),
+                    "exit_order_type": (
+                        raw_order.get(
+                            "order_type"
+                        )
+                        or raw_order.get(
+                            "type"
+                        )
+                    ),
+                }
+            )
+
+            lot[
+                "remaining_shares"
+            ] = (
+                lot_remaining
+                - matched_shares
+            )
+
+            remaining_sell -= (
+                matched_shares
+            )
+
+            if (
+                lot[
+                    "remaining_shares"
+                ]
+                <= 0.00000001
+            ):
+                symbol_lots.pop(0)
+
+        if remaining_sell > 0.00000001:
+            unmatched_sells.append(
+                {
+                    "order_id": fill.get(
+                        "order_id"
+                    ),
+                    "symbol": symbol,
+                    "shares": shares,
+                    "unmatched_shares": round(
+                        remaining_sell,
+                        8,
+                    ),
+                    "price": price,
+                    "filled_at": fill.get(
+                        "filled_at"
+                    ),
+                    "client_order_id": (
+                        client_order_id
+                    ),
+                    "position_intent": (
+                        raw_order.get(
+                            "position_intent"
+                        )
+                    ),
+                }
+            )
+
+    open_positions: list[
+        dict[str, Any]
+    ] = []
+
+    for symbol, lots in open_lots.items():
+        for lot in lots:
+            remaining = safe_float(
+                lot.get(
+                    "remaining_shares"
+                )
+            )
+
+            if (
+                remaining is None
+                or remaining
+                <= 0.00000001
+            ):
+                continue
+
+            open_positions.append(
+                {
+                    "symbol": symbol,
+                    "entry_order_id": (
+                        lot.get(
+                            "order_id"
+                        )
+                    ),
+                    "remaining_shares": (
+                        remaining
+                    ),
+                    "entry_price": (
+                        lot.get(
+                            "price"
+                        )
+                    ),
+                    "entry_timestamp": (
+                        lot.get(
+                            "filled_at"
+                        )
+                    ),
+                    "client_order_id": (
+                        lot.get(
+                            "client_order_id"
+                        )
+                    ),
+                }
+            )
+
+    total_realized = sum(
+        float(
+            trade.get(
+                "realized_profit_loss"
+            )
+            or 0.0
+        )
+        for trade in completed
+    )
+
+    return {
+        "paper": True,
+        "read_only_trade_book": True,
+        "method": (
+            "FIFO using auto-entry BUY "
+            "orders as bot entry lots"
+        ),
+        "summary": {
+            "ledger_fills": len(
+                fills
+            ),
+            "completed_matches": len(
+                completed
+            ),
+            "open_bot_lots": len(
+                open_positions
+            ),
+            "unmatched_sell_fills": len(
+                unmatched_sells
+            ),
+            "ignored_non_auto_buys": len(
+                ignored_buys
+            ),
+            "reconstructed_realized_pl": (
+                round(
+                    total_realized,
+                    2,
+                )
+            ),
+        },
+        "completed_trades": completed,
+        "open_positions": open_positions,
+        "unmatched_sells": (
+            unmatched_sells
+        ),
+        "ignored_buys": ignored_buys,
+    }
+
 @app.get("/auto-trader/broker-fills")
 def auto_trader_broker_fills(
     request: Request,
@@ -12171,6 +12587,7 @@ def sell(
         shares=shares,
         side="sell",
     )
+
 
 
 
