@@ -1,4 +1,4 @@
-import json
+﻿import json
 from datetime import datetime, timezone
 import math
 import os
@@ -354,6 +354,44 @@ def initialize_database() -> None:
             """
         )
 
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS broker_fills (
+                order_id TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL
+                    CHECK(side IN ('BUY', 'SELL')),
+                shares REAL NOT NULL,
+                price REAL NOT NULL,
+                filled_at TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'alpaca_paper',
+                raw_order_json TEXT NOT NULL DEFAULT '{}',
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_broker_fills_symbol
+            ON broker_fills(symbol)
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_broker_fills_filled_at
+            ON broker_fills(filled_at)
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_broker_fills_side
+            ON broker_fills(side)
+            """
+        )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS pro_ticker_discovery_state (
@@ -1466,6 +1504,322 @@ def save_pro_ticker_discovery_cursor(
     return normalized_cursor
 
 
+# =========================================================
+# Broker fill ledger
+# =========================================================
+
+def upsert_broker_fill(
+    *,
+    order_id: str,
+    symbol: str,
+    side: str,
+    shares: float,
+    price: float,
+    filled_at: str,
+    raw_order: dict[str, Any] | None = None,
+    source: str = "alpaca_paper",
+) -> dict[str, Any]:
+    """Insert or refresh one broker execution by Alpaca order ID."""
+
+    normalized_order_id = str(order_id).strip()
+
+    if not normalized_order_id:
+        raise ValueError(
+            "Broker order ID cannot be empty."
+        )
+
+    normalized_symbol = _normalize_symbol(
+        symbol
+    )
+
+    normalized_side = str(
+        side
+    ).strip().upper()
+
+    if normalized_side not in {
+        "BUY",
+        "SELL",
+    }:
+        raise ValueError(
+            "Broker fill side must be BUY or SELL."
+        )
+
+    normalized_shares = (
+        _validate_finite_number(
+            shares,
+            "Broker fill shares",
+            allow_zero=False,
+        )
+    )
+
+    normalized_price = (
+        _validate_finite_number(
+            price,
+            "Broker fill price",
+            allow_zero=False,
+        )
+    )
+
+    normalized_filled_at = (
+        _validate_timestamp(
+            filled_at
+        )
+    )
+
+    normalized_source = str(
+        source or "alpaca_paper"
+    ).strip()
+
+    if not normalized_source:
+        normalized_source = (
+            "alpaca_paper"
+        )
+
+    now = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    raw_order_json = (
+        _serialize_json_object(
+            raw_order
+        )
+    )
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO broker_fills (
+                order_id,
+                symbol,
+                side,
+                shares,
+                price,
+                filled_at,
+                source,
+                raw_order_json,
+                first_seen_at,
+                last_seen_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+
+            ON CONFLICT(order_id)
+            DO UPDATE SET
+                symbol = excluded.symbol,
+                side = excluded.side,
+                shares = excluded.shares,
+                price = excluded.price,
+                filled_at = excluded.filled_at,
+                source = excluded.source,
+                raw_order_json = excluded.raw_order_json,
+                last_seen_at = excluded.last_seen_at
+            """,
+            (
+                normalized_order_id,
+                normalized_symbol,
+                normalized_side,
+                normalized_shares,
+                normalized_price,
+                normalized_filled_at,
+                normalized_source,
+                raw_order_json,
+                now,
+                now,
+            ),
+        )
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM broker_fills
+            WHERE order_id = ?
+            """,
+            (
+                normalized_order_id,
+            ),
+        ).fetchone()
+
+    if row is None:
+        raise RuntimeError(
+            "Broker fill could not be reloaded."
+        )
+
+    result = dict(row)
+
+    result["raw_order"] = (
+        _deserialize_json_object(
+            result.pop(
+                "raw_order_json",
+                "{}",
+            )
+        )
+    )
+
+    return result
+
+
+def get_broker_fill(
+    order_id: str,
+) -> dict[str, Any] | None:
+    """Load one broker fill by order ID."""
+
+    normalized_order_id = str(
+        order_id
+    ).strip()
+
+    if not normalized_order_id:
+        return None
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM broker_fills
+            WHERE order_id = ?
+            """,
+            (
+                normalized_order_id,
+            ),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    result = dict(row)
+
+    result["raw_order"] = (
+        _deserialize_json_object(
+            result.pop(
+                "raw_order_json",
+                "{}",
+            )
+        )
+    )
+
+    return result
+
+
+def load_broker_fills(
+    *,
+    symbol: str | None = None,
+    side: str | None = None,
+    start_timestamp: str | None = None,
+    end_timestamp: str | None = None,
+    limit: int = 5000,
+) -> list[dict[str, Any]]:
+    """Load broker fills newest first."""
+
+    safe_limit = max(
+        1,
+        min(
+            int(limit),
+            10000,
+        ),
+    )
+
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if symbol is not None:
+        clauses.append(
+            "symbol = ?"
+        )
+
+        params.append(
+            _normalize_symbol(
+                symbol
+            )
+        )
+
+    if side is not None:
+        normalized_side = str(
+            side
+        ).strip().upper()
+
+        if normalized_side not in {
+            "BUY",
+            "SELL",
+        }:
+            raise ValueError(
+                "Broker fill side must be BUY or SELL."
+            )
+
+        clauses.append(
+            "side = ?"
+        )
+
+        params.append(
+            normalized_side
+        )
+
+    if start_timestamp is not None:
+        clauses.append(
+            "filled_at >= ?"
+        )
+
+        params.append(
+            _validate_timestamp(
+                start_timestamp
+            )
+        )
+
+    if end_timestamp is not None:
+        clauses.append(
+            "filled_at <= ?"
+        )
+
+        params.append(
+            _validate_timestamp(
+                end_timestamp
+            )
+        )
+
+    where_sql = (
+        " WHERE "
+        + " AND ".join(
+            clauses
+        )
+        if clauses
+        else ""
+    )
+
+    params.append(
+        safe_limit
+    )
+
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT *
+            FROM broker_fills
+            {where_sql}
+            ORDER BY filled_at DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+
+    results: list[
+        dict[str, Any]
+    ] = []
+
+    for row in rows:
+        item = dict(row)
+
+        item["raw_order"] = (
+            _deserialize_json_object(
+                item.pop(
+                    "raw_order_json",
+                    "{}",
+                )
+            )
+        )
+
+        results.append(
+            item
+        )
+
+    return results
+
 def upsert_pro_ticker_research(
     *,
     article_url: str,
@@ -2375,3 +2729,5 @@ def set_learning_recommendation_active(
         )
         if cursor.rowcount == 0:
             raise ValueError("Learning recommendation was not found.")
+
+

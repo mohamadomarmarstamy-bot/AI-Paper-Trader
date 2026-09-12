@@ -32,7 +32,9 @@ from database import (
     load_trade_excursions,
     load_learning_outcomes,
     load_pro_ticker_research,
+    load_broker_fills,
     load_trade_excursions,
+    upsert_broker_fill,
     record_trade_book_event,
     save_learning_outcome,
     upsert_trade_excursion,
@@ -2776,6 +2778,138 @@ def normalize_alpaca_position(
         ),
     }
 
+
+def sync_alpaca_broker_fills(
+    *,
+    limit: int = 500,
+) -> dict[str, Any]:
+    """
+    Persist filled Alpaca PAPER orders into the broker-fill ledger.
+
+    This does not modify trade_book or trading behavior.
+    """
+
+    raw_orders = fetch_alpaca_paper_trade_history(
+        limit=limit
+    )
+
+    examined = 0
+    filled = 0
+    saved = 0
+    errors: list[dict[str, Any]] = []
+
+    for order in raw_orders:
+        if not isinstance(
+            order,
+            dict,
+        ):
+            continue
+
+        examined += 1
+
+        status = str(
+            order.get("status") or ""
+        ).strip().lower()
+
+        if status != "filled":
+            continue
+
+        order_id = str(
+            order.get("id") or ""
+        ).strip()
+
+        symbol = clean_symbol(
+            order.get("symbol")
+        )
+
+        side = str(
+            order.get("side") or ""
+        ).strip().upper()
+
+        shares = safe_float(
+            order.get("filled_qty")
+        )
+
+        price = safe_float(
+            order.get(
+                "filled_avg_price"
+            )
+        )
+
+        filled_at = str(
+            order.get("filled_at") or ""
+        ).strip()
+
+        if (
+            not order_id
+            or not symbol
+            or side not in {
+                "BUY",
+                "SELL",
+            }
+            or shares is None
+            or shares <= 0
+            or price is None
+            or price <= 0
+            or not filled_at
+        ):
+            errors.append(
+                {
+                    "order_id": order_id,
+                    "symbol": symbol,
+                    "error": (
+                        "Filled Alpaca order "
+                        "was missing required "
+                        "execution fields."
+                    ),
+                }
+            )
+            continue
+
+        filled += 1
+
+        try:
+            upsert_broker_fill(
+                order_id=order_id,
+                symbol=symbol,
+                side=side,
+                shares=shares,
+                price=price,
+                filled_at=filled_at,
+                raw_order=order,
+                source="alpaca_paper",
+            )
+
+            saved += 1
+
+        except Exception as error:
+            errors.append(
+                {
+                    "order_id": order_id,
+                    "symbol": symbol,
+                    "error": (
+                        clean_error_message(
+                            error
+                        )
+                    ),
+                }
+            )
+
+    ledger = load_broker_fills(
+        limit=10000
+    )
+
+    return {
+        "success": len(errors) == 0,
+        "paper": True,
+        "read_only_trade_book": True,
+        "orders_examined": examined,
+        "filled_orders_seen": filled,
+        "fills_saved_or_refreshed": saved,
+        "ledger_count": len(ledger),
+        "error_count": len(errors),
+        "errors": errors,
+    }
 
 def normalize_alpaca_order_for_history(
     order: dict[str, Any],
@@ -10073,6 +10207,23 @@ def auto_trader_journal(
         ),
     }
 
+@app.post("/auto-trader/broker-fills/sync")
+def sync_auto_trader_broker_fills(
+    request: Request,
+    limit: int = Query(
+        default=500,
+        ge=1,
+        le=500,
+    ),
+) -> dict[str, Any]:
+    """Persist recent Alpaca PAPER fills into SQLite."""
+
+    require_app_session(request)
+
+    return sync_alpaca_broker_fills(
+        limit=limit
+    )
+
 @app.get("/auto-trader/reconciliation")
 def auto_trader_reconciliation(
     request: Request,
@@ -11900,4 +12051,6 @@ def sell(
         shares=shares,
         side="sell",
     )
+
+
 
