@@ -11145,10 +11145,8 @@ def auto_trader_canonical_broker_trades(
 
         if remaining_shares <= 0.00000001:
             status = "CLOSED"
-        elif matched_shares > 0:
-            status = "PARTIAL"
         else:
-            status = "OPEN"
+            status = "RESIDUAL"
 
         canonical.append(
             {
@@ -11243,12 +11241,192 @@ def auto_trader_canonical_broker_trades(
         reverse=True,
     )
 
+    live_positions = fetch_alpaca_paper_positions()
+
+    live_qty_by_symbol: dict[str, float] = {}
+
+    for position in live_positions:
+        if not isinstance(
+            position,
+            dict,
+        ):
+            continue
+
+        symbol = clean_symbol(
+            position.get(
+                "symbol"
+            )
+        )
+
+        qty = safe_float(
+            position.get(
+                "qty"
+            )
+        )
+
+        if (
+            not symbol
+            or qty is None
+            or qty <= 0
+        ):
+            continue
+
+        live_qty_by_symbol[
+            symbol
+        ] = float(
+            qty
+        )
+
+    residual_by_symbol: dict[
+        str,
+        list[dict[str, Any]],
+    ] = {}
+
+    for item in canonical:
+        remaining = safe_float(
+            item.get(
+                "remaining_shares"
+            )
+        ) or 0.0
+
+        if remaining <= 0.00000001:
+            item[
+                "broker_open_shares"
+            ] = 0.0
+
+            item[
+                "unaccounted_closed_shares"
+            ] = 0.0
+
+            item[
+                "pnl_complete"
+            ] = True
+
+            continue
+
+        residual_by_symbol.setdefault(
+            str(
+                item.get(
+                    "symbol"
+                )
+                or ""
+            ),
+            [],
+        ).append(
+            item
+        )
+
+    for symbol, items in residual_by_symbol.items():
+        broker_remaining = float(
+            live_qty_by_symbol.get(
+                symbol,
+                0.0,
+            )
+        )
+
+        # FIFO selling leaves the newest lots open,
+        # so allocate current broker shares newest first.
+        items.sort(
+            key=lambda item: str(
+                item.get(
+                    "entry_timestamp"
+                )
+                or ""
+            ),
+            reverse=True,
+        )
+
+        for item in items:
+            remaining = float(
+                item.get(
+                    "remaining_shares"
+                )
+                or 0.0
+            )
+
+            broker_open = min(
+                remaining,
+                broker_remaining,
+            )
+
+            broker_remaining -= (
+                broker_open
+            )
+
+            historical_missing = max(
+                0.0,
+                remaining
+                - broker_open,
+            )
+
+            item[
+                "broker_open_shares"
+            ] = round(
+                broker_open,
+                8,
+            )
+
+            item[
+                "unaccounted_closed_shares"
+            ] = round(
+                historical_missing,
+                8,
+            )
+
+            item[
+                "pnl_complete"
+            ] = (
+                historical_missing
+                <= 0.00000001
+            )
+
+            matched = float(
+                item.get(
+                    "matched_shares"
+                )
+                or 0.0
+            )
+
+            if (
+                broker_open
+                > 0.00000001
+            ):
+                if matched > 0.00000001:
+                    item[
+                        "status"
+                    ] = "PARTIAL"
+                else:
+                    item[
+                        "status"
+                    ] = "OPEN"
+
+            elif (
+                historical_missing
+                > 0.00000001
+            ):
+                item[
+                    "status"
+                ] = "CLOSED_INCOMPLETE"
+
+            else:
+                item[
+                    "status"
+                ] = "CLOSED"
+
     closed = [
         item
         for item in canonical
         if item.get(
             "status"
         ) == "CLOSED"
+    ]
+
+    closed_incomplete = [
+        item
+        for item in canonical
+        if item.get(
+            "status"
+        ) == "CLOSED_INCOMPLETE"
     ]
 
     partial = [
@@ -11291,11 +11469,17 @@ def auto_trader_canonical_broker_trades(
             "closed_trades": len(
                 closed
             ),
+            "closed_incomplete_trades": len(
+                closed_incomplete
+            ),
             "partial_trades": len(
                 partial
             ),
             "open_trades": len(
                 opened
+            ),
+            "live_position_symbols": len(
+                live_qty_by_symbol
             ),
             "unmatched_sell_fills": len(
                 unmatched_sells
