@@ -728,6 +728,17 @@
                     0
                 );
 
+            const incompleteTrades =
+                dayTrades.filter(
+                    (trade) =>
+                        trade?.pnl_complete === false
+                        || trade?.status
+                            === "CLOSED_INCOMPLETE"
+                );
+
+            const incompleteCount =
+                incompleteTrades.length;
+
             const pnl =
                 document.createElement(
                     "strong"
@@ -737,7 +748,25 @@
                 "trade-journal-pnl";
 
             pnl.textContent =
-                formatCurrency(dayPnl);
+                incompleteCount > 0
+                    ? `${formatCurrency(dayPnl)} known`
+                    : formatCurrency(dayPnl);
+
+            pnl.title =
+                incompleteCount > 0
+                    ? (
+                        "Known realized P/L only. "
+                        + `${incompleteCount} trade${
+                            incompleteCount === 1
+                                ? ""
+                                : "s"
+                        } ${
+                            incompleteCount === 1
+                                ? "has"
+                                : "have"
+                        } incomplete broker-fill history.`
+                    )
+                    : "Realized P/L";
 
             if (dayPnl > 0) {
                 pnl.classList.add(
@@ -760,6 +789,34 @@
                         ? ""
                         : "s"
                 }`;
+
+            const accountingWarning =
+                document.createElement(
+                    "span"
+                );
+
+            accountingWarning.className =
+                "trade-journal-day-hint";
+
+            accountingWarning.textContent =
+                incompleteCount > 0
+                    ? (
+                        `? ${incompleteCount} incomplete`
+                    )
+                    : "? Complete";
+
+            accountingWarning.title =
+                incompleteCount > 0
+                    ? (
+                        "Some historical exit fills "
+                        + "are unavailable, so this "
+                        + "day's realized P/L is not "
+                        + "a complete total."
+                    )
+                    : (
+                        "All displayed trades have "
+                        + "complete broker-fill accounting."
+                    );
 
             const pdfButton =
                 document.createElement(
@@ -825,6 +882,7 @@
                 dayLabel,
                 pnl,
                 count,
+                accountingWarning,
                 pdfButton
             );
 
