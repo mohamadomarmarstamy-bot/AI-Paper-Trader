@@ -10791,6 +10791,526 @@ def auto_trader_broker_fill_trade_book_gap(
         ),
     }
 
+@app.get("/auto-trader/broker-fills/canonical-trades")
+def auto_trader_canonical_broker_trades(
+    request: Request,
+) -> dict[str, Any]:
+    """
+    Reconstruct one canonical bot trade per auto-entry BUY.
+
+    Read-only. Does not modify trade_book.
+    """
+
+    require_app_session(request)
+
+    fills = load_broker_fills(
+        limit=10000
+    )
+
+    fills = sorted(
+        fills,
+        key=lambda item: str(
+            item.get("filled_at") or ""
+        ),
+    )
+
+    open_lots: dict[
+        str,
+        list[dict[str, Any]],
+    ] = {}
+
+    entries: dict[
+        str,
+        dict[str, Any],
+    ] = {}
+
+    unmatched_sells: list[
+        dict[str, Any]
+    ] = []
+
+    for fill in fills:
+        symbol = str(
+            fill.get("symbol") or ""
+        ).strip().upper()
+
+        side = str(
+            fill.get("side") or ""
+        ).strip().upper()
+
+        shares = safe_float(
+            fill.get("shares")
+        )
+
+        price = safe_float(
+            fill.get("price")
+        )
+
+        order_id = str(
+            fill.get("order_id") or ""
+        ).strip()
+
+        if (
+            not symbol
+            or not order_id
+            or shares is None
+            or shares <= 0
+            or price is None
+            or price <= 0
+        ):
+            continue
+
+        raw_order = fill.get(
+            "raw_order"
+        )
+
+        if not isinstance(
+            raw_order,
+            dict,
+        ):
+            raw_order = {}
+
+        client_order_id = str(
+            raw_order.get(
+                "client_order_id"
+            )
+            or ""
+        ).strip()
+
+        if side == "BUY":
+            if not (
+                client_order_id
+                .lower()
+                .startswith(
+                    "auto-entry-"
+                )
+            ):
+                continue
+
+            entry = {
+                "symbol": symbol,
+                "entry_order_id": order_id,
+                "entry_client_order_id": (
+                    client_order_id
+                ),
+                "entry_timestamp": (
+                    fill.get(
+                        "filled_at"
+                    )
+                ),
+                "entry_price": float(
+                    price
+                ),
+                "entry_shares": float(
+                    shares
+                ),
+                "remaining_shares": float(
+                    shares
+                ),
+                "matched_shares": 0.0,
+                "exit_value": 0.0,
+                "realized_profit_loss": 0.0,
+                "exit_order_ids": [],
+                "exit_allocations": [],
+                "last_exit_timestamp": None,
+            }
+
+            entries[
+                order_id
+            ] = entry
+
+            open_lots.setdefault(
+                symbol,
+                [],
+            ).append(
+                entry
+            )
+
+            continue
+
+        if side != "SELL":
+            continue
+
+        remaining_sell = float(
+            shares
+        )
+
+        lots = open_lots.get(
+            symbol,
+            [],
+        )
+
+        while (
+            remaining_sell > 0.00000001
+            and lots
+        ):
+            lot = lots[0]
+
+            lot_remaining = float(
+                lot.get(
+                    "remaining_shares"
+                )
+                or 0.0
+            )
+
+            if lot_remaining <= 0.00000001:
+                lots.pop(0)
+                continue
+
+            matched = min(
+                remaining_sell,
+                lot_remaining,
+            )
+
+            entry_price = float(
+                lot["entry_price"]
+            )
+
+            exit_price = float(
+                price
+            )
+
+            allocation_pl = (
+                exit_price
+                - entry_price
+            ) * matched
+
+            lot[
+                "matched_shares"
+            ] += matched
+
+            lot[
+                "remaining_shares"
+            ] -= matched
+
+            lot[
+                "exit_value"
+            ] += (
+                exit_price
+                * matched
+            )
+
+            lot[
+                "realized_profit_loss"
+            ] += allocation_pl
+
+            lot[
+                "last_exit_timestamp"
+            ] = fill.get(
+                "filled_at"
+            )
+
+            if (
+                order_id
+                not in lot[
+                    "exit_order_ids"
+                ]
+            ):
+                lot[
+                    "exit_order_ids"
+                ].append(
+                    order_id
+                )
+
+            lot[
+                "exit_allocations"
+            ].append(
+                {
+                    "exit_order_id": (
+                        order_id
+                    ),
+                    "shares": round(
+                        matched,
+                        8,
+                    ),
+                    "price": (
+                        exit_price
+                    ),
+                    "timestamp": (
+                        fill.get(
+                            "filled_at"
+                        )
+                    ),
+                }
+            )
+
+            remaining_sell -= (
+                matched
+            )
+
+            if (
+                lot[
+                    "remaining_shares"
+                ]
+                <= 0.00000001
+            ):
+                lot[
+                    "remaining_shares"
+                ] = 0.0
+
+                lots.pop(0)
+
+        if remaining_sell > 0.00000001:
+            unmatched_sells.append(
+                {
+                    "order_id": (
+                        order_id
+                    ),
+                    "symbol": symbol,
+                    "shares": float(
+                        shares
+                    ),
+                    "unmatched_shares": round(
+                        remaining_sell,
+                        8,
+                    ),
+                    "price": float(
+                        price
+                    ),
+                    "filled_at": (
+                        fill.get(
+                            "filled_at"
+                        )
+                    ),
+                }
+            )
+
+    canonical: list[
+        dict[str, Any]
+    ] = []
+
+    for entry in entries.values():
+        matched_shares = float(
+            entry.get(
+                "matched_shares"
+            )
+            or 0.0
+        )
+
+        entry_shares = float(
+            entry.get(
+                "entry_shares"
+            )
+            or 0.0
+        )
+
+        remaining_shares = max(
+            0.0,
+            float(
+                entry.get(
+                    "remaining_shares"
+                )
+                or 0.0
+            ),
+        )
+
+        if matched_shares > 0:
+            average_exit_price = (
+                float(
+                    entry.get(
+                        "exit_value"
+                    )
+                    or 0.0
+                )
+                / matched_shares
+            )
+
+            realized_pl = float(
+                entry.get(
+                    "realized_profit_loss"
+                )
+                or 0.0
+            )
+
+            realized_return = (
+                (
+                    average_exit_price
+                    - float(
+                        entry[
+                            "entry_price"
+                        ]
+                    )
+                )
+                / float(
+                    entry[
+                        "entry_price"
+                    ]
+                )
+                * 100.0
+            )
+
+        else:
+            average_exit_price = None
+            realized_pl = 0.0
+            realized_return = None
+
+        if remaining_shares <= 0.00000001:
+            status = "CLOSED"
+        elif matched_shares > 0:
+            status = "PARTIAL"
+        else:
+            status = "OPEN"
+
+        canonical.append(
+            {
+                "symbol": (
+                    entry["symbol"]
+                ),
+                "status": status,
+                "entry_order_id": (
+                    entry[
+                        "entry_order_id"
+                    ]
+                ),
+                "entry_client_order_id": (
+                    entry[
+                        "entry_client_order_id"
+                    ]
+                ),
+                "entry_timestamp": (
+                    entry[
+                        "entry_timestamp"
+                    ]
+                ),
+                "entry_price": round(
+                    float(
+                        entry[
+                            "entry_price"
+                        ]
+                    ),
+                    6,
+                ),
+                "entry_shares": round(
+                    entry_shares,
+                    8,
+                ),
+                "matched_shares": round(
+                    matched_shares,
+                    8,
+                ),
+                "remaining_shares": round(
+                    remaining_shares,
+                    8,
+                ),
+                "average_exit_price": (
+                    round(
+                        average_exit_price,
+                        6,
+                    )
+                    if average_exit_price
+                    is not None
+                    else None
+                ),
+                "exit_timestamp": (
+                    entry.get(
+                        "last_exit_timestamp"
+                    )
+                ),
+                "exit_order_ids": list(
+                    entry.get(
+                        "exit_order_ids"
+                    )
+                    or []
+                ),
+                "exit_allocations": list(
+                    entry.get(
+                        "exit_allocations"
+                    )
+                    or []
+                ),
+                "realized_profit_loss": round(
+                    realized_pl,
+                    4,
+                ),
+                "realized_return_percent": (
+                    round(
+                        realized_return,
+                        6,
+                    )
+                    if realized_return
+                    is not None
+                    else None
+                ),
+            }
+        )
+
+    canonical.sort(
+        key=lambda item: str(
+            item.get(
+                "entry_timestamp"
+            )
+            or ""
+        ),
+        reverse=True,
+    )
+
+    closed = [
+        item
+        for item in canonical
+        if item.get(
+            "status"
+        ) == "CLOSED"
+    ]
+
+    partial = [
+        item
+        for item in canonical
+        if item.get(
+            "status"
+        ) == "PARTIAL"
+    ]
+
+    opened = [
+        item
+        for item in canonical
+        if item.get(
+            "status"
+        ) == "OPEN"
+    ]
+
+    realized_total = sum(
+        float(
+            item.get(
+                "realized_profit_loss"
+            )
+            or 0.0
+        )
+        for item in canonical
+    )
+
+    return {
+        "paper": True,
+        "read_only": True,
+        "source": "broker_fills_fifo_by_entry",
+        "summary": {
+            "broker_fills": len(
+                fills
+            ),
+            "bot_entry_orders": len(
+                canonical
+            ),
+            "closed_trades": len(
+                closed
+            ),
+            "partial_trades": len(
+                partial
+            ),
+            "open_trades": len(
+                opened
+            ),
+            "unmatched_sell_fills": len(
+                unmatched_sells
+            ),
+            "realized_profit_loss": round(
+                realized_total,
+                2,
+            ),
+        },
+        "trades": canonical,
+        "unmatched_sells": (
+            unmatched_sells
+        ),
+    }
+
 @app.get("/auto-trader/broker-fills/pairing")
 def auto_trader_broker_fill_pairing(
     request: Request,
@@ -13171,6 +13691,7 @@ def sell(
         shares=shares,
         side="sell",
     )
+
 
 
 
