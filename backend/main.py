@@ -9978,20 +9978,20 @@ def auto_trader_pnl_reconciliation(
 
         live_last_equity = safe_float(
             live_account.get(
-                "last_equity"
+                "starting_balance"
             )
         )
 
         account_day_pl = safe_float(
             live_account.get(
-                "daily_pl"
+                "profit_loss"
             )
         )
 
         account_day_pl_percent = (
             safe_float(
                 live_account.get(
-                    "daily_pl_percent"
+                    "profit_loss_percent"
                 )
             )
         )
