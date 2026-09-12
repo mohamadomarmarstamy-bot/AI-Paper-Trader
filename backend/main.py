@@ -29,6 +29,7 @@ from database import (
     load_open_trade_book_entry,
     load_trade_book,
     load_trade_book_events,
+    load_trade_excursions,
     load_learning_outcomes,
     load_pro_ticker_research,
     load_trade_excursions,
@@ -294,6 +295,625 @@ async def portfolio_refresh_loop() -> None:
         )
 
 
+_pro_ticker_last_hourly_key: str | None = None
+_pro_ticker_last_daily_date: str | None = None
+_pro_ticker_last_backfill_date: str | None = None
+
+
+def parse_trade_timestamp(
+    value: Any,
+) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+
+    cleaned = value.strip()
+
+    if not cleaned:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(
+            cleaned.replace(
+                "Z",
+                "+00:00",
+            )
+        )
+    except Exception:
+        return None
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(
+            tzinfo=timezone.utc
+        )
+
+    return parsed
+
+
+def format_holding_duration(
+    entry_timestamp: Any,
+    exit_timestamp: Any,
+) -> str:
+    entry_time = parse_trade_timestamp(
+        entry_timestamp
+    )
+
+    exit_time = parse_trade_timestamp(
+        exit_timestamp
+    )
+
+    if (
+        entry_time is None
+        or exit_time is None
+    ):
+        return "Unknown"
+
+    seconds = max(
+        0,
+        int(
+            (
+                exit_time
+                - entry_time
+            ).total_seconds()
+        ),
+    )
+
+    hours, remainder = divmod(
+        seconds,
+        3600,
+    )
+
+    minutes, seconds = divmod(
+        remainder,
+        60,
+    )
+
+    if hours:
+        return (
+            f"{hours}h "
+            f"{minutes}m"
+        )
+
+    if minutes:
+        return (
+            f"{minutes}m "
+            f"{seconds}s"
+        )
+
+    return f"{seconds}s"
+
+
+def load_today_closed_trades(
+    eastern_date: str,
+) -> list[dict[str, Any]]:
+    eastern = ZoneInfo(
+        "America/New_York"
+    )
+
+    rows = load_trade_book(
+        status="CLOSED",
+        limit=5000,
+    )
+
+    results: list[
+        dict[str, Any]
+    ] = []
+
+    for row in rows:
+        exit_time = (
+            parse_trade_timestamp(
+                row.get(
+                    "exit_timestamp"
+                )
+            )
+        )
+
+        if exit_time is None:
+            continue
+
+        local_exit = exit_time.astimezone(
+            eastern
+        )
+
+        if (
+            local_exit.date().isoformat()
+            != eastern_date
+        ):
+            continue
+
+        item = dict(row)
+        item[
+            "_exit_eastern"
+        ] = local_exit
+
+        results.append(
+            item
+        )
+
+    results.sort(
+        key=lambda item: item[
+            "_exit_eastern"
+        ]
+    )
+
+    return results
+
+
+def build_daily_market_recap_email(
+    *,
+    research_result: dict[str, Any],
+    eastern_date: str,
+) -> tuple[str, str]:
+    trades = load_today_closed_trades(
+        eastern_date
+    )
+
+    excursions = (
+        load_trade_excursions(
+            limit=1000
+        )
+    )
+
+    excursion_map = {
+        int(item["trade_book_id"]): item
+        for item in excursions
+        if item.get(
+            "trade_book_id"
+        ) is not None
+    }
+
+    completed = len(trades)
+
+    wins = sum(
+        1
+        for trade in trades
+        if float(
+            trade.get(
+                "realized_profit_loss"
+            )
+            or 0.0
+        ) > 0
+    )
+
+    losses = sum(
+        1
+        for trade in trades
+        if float(
+            trade.get(
+                "realized_profit_loss"
+            )
+            or 0.0
+        ) < 0
+    )
+
+    flat = (
+        completed
+        - wins
+        - losses
+    )
+
+    total_pl = sum(
+        float(
+            trade.get(
+                "realized_profit_loss"
+            )
+            or 0.0
+        )
+        for trade in trades
+    )
+
+    win_rate = (
+        (wins / completed) * 100.0
+        if completed
+        else 0.0
+    )
+
+    best_trade = (
+        max(
+            trades,
+            key=lambda trade: float(
+                trade.get(
+                    "realized_profit_loss"
+                )
+                or 0.0
+            ),
+        )
+        if trades
+        else None
+    )
+
+    worst_trade = (
+        min(
+            trades,
+            key=lambda trade: float(
+                trade.get(
+                    "realized_profit_loss"
+                )
+                or 0.0
+            ),
+        )
+        if trades
+        else None
+    )
+
+    lines = [
+        "AI Paper Trader - Market Close Daily Recap",
+        "",
+        f"Trading date: {eastern_date}",
+        "",
+        "DAILY PERFORMANCE",
+        "-----------------",
+        f"Completed trades: {completed}",
+        f"Wins: {wins}",
+        f"Losses: {losses}",
+        f"Flat: {flat}",
+        f"Win rate: {win_rate:.2f}%",
+        f"Realized P/L: ${total_pl:,.2f}",
+    ]
+
+    if best_trade is not None:
+        lines.append(
+            "Best trade: "
+            f"{best_trade.get('symbol')} "
+            f"${float(best_trade.get('realized_profit_loss') or 0):,.2f}"
+        )
+
+    if worst_trade is not None:
+        lines.append(
+            "Worst trade: "
+            f"{worst_trade.get('symbol')} "
+            f"${float(worst_trade.get('realized_profit_loss') or 0):,.2f}"
+        )
+
+    lines.extend(
+        [
+            "",
+            "COMPLETED TRADES",
+            "----------------",
+        ]
+    )
+
+    if not trades:
+        lines.append(
+            "No completed paper trades today."
+        )
+
+    for index, trade in enumerate(
+        trades,
+        start=1,
+    ):
+        trade_id = trade.get("id")
+
+        excursion = (
+            excursion_map.get(
+                int(trade_id)
+            )
+            if trade_id is not None
+            else None
+        )
+
+        pnl = float(
+            trade.get(
+                "realized_profit_loss"
+            )
+            or 0.0
+        )
+
+        return_pct = float(
+            trade.get(
+                "realized_return_percent"
+            )
+            or 0.0
+        )
+
+        lines.extend(
+            [
+                "",
+                (
+                    f"{index}. "
+                    f"{trade.get('symbol', 'UNKNOWN')}"
+                ),
+                (
+                    "Shares: "
+                    f"{trade.get('shares', 'Unknown')}"
+                ),
+                (
+                    "Entry: $"
+                    f"{float(trade.get('entry_price') or 0):,.4f}"
+                ),
+                (
+                    "Exit: $"
+                    f"{float(trade.get('exit_price') or 0):,.4f}"
+                ),
+                (
+                    "Realized P/L: "
+                    f"${pnl:,.2f}"
+                ),
+                (
+                    "Return: "
+                    f"{return_pct:.3f}%"
+                ),
+                (
+                    "Holding time: "
+                    + format_holding_duration(
+                        trade.get(
+                            "entry_timestamp"
+                        ),
+                        trade.get(
+                            "exit_timestamp"
+                        ),
+                    )
+                ),
+                (
+                    "Exit reason: "
+                    f"{trade.get('exit_reason') or 'Unknown'}"
+                ),
+            ]
+        )
+
+        if excursion:
+            lines.append(
+                "MFE / MAE: "
+                f"{float(excursion.get('mfe_percent') or 0):.3f}% / "
+                f"{float(excursion.get('mae_percent') or 0):.3f}%"
+            )
+
+    lines.extend(
+        [
+            "",
+            "PRO TICKER RESEARCH",
+            "-------------------",
+            (
+                "Closing pages scanned: "
+                f"{research_result.get('pages_scanned', 0)}"
+            ),
+            (
+                "Recaps collected: "
+                f"{research_result.get('collected_count', 0)}"
+            ),
+            (
+                "Research errors: "
+                f"{research_result.get('error_count', 0)}"
+            ),
+        ]
+    )
+
+    collected = research_result.get(
+        "collected",
+        [],
+    )
+
+    if isinstance(collected, list):
+        for item in collected:
+            if not isinstance(
+                item,
+                dict,
+            ):
+                continue
+
+            features = item.get(
+                "raw_features",
+                {},
+            )
+
+            if not isinstance(
+                features,
+                dict,
+            ):
+                features = {}
+
+            learned = [
+                label
+                for key, label in (
+                    (
+                        "breakout_present",
+                        "Breakout",
+                    ),
+                    (
+                        "bull_flag_present",
+                        "Bull flag",
+                    ),
+                    (
+                        "consolidation_present",
+                        "Consolidation",
+                    ),
+                    (
+                        "higher_lows_present",
+                        "Higher lows",
+                    ),
+                    (
+                        "relative_volume_present",
+                        "Relative volume",
+                    ),
+                    (
+                        "rsi_present",
+                        "RSI",
+                    ),
+                    (
+                        "vwap_present",
+                        "VWAP",
+                    ),
+                    (
+                        "vwma_present",
+                        "VWMA",
+                    ),
+                    (
+                        "exhaustion_present",
+                        "Exhaustion",
+                    ),
+                    (
+                        "parabolic_present",
+                        "Parabolic",
+                    ),
+                )
+                if features.get(key)
+            ]
+
+            lines.extend(
+                [
+                    "",
+                    (
+                        f"{item.get('symbol') or 'UNKNOWN'}"
+                    ),
+                    (
+                        "Reported move: "
+                        f"{item.get('reported_move_percent') or 'Unknown'}%"
+                    ),
+                    (
+                        "Characteristics: "
+                        + (
+                            ", ".join(learned)
+                            if learned
+                            else "None extracted"
+                        )
+                    ),
+                ]
+            )
+
+    lines.extend(
+        [
+            "",
+            "LEARNING NOTE",
+            "-------------",
+            (
+                "Pro Ticker research remains "
+                "research-only and does not directly "
+                "trigger paper trades."
+            ),
+        ]
+    )
+
+    subject = (
+        "AI Paper Trader - "
+        f"Daily Market Recap {eastern_date}"
+    )
+
+    return (
+        subject,
+        "\n".join(lines),
+    )
+
+
+async def pro_ticker_scheduler_loop() -> None:
+    global _pro_ticker_last_hourly_key
+    global _pro_ticker_last_daily_date
+    global _pro_ticker_last_backfill_date
+
+    eastern = ZoneInfo(
+        "America/New_York"
+    )
+
+    while True:
+        try:
+            now = datetime.now(
+                eastern
+            )
+
+            today = (
+                now.date().isoformat()
+            )
+
+            calendar_entry = (
+                await asyncio.to_thread(
+                    fetch_alpaca_market_calendar_today
+                )
+            )
+
+            market_open = (
+                market_is_open_from_calendar(
+                    calendar_entry
+                )
+            )
+
+            hourly_key = (
+                f"{today}:{now.hour}"
+            )
+
+            if (
+                market_open
+                and now.minute >= 5
+                and _pro_ticker_last_hourly_key
+                != hourly_key
+            ):
+                result = (
+                    await asyncio.to_thread(
+                        run_pro_ticker_fresh_scan,
+                        pages=10,
+                    )
+                )
+
+                subject, message = (
+                    build_pro_ticker_scan_email(
+                        result,
+                        label="Hourly",
+                    )
+                )
+
+                await asyncio.to_thread(
+                    send_health_alert_email,
+                    subject,
+                    message,
+                )
+
+                _pro_ticker_last_hourly_key = (
+                    hourly_key
+                )
+
+            if (
+                calendar_entry
+                and now.hour == 16
+                and now.minute >= 5
+                and _pro_ticker_last_daily_date
+                != today
+            ):
+                result = (
+                    await asyncio.to_thread(
+                        run_pro_ticker_fresh_scan,
+                        pages=40,
+                    )
+                )
+
+                subject, message = (
+                    build_daily_market_recap_email(
+                        research_result=result,
+                        eastern_date=today,
+                    )
+                )
+
+                await asyncio.to_thread(
+                    send_health_alert_email,
+                    subject,
+                    message,
+                )
+
+                _pro_ticker_last_daily_date = (
+                    today
+                )
+
+            if (
+                calendar_entry
+                and now.hour == 16
+                and now.minute >= 20
+                and _pro_ticker_last_backfill_date
+                != today
+            ):
+                await asyncio.to_thread(
+                    run_pro_ticker_historical_backfill,
+                    pages_per_run=10,
+                )
+
+                _pro_ticker_last_backfill_date = (
+                    today
+                )
+
+        except Exception as error:
+            print(
+                "Pro Ticker scheduler error: "
+                f"{clean_error_message(error)}"
+            )
+
+        await asyncio.sleep(60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_auto_trader_log()
@@ -312,17 +932,23 @@ async def lifespan(app: FastAPI):
         auto_trader_health_watchdog()
     )
 
+    pro_ticker_scheduler_task = asyncio.create_task(
+        pro_ticker_scheduler_loop()
+    )
+
     try:
         yield
     finally:
         refresh_task.cancel()
         auto_trade_task.cancel()
         health_watchdog_task.cancel()
+        pro_ticker_scheduler_task.cancel()
 
         for task in (
             refresh_task,
             auto_trade_task,
             health_watchdog_task,
+            pro_ticker_scheduler_task,
         ):
             try:
                 await task
@@ -9015,6 +9641,74 @@ def build_pro_ticker_scan_email(
         subject,
         "\n".join(lines),
     )
+
+
+@app.post("/auto-trader/pro-ticker-research/daily-recap")
+def auto_trader_pro_ticker_daily_recap(
+    request: Request,
+    send_email: bool = Query(
+        default=False,
+    ),
+    run_research: bool = Query(
+        default=False,
+    ),
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    eastern_now = datetime.now(
+        ZoneInfo("America/New_York")
+    )
+
+    eastern_date = (
+        eastern_now.date().isoformat()
+    )
+
+    if run_research:
+        research_result = (
+            run_pro_ticker_fresh_scan(
+                pages=40,
+            )
+        )
+    else:
+        research_result = {
+            "pages_scanned": 0,
+            "candidate_count": 0,
+            "collected_count": 0,
+            "error_count": 0,
+            "collected": [],
+            "errors": [],
+        }
+
+    subject, message = (
+        build_daily_market_recap_email(
+            research_result=research_result,
+            eastern_date=eastern_date,
+        )
+    )
+
+    email_status = "skipped"
+
+    if send_email:
+        email_status = (
+            "sent"
+            if send_health_alert_email(
+                subject,
+                message,
+            )
+            else "failed"
+        )
+
+    return {
+        "paper": True,
+        "research_only": True,
+        "success": True,
+        "email": email_status,
+        "subject": subject,
+        "message": message,
+        "research": research_result,
+    }
 
 
 @app.post("/auto-trader/pro-ticker-research/fresh-scan")
