@@ -9696,6 +9696,341 @@ def portfolio_history(
         return []
 
 
+
+@app.get("/auto-trader/pnl-reconciliation")
+def auto_trader_pnl_reconciliation(
+    request: Request,
+    date: str = Query(...),
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    try:
+        target_date = datetime.strptime(
+            date,
+            "%Y-%m-%d",
+        ).date()
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "date must use YYYY-MM-DD format"
+            ),
+        ) from error
+
+    eastern = ZoneInfo(
+        "America/New_York"
+    )
+
+    history_payload = auto_trader_history(
+        request=request,
+        limit=5000,
+    )
+
+    history_rows = (
+        history_payload.get("history")
+        if isinstance(
+            history_payload,
+            dict,
+        )
+        else []
+    )
+
+    if not isinstance(
+        history_rows,
+        list,
+    ):
+        history_rows = []
+
+    day_trades: list[
+        dict[str, Any]
+    ] = []
+
+    for trade in history_rows:
+        if not isinstance(
+            trade,
+            dict,
+        ):
+            continue
+
+        timestamp = (
+            trade.get("exit_timestamp")
+            or trade.get("filled_at")
+        )
+
+        if not timestamp:
+            continue
+
+        try:
+            parsed = datetime.fromisoformat(
+                str(timestamp).replace(
+                    "Z",
+                    "+00:00",
+                )
+            )
+
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(
+                    tzinfo=timezone.utc
+                )
+
+            local_date = (
+                parsed.astimezone(
+                    eastern
+                ).date()
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+            continue
+
+        if local_date == target_date:
+            day_trades.append(
+                trade
+            )
+
+    known_closed_trade_pl = 0.0
+    complete_trades = 0
+    incomplete_trades = 0
+    unaccounted_closed_shares = 0.0
+
+    for trade in day_trades:
+        value = safe_float(
+            trade.get(
+                "realized_profit_loss"
+            )
+        )
+
+        if value is not None:
+            known_closed_trade_pl += value
+
+        incomplete = (
+            trade.get("pnl_complete")
+            is False
+            or str(
+                trade.get("status")
+                or ""
+            ).upper()
+            == "CLOSED_INCOMPLETE"
+        )
+
+        if incomplete:
+            incomplete_trades += 1
+
+            missing = safe_float(
+                trade.get(
+                    "unaccounted_closed_shares"
+                )
+            )
+
+            if missing is not None:
+                unaccounted_closed_shares += (
+                    missing
+                )
+        else:
+            complete_trades += 1
+
+    portfolio_history = (
+        fetch_alpaca_portfolio_history()
+    )
+
+    daily_equity: dict[
+        str,
+        float,
+    ] = {}
+
+    for point in portfolio_history:
+        if not isinstance(
+            point,
+            dict,
+        ):
+            continue
+
+        raw_timestamp = point.get(
+            "timestamp"
+        )
+
+        equity = safe_float(
+            point.get("equity")
+        )
+
+        if (
+            raw_timestamp is None
+            or equity is None
+        ):
+            continue
+
+        try:
+            if isinstance(
+                raw_timestamp,
+                (int, float),
+            ):
+                parsed = (
+                    datetime.fromtimestamp(
+                        raw_timestamp,
+                        tz=timezone.utc,
+                    )
+                )
+            else:
+                parsed = (
+                    datetime.fromisoformat(
+                        str(
+                            raw_timestamp
+                        ).replace(
+                            "Z",
+                            "+00:00",
+                        )
+                    )
+                )
+
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(
+                        tzinfo=timezone.utc
+                    )
+
+            day_key = (
+                parsed.astimezone(
+                    eastern
+                ).date().isoformat()
+            )
+
+        except (
+            TypeError,
+            ValueError,
+            OSError,
+        ):
+            continue
+
+        daily_equity[day_key] = equity
+
+    ordered_dates = sorted(
+        daily_equity
+    )
+
+    target_key = (
+        target_date.isoformat()
+    )
+
+    target_equity = daily_equity.get(
+        target_key
+    )
+
+    prior_date = None
+    prior_equity = None
+
+    if target_key in ordered_dates:
+        index = ordered_dates.index(
+            target_key
+        )
+
+        if index > 0:
+            prior_date = (
+                ordered_dates[
+                    index - 1
+                ]
+            )
+
+            prior_equity = (
+                daily_equity.get(
+                    prior_date
+                )
+            )
+
+    account_day_pl = None
+
+    if (
+        target_equity is not None
+        and prior_equity is not None
+    ):
+        account_day_pl = (
+            target_equity
+            - prior_equity
+        )
+
+    return {
+        "date": target_key,
+        "account_day_pl": (
+            round(
+                account_day_pl,
+                2,
+            )
+            if account_day_pl
+            is not None
+            else None
+        ),
+        "account_equity": (
+            round(
+                target_equity,
+                2,
+            )
+            if target_equity
+            is not None
+            else None
+        ),
+        "prior_trading_date": (
+            prior_date
+        ),
+        "prior_equity": (
+            round(
+                prior_equity,
+                2,
+            )
+            if prior_equity
+            is not None
+            else None
+        ),
+        "known_closed_trade_pl": round(
+            known_closed_trade_pl,
+            2,
+        ),
+        "closed_trades": len(
+            day_trades
+        ),
+        "complete_trades": (
+            complete_trades
+        ),
+        "incomplete_trades": (
+            incomplete_trades
+        ),
+        "unaccounted_closed_shares": (
+            round(
+                unaccounted_closed_shares,
+                6,
+            )
+        ),
+        "journal_pl_complete": (
+            incomplete_trades == 0
+        ),
+        "metrics_are_directly_comparable": (
+            False
+        ),
+        "account_day_pl_definition": (
+            "Change in Alpaca account "
+            "equity from the prior "
+            "trading-day equity point."
+        ),
+        "closed_trade_pl_definition": (
+            "Known canonical realized "
+            "P/L measured from each "
+            "trade's entry price to its "
+            "matched exit fills."
+        ),
+        "note": (
+            "Account Day P/L and "
+            "closed-trade P/L measure "
+            "different things and are "
+            "not expected to match when "
+            "positions span trading days. "
+            "Incomplete canonical trades "
+            "also make the known "
+            "closed-trade total partial."
+        ),
+    }
+
+
 @app.get("/auto-trader/excursions")
 def auto_trader_excursions(
     request: Request,
