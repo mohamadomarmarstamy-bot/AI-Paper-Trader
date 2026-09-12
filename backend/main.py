@@ -10207,6 +10207,455 @@ def auto_trader_journal(
         ),
     }
 
+@app.get("/auto-trader/broker-fills/trade-book-gap")
+def auto_trader_broker_fill_trade_book_gap(
+    request: Request,
+) -> dict[str, Any]:
+    """
+    Compare reconstructed broker round trips against trade_book.
+
+    Diagnostic only. No database writes are performed.
+    """
+
+    require_app_session(request)
+
+    fills = load_broker_fills(
+        limit=10000
+    )
+
+    fills = sorted(
+        fills,
+        key=lambda item: str(
+            item.get("filled_at") or ""
+        ),
+    )
+
+    open_lots: dict[
+        str,
+        list[dict[str, Any]],
+    ] = {}
+
+    reconstructed: list[
+        dict[str, Any]
+    ] = []
+
+    unmatched_sells: list[
+        dict[str, Any]
+    ] = []
+
+    for fill in fills:
+        symbol = str(
+            fill.get("symbol") or ""
+        ).strip().upper()
+
+        side = str(
+            fill.get("side") or ""
+        ).strip().upper()
+
+        shares = safe_float(
+            fill.get("shares")
+        )
+
+        price = safe_float(
+            fill.get("price")
+        )
+
+        if (
+            not symbol
+            or shares is None
+            or shares <= 0
+            or price is None
+            or price <= 0
+        ):
+            continue
+
+        raw_order = fill.get(
+            "raw_order"
+        )
+
+        if not isinstance(
+            raw_order,
+            dict,
+        ):
+            raw_order = {}
+
+        client_order_id = str(
+            raw_order.get(
+                "client_order_id"
+            )
+            or ""
+        ).strip()
+
+        if side == "BUY":
+            if not (
+                client_order_id
+                .lower()
+                .startswith(
+                    "auto-entry-"
+                )
+            ):
+                continue
+
+            open_lots.setdefault(
+                symbol,
+                [],
+            ).append(
+                {
+                    "order_id": fill.get(
+                        "order_id"
+                    ),
+                    "remaining_shares": shares,
+                    "price": price,
+                    "filled_at": fill.get(
+                        "filled_at"
+                    ),
+                    "client_order_id": (
+                        client_order_id
+                    ),
+                }
+            )
+
+            continue
+
+        if side != "SELL":
+            continue
+
+        remaining_sell = shares
+
+        lots = open_lots.get(
+            symbol,
+            [],
+        )
+
+        while (
+            remaining_sell > 0.00000001
+            and lots
+        ):
+            lot = lots[0]
+
+            lot_remaining = (
+                safe_float(
+                    lot.get(
+                        "remaining_shares"
+                    )
+                )
+                or 0.0
+            )
+
+            if lot_remaining <= 0.00000001:
+                lots.pop(0)
+                continue
+
+            matched_shares = min(
+                remaining_sell,
+                lot_remaining,
+            )
+
+            entry_price = float(
+                lot["price"]
+            )
+
+            exit_price = float(
+                price
+            )
+
+            realized_pl = (
+                exit_price
+                - entry_price
+            ) * matched_shares
+
+            realized_return = (
+                (
+                    exit_price
+                    - entry_price
+                )
+                / entry_price
+                * 100.0
+            )
+
+            reconstructed.append(
+                {
+                    "symbol": symbol,
+                    "shares": round(
+                        matched_shares,
+                        8,
+                    ),
+                    "entry_order_id": (
+                        lot.get(
+                            "order_id"
+                        )
+                    ),
+                    "exit_order_id": (
+                        fill.get(
+                            "order_id"
+                        )
+                    ),
+                    "entry_price": (
+                        entry_price
+                    ),
+                    "exit_price": (
+                        exit_price
+                    ),
+                    "entry_timestamp": (
+                        lot.get(
+                            "filled_at"
+                        )
+                    ),
+                    "exit_timestamp": (
+                        fill.get(
+                            "filled_at"
+                        )
+                    ),
+                    "realized_profit_loss": (
+                        round(
+                            realized_pl,
+                            4,
+                        )
+                    ),
+                    "realized_return_percent": (
+                        round(
+                            realized_return,
+                            6,
+                        )
+                    ),
+                }
+            )
+
+            lot[
+                "remaining_shares"
+            ] = (
+                lot_remaining
+                - matched_shares
+            )
+
+            remaining_sell -= (
+                matched_shares
+            )
+
+            if (
+                lot[
+                    "remaining_shares"
+                ]
+                <= 0.00000001
+            ):
+                lots.pop(0)
+
+        if remaining_sell > 0.00000001:
+            unmatched_sells.append(
+                {
+                    "order_id": fill.get(
+                        "order_id"
+                    ),
+                    "symbol": symbol,
+                    "shares": shares,
+                    "unmatched_shares": round(
+                        remaining_sell,
+                        8,
+                    ),
+                    "price": price,
+                    "filled_at": fill.get(
+                        "filled_at"
+                    ),
+                }
+            )
+
+    trade_book_rows = load_trade_book(
+        limit=5000
+    )
+
+    by_entry_order_id = {
+        str(
+            row.get(
+                "entry_order_id"
+            )
+            or ""
+        ).strip(): row
+        for row in trade_book_rows
+        if str(
+            row.get(
+                "entry_order_id"
+            )
+            or ""
+        ).strip()
+    }
+
+    by_exit_order_id = {
+        str(
+            row.get(
+                "exit_order_id"
+            )
+            or ""
+        ).strip(): row
+        for row in trade_book_rows
+        if str(
+            row.get(
+                "exit_order_id"
+            )
+            or ""
+        ).strip()
+    }
+
+    matched_existing: list[
+        dict[str, Any]
+    ] = []
+
+    missing: list[
+        dict[str, Any]
+    ] = []
+
+    conflicting: list[
+        dict[str, Any]
+    ] = []
+
+    for trade in reconstructed:
+        entry_id = str(
+            trade.get(
+                "entry_order_id"
+            )
+            or ""
+        ).strip()
+
+        exit_id = str(
+            trade.get(
+                "exit_order_id"
+            )
+            or ""
+        ).strip()
+
+        entry_row = (
+            by_entry_order_id.get(
+                entry_id
+            )
+        )
+
+        exit_row = (
+            by_exit_order_id.get(
+                exit_id
+            )
+        )
+
+        if (
+            entry_row is not None
+            and exit_row is not None
+            and entry_row.get("id")
+            == exit_row.get("id")
+        ):
+            matched_existing.append(
+                {
+                    **trade,
+                    "trade_book_id": (
+                        entry_row.get(
+                            "id"
+                        )
+                    ),
+                    "trade_book_status": (
+                        entry_row.get(
+                            "status"
+                        )
+                    ),
+                }
+            )
+            continue
+
+        if (
+            entry_row is None
+            and exit_row is None
+        ):
+            missing.append(
+                trade
+            )
+            continue
+
+        conflicting.append(
+            {
+                **trade,
+                "entry_trade_book_id": (
+                    entry_row.get("id")
+                    if entry_row
+                    else None
+                ),
+                "exit_trade_book_id": (
+                    exit_row.get("id")
+                    if exit_row
+                    else None
+                ),
+                "entry_status": (
+                    entry_row.get("status")
+                    if entry_row
+                    else None
+                ),
+                "exit_status": (
+                    exit_row.get("status")
+                    if exit_row
+                    else None
+                ),
+            }
+        )
+
+    missing_pl = sum(
+        float(
+            trade.get(
+                "realized_profit_loss"
+            )
+            or 0.0
+        )
+        for trade in missing
+    )
+
+    existing_pl = sum(
+        float(
+            trade.get(
+                "realized_profit_loss"
+            )
+            or 0.0
+        )
+        for trade in matched_existing
+    )
+
+    return {
+        "paper": True,
+        "read_only": True,
+        "source": (
+            "broker_fills+trade_book"
+        ),
+        "summary": {
+            "broker_fills": len(
+                fills
+            ),
+            "reconstructed_matches": len(
+                reconstructed
+            ),
+            "already_in_trade_book": len(
+                matched_existing
+            ),
+            "missing_from_trade_book": len(
+                missing
+            ),
+            "conflicting_partial_matches": len(
+                conflicting
+            ),
+            "unmatched_sell_fills": len(
+                unmatched_sells
+            ),
+            "existing_reconstructed_pl": round(
+                existing_pl,
+                2,
+            ),
+            "missing_reconstructed_pl": round(
+                missing_pl,
+                2,
+            ),
+        },
+        "missing_trades": missing,
+        "conflicting_trades": conflicting,
+        "already_recorded": (
+            matched_existing
+        ),
+        "unmatched_sells": (
+            unmatched_sells
+        ),
+    }
+
 @app.get("/auto-trader/broker-fills/pairing")
 def auto_trader_broker_fill_pairing(
     request: Request,
@@ -12587,6 +13036,7 @@ def sell(
         shares=shares,
         side="sell",
     )
+
 
 
 
