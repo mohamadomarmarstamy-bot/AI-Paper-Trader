@@ -2658,6 +2658,140 @@ def fetch_alpaca_paper_trade_history(
         if isinstance(order, dict)
     ]
 
+def fetch_alpaca_paper_trade_history_paginated(
+    *,
+    max_orders: int = 5000,
+    batch_size: int = 500,
+) -> list[dict[str, Any]]:
+    """
+    Fetch Alpaca PAPER order history across multiple pages.
+
+    Uses before_order_id so each request walks backward
+    through order history without overlapping the prior page.
+    """
+
+    safe_max_orders = max(
+        1,
+        min(
+            int(max_orders),
+            10000,
+        ),
+    )
+
+    safe_batch_size = max(
+        1,
+        min(
+            int(batch_size),
+            500,
+        ),
+    )
+
+    results: list[
+        dict[str, Any]
+    ] = []
+
+    seen_order_ids: set[str] = set()
+
+    before_order_id: str | None = None
+
+    while len(results) < safe_max_orders:
+        request_limit = min(
+            safe_batch_size,
+            safe_max_orders - len(results),
+        )
+
+        params: dict[str, Any] = {
+            "status": "all",
+            "limit": request_limit,
+            "direction": "desc",
+        }
+
+        if before_order_id:
+            params[
+                "before_order_id"
+            ] = before_order_id
+
+        payload = alpaca_paper_request(
+            "GET",
+            "/v2/orders",
+            params=params,
+        )
+
+        if not isinstance(
+            payload,
+            list,
+        ):
+            raise RuntimeError(
+                "Alpaca returned an invalid "
+                "paginated trade-history response."
+            )
+
+        batch = [
+            order
+            for order in payload
+            if isinstance(
+                order,
+                dict,
+            )
+        ]
+
+        if not batch:
+            break
+
+        added_this_page = 0
+
+        for order in batch:
+            order_id = str(
+                order.get("id") or ""
+            ).strip()
+
+            if not order_id:
+                continue
+
+            if order_id in seen_order_ids:
+                continue
+
+            seen_order_ids.add(
+                order_id
+            )
+
+            results.append(
+                order
+            )
+
+            added_this_page += 1
+
+            if (
+                len(results)
+                >= safe_max_orders
+            ):
+                break
+
+        if len(batch) < request_limit:
+            break
+
+        last_order_id = str(
+            batch[-1].get("id") or ""
+        ).strip()
+
+        if not last_order_id:
+            break
+
+        if (
+            last_order_id
+            == before_order_id
+        ):
+            break
+
+        before_order_id = (
+            last_order_id
+        )
+
+        if added_this_page == 0:
+            break
+
+    return results
+
 def normalize_alpaca_position(
     position: dict[str, Any],
 ) -> dict[str, Any]:
@@ -2789,8 +2923,9 @@ def sync_alpaca_broker_fills(
     This does not modify trade_book or trading behavior.
     """
 
-    raw_orders = fetch_alpaca_paper_trade_history(
-        limit=limit
+    raw_orders = fetch_alpaca_paper_trade_history_paginated(
+        max_orders=limit,
+        batch_size=500,
     )
 
     examined = 0
@@ -11198,7 +11333,7 @@ def sync_auto_trader_broker_fills(
     limit: int = Query(
         default=500,
         ge=1,
-        le=500,
+        le=5000,
     ),
 ) -> dict[str, Any]:
     """Persist recent Alpaca PAPER fills into SQLite."""
@@ -13036,6 +13171,8 @@ def sell(
         shares=shares,
         side="sell",
     )
+
+
 
 
 
