@@ -10207,6 +10207,126 @@ def auto_trader_journal(
         ),
     }
 
+@app.get("/auto-trader/broker-fills")
+def auto_trader_broker_fills(
+    request: Request,
+    date: str | None = Query(
+        default=None,
+    ),
+    limit: int = Query(
+        default=5000,
+        ge=1,
+        le=10000,
+    ),
+) -> dict[str, Any]:
+    """Read persisted Alpaca PAPER broker fills."""
+
+    require_app_session(request)
+
+    target_date = None
+
+    if date is not None:
+        try:
+            target_date = datetime.strptime(
+                date,
+                "%Y-%m-%d",
+            ).date()
+        except ValueError as error:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "date must use YYYY-MM-DD format."
+                ),
+            ) from error
+
+    rows = load_broker_fills(
+        limit=limit
+    )
+
+    eastern = ZoneInfo(
+        "America/New_York"
+    )
+
+    results: list[
+        dict[str, Any]
+    ] = []
+
+    for row in rows:
+        item = dict(row)
+
+        filled_at = str(
+            item.get("filled_at") or ""
+        ).strip()
+
+        try:
+            parsed = datetime.fromisoformat(
+                filled_at.replace(
+                    "Z",
+                    "+00:00",
+                )
+            )
+
+            eastern_time = (
+                parsed.astimezone(
+                    eastern
+                )
+            )
+
+            eastern_date = (
+                eastern_time.date()
+            )
+
+            item[
+                "filled_at_eastern"
+            ] = eastern_time.isoformat()
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+            eastern_date = None
+
+            item[
+                "filled_at_eastern"
+            ] = None
+
+        if (
+            target_date is not None
+            and eastern_date
+            != target_date
+        ):
+            continue
+
+        results.append(
+            item
+        )
+
+    buy_count = sum(
+        1
+        for row in results
+        if row.get("side") == "BUY"
+    )
+
+    sell_count = sum(
+        1
+        for row in results
+        if row.get("side") == "SELL"
+    )
+
+    return {
+        "paper": True,
+        "source": "broker_fills",
+        "date": (
+            target_date.isoformat()
+            if target_date is not None
+            else None
+        ),
+        "count": len(results),
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+        "fills": results,
+    }
+
 @app.post("/auto-trader/broker-fills/sync")
 def sync_auto_trader_broker_fills(
     request: Request,
@@ -12051,6 +12171,7 @@ def sell(
         shares=shares,
         side="sell",
     )
+
 
 
 
