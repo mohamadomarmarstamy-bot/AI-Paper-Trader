@@ -4,7 +4,6 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-import pandas as pd
 import requests
 
 from database import upsert_pro_ticker_research
@@ -117,7 +116,121 @@ def _html_to_text(
         text,
     ).strip()
 
+    # Add space after sentence punctuation when
+    # HTML joins the next sentence directly.
+    text = re.sub(
+        r"([.!?])(?=[A-Z$])",
+        r"\1 ",
+        text,
+    )
+
+    # Separate prose from ticker symbols.
+    text = re.sub(
+        r"([A-Za-z])(\$[A-Z]{1,6})\b",
+        r"\1 \2",
+        text,
+    )
+
+    # Separate prose from dollar prices.
+    text = re.sub(
+        r"([A-Za-z])(\$[0-9])",
+        r"\1 \2",
+        text,
+    )
+
+    # Repair common technical-term joins.
+    text = re.sub(
+        r"\b(VWAP|VWMA|RSI)(?=[a-z])",
+        r"\1 ",
+        text,
+    )
+
+    # A couple of source-specific prose joins.
+    text = re.sub(
+        r"\bpre-marketmoves\b",
+        "pre-market moves",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    text = re.sub(
+        r"\bThiswas\b",
+        "This was",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text,
+    ).strip()
+
     return text
+
+
+def _extract_published_date(
+    html: str,
+) -> str | None:
+    from lxml import html as lxml_html
+
+    document = lxml_html.fromstring(
+        html
+    )
+
+    candidates = document.xpath(
+        "//*[@title]/@title"
+    )
+
+    date_pattern = re.compile(
+        r"^(?:Monday|Tuesday|Wednesday|Thursday|"
+        r"Friday|Saturday|Sunday),\s+"
+        r"(?:January|February|March|April|May|June|"
+        r"July|August|September|October|November|December)"
+        r"\s+\d{1,2},\s+\d{4}$",
+        flags=re.IGNORECASE,
+    )
+
+    for candidate in candidates:
+        value = str(candidate).strip()
+
+        if date_pattern.match(value):
+            return value
+
+    return None
+
+
+def _extract_alert_date(
+    text: str,
+) -> str | None:
+    pattern = re.compile(
+        r"\b(?:On\s+)?"
+        r"((?:Monday|Tuesday|Wednesday|Thursday|"
+        r"Friday|Saturday|Sunday),\s+)?"
+        r"((?:January|February|March|April|May|June|"
+        r"July|August|September|October|November|December)"
+        r"\s+\d{1,2},\s+\d{4})"
+        r",?\s+Pro\s+Ticker\s+alerted\b",
+        flags=re.IGNORECASE,
+    )
+
+    match = pattern.search(text)
+
+    if not match:
+        return None
+
+    weekday = (
+        match.group(1) or ""
+    ).strip()
+
+    date_part = match.group(2).strip()
+
+    if weekday:
+        return (
+            f"{weekday} {date_part}"
+        )
+
+    return date_part
 
 
 def _extract_title(
@@ -313,6 +426,18 @@ def parse_pro_ticker_article(
         html
     )
 
+    published_date = (
+        _extract_published_date(
+            html
+        )
+    )
+
+    alert_date = (
+        _extract_alert_date(
+            text
+        )
+    )
+
     symbol = _extract_symbol(
         title,
         text,
@@ -418,6 +543,9 @@ def parse_pro_ticker_article(
         "article_url": normalized_url,
         "symbol": symbol,
         "article_title": title,
+        "published_date": published_date,
+        "alert_date": alert_date,
+        "alert_time": None,
         "direction": (
             "LONG"
             if long_level is not None
@@ -506,7 +634,7 @@ def parse_pro_ticker_article(
         ),
         "raw_features": {
             **raw_features,
-            "collector_version": 1,
+            "collector_version": 2,
             "text_length": len(text),
         },
     }
