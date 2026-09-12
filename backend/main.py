@@ -12223,19 +12223,98 @@ def auto_trader_history(
         request
     )
 
-    trades = load_trade_book(
-        status="CLOSED",
-        limit=limit,
+    canonical_payload = (
+        auto_trader_canonical_broker_trades(
+            request=request
+        )
     )
 
-    learning_outcomes = load_learning_outcomes(
-        limit=10000,
+    canonical_trades = (
+        canonical_payload.get(
+            "trades",
+            [],
+        )
     )
 
-    entry_events = load_trade_book_events(
-        event="entry",
+    if not isinstance(
+        canonical_trades,
+        list,
+    ):
+        canonical_trades = []
+
+    # Trade Journal/history represents positions that
+    # are no longer open at Alpaca.
+    closed_canonical = [
+        trade
+        for trade in canonical_trades
+        if (
+            isinstance(
+                trade,
+                dict,
+            )
+            and trade.get(
+                "status"
+            )
+            in {
+                "CLOSED",
+                "CLOSED_INCOMPLETE",
+            }
+        )
+    ]
+
+    closed_canonical.sort(
+        key=lambda trade: str(
+            trade.get(
+                "exit_timestamp"
+            )
+            or trade.get(
+                "entry_timestamp"
+            )
+            or ""
+        ),
+        reverse=True,
+    )
+
+    closed_canonical = (
+        closed_canonical[
+            :limit
+        ]
+    )
+
+    legacy_trades = load_trade_book(
         limit=5000,
     )
+
+    learning_outcomes = (
+        load_learning_outcomes(
+            limit=10000,
+        )
+    )
+
+    entry_events = (
+        load_trade_book_events(
+            event="entry",
+            limit=5000,
+        )
+    )
+
+    legacy_by_entry_order_id: dict[
+        str,
+        dict[str, Any],
+    ] = {}
+
+    for trade in legacy_trades:
+        entry_order_id = str(
+            trade.get(
+                "entry_order_id"
+            )
+            or ""
+        ).strip()
+
+        if entry_order_id:
+            legacy_by_entry_order_id[
+                entry_order_id
+            ] = trade
 
     learning_by_trade_id: dict[
         int,
@@ -12264,7 +12343,10 @@ def auto_trader_history(
         trade_book_id = event.get(
             "trade_book_id"
         )
-        details = event.get("details")
+
+        details = event.get(
+            "details"
+        )
 
         if (
             isinstance(
@@ -12282,44 +12364,129 @@ def auto_trader_history(
                 trade_book_id
             ] = details
 
-    history: list[dict[str, Any]] = []
+    history: list[
+        dict[str, Any]
+    ] = []
+
     wins = 0
     losses = 0
     breakeven = 0
+
     total_profit_loss = 0.0
-    return_values: list[float] = []
 
-    for trade in trades:
-        trade_id = trade.get("id")
+    return_values: list[
+        float
+    ] = []
 
-        learning_outcome = (
-            learning_by_trade_id.get(
-                trade_id
+    complete_count = 0
+    incomplete_count = 0
+
+    for canonical in closed_canonical:
+        entry_order_id = str(
+            canonical.get(
+                "entry_order_id"
             )
+            or ""
+        ).strip()
+
+        exit_order_ids = [
+            str(order_id).strip()
+            for order_id
+            in (
+                canonical.get(
+                    "exit_order_ids"
+                )
+                or []
+            )
+            if str(
+                order_id
+            ).strip()
+        ]
+
+        legacy_trade = (
+            legacy_by_entry_order_id.get(
+                entry_order_id
+            )
+        )
+
+        legacy_trade_id = (
+            legacy_trade.get("id")
             if isinstance(
-                trade_id,
-                int,
+                legacy_trade,
+                dict,
             )
             else None
         )
 
         entry_details = (
             entry_by_trade_id.get(
-                trade_id
+                legacy_trade_id
             )
             if isinstance(
-                trade_id,
+                legacy_trade_id,
                 int,
             )
             else None
         )
 
-        realized_profit_loss = trade.get(
-            "realized_profit_loss"
+        legacy_exit_order_id = str(
+            (
+                legacy_trade.get(
+                    "exit_order_id"
+                )
+                if isinstance(
+                    legacy_trade,
+                    dict,
+                )
+                else ""
+            )
+            or ""
+        ).strip()
+
+        legacy_exit_consistent = (
+            bool(
+                legacy_exit_order_id
+            )
+            and legacy_exit_order_id
+            in exit_order_ids
         )
-        realized_return_percent = trade.get(
-            "realized_return_percent"
+
+        learning_outcome = (
+            learning_by_trade_id.get(
+                legacy_trade_id
+            )
+            if (
+                isinstance(
+                    legacy_trade_id,
+                    int,
+                )
+                and legacy_exit_consistent
+            )
+            else None
         )
+
+        realized_profit_loss = (
+            canonical.get(
+                "realized_profit_loss"
+            )
+        )
+
+        realized_return_percent = (
+            canonical.get(
+                "realized_return_percent"
+            )
+        )
+
+        pnl_complete = bool(
+            canonical.get(
+                "pnl_complete"
+            )
+        )
+
+        if pnl_complete:
+            complete_count += 1
+        else:
+            incomplete_count += 1
 
         if isinstance(
             realized_profit_loss,
@@ -12328,7 +12495,10 @@ def auto_trader_history(
             profit_loss = float(
                 realized_profit_loss
             )
-            total_profit_loss += profit_loss
+
+            total_profit_loss += (
+                profit_loss
+            )
 
             if profit_loss > 0:
                 wins += 1
@@ -12347,17 +12517,60 @@ def auto_trader_history(
                 )
             )
 
+        average_exit_price = (
+            canonical.get(
+                "average_exit_price"
+            )
+        )
+
         history.append(
             {
-                "id": trade.get("id"),
-                "symbol": trade.get("symbol"),
-                "status": trade.get("status"),
-                "shares": trade.get("shares"),
-                "entry_price": trade.get(
+                "id": (
+                    legacy_trade_id
+                    if isinstance(
+                        legacy_trade_id,
+                        int,
+                    )
+                    else (
+                        "broker:"
+                        + entry_order_id
+                    )
+                ),
+                "symbol": canonical.get(
+                    "symbol"
+                ),
+                "status": canonical.get(
+                    "status"
+                ),
+                "shares": canonical.get(
+                    "entry_shares"
+                ),
+                "entry_shares": canonical.get(
+                    "entry_shares"
+                ),
+                "matched_shares": canonical.get(
+                    "matched_shares"
+                ),
+                "remaining_shares": canonical.get(
+                    "remaining_shares"
+                ),
+                "broker_open_shares": canonical.get(
+                    "broker_open_shares"
+                ),
+                "unaccounted_closed_shares": (
+                    canonical.get(
+                        "unaccounted_closed_shares"
+                    )
+                ),
+                "pnl_complete": pnl_complete,
+                "entry_price": canonical.get(
                     "entry_price"
                 ),
-                "exit_price": trade.get(
-                    "exit_price"
+                "exit_price": (
+                    average_exit_price
+                ),
+                "average_exit_price": (
+                    average_exit_price
                 ),
                 "realized_profit_loss": (
                     realized_profit_loss
@@ -12365,26 +12578,63 @@ def auto_trader_history(
                 "realized_return_percent": (
                     realized_return_percent
                 ),
-                "entry_timestamp": trade.get(
+                "entry_timestamp": canonical.get(
                     "entry_timestamp"
                 ),
-                "exit_timestamp": trade.get(
+                "exit_timestamp": canonical.get(
                     "exit_timestamp"
                 ),
-                "entry_reason": trade.get(
-                    "entry_reason"
+                "entry_reason": (
+                    legacy_trade.get(
+                        "entry_reason"
+                    )
+                    if isinstance(
+                        legacy_trade,
+                        dict,
+                    )
+                    else "auto_trader_entry"
                 ),
-                "exit_reason": trade.get(
-                    "exit_reason"
+                "exit_reason": (
+                    legacy_trade.get(
+                        "exit_reason"
+                    )
+                    if (
+                        isinstance(
+                            legacy_trade,
+                            dict,
+                        )
+                        and legacy_exit_consistent
+                    )
+                    else "broker_sell_fill"
                 ),
-                "strategy": trade.get(
-                    "strategy"
+                "strategy": (
+                    legacy_trade.get(
+                        "strategy"
+                    )
+                    if isinstance(
+                        legacy_trade,
+                        dict,
+                    )
+                    else "auto_trader"
                 ),
-                "entry_order_id": trade.get(
-                    "entry_order_id"
+                "entry_order_id": (
+                    entry_order_id
                 ),
-                "exit_order_id": trade.get(
-                    "exit_order_id"
+                "exit_order_id": (
+                    exit_order_ids[-1]
+                    if len(
+                        exit_order_ids
+                    ) == 1
+                    else None
+                ),
+                "exit_order_ids": (
+                    exit_order_ids
+                ),
+                "exit_allocations": (
+                    canonical.get(
+                        "exit_allocations"
+                    )
+                    or []
                 ),
                 "entry_diagnostics": (
                     entry_details
@@ -12462,12 +12712,13 @@ def auto_trader_history(
                             )
                             if learning_outcome.get(
                                 "holding_seconds"
-                            ) is not None
+                            )
+                            is not None
                             else calculate_holding_seconds(
-                                trade.get(
+                                canonical.get(
                                     "entry_timestamp"
                                 ),
-                                trade.get(
+                                canonical.get(
                                     "exit_timestamp"
                                 ),
                             )
@@ -12497,16 +12748,20 @@ def auto_trader_history(
             }
         )
 
-    completed = len(history)
+    completed = len(
+        history
+    )
 
     win_rate_percent = (
-        (wins / completed) * 100.0
+        (wins / completed)
+        * 100.0
         if completed > 0
         else 0.0
     )
 
     average_return_percent = (
-        sum(return_values) / len(return_values)
+        sum(return_values)
+        / len(return_values)
         if return_values
         else 0.0
     )
@@ -12515,16 +12770,36 @@ def auto_trader_history(
         calculate_learning_summary()
     )
 
+    canonical_summary = (
+        canonical_payload.get(
+            "summary",
+            {}
+        )
+    )
+
+    if not isinstance(
+        canonical_summary,
+        dict,
+    ):
+        canonical_summary = {}
+
     return {
         "paper": True,
         "read_only": True,
         "source": (
-            "sqlite_trade_book+learning_outcomes"
-            "+trade_book_events"
+            "alpaca_broker_fills_canonical"
+            "+trade_book_entry_diagnostics"
+            "+validated_learning_outcomes"
         ),
         "count": completed,
         "summary": {
             "completed_trades": completed,
+            "complete_trades": (
+                complete_count
+            ),
+            "incomplete_trades": (
+                incomplete_count
+            ),
             "wins": wins,
             "losses": losses,
             "breakeven": breakeven,
@@ -12536,9 +12811,30 @@ def auto_trader_history(
                 total_profit_loss,
                 2,
             ),
+            "realized_profit_loss_complete": (
+                incomplete_count == 0
+            ),
             "average_return_percent": round(
                 average_return_percent,
                 4,
+            ),
+            "open_trades": (
+                canonical_summary.get(
+                    "open_trades",
+                    0,
+                )
+            ),
+            "closed_incomplete_trades": (
+                canonical_summary.get(
+                    "closed_incomplete_trades",
+                    0,
+                )
+            ),
+            "unmatched_sell_fills": (
+                canonical_summary.get(
+                    "unmatched_sell_fills",
+                    0,
+                )
             ),
             "excursion_trade_count": (
                 learning_summary.get(
@@ -12581,7 +12877,6 @@ def auto_trader_history(
         },
         "trades": history,
     }
-
 
 
 def _trade_report_history(
