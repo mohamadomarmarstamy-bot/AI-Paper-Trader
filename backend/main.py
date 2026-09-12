@@ -9891,9 +9891,13 @@ def auto_trader_pnl_reconciliation(
                         tzinfo=timezone.utc
                     )
 
+            # Alpaca 1D portfolio-history timestamps
+            # are UTC calendar-day labels. Converting
+            # midnight UTC to Eastern would incorrectly
+            # move the point to the prior calendar date.
             day_key = (
                 parsed.astimezone(
-                    eastern
+                    timezone.utc
                 ).date().isoformat()
             )
 
@@ -9939,15 +9943,57 @@ def auto_trader_pnl_reconciliation(
                 )
             )
 
-    account_day_pl = None
+    historical_equity_change = None
 
     if (
         target_equity is not None
         and prior_equity is not None
     ):
-        account_day_pl = (
+        historical_equity_change = (
             target_equity
             - prior_equity
+        )
+
+    eastern_today = (
+        datetime.now(
+            eastern
+        ).date()
+    )
+
+    account_day_pl = None
+    account_day_pl_percent = None
+    live_equity = None
+    live_last_equity = None
+
+    if target_date == eastern_today:
+        live_account = (
+            build_alpaca_live_account_snapshot()
+        )
+
+        live_equity = safe_float(
+            live_account.get(
+                "equity"
+            )
+        )
+
+        live_last_equity = safe_float(
+            live_account.get(
+                "last_equity"
+            )
+        )
+
+        account_day_pl = safe_float(
+            live_account.get(
+                "daily_pl"
+            )
+        )
+
+        account_day_pl_percent = (
+            safe_float(
+                live_account.get(
+                    "daily_pl_percent"
+                )
+            )
         )
 
     return {
@@ -9961,7 +10007,34 @@ def auto_trader_pnl_reconciliation(
             is not None
             else None
         ),
-        "account_equity": (
+        "account_day_pl_percent": (
+            round(
+                account_day_pl_percent,
+                4,
+            )
+            if account_day_pl_percent
+            is not None
+            else None
+        ),
+        "live_equity": (
+            round(
+                live_equity,
+                2,
+            )
+            if live_equity
+            is not None
+            else None
+        ),
+        "live_last_equity": (
+            round(
+                live_last_equity,
+                2,
+            )
+            if live_last_equity
+            is not None
+            else None
+        ),
+        "portfolio_history_equity": (
             round(
                 target_equity,
                 2,
@@ -9970,15 +10043,24 @@ def auto_trader_pnl_reconciliation(
             is not None
             else None
         ),
-        "prior_trading_date": (
+        "prior_portfolio_history_date": (
             prior_date
         ),
-        "prior_equity": (
+        "prior_portfolio_history_equity": (
             round(
                 prior_equity,
                 2,
             )
             if prior_equity
+            is not None
+            else None
+        ),
+        "portfolio_history_equity_change": (
+            round(
+                historical_equity_change,
+                2,
+            )
+            if historical_equity_change
             is not None
             else None
         ),
@@ -10008,9 +10090,17 @@ def auto_trader_pnl_reconciliation(
             False
         ),
         "account_day_pl_definition": (
-            "Change in Alpaca account "
-            "equity from the prior "
-            "trading-day equity point."
+            "Live Alpaca account day P/L "
+            "from equity minus last_equity. "
+            "Available here only when the "
+            "requested date is today."
+        ),
+        "portfolio_history_definition": (
+            "Alpaca 1D portfolio-history "
+            "equity points. Consecutive "
+            "point differences are exposed "
+            "separately and are not labeled "
+            "as account day P/L."
         ),
         "closed_trade_pl_definition": (
             "Known canonical realized "
