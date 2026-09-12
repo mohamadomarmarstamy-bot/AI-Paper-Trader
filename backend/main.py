@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import json
 import math
 import os
@@ -10073,6 +10073,168 @@ def auto_trader_journal(
         ),
     }
 
+@app.get("/auto-trader/reconciliation")
+def auto_trader_reconciliation(
+    request: Request,
+    date: str = Query(...),
+) -> dict[str, Any]:
+    require_app_session(request)
+
+    eastern = ZoneInfo("America/New_York")
+
+    try:
+        target_date = datetime.strptime(
+            date,
+            "%Y-%m-%d",
+        ).date()
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail="date must use YYYY-MM-DD format",
+        ) from error
+
+    raw_orders = fetch_alpaca_paper_trade_history(
+        limit=500
+    )
+
+    fills: list[dict[str, Any]] = []
+
+    for order in raw_orders:
+        trade = normalize_alpaca_order_for_history(
+            order
+        )
+
+        if trade is None:
+            continue
+
+        timestamp = str(
+            trade.get("timestamp") or ""
+        ).strip()
+
+        if not timestamp:
+            continue
+
+        try:
+            fill_dt = datetime.fromisoformat(
+                timestamp.replace(
+                    "Z",
+                    "+00:00",
+                )
+            )
+
+            if fill_dt.tzinfo is None:
+                fill_dt = fill_dt.replace(
+                    tzinfo=timezone.utc
+                )
+
+            fill_eastern = (
+                fill_dt.astimezone(eastern)
+            )
+
+        except Exception:
+            continue
+
+        if fill_eastern.date() != target_date:
+            continue
+
+        fills.append(
+            {
+                "order_id": str(
+                    trade.get("id") or ""
+                ),
+                "symbol": clean_symbol(
+                    trade.get("symbol")
+                ),
+                "side": str(
+                    trade.get("side") or ""
+                ).upper(),
+                "shares": trade.get("shares"),
+                "price": trade.get("price"),
+                "filled_at": timestamp,
+                "filled_at_eastern": (
+                    fill_eastern.isoformat()
+                ),
+            }
+        )
+
+    trade_book_rows = load_trade_book(
+        limit=5000
+    )
+
+    entry_ids = {
+        str(
+            row.get("entry_order_id") or ""
+        )
+        for row in trade_book_rows
+        if row.get("entry_order_id")
+    }
+
+    exit_ids = {
+        str(
+            row.get("exit_order_id") or ""
+        )
+        for row in trade_book_rows
+        if row.get("exit_order_id")
+    }
+
+    known_ids = entry_ids | exit_ids
+
+    matched: list[dict[str, Any]] = []
+    missing: list[dict[str, Any]] = []
+
+    for fill in fills:
+        order_id = fill["order_id"]
+
+        if order_id and order_id in known_ids:
+            matched.append(fill)
+        else:
+            missing.append(fill)
+
+    buy_fills = [
+        fill
+        for fill in fills
+        if fill["side"] == "BUY"
+    ]
+
+    sell_fills = [
+        fill
+        for fill in fills
+        if fill["side"] == "SELL"
+    ]
+
+    missing_buys = [
+        fill
+        for fill in missing
+        if fill["side"] == "BUY"
+    ]
+
+    missing_sells = [
+        fill
+        for fill in missing
+        if fill["side"] == "SELL"
+    ]
+
+    return {
+        "paper": True,
+        "read_only": True,
+        "date": target_date.isoformat(),
+        "source": (
+            "alpaca_filled_orders"
+            "+sqlite_trade_book"
+        ),
+        "summary": {
+            "alpaca_filled_orders": len(fills),
+            "alpaca_buy_fills": len(buy_fills),
+            "alpaca_sell_fills": len(sell_fills),
+            "matched_to_trade_book": len(matched),
+            "missing_from_trade_book": len(missing),
+            "missing_buy_fills": len(missing_buys),
+            "missing_sell_fills": len(missing_sells),
+        },
+        "missing_fills": missing,
+        "matched_fills": matched,
+    }
+
 @app.get("/auto-trader/history")
 def auto_trader_history(
     request: Request,
@@ -11738,3 +11900,4 @@ def sell(
         shares=shares,
         side="sell",
     )
+
