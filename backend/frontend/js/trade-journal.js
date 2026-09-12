@@ -801,9 +801,9 @@
             accountingWarning.textContent =
                 incompleteCount > 0
                     ? (
-                        `? ${incompleteCount} incomplete`
+                        `${incompleteCount} incomplete`
                     )
-                    : "? Complete";
+                    : "Complete";
 
             accountingWarning.title =
                 incompleteCount > 0

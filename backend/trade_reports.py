@@ -199,6 +199,7 @@ def _summary_table(
     gains = 0.0
     losses = 0.0
     total = 0.0
+    incomplete_count = 0
 
     for trade in trades:
         try:
@@ -218,12 +219,31 @@ def _summary_table(
         elif value < 0:
             losses += value
 
+        if (
+            trade.get("pnl_complete") is False
+            or trade.get("status")
+            == "CLOSED_INCOMPLETE"
+        ):
+            incomplete_count += 1
+
+    total_label = (
+        "Known realized P/L"
+        if incomplete_count > 0
+        else "Net realized P/L"
+    )
+
     rows = [
         ["Trades", str(len(trades))],
         ["Realized gains", _money(gains)],
         ["Realized losses", _money(losses)],
-        ["Net realized P/L", _money(total)],
+        [total_label, _money(total)],
     ]
+
+    if incomplete_count > 0:
+        rows.append([
+            "Incomplete trades",
+            str(incomplete_count),
+        ])
 
     table = Table(
         rows,
