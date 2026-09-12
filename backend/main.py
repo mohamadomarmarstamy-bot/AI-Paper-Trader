@@ -47,6 +47,7 @@ from paper_trader import PaperTrader
 from trade_reports import build_trade_report_pdf
 from pro_ticker_collector import (
     collect_pro_ticker_article,
+    run_pro_ticker_fresh_scan,
     run_pro_ticker_historical_backfill,
 )
 from scanner import (
@@ -8851,6 +8852,225 @@ def auto_trader_pro_ticker_research(
         "research_only": True,
         "count": len(rows),
         "results": rows,
+    }
+
+
+def build_pro_ticker_scan_email(
+    result: dict[str, Any],
+    *,
+    label: str = "Hourly",
+) -> tuple[str, str]:
+    collected = result.get(
+        "collected",
+        [],
+    )
+
+    if not isinstance(
+        collected,
+        list,
+    ):
+        collected = []
+
+    lines = [
+        "AI Paper Trader - Pro Ticker Research",
+        "",
+        f"Scan type: {label}",
+        (
+            "Pages scanned: "
+            f"{result.get('pages_scanned', 0)}"
+        ),
+        (
+            "Recaps collected: "
+            f"{result.get('collected_count', 0)}"
+        ),
+        (
+            "Errors: "
+            f"{result.get('error_count', 0)}"
+        ),
+        "",
+    ]
+
+    if collected:
+        lines.append("Research collected:")
+        lines.append("")
+
+        for item in collected:
+            symbol = (
+                item.get("symbol")
+                or "UNKNOWN"
+            )
+
+            title = (
+                item.get("article_title")
+                or "Untitled article"
+            )
+
+            move = item.get(
+                "reported_move_percent"
+            )
+
+            direction = (
+                item.get("direction")
+                or "Unknown"
+            )
+
+            features = item.get(
+                "raw_features",
+                {},
+            )
+
+            if not isinstance(
+                features,
+                dict,
+            ):
+                features = {}
+
+            learned = []
+
+            feature_labels = {
+                "breakout_present": "Breakout",
+                "bull_flag_present": "Bull flag",
+                "consolidation_present": "Consolidation",
+                "higher_lows_present": "Higher lows",
+                "relative_volume_present": "Relative volume",
+                "rsi_present": "RSI",
+                "vwap_present": "VWAP",
+                "vwma_present": "VWMA",
+                "exhaustion_present": "Exhaustion",
+                "parabolic_present": "Parabolic move",
+            }
+
+            for key, label_text in (
+                feature_labels.items()
+            ):
+                if features.get(key):
+                    learned.append(
+                        label_text
+                    )
+
+            lines.append(
+                f"{symbol}"
+            )
+            lines.append(
+                f"Title: {title}"
+            )
+            lines.append(
+                f"Direction: {direction}"
+            )
+
+            if move is not None:
+                lines.append(
+                    "Reported move: "
+                    f"{move}%"
+                )
+
+            if learned:
+                lines.append(
+                    "Setup characteristics: "
+                    + ", ".join(learned)
+                )
+
+            lines.append("")
+
+    else:
+        lines.append(
+            "No qualifying Pro Ticker "
+            "signal recaps were found."
+        )
+
+    errors = result.get(
+        "errors",
+        [],
+    )
+
+    if isinstance(errors, list) and errors:
+        lines.append("")
+        lines.append("Errors:")
+
+        for item in errors[:10]:
+            if isinstance(item, dict):
+                lines.append(
+                    "- "
+                    + str(
+                        item.get(
+                            "article_url",
+                            "Unknown URL",
+                        )
+                    )
+                    + ": "
+                    + str(
+                        item.get(
+                            "error",
+                            "Unknown error",
+                        )
+                    )
+                )
+
+    subject = (
+        "AI Paper Trader - "
+        f"Pro Ticker {label} Research Complete"
+    )
+
+    return (
+        subject,
+        "\n".join(lines),
+    )
+
+
+@app.post("/auto-trader/pro-ticker-research/fresh-scan")
+def auto_trader_pro_ticker_fresh_scan(
+    request: Request,
+    pages: int = Query(
+        default=10,
+        ge=1,
+        le=40,
+    ),
+    send_email: bool = Query(
+        default=True,
+    ),
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    try:
+        result = run_pro_ticker_fresh_scan(
+            pages=pages,
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Pro Ticker fresh scan failed: "
+                f"{error}"
+            ),
+        ) from error
+
+    email_status = "skipped"
+
+    if send_email:
+        subject, message = (
+            build_pro_ticker_scan_email(
+                result,
+                label="Hourly",
+            )
+        )
+
+        email_status = (
+            "sent"
+            if send_health_alert_email(
+                subject,
+                message,
+            )
+            else "failed"
+        )
+
+    return {
+        "paper": True,
+        "research_only": True,
+        "success": True,
+        "email": email_status,
+        **result,
     }
 
 

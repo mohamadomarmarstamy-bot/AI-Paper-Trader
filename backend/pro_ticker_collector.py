@@ -905,6 +905,109 @@ def parse_pro_ticker_article(
     }
 
 
+def run_pro_ticker_fresh_scan(
+    *,
+    pages: int = 10,
+) -> dict[str, Any]:
+    page_count = max(
+        1,
+        min(
+            int(pages),
+            40,
+        ),
+    )
+
+    discovered = discover_pro_ticker_articles(
+        start_page=1,
+        max_pages=page_count,
+        max_articles=200,
+    )
+
+    collected: list[
+        dict[str, Any]
+    ] = []
+
+    errors: list[
+        dict[str, Any]
+    ] = []
+
+    seen_urls: set[str] = set()
+
+    for item in discovered:
+        article_url = str(
+            item.get(
+                "article_url",
+                "",
+            )
+        ).strip()
+
+        if (
+            not article_url
+            or article_url in seen_urls
+        ):
+            continue
+
+        seen_urls.add(
+            article_url
+        )
+
+        try:
+            saved = collect_pro_ticker_article(
+                article_url
+            )
+
+            collected.append(
+                {
+                    "id": saved.get("id"),
+                    "symbol": saved.get(
+                        "symbol"
+                    ),
+                    "article_url": article_url,
+                    "article_title": saved.get(
+                        "article_title"
+                    ),
+                    "published_date": saved.get(
+                        "published_date"
+                    ),
+                    "direction": saved.get(
+                        "direction"
+                    ),
+                    "reported_move_percent": (
+                        saved.get(
+                            "reported_move_percent"
+                        )
+                    ),
+                    "raw_features": saved.get(
+                        "raw_features",
+                        {},
+                    ),
+                }
+            )
+
+        except Exception as error:
+            errors.append(
+                {
+                    "article_url": article_url,
+                    "error": str(error),
+                }
+            )
+
+    return {
+        "pages_scanned": page_count,
+        "candidate_count": len(
+            discovered
+        ),
+        "collected_count": len(
+            collected
+        ),
+        "error_count": len(
+            errors
+        ),
+        "collected": collected,
+        "errors": errors,
+    }
+
+
 def run_pro_ticker_historical_backfill(
     *,
     pages_per_run: int = 10,
