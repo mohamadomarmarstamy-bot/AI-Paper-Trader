@@ -303,6 +303,11 @@ _pro_ticker_last_hourly_key: str | None = None
 _pro_ticker_last_daily_date: str | None = None
 _pro_ticker_last_backfill_date: str | None = None
 
+_trade_report_last_weekly_key: str | None = None
+_trade_report_last_monthly_key: str | None = None
+_trade_report_month_end_check_date: str | None = None
+_trade_report_month_end_check_result = False
+
 
 def parse_trade_timestamp(
     value: Any,
@@ -797,10 +802,229 @@ def build_daily_market_recap_email(
     )
 
 
+def build_scheduled_trade_report(
+    *,
+    report_type: str,
+    start_date: datetime,
+    end_date: datetime,
+) -> dict[str, Any]:
+    normalized_type = str(
+        report_type
+    ).strip().lower()
+
+    if normalized_type not in {
+        "weekly",
+        "monthly",
+    }:
+        raise ValueError(
+            "report_type must be weekly or monthly."
+        )
+
+    trades = _trade_report_history()
+
+    selected: list[
+        dict[str, Any]
+    ] = []
+
+    start_day = start_date.date()
+    end_day = end_date.date()
+
+    for trade in trades:
+        local_date = (
+            _trade_report_local_date(
+                trade.get(
+                    "exit_timestamp"
+                )
+                or trade.get(
+                    "entry_timestamp"
+                )
+            )
+        )
+
+        if not local_date:
+            continue
+
+        try:
+            trade_day = (
+                datetime.strptime(
+                    local_date,
+                    "%Y-%m-%d",
+                ).date()
+            )
+
+        except ValueError:
+            continue
+
+        if (
+            start_day
+            <= trade_day
+            <= end_day
+        ):
+            selected.append(
+                trade
+            )
+
+    incomplete_count = sum(
+        1
+        for trade in selected
+        if (
+            trade.get(
+                "pnl_complete"
+            )
+            is False
+            or trade.get(
+                "status"
+            )
+            == "CLOSED_INCOMPLETE"
+        )
+    )
+
+    known_realized_pl = 0.0
+
+    for trade in selected:
+        try:
+            known_realized_pl += float(
+                trade.get(
+                    "realized_profit_loss"
+                )
+                or 0.0
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            continue
+
+    if normalized_type == "weekly":
+        title = (
+            "AI Paper Trader - Weekly Report"
+        )
+
+        subtitle = (
+            start_day.strftime(
+                "%B %d, %Y"
+            )
+            + " - "
+            + end_day.strftime(
+                "%B %d, %Y"
+            )
+        )
+
+        filename = (
+            "ai-paper-trader-week-"
+            f"{start_day.isoformat()}.pdf"
+        )
+
+        subject = (
+            "AI Paper Trader - Weekly "
+            f"Trade Report {start_day.isoformat()}"
+        )
+
+    else:
+        title = (
+            "AI Paper Trader - Monthly Report"
+        )
+
+        subtitle = (
+            start_day.strftime(
+                "%B %Y"
+            )
+        )
+
+        filename = (
+            "ai-paper-trader-"
+            f"{start_day.strftime('%Y-%m')}.pdf"
+        )
+
+        subject = (
+            "AI Paper Trader - Monthly "
+            "Trade Report "
+            f"{start_day.strftime('%Y-%m')}"
+        )
+
+    pdf = build_trade_report_pdf(
+        title=title,
+        subtitle=subtitle,
+        trades=selected,
+        compact=True,
+    )
+
+    pnl_label = (
+        "Known realized P/L"
+        if incomplete_count
+        else "Net realized P/L"
+    )
+
+    message_lines = [
+        title,
+        subtitle,
+        "",
+        (
+            "Completed trades: "
+            f"{len(selected)}"
+        ),
+        (
+            f"{pnl_label}: "
+            f"${known_realized_pl:,.2f}"
+        ),
+        (
+            "Incomplete trades: "
+            f"{incomplete_count}"
+        ),
+        "",
+    ]
+
+    if incomplete_count:
+        message_lines.extend([
+            (
+                "Some broker history is incomplete, "
+                "so the P/L above includes only the "
+                "broker-confirmed amounts currently "
+                "known."
+            ),
+            "",
+        ])
+
+    message_lines.extend([
+        (
+            "The detailed PDF report is attached."
+        ),
+        "",
+        (
+            "Paper-trading report only. "
+            "Not an official brokerage statement "
+            "or tax document."
+        ),
+    ])
+
+    return {
+        "subject": subject,
+        "message": "\n".join(
+            message_lines
+        ),
+        "filename": filename,
+        "pdf": pdf,
+        "trade_count": len(
+            selected
+        ),
+        "incomplete_count": (
+            incomplete_count
+        ),
+        "known_realized_pl": round(
+            known_realized_pl,
+            2,
+        ),
+    }
+
+
 async def pro_ticker_scheduler_loop() -> None:
     global _pro_ticker_last_hourly_key
     global _pro_ticker_last_daily_date
     global _pro_ticker_last_backfill_date
+    global _trade_report_last_weekly_key
+    global _trade_report_last_monthly_key
+    global _trade_report_month_end_check_date
+    global _trade_report_month_end_check_result
 
     eastern = ZoneInfo(
         "America/New_York"
@@ -892,6 +1116,206 @@ async def pro_ticker_scheduler_loop() -> None:
                 _pro_ticker_last_daily_date = (
                     today
                 )
+
+            # ----------------------------------
+            # Weekly canonical trade report
+            #
+            # Friday at/after 4:10 PM Eastern.
+            # This intentionally does not require a
+            # calendar entry so holiday Fridays can
+            # still produce the Mon-Fri report.
+            # ----------------------------------
+
+            week_start_date = (
+                now.date()
+                - timedelta(
+                    days=now.weekday()
+                )
+            )
+
+            weekly_key = (
+                week_start_date.isoformat()
+            )
+
+            if (
+                now.weekday() == 4
+                and now.hour == 16
+                and now.minute >= 10
+                and _trade_report_last_weekly_key
+                != weekly_key
+            ):
+                week_start = datetime.combine(
+                    week_start_date,
+                    datetime.min.time(),
+                    tzinfo=eastern,
+                )
+
+                week_end = (
+                    week_start
+                    + timedelta(days=4)
+                )
+
+                weekly_report = (
+                    await asyncio.to_thread(
+                        build_scheduled_trade_report,
+                        report_type="weekly",
+                        start_date=week_start,
+                        end_date=week_end,
+                    )
+                )
+
+                weekly_sent = (
+                    await asyncio.to_thread(
+                        send_health_alert_email,
+                        weekly_report["subject"],
+                        weekly_report["message"],
+                        [
+                            {
+                                "filename": (
+                                    weekly_report[
+                                        "filename"
+                                    ]
+                                ),
+                                "content": (
+                                    weekly_report[
+                                        "pdf"
+                                    ]
+                                ),
+                            }
+                        ],
+                    )
+                )
+
+                if weekly_sent:
+                    _trade_report_last_weekly_key = (
+                        weekly_key
+                    )
+
+                    print(
+                        "Weekly trade report email "
+                        f"sent for {weekly_key}."
+                    )
+
+                else:
+                    print(
+                        "Weekly trade report email "
+                        "failed; scheduler will retry."
+                    )
+
+            # ----------------------------------
+            # Monthly canonical trade report
+            #
+            # At/after 4:15 PM Eastern on the
+            # actual final Alpaca trading day.
+            #
+            # The month-end calendar result is
+            # cached for the date so Alpaca is not
+            # queried every minute.
+            # ----------------------------------
+
+            month_key = now.strftime(
+                "%Y-%m"
+            )
+
+            if (
+                calendar_entry
+                and now.hour == 16
+                and now.minute >= 15
+                and _trade_report_last_monthly_key
+                != month_key
+            ):
+                if (
+                    _trade_report_month_end_check_date
+                    != today
+                ):
+                    (
+                        _trade_report_month_end_check_result
+                    ) = await asyncio.to_thread(
+                        is_final_trading_day_of_month,
+                        today,
+                    )
+
+                    (
+                        _trade_report_month_end_check_date
+                    ) = today
+
+                if (
+                    _trade_report_month_end_check_result
+                ):
+                    month_start_date = (
+                        now.date().replace(
+                            day=1
+                        )
+                    )
+
+                    month_start = (
+                        datetime.combine(
+                            month_start_date,
+                            datetime.min.time(),
+                            tzinfo=eastern,
+                        )
+                    )
+
+                    month_end = (
+                        datetime.combine(
+                            now.date(),
+                            datetime.max.time(),
+                            tzinfo=eastern,
+                        )
+                    )
+
+                    monthly_report = (
+                        await asyncio.to_thread(
+                            build_scheduled_trade_report,
+                            report_type="monthly",
+                            start_date=month_start,
+                            end_date=month_end,
+                        )
+                    )
+
+                    monthly_sent = (
+                        await asyncio.to_thread(
+                            send_health_alert_email,
+                            monthly_report[
+                                "subject"
+                            ],
+                            monthly_report[
+                                "message"
+                            ],
+                            [
+                                {
+                                    "filename": (
+                                        monthly_report[
+                                            "filename"
+                                        ]
+                                    ),
+                                    "content": (
+                                        monthly_report[
+                                            "pdf"
+                                        ]
+                                    ),
+                                }
+                            ],
+                        )
+                    )
+
+                    if monthly_sent:
+                        (
+                            _trade_report_last_monthly_key
+                        ) = month_key
+
+                        print(
+                            "Monthly trade report "
+                            "email sent for "
+                            f"{month_key}."
+                        )
+
+                    else:
+                        print(
+                            "Monthly trade report "
+                            "email failed; scheduler "
+                            "will retry."
+                        )
 
             if (
                 calendar_entry
@@ -1608,6 +2032,94 @@ def fetch_alpaca_market_calendar_today() -> dict[str, Any] | None:
         )
 
     return entry
+
+
+def fetch_alpaca_market_calendar_range(
+    start_date: str,
+    end_date: str,
+) -> list[dict[str, Any]]:
+    """
+    Return Alpaca US market calendar entries
+    for an inclusive date range.
+    """
+
+    payload = alpaca_paper_request(
+        "GET",
+        "/v2/calendar",
+        params={
+            "start": start_date,
+            "end": end_date,
+        },
+    )
+
+    if not isinstance(payload, list):
+        raise RuntimeError(
+            "Alpaca returned an invalid "
+            "market-calendar response."
+        )
+
+    return [
+        entry
+        for entry in payload
+        if isinstance(entry, dict)
+    ]
+
+
+def is_final_trading_day_of_month(
+    target_date: str,
+) -> bool:
+    """
+    Return True when target_date is the final
+    Alpaca trading day of its calendar month.
+    """
+
+    try:
+        parsed_date = datetime.strptime(
+            target_date,
+            "%Y-%m-%d",
+        ).date()
+
+    except ValueError:
+        return False
+
+    next_month = (
+        parsed_date.replace(
+            day=28
+        )
+        + timedelta(days=4)
+    ).replace(day=1)
+
+    month_end = (
+        next_month
+        - timedelta(days=1)
+    )
+
+    calendar_entries = (
+        fetch_alpaca_market_calendar_range(
+            parsed_date.isoformat(),
+            month_end.isoformat(),
+        )
+    )
+
+    trading_dates: list[str] = []
+
+    for entry in calendar_entries:
+        entry_date = str(
+            entry.get("date")
+            or ""
+        ).strip()
+
+        if entry_date:
+            trading_dates.append(
+                entry_date
+            )
+
+    if not trading_dates:
+        return False
+
+    return target_date == max(
+        trading_dates
+    )
 
 
 def market_is_open_from_calendar(
@@ -11349,7 +11861,7 @@ def auto_trader_broker_fill_trade_book_gap(
 
 @app.get("/auto-trader/broker-fills/canonical-trades")
 def auto_trader_canonical_broker_trades(
-    request: Request,
+    request: Request = None,
 ) -> dict[str, Any]:
     """
     Reconstruct one canonical bot trade per auto-entry BUY.
@@ -11357,7 +11869,8 @@ def auto_trader_canonical_broker_trades(
     Read-only. Does not modify trade_book.
     """
 
-    require_app_session(request)
+    if request is not None:
+        require_app_session(request)
 
     fills = load_broker_fills(
         limit=10000
@@ -12970,16 +13483,17 @@ def auto_trader_reconciliation(
 
 @app.get("/auto-trader/history")
 def auto_trader_history(
-    request: Request,
+    request: Request = None,
     limit: int = Query(
         default=200,
         ge=1,
         le=5000,
     ),
 ) -> dict[str, Any]:
-    require_app_session(
-        request
-    )
+    if request is not None:
+        require_app_session(
+            request
+        )
 
     canonical_payload = (
         auto_trader_canonical_broker_trades(
@@ -13638,7 +14152,7 @@ def auto_trader_history(
 
 
 def _trade_report_history(
-    request: Request,
+    request: Request = None,
 ) -> list[dict[str, Any]]:
     """
     Reuse the existing persistent trade-history endpoint
@@ -13684,7 +14198,11 @@ def _trade_report_local_date(
         )
 
         if parsed.tzinfo is not None:
-            parsed = parsed.astimezone()
+            parsed = parsed.astimezone(
+                ZoneInfo(
+                    "America/New_York"
+                )
+            )
 
         return parsed.strftime(
             "%Y-%m-%d"
