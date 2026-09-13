@@ -1609,7 +1609,12 @@ def upsert_broker_fill(
                 shares = excluded.shares,
                 price = excluded.price,
                 filled_at = excluded.filled_at,
-                source = excluded.source,
+                source = CASE
+                    WHEN broker_fills.source
+                        = 'alpaca_paper_immediate'
+                    THEN broker_fills.source
+                    ELSE excluded.source
+                END,
                 raw_order_json = excluded.raw_order_json,
                 last_seen_at = excluded.last_seen_at
             """,
