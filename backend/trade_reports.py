@@ -297,6 +297,7 @@ def build_trade_report_pdf(
     title: str,
     subtitle: str,
     trades: list[dict[str, Any]],
+    compact: bool = False,
 ) -> bytes:
     buffer = BytesIO()
 
@@ -317,42 +318,47 @@ def build_trade_report_pdf(
         "ReportTitle",
         parent=styles["Title"],
         alignment=TA_CENTER,
-        fontSize=18,
-        leading=22,
-        spaceAfter=6,
+        fontSize=14 if compact else 18,
+        leading=17 if compact else 22,
+        spaceAfter=4 if compact else 6,
     )
 
     subtitle_style = ParagraphStyle(
         "ReportSubtitle",
         parent=styles["Normal"],
         alignment=TA_CENTER,
-        fontSize=9,
+        fontSize=7 if compact else 9,
         textColor=colors.grey,
-        spaceAfter=14,
+        spaceAfter=7 if compact else 14,
     )
 
     trade_title_style = ParagraphStyle(
         "TradeTitle",
         parent=styles["Heading3"],
-        fontSize=11,
-        leading=14,
-        spaceBefore=10,
-        spaceAfter=5,
+        fontSize=8.5 if compact else 11,
+        leading=10 if compact else 14,
+        spaceBefore=4 if compact else 10,
+        spaceAfter=2 if compact else 5,
     )
 
     body_style = ParagraphStyle(
         "Body",
         parent=styles["BodyText"],
-        fontSize=8.5,
-        leading=11,
-        spaceAfter=4,
+        fontSize=6.5 if compact else 8.5,
+        leading=8 if compact else 11,
+        spaceAfter=2 if compact else 4,
     )
 
     story: list[Any] = [
         Paragraph(title, title_style),
         Paragraph(subtitle, subtitle_style),
         _summary_table(trades),
-        Spacer(1, 0.18 * inch),
+        Spacer(
+            1,
+            0.08 * inch
+            if compact
+            else 0.18 * inch,
+        ),
     ]
 
     for trade in trades:
@@ -450,36 +456,74 @@ def build_trade_report_pdf(
                     "FONTSIZE",
                     (0, 0),
                     (-1, -1),
-                    7.5,
+                    6 if compact else 7.5,
                 ),
                 (
                     "PADDING",
                     (0, 0),
                     (-1, -1),
-                    5,
+                    2.5 if compact else 5,
                 ),
             ])
         )
 
         story.append(trade_table)
-        story.append(Spacer(1, 5))
+        story.append(
+            Spacer(
+                1,
+                2 if compact else 5,
+            )
+        )
+
+        buy_explanation = (
+            _build_buy_explanation(
+                trade
+            )
+        )
+
+        sell_explanation = (
+            _build_sell_explanation(
+                trade
+            )
+        )
+
+        if compact:
+            max_length = 260
+
+            if (
+                len(buy_explanation)
+                > max_length
+            ):
+                buy_explanation = (
+                    buy_explanation[
+                        : max_length - 3
+                    ]
+                    + "..."
+                )
+
+            if (
+                len(sell_explanation)
+                > max_length
+            ):
+                sell_explanation = (
+                    sell_explanation[
+                        : max_length - 3
+                    ]
+                    + "..."
+                )
 
         story.append(
             Paragraph(
-                "<b>Why the AI bought:</b> "
-                + _build_buy_explanation(
-                    trade
-                ),
+                "<b>Buy:</b> "
+                + buy_explanation,
                 body_style,
             )
         )
 
         story.append(
             Paragraph(
-                "<b>Why the AI sold:</b> "
-                + _build_sell_explanation(
-                    trade
-                ),
+                "<b>Sell:</b> "
+                + sell_explanation,
                 body_style,
             )
         )

@@ -13829,6 +13829,7 @@ def auto_trader_weekly_report(
             f"{display_start} - {display_end}"
         ),
         trades=selected,
+        compact=True,
     )
 
     filename = (
@@ -13910,6 +13911,7 @@ def auto_trader_monthly_report(
         title="AI Paper Trader - Monthly Report",
         subtitle=display_month,
         trades=selected,
+        compact=True,
     )
 
     filename = (
