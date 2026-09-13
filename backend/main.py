@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import math
 import os
@@ -5649,9 +5649,45 @@ def submit_alpaca_auto_bracket_buy(
                     entry_price is not None
                     and entry_price > 0
                     and entry_timestamp
+                    and entry_order_id
                     and filled_shares is not None
                     and filled_shares > 0
                 ):
+                    try:
+                        upsert_broker_fill(
+                            order_id=entry_order_id,
+                            symbol=normalized_symbol,
+                            side="BUY",
+                            shares=filled_shares,
+                            price=entry_price,
+                            filled_at=entry_timestamp,
+                            raw_order=latest_order,
+                            source=(
+                                "alpaca_paper_immediate"
+                            ),
+                        )
+
+                    except Exception as error:
+                        add_auto_trader_log(
+                            "broker_fill_persist_error",
+                            symbol=normalized_symbol,
+                            message=(
+                                "Confirmed BUY fill could "
+                                "not be persisted immediately "
+                                "to broker_fills."
+                            ),
+                            details={
+                                "order_id": (
+                                    entry_order_id
+                                ),
+                                "error": (
+                                    clean_error_message(
+                                        error
+                                    )
+                                ),
+                            },
+                        )
+
                     trade_book_id = (
                         create_trade_book_entry(
                             symbol=normalized_symbol,
@@ -6177,13 +6213,53 @@ def detect_new_broker_exit_fills() -> list[dict[str, Any]]:
         ):
             exit_reason = "take_profit_fill"
 
+        filled_at = str(
+            order.get("filled_at")
+            or ""
+        ).strip()
+
+        if filled_at:
+            try:
+                upsert_broker_fill(
+                    order_id=order_id,
+                    symbol=symbol,
+                    side="SELL",
+                    shares=filled_qty,
+                    price=filled_price,
+                    filled_at=filled_at,
+                    raw_order=order,
+                    source=(
+                        "alpaca_paper_immediate"
+                    ),
+                )
+
+            except Exception as error:
+                add_auto_trader_log(
+                    "broker_fill_persist_error",
+                    symbol=symbol,
+                    message=(
+                        "Confirmed SELL fill could "
+                        "not be persisted immediately "
+                        "to broker_fills."
+                    ),
+                    details={
+                        "order_id": order_id,
+                        "error": (
+                            clean_error_message(
+                                error
+                            )
+                        ),
+                    },
+                )
+
         result = {
             "order_id": order_id,
             "symbol": symbol,
             "shares": filled_qty,
             "filled_price": filled_price,
-            "filled_at": order.get(
-                "filled_at"
+            "filled_at": (
+                filled_at
+                or order.get("filled_at")
             ),
             "order_type": order_type,
             "stop_price": stop_price,
