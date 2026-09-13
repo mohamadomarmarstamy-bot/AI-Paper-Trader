@@ -1240,6 +1240,30 @@ async def pro_ticker_scheduler_loop() -> None:
                         f"{backup_sync_key}"
                     )
 
+
+                    try:
+                        coverage_result = (
+                            await asyncio.to_thread(
+                                check_broker_fill_coverage_and_alert,
+                                limit=50,
+                            )
+                        )
+
+                        print(
+                            "Broker-fill coverage check: "
+                            f"{coverage_result.get('coverage_percent')}% "
+                            f"coverage, "
+                            f"{coverage_result.get('missing_after_recovery')} "
+                            "missing after recovery."
+                        )
+
+                    except Exception as coverage_error:
+                        print(
+                            "Broker-fill coverage check "
+                            "failed: "
+                            f"{clean_error_message(coverage_error)}"
+                        )
+
                 except Exception as error:
                     _broker_fill_backup_last_error = (
                         clean_error_message(
@@ -13456,6 +13480,10 @@ def auto_trader_scheduler_state(
             "broker_fill_backup_state",
             {},
         ),
+        "broker_fill_coverage_alert_state": get_scheduler_state(
+            "broker_fill_coverage_alert_state",
+            {},
+        ),
     }
 
 
@@ -13536,30 +13564,28 @@ def auto_trader_broker_fill_backup_status(
     }
 
 
-@app.get("/auto-trader/broker-fills/audit")
-def auto_trader_broker_fills_audit(
-    request: Request,
-    limit: int = Query(
-        default=50,
-        ge=1,
-        le=500,
-    ),
+def audit_broker_fill_coverage(
+    *,
+    limit: int = 50,
 ) -> dict[str, Any]:
     """
     Compare recent filled Alpaca PAPER orders
     against the persistent broker_fills ledger.
 
-    Read-only. Does not modify trading state
-    or database contents.
+    Internal read-only helper.
     """
 
-    require_app_session(
-        request
+    safe_limit = max(
+        1,
+        min(
+            int(limit),
+            500,
+        ),
     )
 
     raw_orders = (
         fetch_alpaca_paper_trade_history(
-            limit=limit
+            limit=safe_limit
         )
     )
 
@@ -13635,36 +13661,40 @@ def auto_trader_broker_fills_audit(
             dict,
         )
 
-        filled_orders.append({
-            "order_id": order_id,
-            "symbol": symbol,
-            "side": side,
-            "shares": filled_qty,
-            "price": filled_price,
-            "filled_at": filled_at,
-            "present_in_broker_fills": (
-                present
-            ),
-            "ledger_source": (
-                ledger_row.get("source")
-                if present
-                else None
-            ),
-            "first_seen_at": (
-                ledger_row.get(
-                    "first_seen_at"
-                )
-                if present
-                else None
-            ),
-            "last_seen_at": (
-                ledger_row.get(
-                    "last_seen_at"
-                )
-                if present
-                else None
-            ),
-        })
+        filled_orders.append(
+            {
+                "order_id": order_id,
+                "symbol": symbol,
+                "side": side,
+                "shares": filled_qty,
+                "price": filled_price,
+                "filled_at": filled_at,
+                "present_in_broker_fills": (
+                    present
+                ),
+                "ledger_source": (
+                    ledger_row.get(
+                        "source"
+                    )
+                    if present
+                    else None
+                ),
+                "first_seen_at": (
+                    ledger_row.get(
+                        "first_seen_at"
+                    )
+                    if present
+                    else None
+                ),
+                "last_seen_at": (
+                    ledger_row.get(
+                        "last_seen_at"
+                    )
+                    if present
+                    else None
+                ),
+            }
+        )
 
     present_count = sum(
         1
@@ -13710,7 +13740,7 @@ def auto_trader_broker_fills_audit(
     return {
         "paper": True,
         "read_only": True,
-        "orders_requested": limit,
+        "orders_requested": safe_limit,
         "filled_orders_checked": (
             len(filled_orders)
         ),
@@ -13735,6 +13765,369 @@ def auto_trader_broker_fills_audit(
         ),
         "fills": filled_orders,
     }
+
+
+def check_broker_fill_coverage_and_alert(
+    *,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """
+    Audit recent Alpaca fills.
+
+    If anything is missing:
+    1. Run another recovery sync.
+    2. Audit again.
+    3. Email only if coverage is still incomplete.
+
+    Alert state is stored in SQLite so Railway
+    restarts do not resend the same incident.
+    """
+
+    safe_limit = max(
+        1,
+        min(
+            int(limit),
+            500,
+        ),
+    )
+
+    before = audit_broker_fill_coverage(
+        limit=safe_limit
+    )
+
+    missing_before = int(
+        before.get(
+            "missing_from_broker_fills",
+            0,
+        )
+        or 0
+    )
+
+    recovery_sync: dict[str, Any] | None = None
+
+    after = before
+
+    if missing_before > 0:
+        recovery_sync = (
+            sync_alpaca_broker_fills(
+                limit=500
+            )
+        )
+
+        after = audit_broker_fill_coverage(
+            limit=safe_limit
+        )
+
+    checked = int(
+        after.get(
+            "filled_orders_checked",
+            0,
+        )
+        or 0
+    )
+
+    missing_rows = [
+        row
+        for row in (
+            after.get("fills")
+            or []
+        )
+        if isinstance(
+            row,
+            dict,
+        )
+        and not row.get(
+            "present_in_broker_fills"
+        )
+    ]
+
+    missing_after = len(
+        missing_rows
+    )
+
+    missing_order_ids = sorted(
+        str(
+            row.get("order_id")
+            or ""
+        ).strip()
+        for row in missing_rows
+        if str(
+            row.get("order_id")
+            or ""
+        ).strip()
+    )
+
+    fingerprint = "|".join(
+        missing_order_ids
+    )
+
+    state = get_scheduler_state(
+        "broker_fill_coverage_alert_state",
+        {},
+    )
+
+    if not isinstance(
+        state,
+        dict,
+    ):
+        state = {}
+
+    alert_active = bool(
+        state.get("active")
+    )
+
+    previous_fingerprint = str(
+        state.get("fingerprint")
+        or ""
+    )
+
+    now_utc = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    alert_email_sent = False
+    recovery_email_sent = False
+    alert_suppressed = False
+
+    # ------------------------------------------------
+    # Missing fills remain AFTER recovery.
+    # ------------------------------------------------
+
+    if (
+        checked > 0
+        and missing_after > 0
+    ):
+        same_incident = (
+            alert_active
+            and fingerprint
+            == previous_fingerprint
+        )
+
+        if same_incident:
+            alert_suppressed = True
+
+        else:
+            detail_lines: list[str] = []
+
+            for row in missing_rows[:10]:
+                detail_lines.append(
+                    (
+                        f"- {row.get('symbol') or 'UNKNOWN'} "
+                        f"{row.get('side') or ''} "
+                        f"{row.get('shares') or ''} "
+                        f"@ {row.get('price') or ''} "
+                        f"| order "
+                        f"{row.get('order_id') or 'UNKNOWN'}"
+                    )
+                )
+
+            if (
+                len(missing_rows)
+                > 10
+            ):
+                detail_lines.append(
+                    (
+                        f"- plus "
+                        f"{len(missing_rows) - 10} "
+                        "additional missing fills"
+                    )
+                )
+
+            message = "\n".join(
+                [
+                    (
+                        "AI Paper Trader detected "
+                        "broker-fill ledger coverage "
+                        "below 100%."
+                    ),
+                    "",
+                    (
+                        f"Recent filled orders checked: "
+                        f"{checked}"
+                    ),
+                    (
+                        f"Missing after automatic "
+                        f"recovery: {missing_after}"
+                    ),
+                    (
+                        f"Coverage: "
+                        f"{after.get('coverage_percent')}%"
+                    ),
+                    "",
+                    "Missing fills:",
+                    *detail_lines,
+                    "",
+                    (
+                        "Trading was not changed. "
+                        "This alert concerns execution "
+                        "record persistence only."
+                    ),
+                ]
+            )
+
+            alert_email_sent = (
+                send_health_alert_email(
+                    (
+                        "[AI Paper Trader] "
+                        "Broker-fill coverage alert"
+                    ),
+                    message,
+                )
+            )
+
+            # Only mark the incident as alerted after
+            # email delivery succeeds. A failed email
+            # will therefore retry next cycle.
+            if alert_email_sent:
+                set_scheduler_state(
+                    "broker_fill_coverage_alert_state",
+                    {
+                        "active": True,
+                        "fingerprint": fingerprint,
+                        "missing_order_ids": (
+                            missing_order_ids
+                        ),
+                        "missing_count": (
+                            missing_after
+                        ),
+                        "coverage_percent": (
+                            after.get(
+                                "coverage_percent"
+                            )
+                        ),
+                        "alerted_at": now_utc,
+                        "recovered_at": None,
+                    },
+                )
+
+    # ------------------------------------------------
+    # Coverage recovered after an active incident.
+    #
+    # Do NOT call zero checked orders a recovery.
+    # ------------------------------------------------
+
+    elif (
+        checked > 0
+        and missing_after == 0
+        and alert_active
+    ):
+        recovery_email_sent = (
+            send_health_alert_email(
+                (
+                    "[AI Paper Trader] "
+                    "Broker-fill coverage recovered"
+                ),
+                "\n".join(
+                    [
+                        (
+                            "Broker-fill ledger coverage "
+                            "has returned to 100%."
+                        ),
+                        "",
+                        (
+                            f"Recent filled orders checked: "
+                            f"{checked}"
+                        ),
+                        (
+                            f"Coverage: "
+                            f"{after.get('coverage_percent')}%"
+                        ),
+                        "",
+                        (
+                            "The previous broker-fill "
+                            "persistence incident is now "
+                            "resolved."
+                        ),
+                    ]
+                ),
+            )
+        )
+
+        # Keep incident active if the recovery email
+        # fails so the notification can retry later.
+        if recovery_email_sent:
+            set_scheduler_state(
+                "broker_fill_coverage_alert_state",
+                {
+                    "active": False,
+                    "fingerprint": "",
+                    "missing_order_ids": [],
+                    "missing_count": 0,
+                    "coverage_percent": (
+                        after.get(
+                            "coverage_percent"
+                        )
+                    ),
+                    "alerted_at": (
+                        state.get(
+                            "alerted_at"
+                        )
+                    ),
+                    "recovered_at": now_utc,
+                },
+            )
+
+    return {
+        "paper": True,
+        "checked": checked,
+        "missing_before_recovery": (
+            missing_before
+        ),
+        "missing_after_recovery": (
+            missing_after
+        ),
+        "coverage_percent": (
+            after.get(
+                "coverage_percent"
+            )
+        ),
+        "all_fills_persisted": (
+            missing_after == 0
+        ),
+        "recovery_sync_ran": (
+            recovery_sync is not None
+        ),
+        "recovery_sync": recovery_sync,
+        "alert_active_before_check": (
+            alert_active
+        ),
+        "alert_email_sent": (
+            alert_email_sent
+        ),
+        "alert_suppressed": (
+            alert_suppressed
+        ),
+        "recovery_email_sent": (
+            recovery_email_sent
+        ),
+        "missing_fills": missing_rows,
+    }
+
+
+@app.get("/auto-trader/broker-fills/audit")
+def auto_trader_broker_fills_audit(
+    request: Request,
+    limit: int = Query(
+        default=50,
+        ge=1,
+        le=500,
+    ),
+) -> dict[str, Any]:
+    """
+    Compare recent filled Alpaca PAPER orders
+    against the persistent broker_fills ledger.
+
+    Read-only. Does not modify trading state
+    or database contents.
+    """
+
+    require_app_session(
+        request
+    )
+
+    return audit_broker_fill_coverage(
+        limit=limit
+    )
 
 
 @app.post("/auto-trader/broker-fills/sync")
