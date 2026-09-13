@@ -308,6 +308,11 @@ _trade_report_last_monthly_key: str | None = None
 _trade_report_month_end_check_date: str | None = None
 _trade_report_month_end_check_result = False
 
+_broker_fill_backup_last_key: str | None = None
+_broker_fill_backup_last_success_at: str | None = None
+_broker_fill_backup_last_result: dict[str, Any] | None = None
+_broker_fill_backup_last_error: str | None = None
+
 
 def parse_trade_timestamp(
     value: Any,
@@ -1026,6 +1031,10 @@ async def pro_ticker_scheduler_loop() -> None:
     global _trade_report_last_monthly_key
     global _trade_report_month_end_check_date
     global _trade_report_month_end_check_result
+    global _broker_fill_backup_last_key
+    global _broker_fill_backup_last_success_at
+    global _broker_fill_backup_last_result
+    global _broker_fill_backup_last_error
 
     eastern = ZoneInfo(
         "America/New_York"
@@ -1052,6 +1061,91 @@ async def pro_ticker_scheduler_loop() -> None:
                     calendar_entry
                 )
             )
+
+            # ----------------------------------
+            # Broker-fill automatic backup sync
+            #
+            # Immediate BUY/SELL persistence remains
+            # the primary path. This is the recovery
+            # layer if an immediate write was missed.
+            #
+            # Market open:
+            #   once per 15-minute bucket
+            #
+            # After close:
+            #   one final recovery pass for the day
+            # ----------------------------------
+
+            backup_sync_key: str | None = None
+
+            if market_open:
+                backup_bucket = (
+                    now.minute // 15
+                )
+
+                backup_sync_key = (
+                    f"{today}:open:"
+                    f"{now.hour:02d}:"
+                    f"{backup_bucket}"
+                )
+
+            elif (
+                calendar_entry
+                and now.hour >= 16
+            ):
+                backup_sync_key = (
+                    f"{today}:post-close"
+                )
+
+            if (
+                backup_sync_key
+                and _broker_fill_backup_last_key
+                != backup_sync_key
+            ):
+                try:
+                    backup_result = (
+                        await asyncio.to_thread(
+                            sync_alpaca_broker_fills,
+                            limit=500,
+                        )
+                    )
+
+                    _broker_fill_backup_last_result = (
+                        backup_result
+                    )
+
+                    _broker_fill_backup_last_success_at = (
+                        datetime.now(
+                            eastern
+                        ).isoformat()
+                    )
+
+                    _broker_fill_backup_last_error = None
+
+                    # Mark the bucket only after the
+                    # sync itself succeeds.
+                    _broker_fill_backup_last_key = (
+                        backup_sync_key
+                    )
+
+                    print(
+                        "Broker-fill backup sync "
+                        "completed: "
+                        f"{backup_sync_key}"
+                    )
+
+                except Exception as error:
+                    _broker_fill_backup_last_error = (
+                        clean_error_message(
+                            error
+                        )
+                    )
+
+                    print(
+                        "Broker-fill backup sync "
+                        "failed: "
+                        f"{_broker_fill_backup_last_error}"
+                    )
 
             hourly_key = (
                 f"{today}:{now.hour}"
@@ -13206,6 +13300,83 @@ def auto_trader_broker_fills(
         "buy_count": buy_count,
         "sell_count": sell_count,
         "fills": results,
+    }
+
+
+@app.get("/auto-trader/broker-fills/backup-status")
+def auto_trader_broker_fill_backup_status(
+    request: Request,
+) -> dict[str, Any]:
+    """
+    Read-only status for the automatic
+    broker-fill recovery sync.
+    """
+
+    require_app_session(
+        request
+    )
+
+    result = (
+        _broker_fill_backup_last_result
+        if isinstance(
+            _broker_fill_backup_last_result,
+            dict,
+        )
+        else {}
+    )
+
+    healthy = (
+        _broker_fill_backup_last_success_at
+        is not None
+        and _broker_fill_backup_last_error
+        is None
+    )
+
+    return {
+        "paper": True,
+        "read_only": True,
+        "enabled": True,
+        "interval_minutes": 15,
+        "status": (
+            "HEALTHY"
+            if healthy
+            else (
+                "ERROR"
+                if _broker_fill_backup_last_error
+                else "WAITING"
+            )
+        ),
+        "last_sync_key": (
+            _broker_fill_backup_last_key
+        ),
+        "last_success_at": (
+            _broker_fill_backup_last_success_at
+        ),
+        "last_error": (
+            _broker_fill_backup_last_error
+        ),
+        "orders_examined": result.get(
+            "orders_examined",
+            result.get(
+                "examined"
+            ),
+        ),
+        "filled_orders_seen": result.get(
+            "filled_orders_seen",
+            result.get(
+                "filled"
+            ),
+        ),
+        "fills_saved_or_refreshed": result.get(
+            "fills_saved_or_refreshed",
+            result.get(
+                "saved"
+            ),
+        ),
+        "sync_errors": result.get(
+            "errors",
+            [],
+        ),
     }
 
 
