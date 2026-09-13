@@ -14130,6 +14130,29 @@ def auto_trader_broker_fills_audit(
     )
 
 
+@app.post("/auto-trader/broker-fills/coverage-check")
+def auto_trader_broker_fill_coverage_check(
+    request: Request,
+    limit: int = Query(
+        default=50,
+        ge=1,
+        le=500,
+    ),
+) -> dict[str, Any]:
+    """
+    Manually run the same broker-fill
+    recovery + alert check used by the scheduler.
+    """
+
+    require_app_session(
+        request
+    )
+
+    return check_broker_fill_coverage_and_alert(
+        limit=limit
+    )
+
+
 @app.post("/auto-trader/broker-fills/sync")
 def sync_auto_trader_broker_fills(
     request: Request,
