@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import math
 import os
@@ -8666,6 +8667,8 @@ def health_alert_env_enabled(name: str) -> bool:
 def send_health_alert_email(
     subject: str,
     message: str,
+    attachments: list[dict[str, Any]]
+    | None = None,
 ) -> bool:
     if not health_alert_env_enabled(
         "HEALTH_ALERT_EMAIL_ENABLED"
@@ -8699,6 +8702,62 @@ def send_health_alert_email(
         return False
 
     try:
+        email_payload: dict[str, Any] = {
+            "from": email_from,
+            "to": [email_to],
+            "subject": subject,
+            "text": message,
+        }
+
+        resend_attachments: list[
+            dict[str, str]
+        ] = []
+
+        for attachment in (
+            attachments or []
+        ):
+            if not isinstance(
+                attachment,
+                dict,
+            ):
+                continue
+
+            filename = str(
+                attachment.get(
+                    "filename"
+                )
+                or ""
+            ).strip()
+
+            content = attachment.get(
+                "content"
+            )
+
+            if (
+                not filename
+                or not isinstance(
+                    content,
+                    (bytes, bytearray),
+                )
+            ):
+                continue
+
+            encoded_content = (
+                base64.b64encode(
+                    bytes(content)
+                ).decode("ascii")
+            )
+
+            resend_attachments.append({
+                "filename": filename,
+                "content": encoded_content,
+            })
+
+        if resend_attachments:
+            email_payload[
+                "attachments"
+            ] = resend_attachments
+
         response = requests.post(
             "https://api.resend.com/emails",
             headers={
@@ -8707,13 +8766,8 @@ def send_health_alert_email(
                 ),
                 "Content-Type": "application/json",
             },
-            json={
-                "from": email_from,
-                "to": [email_to],
-                "subject": subject,
-                "text": message,
-            },
-            timeout=15,
+            json=email_payload,
+            timeout=30,
         )
 
         response.raise_for_status()
