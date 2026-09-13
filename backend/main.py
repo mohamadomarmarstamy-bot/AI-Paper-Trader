@@ -33,6 +33,7 @@ from database import (
     load_learning_outcomes,
     load_pro_ticker_research,
     load_broker_fills,
+    get_broker_fill,
     load_trade_excursions,
     upsert_broker_fill,
     record_trade_book_event,
@@ -12531,6 +12532,208 @@ def auto_trader_broker_fills(
         "sell_count": sell_count,
         "fills": results,
     }
+
+
+@app.get("/auto-trader/broker-fills/audit")
+def auto_trader_broker_fills_audit(
+    request: Request,
+    limit: int = Query(
+        default=50,
+        ge=1,
+        le=500,
+    ),
+) -> dict[str, Any]:
+    """
+    Compare recent filled Alpaca PAPER orders
+    against the persistent broker_fills ledger.
+
+    Read-only. Does not modify trading state
+    or database contents.
+    """
+
+    require_app_session(
+        request
+    )
+
+    raw_orders = (
+        fetch_alpaca_paper_trade_history(
+            limit=limit
+        )
+    )
+
+    filled_orders: list[
+        dict[str, Any]
+    ] = []
+
+    for order in raw_orders:
+        if not isinstance(
+            order,
+            dict,
+        ):
+            continue
+
+        status = str(
+            order.get("status")
+            or ""
+        ).strip().lower()
+
+        if status != "filled":
+            continue
+
+        order_id = str(
+            order.get("id")
+            or ""
+        ).strip()
+
+        symbol = clean_symbol(
+            order.get("symbol")
+        )
+
+        side = str(
+            order.get("side")
+            or ""
+        ).strip().upper()
+
+        filled_qty = safe_float(
+            order.get("filled_qty")
+        )
+
+        filled_price = safe_float(
+            order.get(
+                "filled_avg_price"
+            )
+        )
+
+        filled_at = str(
+            order.get("filled_at")
+            or ""
+        ).strip()
+
+        if (
+            not order_id
+            or not symbol
+            or side not in {
+                "BUY",
+                "SELL",
+            }
+            or filled_qty is None
+            or filled_qty <= 0
+            or filled_price is None
+            or filled_price <= 0
+            or not filled_at
+        ):
+            continue
+
+        ledger_row = get_broker_fill(
+            order_id
+        )
+
+        present = isinstance(
+            ledger_row,
+            dict,
+        )
+
+        filled_orders.append({
+            "order_id": order_id,
+            "symbol": symbol,
+            "side": side,
+            "shares": filled_qty,
+            "price": filled_price,
+            "filled_at": filled_at,
+            "present_in_broker_fills": (
+                present
+            ),
+            "ledger_source": (
+                ledger_row.get("source")
+                if present
+                else None
+            ),
+            "first_seen_at": (
+                ledger_row.get(
+                    "first_seen_at"
+                )
+                if present
+                else None
+            ),
+            "last_seen_at": (
+                ledger_row.get(
+                    "last_seen_at"
+                )
+                if present
+                else None
+            ),
+        })
+
+    present_count = sum(
+        1
+        for item in filled_orders
+        if item[
+            "present_in_broker_fills"
+        ]
+    )
+
+    missing_count = (
+        len(filled_orders)
+        - present_count
+    )
+
+    coverage_percent = (
+        (
+            present_count
+            / len(filled_orders)
+        )
+        * 100
+        if filled_orders
+        else 100.0
+    )
+
+    immediate_count = sum(
+        1
+        for item in filled_orders
+        if item.get(
+            "ledger_source"
+        )
+        == "alpaca_paper_immediate"
+    )
+
+    sync_count = sum(
+        1
+        for item in filled_orders
+        if item.get(
+            "ledger_source"
+        )
+        == "alpaca_paper"
+    )
+
+    return {
+        "paper": True,
+        "read_only": True,
+        "orders_requested": limit,
+        "filled_orders_checked": (
+            len(filled_orders)
+        ),
+        "present_in_broker_fills": (
+            present_count
+        ),
+        "missing_from_broker_fills": (
+            missing_count
+        ),
+        "coverage_percent": round(
+            coverage_percent,
+            2,
+        ),
+        "immediate_source_count": (
+            immediate_count
+        ),
+        "sync_source_count": (
+            sync_count
+        ),
+        "all_fills_persisted": (
+            missing_count == 0
+        ),
+        "fills": filled_orders,
+    }
+
 
 @app.post("/auto-trader/broker-fills/sync")
 def sync_auto_trader_broker_fills(
