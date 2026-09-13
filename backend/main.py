@@ -1017,6 +1017,7 @@ def build_scheduled_trade_report(
     }
 
 
+
 async def pro_ticker_scheduler_loop() -> None:
     global _pro_ticker_last_hourly_key
     global _pro_ticker_last_daily_date
@@ -1413,6 +1414,113 @@ app.mount(
     ),
     name="js",
 )
+
+@app.post("/auto-trader/report/test-email")
+def auto_trader_test_report_email(
+    request: Request,
+    report_type: str = Query(
+        default="weekly",
+        pattern=r"^(weekly|monthly)$",
+    ),
+) -> dict[str, Any]:
+    """
+    Manually test the scheduled trade-report
+    PDF + email pipeline.
+
+    Uses the same canonical history, PDF builder,
+    and email attachment path as the scheduler.
+    """
+
+    require_app_session(request)
+
+    eastern = ZoneInfo(
+        "America/New_York"
+    )
+
+    now = datetime.now(
+        eastern
+    )
+
+    if report_type == "weekly":
+        start_date = (
+            now
+            - timedelta(
+                days=now.weekday()
+            )
+        ).replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+
+        end_date = (
+            start_date
+            + timedelta(days=4)
+        ).replace(
+            hour=23,
+            minute=59,
+            second=59,
+        )
+
+    else:
+        start_date = now.replace(
+            day=1,
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+
+        end_date = now
+
+    report = build_scheduled_trade_report(
+        report_type=report_type,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    sent = send_health_alert_email(
+        report["subject"],
+        report["message"],
+        [
+            {
+                "filename": report[
+                    "filename"
+                ],
+                "content": report[
+                    "pdf"
+                ],
+            }
+        ],
+    )
+
+    return {
+        "success": sent,
+        "paper": True,
+        "report_type": report_type,
+        "period_start": (
+            start_date.date().isoformat()
+        ),
+        "period_end": (
+            end_date.date().isoformat()
+        ),
+        "trade_count": report[
+            "trade_count"
+        ],
+        "incomplete_count": report[
+            "incomplete_count"
+        ],
+        "known_realized_pl": report[
+            "known_realized_pl"
+        ],
+        "filename": report[
+            "filename"
+        ],
+        "email_sent": sent,
+    }
+
+
 
 @app.get("/style.css")
 def frontend_style():
