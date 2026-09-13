@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import threading
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 import hashlib
 import hmac
@@ -13703,6 +13703,146 @@ def auto_trader_daily_report(
         headers={
             "Content-Disposition": (
                 f'attachment; filename="{filename}"'
+            ),
+        },
+    )
+
+
+
+@app.get("/auto-trader/report/weekly.pdf")
+def auto_trader_weekly_report(
+    request: Request,
+    week: str = Query(
+        ...,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+    ),
+) -> Response:
+    """
+    Build a Monday-Friday canonical trade
+    report for the requested trading week.
+
+    The `week` parameter must be the Monday
+    that starts the requested week.
+    """
+
+    require_app_session(
+        request
+    )
+
+    try:
+        week_start = datetime.strptime(
+            week,
+            "%Y-%m-%d",
+        ).date()
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid week. Use YYYY-MM-DD."
+            ),
+        ) from error
+
+    if week_start.weekday() != 0:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "week must be the Monday "
+                "starting the requested week."
+            ),
+        )
+
+    week_end = (
+        week_start
+        + timedelta(days=4)
+    )
+
+    trades = _trade_report_history(
+        request
+    )
+
+    selected: list[
+        dict[str, Any]
+    ] = []
+
+    for trade in trades:
+        local_date = (
+            _trade_report_local_date(
+                trade.get(
+                    "exit_timestamp"
+                )
+                or trade.get(
+                    "entry_timestamp"
+                )
+            )
+        )
+
+        if not local_date:
+            continue
+
+        try:
+            trade_date = (
+                datetime.strptime(
+                    local_date,
+                    "%Y-%m-%d",
+                ).date()
+            )
+
+        except ValueError:
+            continue
+
+        if (
+            week_start
+            <= trade_date
+            <= week_end
+        ):
+            selected.append(
+                trade
+            )
+
+    if not selected:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No completed trades found "
+                f"for week starting {week}."
+            ),
+        )
+
+    display_start = (
+        week_start.strftime(
+            "%B %d, %Y"
+        )
+    )
+
+    display_end = (
+        week_end.strftime(
+            "%B %d, %Y"
+        )
+    )
+
+    pdf = build_trade_report_pdf(
+        title=(
+            "AI Paper Trader - Weekly Report"
+        ),
+        subtitle=(
+            f"{display_start} - {display_end}"
+        ),
+        trades=selected,
+    )
+
+    filename = (
+        "ai-paper-trader-week-"
+        f"{week}.pdf"
+    )
+
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                "attachment; "
+                f'filename="{filename}"'
             ),
         },
     )
