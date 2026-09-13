@@ -35,10 +35,12 @@ from database import (
     load_pro_ticker_research,
     load_broker_fills,
     get_broker_fill,
+    get_scheduler_state,
     load_trade_excursions,
     upsert_broker_fill,
     record_trade_book_event,
     save_learning_outcome,
+    set_scheduler_state,
     upsert_trade_excursion,
 )
 from indicators import (
@@ -312,6 +314,106 @@ _broker_fill_backup_last_key: str | None = None
 _broker_fill_backup_last_success_at: str | None = None
 _broker_fill_backup_last_result: dict[str, Any] | None = None
 _broker_fill_backup_last_error: str | None = None
+
+
+def restore_persistent_scheduler_state() -> None:
+    """
+    Restore scheduler markers after a process restart.
+    """
+
+    global _trade_report_last_weekly_key
+    global _trade_report_last_monthly_key
+    global _broker_fill_backup_last_key
+    global _broker_fill_backup_last_success_at
+    global _broker_fill_backup_last_result
+    global _broker_fill_backup_last_error
+
+    weekly_key = get_scheduler_state(
+        "trade_report_last_weekly_key"
+    )
+
+    if isinstance(weekly_key, str) and weekly_key.strip():
+        _trade_report_last_weekly_key = weekly_key.strip()
+
+    monthly_key = get_scheduler_state(
+        "trade_report_last_monthly_key"
+    )
+
+    if isinstance(monthly_key, str) and monthly_key.strip():
+        _trade_report_last_monthly_key = monthly_key.strip()
+
+    broker_state = get_scheduler_state(
+        "broker_fill_backup_state",
+        {},
+    )
+
+    if isinstance(broker_state, dict):
+        last_key = broker_state.get("last_key")
+
+        if isinstance(last_key, str) and last_key.strip():
+            _broker_fill_backup_last_key = last_key.strip()
+
+        last_success_at = broker_state.get(
+            "last_success_at"
+        )
+
+        if (
+            isinstance(last_success_at, str)
+            and last_success_at.strip()
+        ):
+            _broker_fill_backup_last_success_at = (
+                last_success_at.strip()
+            )
+
+        last_result = broker_state.get(
+            "last_result"
+        )
+
+        if isinstance(last_result, dict):
+            _broker_fill_backup_last_result = last_result
+
+        last_error = broker_state.get(
+            "last_error"
+        )
+
+        if (
+            isinstance(last_error, str)
+            and last_error.strip()
+        ):
+            _broker_fill_backup_last_error = (
+                last_error.strip()
+            )
+        else:
+            _broker_fill_backup_last_error = None
+
+    print(
+        "Persistent scheduler state restored: "
+        f"weekly={_trade_report_last_weekly_key}, "
+        f"monthly={_trade_report_last_monthly_key}, "
+        f"broker_sync={_broker_fill_backup_last_key}"
+    )
+
+
+def persist_broker_fill_backup_state() -> None:
+    """
+    Persist current broker-fill recovery status.
+    """
+
+    set_scheduler_state(
+        "broker_fill_backup_state",
+        {
+            "last_key": _broker_fill_backup_last_key,
+            "last_success_at": (
+                _broker_fill_backup_last_success_at
+            ),
+            "last_result": (
+                _broker_fill_backup_last_result
+            ),
+            "last_error": (
+                _broker_fill_backup_last_error
+            ),
+        },
+    )
 
 
 def parse_trade_timestamp(
@@ -1128,6 +1230,10 @@ async def pro_ticker_scheduler_loop() -> None:
                         backup_sync_key
                     )
 
+                    await asyncio.to_thread(
+                        persist_broker_fill_backup_state
+                    )
+
                     print(
                         "Broker-fill backup sync "
                         "completed: "
@@ -1140,6 +1246,17 @@ async def pro_ticker_scheduler_loop() -> None:
                             error
                         )
                     )
+
+                    try:
+                        await asyncio.to_thread(
+                            persist_broker_fill_backup_state
+                        )
+                    except Exception as state_error:
+                        print(
+                            "Failed to persist broker-fill "
+                            "backup error state: "
+                            f"{clean_error_message(state_error)}"
+                        )
 
                     print(
                         "Broker-fill backup sync "
@@ -1286,6 +1403,12 @@ async def pro_ticker_scheduler_loop() -> None:
                         weekly_key
                     )
 
+                    await asyncio.to_thread(
+                        set_scheduler_state,
+                        "trade_report_last_weekly_key",
+                        weekly_key,
+                    )
+
                     print(
                         "Weekly trade report email "
                         f"sent for {weekly_key}."
@@ -1399,6 +1522,12 @@ async def pro_ticker_scheduler_loop() -> None:
                             _trade_report_last_monthly_key
                         ) = month_key
 
+                        await asyncio.to_thread(
+                            set_scheduler_state,
+                            "trade_report_last_monthly_key",
+                            month_key,
+                        )
+
                         print(
                             "Monthly trade report "
                             "email sent for "
@@ -1442,6 +1571,7 @@ async def lifespan(app: FastAPI):
     load_auto_trader_log()
     load_auto_trader_journal()
     initialize_seen_exit_order_ids()
+    restore_persistent_scheduler_state()
 
     refresh_task = asyncio.create_task(
         portfolio_refresh_loop()

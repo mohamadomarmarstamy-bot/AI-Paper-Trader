@@ -202,6 +202,95 @@ def _deserialize_json_object(value: Any) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def get_scheduler_state(
+    key: str,
+    default: Any = None,
+) -> Any:
+    """
+    Load one persistent scheduler value.
+    """
+
+    normalized_key = str(key).strip()
+
+    if not normalized_key:
+        return default
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT value_json
+            FROM scheduler_state
+            WHERE key = ?
+            LIMIT 1
+            """,
+            (normalized_key,),
+        ).fetchone()
+
+    if row is None:
+        return default
+
+    try:
+        value_json = row["value_json"]
+    except Exception:
+        try:
+            value_json = row[0]
+        except Exception:
+            return default
+
+    try:
+        return json.loads(value_json)
+    except Exception:
+        return default
+
+
+def set_scheduler_state(
+    key: str,
+    value: Any,
+) -> None:
+    """
+    Persist one scheduler value as JSON.
+    """
+
+    normalized_key = str(key).strip()
+
+    if not normalized_key:
+        raise ValueError(
+            "Scheduler state key cannot be empty."
+        )
+
+    value_json = json.dumps(
+        value,
+        separators=(",", ":"),
+        default=str,
+    )
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO scheduler_state (
+                key,
+                value_json,
+                updated_at
+            )
+            VALUES (
+                ?,
+                ?,
+                strftime(
+                    '%Y-%m-%dT%H:%M:%fZ',
+                    'now'
+                )
+            )
+            ON CONFLICT(key) DO UPDATE SET
+                value_json = excluded.value_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                normalized_key,
+                value_json,
+            ),
+        )
+
+
 def initialize_database() -> None:
     """Create all required database tables and indexes."""
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -392,6 +481,16 @@ def initialize_database() -> None:
             ON broker_fills(side)
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scheduler_state (
+                key TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL DEFAULT '{}',
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS pro_ticker_discovery_state (
