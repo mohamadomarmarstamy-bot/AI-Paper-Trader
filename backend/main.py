@@ -13433,6 +13433,32 @@ def auto_trader_broker_fills(
     }
 
 
+@app.get("/auto-trader/scheduler-state")
+def auto_trader_scheduler_state(
+    request: Request,
+) -> dict[str, Any]:
+    """
+    Read-only view of persisted scheduler state.
+    """
+
+    require_app_session(request)
+
+    return {
+        "paper": True,
+        "read_only": True,
+        "weekly_report_key": get_scheduler_state(
+            "trade_report_last_weekly_key"
+        ),
+        "monthly_report_key": get_scheduler_state(
+            "trade_report_last_monthly_key"
+        ),
+        "broker_fill_backup_state": get_scheduler_state(
+            "broker_fill_backup_state",
+            {},
+        ),
+    }
+
+
 @app.get("/auto-trader/broker-fills/backup-status")
 def auto_trader_broker_fill_backup_status(
     request: Request,
