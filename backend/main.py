@@ -205,6 +205,10 @@ AUTO_TRADER_MAX_ENTRY_SPREAD_PERCENT = 1.0
 # We will wire ATR into the entry logic after the basic fixes.
 AUTO_TRADER_MAX_ENTRY_ATR_PERCENT = 8.0
 
+# PAPER-trade analysis showed materially weaker
+# results for scanner ranks above 20.
+AUTO_TRADER_MAX_ENTRY_SCANNER_RANK = 20
+
 
 # ============================================================
 # LOGGING / LEARNING JOURNAL
@@ -8748,6 +8752,17 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             news_score = None
             news_adjusted = False
 
+            scanner_rank = safe_float(
+                candidate.get("scanner_rank")
+                or candidate.get("rank")
+            )
+
+            scanner_rank_pass = (
+                scanner_rank is None
+                or scanner_rank
+                <= AUTO_TRADER_MAX_ENTRY_SCANNER_RANK
+            )
+
             preliminary_entry_pass = (
                 signal == "BUY"
                 and score is not None
@@ -8755,6 +8770,7 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 and confidence is not None
                 and confidence
                 >= learning_confidence_min
+                and scanner_rank_pass
             )
 
             if preliminary_entry_pass:
@@ -8799,6 +8815,7 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 and confidence is not None
                 and confidence
                 >= learning_confidence_min
+                and scanner_rank_pass
             ):
                 failed_requirements = []
 
@@ -8824,6 +8841,11 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         "confidence_below_minimum"
                     )
 
+                if not scanner_rank_pass:
+                    failed_requirements.append(
+                        "scanner_rank_above_maximum"
+                    )
+
                 cycle_result[
                     "skipped_candidates"
                 ].append({
@@ -8837,6 +8859,10 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     "signal": signal,
                     "score": score,
                     "confidence": confidence,
+                    "scanner_rank": scanner_rank,
+                    "maximum_scanner_rank": (
+                        AUTO_TRADER_MAX_ENTRY_SCANNER_RANK
+                    ),
                     "required_score": (
                         learning_score_min
                     ),
@@ -10241,6 +10267,9 @@ def get_auto_trader_status() -> dict[str, Any]:
             ),
             "entry_score_min": (
                 AUTO_TRADER_ENTRY_SCORE_MIN
+            ),
+            "max_entry_scanner_rank": (
+                AUTO_TRADER_MAX_ENTRY_SCANNER_RANK
             ),
             "entry_confidence_min": (
                 AUTO_TRADER_ENTRY_CONFIDENCE_MIN
