@@ -15002,6 +15002,668 @@ def auto_trader_history(
     }
 
 
+
+def _profitability_group_summary(
+    trades: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    Summarize one profitability bucket.
+    """
+
+    count = len(trades)
+
+    if count == 0:
+        return {
+            "trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "breakeven": 0,
+            "win_rate_percent": None,
+            "total_realized_pl": 0.0,
+            "average_return_percent": None,
+            "average_mfe_percent": None,
+            "average_mae_percent": None,
+            "average_holding_minutes": None,
+        }
+
+    wins = 0
+    losses = 0
+    breakeven = 0
+
+    total_pl = 0.0
+
+    returns: list[float] = []
+    mfe_values: list[float] = []
+    mae_values: list[float] = []
+    holding_values: list[float] = []
+
+    for trade in trades:
+        pnl = safe_float(
+            trade.get(
+                "realized_profit_loss"
+            )
+        )
+
+        return_pct = safe_float(
+            trade.get(
+                "realized_return_percent"
+            )
+        )
+
+        learning = trade.get(
+            "learning"
+        )
+
+        if not isinstance(
+            learning,
+            dict,
+        ):
+            learning = {}
+
+        mfe = safe_float(
+            learning.get(
+                "mfe_percent"
+            )
+        )
+
+        mae = safe_float(
+            learning.get(
+                "mae_percent"
+            )
+        )
+
+        holding_seconds = safe_float(
+            learning.get(
+                "holding_seconds"
+            )
+        )
+
+        if pnl is not None:
+            total_pl += pnl
+
+            if pnl > 0:
+                wins += 1
+            elif pnl < 0:
+                losses += 1
+            else:
+                breakeven += 1
+
+        if return_pct is not None:
+            returns.append(
+                return_pct
+            )
+
+        if mfe is not None:
+            mfe_values.append(
+                mfe
+            )
+
+        if mae is not None:
+            mae_values.append(
+                mae
+            )
+
+        if (
+            holding_seconds is not None
+            and holding_seconds >= 0
+        ):
+            holding_values.append(
+                holding_seconds / 60.0
+            )
+
+    return {
+        "trades": count,
+        "wins": wins,
+        "losses": losses,
+        "breakeven": breakeven,
+        "win_rate_percent": round(
+            (
+                wins
+                / count
+                * 100.0
+            ),
+            2,
+        ),
+        "total_realized_pl": round(
+            total_pl,
+            2,
+        ),
+        "average_return_percent": (
+            round(
+                sum(returns)
+                / len(returns),
+                4,
+            )
+            if returns
+            else None
+        ),
+        "average_mfe_percent": (
+            round(
+                sum(mfe_values)
+                / len(mfe_values),
+                4,
+            )
+            if mfe_values
+            else None
+        ),
+        "average_mae_percent": (
+            round(
+                sum(mae_values)
+                / len(mae_values),
+                4,
+            )
+            if mae_values
+            else None
+        ),
+        "average_holding_minutes": (
+            round(
+                sum(holding_values)
+                / len(holding_values),
+                2,
+            )
+            if holding_values
+            else None
+        ),
+    }
+
+
+def build_profitability_analysis(
+    trades: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    Analyze complete canonical PAPER trades.
+
+    This is diagnostics only. It does not alter
+    trading settings or place orders.
+    """
+
+    complete_trades = [
+        trade
+        for trade in trades
+        if (
+            isinstance(
+                trade,
+                dict,
+            )
+            and trade.get(
+                "pnl_complete"
+            )
+            is not False
+            and trade.get(
+                "status"
+            )
+            == "CLOSED"
+        )
+    ]
+
+    score_bands: dict[
+        str,
+        list[dict[str, Any]],
+    ] = {
+        "75-79": [],
+        "80-84": [],
+        "85-89": [],
+        "90-94": [],
+        "95+": [],
+        "unknown": [],
+    }
+
+    rank_bands: dict[
+        str,
+        list[dict[str, Any]],
+    ] = {
+        "1-5": [],
+        "6-10": [],
+        "11-20": [],
+        "21+": [],
+        "unknown": [],
+    }
+
+    holding_bands: dict[
+        str,
+        list[dict[str, Any]],
+    ] = {
+        "<5m": [],
+        "5-15m": [],
+        "15-30m": [],
+        "30-60m": [],
+        "1-4h": [],
+        "4h+": [],
+        "unknown": [],
+    }
+
+    exit_reason_groups: dict[
+        str,
+        list[dict[str, Any]],
+    ] = {}
+
+    excursion_trades: list[
+        dict[str, Any]
+    ] = []
+
+    for trade in complete_trades:
+        learning = trade.get(
+            "learning"
+        )
+
+        if not isinstance(
+            learning,
+            dict,
+        ):
+            learning = {}
+
+        score = safe_float(
+            learning.get(
+                "entry_score"
+            )
+        )
+
+        rank = safe_float(
+            learning.get(
+                "scanner_rank"
+            )
+        )
+
+        holding_seconds = safe_float(
+            learning.get(
+                "holding_seconds"
+            )
+        )
+
+        mfe = safe_float(
+            learning.get(
+                "mfe_percent"
+            )
+        )
+
+        mae = safe_float(
+            learning.get(
+                "mae_percent"
+            )
+        )
+
+        # ----------------------------
+        # Entry score bands
+        # ----------------------------
+
+        if score is None:
+            score_key = "unknown"
+        elif score < 80:
+            score_key = "75-79"
+        elif score < 85:
+            score_key = "80-84"
+        elif score < 90:
+            score_key = "85-89"
+        elif score < 95:
+            score_key = "90-94"
+        else:
+            score_key = "95+"
+
+        score_bands[
+            score_key
+        ].append(
+            trade
+        )
+
+        # ----------------------------
+        # Scanner-rank bands
+        # ----------------------------
+
+        if rank is None:
+            rank_key = "unknown"
+        elif rank <= 5:
+            rank_key = "1-5"
+        elif rank <= 10:
+            rank_key = "6-10"
+        elif rank <= 20:
+            rank_key = "11-20"
+        else:
+            rank_key = "21+"
+
+        rank_bands[
+            rank_key
+        ].append(
+            trade
+        )
+
+        # ----------------------------
+        # Holding-time bands
+        # ----------------------------
+
+        if holding_seconds is None:
+            holding_key = "unknown"
+        elif holding_seconds < 300:
+            holding_key = "<5m"
+        elif holding_seconds < 900:
+            holding_key = "5-15m"
+        elif holding_seconds < 1800:
+            holding_key = "15-30m"
+        elif holding_seconds < 3600:
+            holding_key = "30-60m"
+        elif holding_seconds < 14400:
+            holding_key = "1-4h"
+        else:
+            holding_key = "4h+"
+
+        holding_bands[
+            holding_key
+        ].append(
+            trade
+        )
+
+        # ----------------------------
+        # Exit reason
+        # ----------------------------
+
+        exit_reason = str(
+            trade.get(
+                "exit_reason"
+            )
+            or "unknown"
+        )
+
+        exit_reason_groups.setdefault(
+            exit_reason,
+            [],
+        ).append(
+            trade
+        )
+
+        if (
+            mfe is not None
+            and mae is not None
+        ):
+            excursion_trades.append(
+                trade
+            )
+
+    winners_with_excursion = [
+        trade
+        for trade in excursion_trades
+        if (
+            safe_float(
+                trade.get(
+                    "realized_profit_loss"
+                )
+            )
+            or 0.0
+        )
+        > 0
+    ]
+
+    losers_with_excursion = [
+        trade
+        for trade in excursion_trades
+        if (
+            safe_float(
+                trade.get(
+                    "realized_profit_loss"
+                )
+            )
+            or 0.0
+        )
+        < 0
+    ]
+
+    losers_profitable_first = []
+
+    losers_never_worked = []
+
+    for trade in losers_with_excursion:
+        learning = trade.get(
+            "learning"
+        )
+
+        if not isinstance(
+            learning,
+            dict,
+        ):
+            continue
+
+        mfe = safe_float(
+            learning.get(
+                "mfe_percent"
+            )
+        )
+
+        if mfe is None:
+            continue
+
+        if mfe >= 0.5:
+            losers_profitable_first.append(
+                trade
+            )
+
+        if mfe < 0.25:
+            losers_never_worked.append(
+                trade
+            )
+
+    score_summary = {
+        key: _profitability_group_summary(
+            rows
+        )
+        for key, rows
+        in score_bands.items()
+    }
+
+    rank_summary = {
+        key: _profitability_group_summary(
+            rows
+        )
+        for key, rows
+        in rank_bands.items()
+    }
+
+    holding_summary = {
+        key: _profitability_group_summary(
+            rows
+        )
+        for key, rows
+        in holding_bands.items()
+    }
+
+    exit_reason_summary = {
+        key: _profitability_group_summary(
+            rows
+        )
+        for key, rows
+        in sorted(
+            exit_reason_groups.items()
+        )
+    }
+
+    observations: list[str] = []
+
+    enough_excursion_data = (
+        len(excursion_trades)
+        >= 30
+    )
+
+    if not enough_excursion_data:
+        observations.append(
+            (
+                "Excursion sample is still small. "
+                "Do not automatically change entry "
+                "or exit thresholds from this data yet."
+            )
+        )
+
+    loser_excursion_summary = (
+        _profitability_group_summary(
+            losers_with_excursion
+        )
+    )
+
+    winner_excursion_summary = (
+        _profitability_group_summary(
+            winners_with_excursion
+        )
+    )
+
+    loser_avg_mfe = safe_float(
+        loser_excursion_summary.get(
+            "average_mfe_percent"
+        )
+    )
+
+    winner_avg_mfe = safe_float(
+        winner_excursion_summary.get(
+            "average_mfe_percent"
+        )
+    )
+
+    if (
+        loser_avg_mfe is not None
+        and winner_avg_mfe is not None
+        and winner_avg_mfe
+        > loser_avg_mfe
+    ):
+        observations.append(
+            (
+                "Current excursion data suggests "
+                "winning trades move favorably much "
+                "more than losing trades. Entry "
+                "selection should be investigated "
+                "before loosening stops."
+            )
+        )
+
+    if losers_never_worked:
+        observations.append(
+            (
+                f"{len(losers_never_worked)} losing "
+                "trades had less than 0.25% favorable "
+                "excursion, suggesting weak entries "
+                "in the current sample."
+            )
+        )
+
+    if losers_profitable_first:
+        observations.append(
+            (
+                f"{len(losers_profitable_first)} losing "
+                "trades first reached at least +0.50% "
+                "MFE. These deserve exit/profit-lock "
+                "review."
+            )
+        )
+
+    return {
+        "paper": True,
+        "read_only": True,
+        "shadow_mode": True,
+        "automatic_strategy_changes": False,
+        "sample": {
+            "complete_trades": (
+                len(complete_trades)
+            ),
+            "excursion_trades": (
+                len(excursion_trades)
+            ),
+            "winners_with_excursion": (
+                len(
+                    winners_with_excursion
+                )
+            ),
+            "losers_with_excursion": (
+                len(
+                    losers_with_excursion
+                )
+            ),
+            "enough_excursion_data": (
+                enough_excursion_data
+            ),
+            "minimum_excursion_sample": 30,
+        },
+        "overall": (
+            _profitability_group_summary(
+                complete_trades
+            )
+        ),
+        "by_entry_score": (
+            score_summary
+        ),
+        "by_scanner_rank": (
+            rank_summary
+        ),
+        "by_holding_time": (
+            holding_summary
+        ),
+        "by_exit_reason": (
+            exit_reason_summary
+        ),
+        "excursion_analysis": {
+            "winners": (
+                winner_excursion_summary
+            ),
+            "losers": (
+                loser_excursion_summary
+            ),
+            "losers_profitable_first_count": (
+                len(
+                    losers_profitable_first
+                )
+            ),
+            "losers_never_worked_count": (
+                len(
+                    losers_never_worked
+                )
+            ),
+            "profitable_first_mfe_threshold": (
+                0.5
+            ),
+            "never_worked_mfe_threshold": (
+                0.25
+            ),
+        },
+        "observations": observations,
+    }
+
+
+@app.get(
+    "/auto-trader/profitability-analysis"
+)
+def auto_trader_profitability_analysis(
+    request: Request,
+) -> dict[str, Any]:
+    """
+    Read-only PAPER-trading profitability
+    diagnostics using canonical history.
+    """
+
+    require_app_session(
+        request
+    )
+
+    payload = auto_trader_history(
+        request=request,
+        limit=5000,
+    )
+
+    trades = payload.get(
+        "trades",
+        [],
+    )
+
+    if not isinstance(
+        trades,
+        list,
+    ):
+        trades = []
+
+    return build_profitability_analysis(
+        [
+            trade
+            for trade in trades
+            if isinstance(
+                trade,
+                dict,
+            )
+        ]
+    )
+
+
 def _trade_report_history(
     request: Request = None,
 ) -> list[dict[str, Any]]:
