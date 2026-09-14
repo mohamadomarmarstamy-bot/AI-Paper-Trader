@@ -8776,7 +8776,19 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 <= AUTO_TRADER_MAX_ENTRY_SCANNER_RANK
             )
 
-            preliminary_entry_pass = (
+            momentum_30_candidate = bool(
+                candidate.get(
+                    "momentum_30_candidate"
+                )
+            )
+
+            selected_strategy_version = (
+                "momentum_30_v1"
+                if momentum_30_candidate
+                else AUTO_TRADER_STRATEGY_VERSION
+            )
+
+            normal_entry_pass = (
                 signal == "BUY"
                 and score is not None
                 and score >= learning_score_min
@@ -8784,6 +8796,21 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 and confidence
                 >= learning_confidence_min
                 and scanner_rank_pass
+            )
+
+            momentum_entry_pass = (
+                momentum_30_candidate
+                and signal == "BUY"
+                and score is not None
+                and score >= learning_score_min
+                and confidence is not None
+                and confidence
+                >= learning_confidence_min
+            )
+
+            preliminary_entry_pass = (
+                normal_entry_pass
+                or momentum_entry_pass
             )
 
             if preliminary_entry_pass:
@@ -8821,7 +8848,7 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             # Every candidate must pass the FINAL,
             # learning, regime, and news-adjusted
             # requirements.
-            if not (
+            normal_entry_pass = (
                 signal == "BUY"
                 and score is not None
                 and score >= learning_score_min
@@ -8829,6 +8856,21 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 and confidence
                 >= learning_confidence_min
                 and scanner_rank_pass
+            )
+
+            momentum_entry_pass = (
+                momentum_30_candidate
+                and signal == "BUY"
+                and score is not None
+                and score >= learning_score_min
+                and confidence is not None
+                and confidence
+                >= learning_confidence_min
+            )
+
+            if not (
+                normal_entry_pass
+                or momentum_entry_pass
             ):
                 failed_requirements = []
 
@@ -9053,6 +9095,9 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                             reference_price
                         ),
                         scanner_result=candidate,
+                        strategy_version=(
+                            selected_strategy_version
+                        ),
                         entry_context={
                             # Execution / market quality.
                             "reference_price": (
@@ -9091,6 +9136,33 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                             ),
 
                             # Momentum.
+                            "strategy_version": (
+                                selected_strategy_version
+                            ),
+                            "momentum_30_candidate": (
+                                momentum_30_candidate
+                            ),
+                            "momentum_move_percent": (
+                                safe_float(
+                                    candidate.get(
+                                        "momentum_move_percent"
+                                    )
+                                )
+                            ),
+                            "momentum_min_move_percent": (
+                                safe_float(
+                                    candidate.get(
+                                        "momentum_min_move_percent"
+                                    )
+                                )
+                            ),
+                            "momentum_min_volume_ratio": (
+                                safe_float(
+                                    candidate.get(
+                                        "momentum_min_volume_ratio"
+                                    )
+                                )
+                            ),
                             "one_day_change": safe_float(
                                 candidate.get("change")
                             ),

@@ -713,6 +713,11 @@ def rank_candidate(
 # Stock analysis
 # =========================================================
 
+MOMENTUM_30_MIN_MOVE_PERCENT = 30.0
+MOMENTUM_30_MIN_VOLUME_RATIO = 1.5
+MOMENTUM_30_STRATEGY_VERSION = "momentum_30_v1"
+
+
 def analyze_stock(
     symbol: str,
     history: pd.DataFrame,
@@ -840,6 +845,20 @@ def analyze_stock(
         twenty_day_change=twenty_day_change,
     )
 
+    momentum_30_candidate = (
+        one_day_change
+        >= MOMENTUM_30_MIN_MOVE_PERCENT
+        and trend in {
+            "BULLISH",
+            "STRONG BULLISH",
+        }
+        and price > sma_20
+        and sma_20 >= sma_50
+        and macd > macd_signal
+        and volume_ratio
+        >= MOMENTUM_30_MIN_VOLUME_RATIO
+    )
+
     trade_plan = build_trade_plan(price)
 
     return {
@@ -848,6 +867,22 @@ def analyze_stock(
         "change": round(one_day_change, 2),
         "five_day_change": round(five_day_change, 2),
         "twenty_day_change": round(twenty_day_change, 2),
+        "momentum_30_candidate": momentum_30_candidate,
+        "momentum_strategy_version": (
+            MOMENTUM_30_STRATEGY_VERSION
+            if momentum_30_candidate
+            else None
+        ),
+        "momentum_move_percent": round(
+            one_day_change,
+            2,
+        ),
+        "momentum_min_move_percent": (
+            MOMENTUM_30_MIN_MOVE_PERCENT
+        ),
+        "momentum_min_volume_ratio": (
+            MOMENTUM_30_MIN_VOLUME_RATIO
+        ),
         "score": ranking["score"],
         "scanner_score": ranking["score"],
         "signal": ranking["signal"],
