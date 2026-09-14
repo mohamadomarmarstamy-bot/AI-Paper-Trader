@@ -9288,6 +9288,40 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 "symbol": symbol,
                 "shares": shares,
                 "score": score,
+                "strategy_version": (
+                    selected_strategy_version
+                ),
+                "momentum_30_candidate": (
+                    momentum_30_candidate
+                ),
+                "momentum_move_percent": (
+                    safe_float(
+                        candidate.get(
+                            "momentum_move_percent"
+                        )
+                    )
+                ),
+                "momentum_trend": (
+                    candidate.get("trend")
+                ),
+                "volume_ratio": (
+                    safe_float(
+                        candidate.get(
+                            "volume_ratio"
+                        )
+                    )
+                ),
+                "scanner_rank": scanner_rank,
+                "entry_success": (
+                    bool(
+                        entry_result.get("success")
+                    )
+                    if isinstance(
+                        entry_result,
+                        dict,
+                    )
+                    else False
+                ),
                 "confidence": (
                     confidence
                 ),
