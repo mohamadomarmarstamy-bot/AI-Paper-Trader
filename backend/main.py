@@ -209,6 +209,10 @@ AUTO_TRADER_MAX_ENTRY_ATR_PERCENT = 8.0
 # results for scanner ranks above 20.
 AUTO_TRADER_MAX_ENTRY_SCANNER_RANK = 20
 
+# Version tag for new PAPER trades so strategy
+# performance can be compared over time.
+AUTO_TRADER_STRATEGY_VERSION = "rank20_v1"
+
 
 # ============================================================
 # LOGGING / LEARNING JOURNAL
@@ -6335,6 +6339,7 @@ def submit_alpaca_auto_bracket_buy(
     reference_price: float,
     scanner_result: dict[str, Any],
     entry_context: dict[str, Any] | None = None,
+    strategy_version: str = AUTO_TRADER_STRATEGY_VERSION,
 ) -> dict[str, Any]:
     """
     Submit an automatic PAPER buy with broker-native stop-loss and
@@ -6574,11 +6579,12 @@ def submit_alpaca_auto_bracket_buy(
                                 or None
                             ),
                             entry_reason="auto_trader_entry",
-                            strategy="scanner_auto_trader",
+                            strategy=strategy_version,
                         )
                     )
 
                     entry_event_details = {
+                        "strategy_version": strategy_version,
                         "score": scanner_result.get(
                             "score"
                         ),
@@ -6616,6 +6622,10 @@ def submit_alpaca_auto_bracket_buy(
                             entry_context
                         )
 
+                    entry_event_details[
+                        "strategy_version"
+                    ] = strategy_version
+
                     record_trade_book_event(
                         trade_book_id=trade_book_id,
                         symbol=normalized_symbol,
@@ -6626,6 +6636,9 @@ def submit_alpaca_auto_bracket_buy(
 
                     result["trade_book_id"] = (
                         trade_book_id
+                    )
+                    result["strategy_version"] = (
+                        strategy_version
                     )
 
             except Exception as error:
