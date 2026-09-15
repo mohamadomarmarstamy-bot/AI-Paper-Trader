@@ -845,18 +845,41 @@ def analyze_stock(
         twenty_day_change=twenty_day_change,
     )
 
-    momentum_30_candidate = (
-        one_day_change
-        >= MOMENTUM_30_MIN_MOVE_PERCENT
-        and trend in {
-            "BULLISH",
-            "STRONG BULLISH",
-        }
-        and price > sma_20
-        and sma_20 >= sma_50
-        and macd > macd_signal
-        and volume_ratio
-        >= MOMENTUM_30_MIN_VOLUME_RATIO
+    momentum_30_checks = {
+        "move_30_pass": (
+            one_day_change
+            >= MOMENTUM_30_MIN_MOVE_PERCENT
+        ),
+        "bullish_trend_pass": (
+            trend in {
+                "BULLISH",
+                "STRONG BULLISH",
+            }
+        ),
+        "above_ma20_pass": (
+            price > sma_20
+        ),
+        "ma_alignment_pass": (
+            sma_20 >= sma_50
+        ),
+        "macd_pass": (
+            macd > macd_signal
+        ),
+        "volume_pass": (
+            volume_ratio
+            >= MOMENTUM_30_MIN_VOLUME_RATIO
+        ),
+    }
+
+    momentum_30_failed_checks = [
+        check_name
+        for check_name, passed
+        in momentum_30_checks.items()
+        if not passed
+    ]
+
+    momentum_30_candidate = all(
+        momentum_30_checks.values()
     )
 
     trade_plan = build_trade_plan(price)
@@ -868,6 +891,12 @@ def analyze_stock(
         "five_day_change": round(five_day_change, 2),
         "twenty_day_change": round(twenty_day_change, 2),
         "momentum_30_candidate": momentum_30_candidate,
+        "momentum_30_checks": (
+            momentum_30_checks
+        ),
+        "momentum_30_failed_checks": (
+            momentum_30_failed_checks
+        ),
         "momentum_strategy_version": (
             MOMENTUM_30_STRATEGY_VERSION
             if momentum_30_candidate
@@ -1569,13 +1598,3 @@ def score_symbol_news_context(
             set(negative_hits)
         ),
     }
-
-
-
-
-
-
-
-
-
-
