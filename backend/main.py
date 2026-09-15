@@ -15432,6 +15432,15 @@ def build_profitability_analysis(
         list[dict[str, Any]],
     ] = {}
 
+    strategy_groups: dict[
+        str,
+        list[dict[str, Any]],
+    ] = {
+        "rank20_v1": [],
+        "momentum_30_v1": [],
+        "legacy_or_unknown": [],
+    }
+
     excursion_trades: list[
         dict[str, Any]
     ] = []
@@ -15564,6 +15573,27 @@ def build_profitability_analysis(
             trade
         )
 
+        # ----------------------------
+        # Strategy version
+        # ----------------------------
+
+        strategy = str(
+            trade.get("strategy")
+            or ""
+        ).strip()
+
+        if strategy not in {
+            "rank20_v1",
+            "momentum_30_v1",
+        }:
+            strategy = "legacy_or_unknown"
+
+        strategy_groups[
+            strategy
+        ].append(
+            trade
+        )
+
         if (
             mfe is not None
             and mae is not None
@@ -15666,6 +15696,14 @@ def build_profitability_analysis(
         in sorted(
             exit_reason_groups.items()
         )
+    }
+
+    strategy_summary = {
+        key: _profitability_group_summary(
+            rows
+        )
+        for key, rows
+        in strategy_groups.items()
     }
 
     observations: list[str] = []
@@ -15787,6 +15825,9 @@ def build_profitability_analysis(
         ),
         "by_exit_reason": (
             exit_reason_summary
+        ),
+        "by_strategy": (
+            strategy_summary
         ),
         "excursion_analysis": {
             "winners": (
