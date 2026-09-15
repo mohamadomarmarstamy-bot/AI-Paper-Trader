@@ -8920,6 +8920,18 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     "momentum_30_candidate": (
                         momentum_30_candidate
                     ),
+                    "momentum_30_checks": (
+                        candidate.get(
+                            "momentum_30_checks",
+                            {},
+                        )
+                    ),
+                    "momentum_30_failed_checks": (
+                        candidate.get(
+                            "momentum_30_failed_checks",
+                            [],
+                        )
+                    ),
                     "momentum_move_percent": (
                         safe_float(
                             candidate.get(
