@@ -11340,6 +11340,423 @@ def auto_trader_excursions(
 # Pro Ticker research routes
 # =========================================================
 
+def build_pro_ticker_learning_analysis(
+    *,
+    limit: int = 5000,
+) -> dict[str, Any]:
+    rows = load_pro_ticker_research(
+        limit=limit,
+    )
+
+    total = len(rows)
+
+    direction_counts = {
+        "LONG": 0,
+        "SHORT": 0,
+        "UNKNOWN": 0,
+    }
+
+    setup_counts: dict[str, int] = {}
+    feature_counts: dict[str, int] = {}
+
+    actionable_level_count = 0
+    outcome_count = 0
+    scanner_seen_count = 0
+    bot_action_count = 0
+    skip_reason_count = 0
+
+    move_values: list[float] = []
+
+    feature_keys = (
+        "vwap_present",
+        "vwma_present",
+        "relative_volume_present",
+        "rsi_present",
+        "breakout_present",
+        "bull_flag_present",
+        "higher_lows_present",
+        "consolidation_present",
+        "exhaustion_present",
+        "parabolic_present",
+    )
+
+    examples: list[dict[str, Any]] = []
+
+    for row in rows:
+        direction = str(
+            row.get("direction") or ""
+        ).strip().upper()
+
+        if direction not in (
+            "LONG",
+            "SHORT",
+        ):
+            direction = "UNKNOWN"
+
+        direction_counts[direction] += 1
+
+        setup_type = str(
+            row.get("setup_type") or ""
+        ).strip().lower()
+
+        if setup_type:
+            setup_counts[setup_type] = (
+                setup_counts.get(
+                    setup_type,
+                    0,
+                )
+                + 1
+            )
+
+        long_level = row.get(
+            "long_level"
+        )
+        short_level = row.get(
+            "short_level"
+        )
+
+        if (
+            long_level is not None
+            or short_level is not None
+        ):
+            actionable_level_count += 1
+
+        move_value = row.get(
+            "reported_move_percent"
+        )
+
+        if move_value is not None:
+            try:
+                numeric_move = float(
+                    move_value
+                )
+
+                if math.isfinite(
+                    numeric_move
+                ):
+                    move_values.append(
+                        numeric_move
+                    )
+                    outcome_count += 1
+
+            except (
+                TypeError,
+                ValueError,
+            ):
+                pass
+
+        scanner_seen = row.get(
+            "our_scanner_seen"
+        )
+
+        if scanner_seen not in (
+            None,
+            0,
+            False,
+            "0",
+            "",
+        ):
+            scanner_seen_count += 1
+
+        if row.get(
+            "our_bot_action"
+        ):
+            bot_action_count += 1
+
+        if row.get(
+            "our_skip_reason"
+        ):
+            skip_reason_count += 1
+
+        raw_features = row.get(
+            "raw_features"
+        )
+
+        if not isinstance(
+            raw_features,
+            dict,
+        ):
+            raw_features = {}
+
+            raw_json = row.get(
+                "raw_features_json"
+            )
+
+            if isinstance(
+                raw_json,
+                str,
+            ):
+                try:
+                    parsed = json.loads(
+                        raw_json
+                    )
+
+                    if isinstance(
+                        parsed,
+                        dict,
+                    ):
+                        raw_features = parsed
+
+                except (
+                    TypeError,
+                    ValueError,
+                    json.JSONDecodeError,
+                ):
+                    pass
+
+        for key in feature_keys:
+            if bool(
+                raw_features.get(key)
+            ):
+                feature_counts[key] = (
+                    feature_counts.get(
+                        key,
+                        0,
+                    )
+                    + 1
+                )
+
+        examples.append(
+            {
+                "id": row.get("id"),
+                "symbol": row.get(
+                    "symbol"
+                ),
+                "published_date": row.get(
+                    "published_date"
+                ),
+                "alert_date": row.get(
+                    "alert_date"
+                ),
+                "alert_time": row.get(
+                    "alert_time"
+                ),
+                "direction": (
+                    row.get("direction")
+                ),
+                "long_level": long_level,
+                "short_level": (
+                    short_level
+                ),
+                "setup_type": (
+                    row.get("setup_type")
+                ),
+                "reported_move_percent": (
+                    move_value
+                ),
+                "our_scanner_seen": (
+                    scanner_seen
+                ),
+                "our_scanner_score": (
+                    row.get(
+                        "our_scanner_score"
+                    )
+                ),
+                "our_scanner_confidence": (
+                    row.get(
+                        "our_scanner_confidence"
+                    )
+                ),
+                "our_scanner_rank": (
+                    row.get(
+                        "our_scanner_rank"
+                    )
+                ),
+                "our_bot_action": (
+                    row.get(
+                        "our_bot_action"
+                    )
+                ),
+                "our_skip_reason": (
+                    row.get(
+                        "our_skip_reason"
+                    )
+                ),
+                "article_title": (
+                    row.get(
+                        "article_title"
+                    )
+                ),
+            }
+        )
+
+    missing_alert_date = sum(
+        1
+        for row in rows
+        if not row.get("alert_date")
+    )
+
+    missing_alert_time = sum(
+        1
+        for row in rows
+        if not row.get("alert_time")
+    )
+
+    missing_direction = (
+        direction_counts["UNKNOWN"]
+    )
+
+    missing_level = (
+        total - actionable_level_count
+    )
+
+    sorted_features = dict(
+        sorted(
+            feature_counts.items(),
+            key=lambda item: (
+                -item[1],
+                item[0],
+            ),
+        )
+    )
+
+    sorted_setups = dict(
+        sorted(
+            setup_counts.items(),
+            key=lambda item: (
+                -item[1],
+                item[0],
+            ),
+        )
+    )
+
+    return {
+        "paper": True,
+        "research_only": True,
+        "automatic_strategy_changes": False,
+        "sample": {
+            "articles": total,
+            "directions": (
+                direction_counts
+            ),
+            "articles_with_actionable_level": (
+                actionable_level_count
+            ),
+            "articles_with_reported_outcome": (
+                outcome_count
+            ),
+            "scanner_seen": (
+                scanner_seen_count
+            ),
+            "bot_actions_recorded": (
+                bot_action_count
+            ),
+            "skip_reasons_recorded": (
+                skip_reason_count
+            ),
+        },
+        "reported_outcomes": {
+            "count": len(
+                move_values
+            ),
+            "average_move_percent": (
+                round(
+                    sum(move_values)
+                    / len(move_values),
+                    4,
+                )
+                if move_values
+                else None
+            ),
+            "minimum_move_percent": (
+                round(
+                    min(move_values),
+                    4,
+                )
+                if move_values
+                else None
+            ),
+            "maximum_move_percent": (
+                round(
+                    max(move_values),
+                    4,
+                )
+                if move_values
+                else None
+            ),
+            "warning": (
+                "Reported move percentages are "
+                "retrospective outcome data and "
+                "must not be used as information "
+                "available at entry."
+            ),
+        },
+        "setup_counts": sorted_setups,
+        "feature_counts": (
+            sorted_features
+        ),
+        "missing_data": {
+            "alert_date": (
+                missing_alert_date
+            ),
+            "alert_time": (
+                missing_alert_time
+            ),
+            "direction": (
+                missing_direction
+            ),
+            "actionable_level": (
+                missing_level
+            ),
+        },
+        "decision_coverage": {
+            "scanner_seen_percent": (
+                round(
+                    (
+                        scanner_seen_count
+                        / total
+                        * 100.0
+                    ),
+                    2,
+                )
+                if total
+                else 0.0
+            ),
+            "bot_action_percent": (
+                round(
+                    (
+                        bot_action_count
+                        / total
+                        * 100.0
+                    ),
+                    2,
+                )
+                if total
+                else 0.0
+            ),
+        },
+        "ready_for_strategy_conclusions": (
+            total >= 30
+            and scanner_seen_count >= 20
+            and bot_action_count >= 20
+        ),
+        "minimum_research_sample": 30,
+        "examples": examples,
+    }
+
+
+@app.get(
+    "/auto-trader/pro-ticker-learning"
+)
+def auto_trader_pro_ticker_learning(
+    request: Request,
+    limit: int = Query(
+        default=1000,
+        ge=1,
+        le=5000,
+    ),
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    return (
+        build_pro_ticker_learning_analysis(
+            limit=limit,
+        )
+    )
+
+
 @app.get("/auto-trader/pro-ticker-research")
 def auto_trader_pro_ticker_research(
     request: Request,
