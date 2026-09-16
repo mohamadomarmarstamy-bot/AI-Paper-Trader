@@ -2112,12 +2112,30 @@ def upsert_pro_ticker_research(
                 exhaustion_context = excluded.exhaustion_context,
                 article_summary = excluded.article_summary,
                 raw_features_json = excluded.raw_features_json,
-                our_scanner_seen = excluded.our_scanner_seen,
-                our_scanner_score = excluded.our_scanner_score,
-                our_scanner_confidence = excluded.our_scanner_confidence,
-                our_scanner_rank = excluded.our_scanner_rank,
-                our_bot_action = excluded.our_bot_action,
-                our_skip_reason = excluded.our_skip_reason,
+                our_scanner_seen = COALESCE(
+                    excluded.our_scanner_seen,
+                    pro_ticker_research.our_scanner_seen
+                ),
+                our_scanner_score = COALESCE(
+                    excluded.our_scanner_score,
+                    pro_ticker_research.our_scanner_score
+                ),
+                our_scanner_confidence = COALESCE(
+                    excluded.our_scanner_confidence,
+                    pro_ticker_research.our_scanner_confidence
+                ),
+                our_scanner_rank = COALESCE(
+                    excluded.our_scanner_rank,
+                    pro_ticker_research.our_scanner_rank
+                ),
+                our_bot_action = COALESCE(
+                    excluded.our_bot_action,
+                    pro_ticker_research.our_bot_action
+                ),
+                our_skip_reason = COALESCE(
+                    excluded.our_skip_reason,
+                    pro_ticker_research.our_skip_reason
+                ),
                 updated_at = excluded.updated_at
             """,
             values,
