@@ -13682,6 +13682,60 @@ def auto_trader_scheduler_state(
     }
 
 
+@app.get("/auto-trader/broker-order/{order_id}")
+def auto_trader_broker_order(
+    request: Request,
+    order_id: str,
+) -> dict[str, Any]:
+    """
+    Read-only diagnostic for one Alpaca PAPER order.
+    """
+
+    require_app_session(
+        request
+    )
+
+    order = get_alpaca_paper_order(
+        order_id
+    )
+
+    fields = (
+        "id",
+        "client_order_id",
+        "symbol",
+        "side",
+        "type",
+        "order_type",
+        "order_class",
+        "time_in_force",
+        "status",
+        "qty",
+        "filled_qty",
+        "filled_avg_price",
+        "limit_price",
+        "stop_price",
+        "created_at",
+        "submitted_at",
+        "updated_at",
+        "filled_at",
+        "expired_at",
+        "canceled_at",
+        "failed_at",
+        "replaced_at",
+        "replaced_by",
+        "replaces",
+    )
+
+    return {
+        "success": True,
+        "paper": True,
+        "order": {
+            field: order.get(field)
+            for field in fields
+        },
+    }
+
+
 @app.get("/auto-trader/broker-fills/backup-status")
 def auto_trader_broker_fill_backup_status(
     request: Request,
