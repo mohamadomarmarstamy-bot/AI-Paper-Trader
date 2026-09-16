@@ -4,36 +4,47 @@ import time
 from typing import Any, Callable
 
 
-CACHE_SECONDS = 15 * 60
+# The tradable Alpaca asset list changes relatively slowly.
+ASSET_CACHE_SECONDS = 15 * 60
 
-_universe_cache: dict[str, Any] = {
+# Movers and most-actives are time-sensitive.
+# Refresh these much more frequently so sudden movers are discovered.
+HOT_UNIVERSE_CACHE_SECONDS = 60
+
+
+_asset_cache: dict[str, Any] = {
+    "symbols": [],
+    "updated_at": 0.0,
+}
+
+_hot_universe_cache: dict[str, Any] = {
     "symbols": [],
     "updated_at": 0.0,
 }
 
 
-def load_momentum_universe(
+def _load_allowed_symbols(
     *,
     request_func: Callable[..., Any],
-    market_data_request_func: Callable[..., Any] | None = None,
     force_refresh: bool = False,
 ) -> list[str]:
     """
-    Load all active, tradable US equity symbols available through Alpaca.
+    Load active, tradable US equities from Alpaca.
 
-    This is intentionally separate from the legacy S&P 500 universe.
+    This list is relatively stable, so it is cached separately
+    from the fast-moving screener candidate universe.
     """
     current_time = time.time()
 
     cached_symbols = list(
-        _universe_cache.get(
+        _asset_cache.get(
             "symbols",
             [],
         )
     )
 
     cached_time = float(
-        _universe_cache.get(
+        _asset_cache.get(
             "updated_at",
             0.0,
         )
@@ -43,7 +54,7 @@ def load_momentum_universe(
     cache_is_valid = (
         bool(cached_symbols)
         and current_time - cached_time
-        < CACHE_SECONDS
+        < ASSET_CACHE_SECONDS
     )
 
     if (
@@ -79,6 +90,17 @@ def load_momentum_universe(
         "AMEX",
         "ARCA",
     }
+
+    excluded_name_terms = (
+        " warrant",
+        " warrants",
+        " right",
+        " rights",
+        " unit",
+        " units",
+        " preferred",
+        " depositary preferred",
+    )
 
     for asset in payload:
         if not isinstance(
@@ -128,17 +150,6 @@ def load_momentum_universe(
             )
         ).strip().lower()
 
-        excluded_name_terms = (
-            " warrant",
-            " warrants",
-            " right",
-            " rights",
-            " unit",
-            " units",
-            " preferred",
-            " depositary preferred",
-        )
-
         if any(
             term in asset_name
             for term in excluded_name_terms
@@ -161,7 +172,67 @@ def load_momentum_universe(
             "were returned by Alpaca."
         )
 
-    allowed_symbols = set(symbols)
+    _asset_cache[
+        "symbols"
+    ] = symbols.copy()
+
+    _asset_cache[
+        "updated_at"
+    ] = time.time()
+
+    return symbols.copy()
+
+
+def load_momentum_universe(
+    *,
+    request_func: Callable[..., Any],
+    market_data_request_func: Callable[..., Any] | None = None,
+    force_refresh: bool = False,
+) -> list[str]:
+    """
+    Build a fast-refreshing momentum universe.
+
+    The broad tradable asset list is cached for 15 minutes,
+    while Alpaca most-actives and movers refresh every minute.
+    """
+    allowed_symbols_list = _load_allowed_symbols(
+        request_func=request_func,
+        force_refresh=force_refresh,
+    )
+
+    allowed_symbols = set(
+        allowed_symbols_list
+    )
+
+    current_time = time.time()
+
+    cached_hot_symbols = list(
+        _hot_universe_cache.get(
+            "symbols",
+            [],
+        )
+    )
+
+    cached_hot_time = float(
+        _hot_universe_cache.get(
+            "updated_at",
+            0.0,
+        )
+        or 0.0
+    )
+
+    hot_cache_is_valid = (
+        bool(cached_hot_symbols)
+        and current_time - cached_hot_time
+        < HOT_UNIVERSE_CACHE_SECONDS
+    )
+
+    if (
+        hot_cache_is_valid
+        and not force_refresh
+    ):
+        return cached_hot_symbols.copy()
+
     candidate_symbols: list[str] = []
     candidate_seen: set[str] = set()
 
@@ -177,12 +248,18 @@ def load_momentum_universe(
                 timeout=15.0,
             )
 
-            if isinstance(most_active_payload, dict):
+            if isinstance(
+                most_active_payload,
+                dict,
+            ):
                 for item in most_active_payload.get(
                     "most_actives",
                     [],
                 ):
-                    if not isinstance(item, dict):
+                    if not isinstance(
+                        item,
+                        dict,
+                    ):
                         continue
 
                     symbol = str(
@@ -196,11 +273,18 @@ def load_momentum_universe(
                         symbol in allowed_symbols
                         and symbol not in candidate_seen
                     ):
-                        candidate_symbols.append(symbol)
-                        candidate_seen.add(symbol)
+                        candidate_symbols.append(
+                            symbol
+                        )
+                        candidate_seen.add(
+                            symbol
+                        )
 
-        except Exception:
-            pass
+        except Exception as error:
+            print(
+                "Alpaca most-actives request failed: "
+                f"{error}"
+            )
 
         try:
             movers_payload = market_data_request_func(
@@ -212,7 +296,10 @@ def load_momentum_universe(
                 timeout=15.0,
             )
 
-            if isinstance(movers_payload, dict):
+            if isinstance(
+                movers_payload,
+                dict,
+            ):
                 for group_name in (
                     "gainers",
                     "losers",
@@ -221,7 +308,10 @@ def load_momentum_universe(
                         group_name,
                         [],
                     ):
-                        if not isinstance(item, dict):
+                        if not isinstance(
+                            item,
+                            dict,
+                        ):
                             continue
 
                         symbol = str(
@@ -235,27 +325,40 @@ def load_momentum_universe(
                             symbol in allowed_symbols
                             and symbol not in candidate_seen
                         ):
-                            candidate_symbols.append(symbol)
-                            candidate_seen.add(symbol)
+                            candidate_symbols.append(
+                                symbol
+                            )
+                            candidate_seen.add(
+                                symbol
+                            )
 
-        except Exception:
-            pass
+        except Exception as error:
+            print(
+                "Alpaca movers request failed: "
+                f"{error}"
+            )
 
     if candidate_symbols:
-        symbols = candidate_symbols
+        hot_symbols = candidate_symbols
+    elif cached_hot_symbols:
+        print(
+            "No fresh Alpaca momentum candidates "
+            "were returned; using the previous hot universe."
+        )
+        hot_symbols = cached_hot_symbols
+    else:
+        print(
+            "No Alpaca momentum candidates were returned; "
+            "using the allowed tradable universe."
+        )
+        hot_symbols = allowed_symbols_list
 
-    _universe_cache[
+    _hot_universe_cache[
         "symbols"
-    ] = symbols.copy()
+    ] = hot_symbols.copy()
 
-    _universe_cache[
+    _hot_universe_cache[
         "updated_at"
     ] = time.time()
 
-    return symbols.copy()
-
-
-
-
-
-
+    return hot_symbols.copy()
