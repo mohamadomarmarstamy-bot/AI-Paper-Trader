@@ -281,6 +281,10 @@ def discover_pro_ticker_articles(
 
     rejected_articles = 0
 
+    rejected_article_samples: list[
+        dict[str, Any]
+    ] = []
+
     for article_url, source_page in list(
         candidate_pages.items()
     )[:article_limit]:
@@ -327,6 +331,41 @@ def discover_pro_ticker_articles(
                 or not has_signal_language
             ):
                 rejected_articles += 1
+
+                if len(
+                    rejected_article_samples
+                ) < 50:
+                    if (
+                        not has_ticker
+                        and not has_signal_language
+                    ):
+                        rejection_reason = (
+                            "missing_ticker_and_signal_language"
+                        )
+                    elif not has_ticker:
+                        rejection_reason = (
+                            "missing_ticker"
+                        )
+                    else:
+                        rejection_reason = (
+                            "missing_signal_language"
+                        )
+
+                    rejected_article_samples.append(
+                        {
+                            "article_url": article_url,
+                            "article_title": title,
+                            "source_page": source_page,
+                            "has_ticker": has_ticker,
+                            "has_signal_language": (
+                                has_signal_language
+                            ),
+                            "rejection_reason": (
+                                rejection_reason
+                            ),
+                        }
+                    )
+
                 continue
 
             symbol = _extract_symbol(
@@ -394,6 +433,9 @@ def discover_pro_ticker_articles(
         ),
         "rejected_articles": (
             rejected_articles
+        ),
+        "rejected_article_samples": (
+            rejected_article_samples
         ),
         "article_errors": len(
             article_errors
