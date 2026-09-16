@@ -11603,9 +11603,9 @@ def auto_trader_pro_ticker_daily_recap(
 def auto_trader_pro_ticker_fresh_scan(
     request: Request,
     pages: int = Query(
-        default=10,
+        default=50,
         ge=1,
-        le=40,
+        le=50,
     ),
     send_email: bool = Query(
         default=True,

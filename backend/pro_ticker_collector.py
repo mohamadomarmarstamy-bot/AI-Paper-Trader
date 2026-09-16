@@ -27,7 +27,10 @@ PRO_TICKER_LATEST_NEWS_URL = (
     "https://www.protickersignals.com/latestnews"
 )
 
-PRO_TICKER_DISCOVERY_MAX_PAGES = 10
+PRO_TICKER_DISCOVERY_MAX_PAGES = 50
+PRO_TICKER_DISCOVERY_MAX_ARTICLES = 500
+
+_last_pro_ticker_discovery_diagnostics: dict[str, Any] = {}
 
 USER_AGENT = (
     "AI-Paper-Trader-Research/1.0 "
@@ -135,6 +138,8 @@ def discover_pro_ticker_articles(
     max_pages: int = 3,
     max_articles: int = 50,
 ) -> list[dict[str, Any]]:
+    global _last_pro_ticker_discovery_diagnostics
+
     from lxml import html as lxml_html
 
     first_page = max(
@@ -154,7 +159,7 @@ def discover_pro_ticker_articles(
         1,
         min(
             int(max_articles),
-            200,
+            PRO_TICKER_DISCOVERY_MAX_ARTICLES,
         ),
     )
 
@@ -163,10 +168,18 @@ def discover_pro_ticker_articles(
         int,
     ] = {}
 
+    attempted_pages: list[int] = []
+    successful_pages: list[int] = []
+    failed_pages: list[dict[str, Any]] = []
+
+    duplicate_links = 0
+
     for page_number in range(
         first_page,
         first_page + page_count,
     ):
+        attempted_pages.append(page_number)
+
         if page_number == 1:
             page_url = (
                 PRO_TICKER_LATEST_NEWS_URL
@@ -177,13 +190,34 @@ def discover_pro_ticker_articles(
                 f"?post_page={page_number}"
             )
 
-        html = _fetch_public_html(
-            page_url
-        )
+        try:
+            html = _fetch_public_html(
+                page_url
+            )
 
-        document = lxml_html.fromstring(
-            html
-        )
+            document = lxml_html.fromstring(
+                html
+            )
+
+            successful_pages.append(
+                page_number
+            )
+
+        except Exception as error:
+            failed_pages.append(
+                {
+                    "page": page_number,
+                    "url": page_url,
+                    "error": str(error),
+                }
+            )
+
+            print(
+                "Pro Ticker discovery page failed "
+                f"{page_number}: {error}"
+            )
+
+            continue
 
         for link in document.xpath(
             "//a[@href]"
@@ -229,14 +263,23 @@ def discover_pro_ticker_articles(
                 f"{clean_path}"
             )
 
-            if clean_url not in candidate_pages:
-                candidate_pages[
-                    clean_url
-                ] = page_number
+            if clean_url in candidate_pages:
+                duplicate_links += 1
+                continue
+
+            candidate_pages[
+                clean_url
+            ] = page_number
 
     discovered: list[
         dict[str, Any]
     ] = []
+
+    article_errors: list[
+        dict[str, Any]
+    ] = []
+
+    rejected_articles = 0
 
     for article_url, source_page in list(
         candidate_pages.items()
@@ -283,6 +326,7 @@ def discover_pro_ticker_articles(
                 not has_ticker
                 or not has_signal_language
             ):
+                rejected_articles += 1
                 continue
 
             symbol = _extract_symbol(
@@ -300,10 +344,64 @@ def discover_pro_ticker_articles(
             )
 
         except Exception as error:
+            article_errors.append(
+                {
+                    "article_url": article_url,
+                    "source_page": source_page,
+                    "error": str(error),
+                }
+            )
+
             print(
                 "Pro Ticker discovery skipped "
                 f"{article_url}: {error}"
             )
+
+    _last_pro_ticker_discovery_diagnostics = {
+        "start_page": first_page,
+        "pages_requested": page_count,
+        "pages_attempted": len(
+            attempted_pages
+        ),
+        "pages_succeeded": len(
+            successful_pages
+        ),
+        "pages_failed": len(
+            failed_pages
+        ),
+        "attempted_page_numbers": (
+            attempted_pages
+        ),
+        "successful_page_numbers": (
+            successful_pages
+        ),
+        "failed_page_details": (
+            failed_pages
+        ),
+        "unique_article_links": len(
+            candidate_pages
+        ),
+        "duplicate_links": (
+            duplicate_links
+        ),
+        "article_limit": article_limit,
+        "articles_checked": min(
+            len(candidate_pages),
+            article_limit,
+        ),
+        "signal_articles_discovered": len(
+            discovered
+        ),
+        "rejected_articles": (
+            rejected_articles
+        ),
+        "article_errors": len(
+            article_errors
+        ),
+        "article_error_details": (
+            article_errors
+        ),
+    }
 
     return discovered
 
@@ -907,20 +1005,22 @@ def parse_pro_ticker_article(
 
 def run_pro_ticker_fresh_scan(
     *,
-    pages: int = 10,
+    pages: int = 50,
 ) -> dict[str, Any]:
+    global _last_pro_ticker_discovery_diagnostics
+
     page_count = max(
         1,
         min(
             int(pages),
-            40,
+            50,
         ),
     )
 
     discovered = discover_pro_ticker_articles(
         start_page=1,
         max_pages=page_count,
-        max_articles=200,
+        max_articles=500,
     )
 
     collected: list[
@@ -992,8 +1092,41 @@ def run_pro_ticker_fresh_scan(
                 }
             )
 
+    discovery_diagnostics = dict(
+        _last_pro_ticker_discovery_diagnostics
+    )
+
     return {
-        "pages_scanned": page_count,
+        "pages_scanned": (
+            discovery_diagnostics.get(
+                "pages_succeeded",
+                0,
+            )
+        ),
+        "pages_requested": (
+            discovery_diagnostics.get(
+                "pages_requested",
+                page_count,
+            )
+        ),
+        "pages_attempted": (
+            discovery_diagnostics.get(
+                "pages_attempted",
+                0,
+            )
+        ),
+        "pages_succeeded": (
+            discovery_diagnostics.get(
+                "pages_succeeded",
+                0,
+            )
+        ),
+        "pages_failed": (
+            discovery_diagnostics.get(
+                "pages_failed",
+                0,
+            )
+        ),
         "candidate_count": len(
             discovered
         ),
@@ -1002,6 +1135,9 @@ def run_pro_ticker_fresh_scan(
         ),
         "error_count": len(
             errors
+        ),
+        "discovery": (
+            discovery_diagnostics
         ),
         "collected": collected,
         "errors": errors,
