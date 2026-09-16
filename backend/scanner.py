@@ -13,7 +13,7 @@ import pandas as pd
 import yfinance as yf
 
 from market_universe import load_market_universe
-from universe import load_momentum_universe
+from universe import get_momentum_mover_metadata, load_momentum_universe
 
 
 # =========================================================
@@ -878,8 +878,20 @@ def analyze_stock(
         if not passed
     ]
 
+    # Fast-momentum qualification:
+    # MA alignment remains diagnostic, but it is not a hard
+    # requirement because moving averages can lag a sudden breakout.
+    momentum_30_required_checks = (
+        "move_30_pass",
+        "bullish_trend_pass",
+        "above_ma20_pass",
+        "macd_pass",
+        "volume_pass",
+    )
+
     momentum_30_candidate = all(
-        momentum_30_checks.values()
+        momentum_30_checks[check_name]
+        for check_name in momentum_30_required_checks
     )
 
     trade_plan = build_trade_plan(price)
@@ -944,13 +956,79 @@ def analyze_stock(
     }
 
 
+def apply_live_momentum_metadata(
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    """Enrich fast-momentum checks with live Alpaca mover data."""
+    symbol = str(candidate.get("symbol", "")).strip().upper()
+    metadata = get_momentum_mover_metadata(symbol)
+
+    if not metadata:
+        return candidate
+
+    live_price = safe_float(metadata.get("price"))
+    live_change = safe_float(metadata.get("change"))
+    live_percent_change = safe_float(
+        metadata.get("percent_change")
+    )
+
+    if live_percent_change is None:
+        return candidate
+
+    checks = dict(
+        candidate.get("momentum_30_checks", {})
+    )
+
+    checks["move_30_pass"] = (
+        live_percent_change
+        >= MOMENTUM_30_MIN_MOVE_PERCENT
+    )
+
+    ma20 = safe_float(candidate.get("ma20"))
+    if live_price is not None and ma20 is not None:
+        checks["above_ma20_pass"] = live_price > ma20
+
+    required_checks = (
+        "move_30_pass",
+        "bullish_trend_pass",
+        "above_ma20_pass",
+        "macd_pass",
+        "volume_pass",
+    )
+
+    candidate["momentum_30_checks"] = checks
+    candidate["momentum_30_failed_checks"] = [
+        name
+        for name, passed in checks.items()
+        if not passed
+    ]
+    candidate["momentum_30_candidate"] = all(
+        bool(checks.get(name, False))
+        for name in required_checks
+    )
+    candidate["momentum_strategy_version"] = (
+        MOMENTUM_30_STRATEGY_VERSION
+        if candidate["momentum_30_candidate"]
+        else None
+    )
+    candidate["momentum_move_percent"] = round(
+        live_percent_change,
+        2,
+    )
+    candidate["momentum_data_source"] = "alpaca_movers"
+    candidate["momentum_live_price"] = live_price
+    candidate["momentum_live_change"] = live_change
+
+    return candidate
+
+
 # =========================================================
 # Result selection
 # =========================================================
 
 def _candidate_sort_key(
     stock: dict[str, Any],
-) -> tuple[float, float, float]:
+) -> tuple[float, float, float, float]:
     """
     Return a signal-aware sort key.
 
@@ -962,9 +1040,15 @@ def _candidate_sort_key(
     score = float(stock.get("score", 50) or 50)
     volume_ratio = float(stock.get("volume_ratio", 0) or 0)
     five_day_change = float(stock.get("five_day_change", 0) or 0)
+    momentum_priority = (
+        1.0
+        if bool(stock.get("momentum_30_candidate", False))
+        else 0.0
+    )
 
     if signal == "SELL":
         return (
+            momentum_priority,
             100.0 - score,
             volume_ratio,
             -five_day_change,
@@ -972,12 +1056,14 @@ def _candidate_sort_key(
 
     if signal == "HOLD":
         return (
+            momentum_priority,
             abs(score - 50.0),
             volume_ratio,
             abs(five_day_change),
         )
 
     return (
+        momentum_priority,
         score,
         volume_ratio,
         five_day_change,
@@ -1176,6 +1262,9 @@ def scan_market(
                     continue
 
                 if candidate is not None:
+                    candidate = apply_live_momentum_metadata(
+                        candidate
+                    )
                     analyzed_count += 1
                     results.append(candidate)
 

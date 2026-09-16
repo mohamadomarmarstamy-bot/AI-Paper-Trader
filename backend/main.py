@@ -8800,12 +8800,6 @@ def run_auto_trader_cycle() -> dict[str, Any]:
 
             momentum_entry_pass = (
                 momentum_30_candidate
-                and signal == "BUY"
-                and score is not None
-                and score >= learning_score_min
-                and confidence is not None
-                and confidence
-                >= learning_confidence_min
             )
 
             preliminary_entry_pass = (
@@ -8860,12 +8854,6 @@ def run_auto_trader_cycle() -> dict[str, Any]:
 
             momentum_entry_pass = (
                 momentum_30_candidate
-                and signal == "BUY"
-                and score is not None
-                and score >= learning_score_min
-                and confidence is not None
-                and confidence
-                >= learning_confidence_min
             )
 
             if not (
@@ -17808,12 +17796,4 @@ def sell(
         shares=shares,
         side="sell",
     )
-
-
-
-
-
-
-
-
 

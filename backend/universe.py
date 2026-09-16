@@ -19,6 +19,7 @@ _asset_cache: dict[str, Any] = {
 
 _hot_universe_cache: dict[str, Any] = {
     "symbols": [],
+    "movers": {},
     "updated_at": 0.0,
 }
 
@@ -235,6 +236,7 @@ def load_momentum_universe(
 
     candidate_symbols: list[str] = []
     candidate_seen: set[str] = set()
+    mover_metadata: dict[str, dict[str, Any]] = {}
 
     if market_data_request_func is not None:
         try:
@@ -314,17 +316,23 @@ def load_momentum_universe(
                         ):
                             continue
 
-                        print(
-                            "ALPACA MOVER FIELDS:",
-                            sorted(item.keys()),
-                        )
-
                         symbol = str(
                             item.get(
                                 "symbol",
                                 "",
                             )
                         ).strip().upper()
+
+                        if symbol in allowed_symbols:
+                            mover_metadata[symbol] = {
+                                "symbol": symbol,
+                                "price": item.get("price"),
+                                "change": item.get("change"),
+                                "percent_change": item.get(
+                                    "percent_change"
+                                ),
+                            }
+
 
                         if (
                             symbol in allowed_symbols
@@ -358,6 +366,13 @@ def load_momentum_universe(
         )
         hot_symbols = allowed_symbols_list
 
+    if mover_metadata:
+        _hot_universe_cache["movers"] = {
+            symbol: data.copy()
+            for symbol, data in mover_metadata.items()
+        }
+
+
     _hot_universe_cache[
         "symbols"
     ] = hot_symbols.copy()
@@ -367,3 +382,27 @@ def load_momentum_universe(
     ] = time.time()
 
     return hot_symbols.copy()
+
+
+def get_momentum_mover_metadata(
+    symbol: str,
+) -> dict[str, Any]:
+    normalized_symbol = str(symbol).strip().upper()
+
+    movers = _hot_universe_cache.get(
+        "movers",
+        {},
+    )
+
+    if not isinstance(movers, dict):
+        return {}
+
+    metadata = movers.get(
+        normalized_symbol,
+        {},
+    )
+
+    if not isinstance(metadata, dict):
+        return {}
+
+    return metadata.copy()
