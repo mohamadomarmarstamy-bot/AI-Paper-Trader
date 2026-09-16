@@ -737,6 +737,53 @@ def _extract_number_after_phrase(
     return None
 
 
+def _extract_direction(
+    title: str | None,
+    text: str,
+    *,
+    long_level: float | None,
+    short_level: float | None,
+) -> str | None:
+    if (
+        long_level is not None
+        and short_level is None
+    ):
+        return "LONG"
+
+    if (
+        short_level is not None
+        and long_level is None
+    ):
+        return "SHORT"
+
+    source = " ".join(
+        [
+            title or "",
+            text,
+        ]
+    )
+
+    long_match = re.search(
+        r"\bLONG\s+(?:SIGNAL|MOVE)\b",
+        source,
+        flags=re.IGNORECASE,
+    )
+
+    short_match = re.search(
+        r"\bSHORT\s+(?:SIGNAL|MOVE)\b",
+        source,
+        flags=re.IGNORECASE,
+    )
+
+    if long_match and not short_match:
+        return "LONG"
+
+    if short_match and not long_match:
+        return "SHORT"
+
+    return None
+
+
 def _extract_reported_move(
     title: str | None,
     text: str,
@@ -882,6 +929,13 @@ def parse_pro_ticker_article(
         )
     )
 
+    direction = _extract_direction(
+        title,
+        text,
+        long_level=long_level,
+        short_level=short_level,
+    )
+
     raw_features = {
         "vwap_present": (
             "vwap" in text.lower()
@@ -951,15 +1005,7 @@ def parse_pro_ticker_article(
         "published_date": published_date,
         "alert_date": alert_date,
         "alert_time": None,
-        "direction": (
-            "LONG"
-            if long_level is not None
-            else (
-                "SHORT"
-                if short_level is not None
-                else None
-            )
-        ),
+        "direction": direction,
         "long_level": long_level,
         "short_level": short_level,
         "reported_high": reported_high,
