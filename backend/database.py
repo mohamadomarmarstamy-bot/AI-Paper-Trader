@@ -2166,6 +2166,176 @@ def upsert_pro_ticker_research(
     return result
 
 
+def update_pro_ticker_decision_observation(
+    *,
+    article_url: str,
+    our_scanner_seen: bool | None = None,
+    our_scanner_score: float | None = None,
+    our_scanner_confidence: float | None = None,
+    our_scanner_rank: int | None = None,
+    our_bot_action: str | None = None,
+    our_skip_reason: str | None = None,
+) -> dict[str, Any] | None:
+    """
+    Update only our PAPER-trader observation fields
+    for an existing Pro Ticker research record.
+
+    This intentionally does not modify article research,
+    parsed alert data, or reported outcome fields.
+    """
+    normalized_url = str(
+        article_url
+    ).strip()
+
+    if not normalized_url:
+        raise ValueError(
+            "Article URL cannot be empty."
+        )
+
+    assignments: list[str] = []
+    params: list[Any] = []
+
+    if our_scanner_seen is not None:
+        assignments.append(
+            "our_scanner_seen = ?"
+        )
+        params.append(
+            int(bool(our_scanner_seen))
+        )
+
+    if our_scanner_score is not None:
+        assignments.append(
+            "our_scanner_score = ?"
+        )
+        params.append(
+            _validate_finite_number(
+                our_scanner_score,
+                "Pro Ticker scanner score",
+                allow_zero=True,
+            )
+        )
+
+    if our_scanner_confidence is not None:
+        assignments.append(
+            "our_scanner_confidence = ?"
+        )
+        params.append(
+            _validate_finite_number(
+                our_scanner_confidence,
+                "Pro Ticker scanner confidence",
+                allow_zero=True,
+            )
+        )
+
+    if our_scanner_rank is not None:
+        assignments.append(
+            "our_scanner_rank = ?"
+        )
+        params.append(
+            _validate_positive_integer(
+                our_scanner_rank,
+                "Pro Ticker scanner rank",
+            )
+        )
+
+    if our_bot_action is not None:
+        normalized_action = str(
+            our_bot_action
+        ).strip()
+
+        if normalized_action:
+            assignments.append(
+                "our_bot_action = ?"
+            )
+            params.append(
+                normalized_action
+            )
+
+    if our_skip_reason is not None:
+        normalized_reason = str(
+            our_skip_reason
+        ).strip()
+
+        if normalized_reason:
+            assignments.append(
+                "our_skip_reason = ?"
+            )
+            params.append(
+                normalized_reason
+            )
+
+    if not assignments:
+        with get_connection() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM pro_ticker_research
+                WHERE article_url = ?
+                """,
+                (normalized_url,),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        result = dict(row)
+        result["raw_features"] = (
+            _deserialize_json_object(
+                result.pop(
+                    "raw_features_json",
+                    "{}",
+                )
+            )
+        )
+        return result
+
+    assignments.append(
+        "updated_at = ?"
+    )
+    params.append(
+        datetime.now(
+            timezone.utc
+        ).isoformat()
+    )
+    params.append(
+        normalized_url
+    )
+
+    with get_connection() as connection:
+        connection.execute(
+            f"""
+            UPDATE pro_ticker_research
+            SET {", ".join(assignments)}
+            WHERE article_url = ?
+            """,
+            tuple(params),
+        )
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM pro_ticker_research
+            WHERE article_url = ?
+            """,
+            (normalized_url,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    result = dict(row)
+    result["raw_features"] = (
+        _deserialize_json_object(
+            result.pop(
+                "raw_features_json",
+                "{}",
+            )
+        )
+    )
+
+    return result
+
+
 def load_pro_ticker_research(
     *,
     symbol: str | None = None,
