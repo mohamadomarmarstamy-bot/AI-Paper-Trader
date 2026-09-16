@@ -314,6 +314,11 @@ def load_momentum_universe(
                         ):
                             continue
 
+                        print(
+                            "ALPACA MOVER FIELDS:",
+                            sorted(item.keys()),
+                        )
+
                         symbol = str(
                             item.get(
                                 "symbol",
