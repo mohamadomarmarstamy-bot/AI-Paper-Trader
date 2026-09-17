@@ -2917,6 +2917,618 @@ def calculate_learning_summary(
     }
 
 
+
+def calculate_feature_performance(
+    *,
+    minimum_group_size: int = 5,
+    limit: int = 10000,
+) -> dict[str, Any]:
+    """
+    Compare entry-time features with completed paper-trade
+    outcomes.
+
+    Entry features come only from the saved entry event, so
+    post-entry information is not used as an entry feature.
+
+    This analysis is read-only and does not change strategy
+    settings.
+    """
+    safe_minimum = max(
+        1,
+        int(minimum_group_size),
+    )
+
+    safe_limit = max(
+        1,
+        min(
+            int(limit),
+            10000,
+        ),
+    )
+
+    outcomes = load_learning_outcomes(
+        limit=safe_limit,
+    )
+
+    entry_events = load_trade_book_events(
+        event="entry",
+        limit=min(
+            safe_limit,
+            5000,
+        ),
+    )
+
+    entry_by_trade_id: dict[
+        int,
+        dict[str, Any],
+    ] = {}
+
+    for event in entry_events:
+        trade_book_id = event.get(
+            "trade_book_id"
+        )
+
+        details = event.get(
+            "details"
+        )
+
+        if (
+            isinstance(
+                trade_book_id,
+                int,
+            )
+            and isinstance(
+                details,
+                dict,
+            )
+            and trade_book_id
+            not in entry_by_trade_id
+        ):
+            entry_by_trade_id[
+                trade_book_id
+            ] = details
+
+    joined: list[
+        tuple[
+            dict[str, Any],
+            dict[str, Any],
+        ]
+    ] = []
+
+    for outcome in outcomes:
+        trade_book_id = outcome.get(
+            "trade_book_id"
+        )
+
+        if not isinstance(
+            trade_book_id,
+            int,
+        ):
+            continue
+
+        entry = entry_by_trade_id.get(
+            trade_book_id
+        )
+
+        if not isinstance(
+            entry,
+            dict,
+        ):
+            continue
+
+        joined.append(
+            (
+                outcome,
+                entry,
+            )
+        )
+
+    def finite_number(
+        value: Any,
+    ) -> float | None:
+        try:
+            number = float(value)
+        except (
+            TypeError,
+            ValueError,
+        ):
+            return None
+
+        if not math.isfinite(number):
+            return None
+
+        return number
+
+    def summarize(
+        rows: list[
+            tuple[
+                dict[str, Any],
+                dict[str, Any],
+            ]
+        ],
+    ) -> dict[str, Any]:
+        count = len(rows)
+
+        wins = sum(
+            1
+            for outcome, _entry in rows
+            if bool(
+                outcome.get("won")
+            )
+        )
+
+        returns = [
+            value
+            for outcome, _entry in rows
+            for value in [
+                finite_number(
+                    outcome.get(
+                        "realized_return_percent"
+                    )
+                )
+            ]
+            if value is not None
+        ]
+
+        profit_losses = [
+            value
+            for outcome, _entry in rows
+            for value in [
+                finite_number(
+                    outcome.get(
+                        "realized_profit_loss"
+                    )
+                )
+            ]
+            if value is not None
+        ]
+
+        mfe_values = [
+            value
+            for outcome, _entry in rows
+            for value in [
+                finite_number(
+                    outcome.get(
+                        "mfe_percent"
+                    )
+                )
+            ]
+            if value is not None
+        ]
+
+        mae_values = [
+            value
+            for outcome, _entry in rows
+            for value in [
+                finite_number(
+                    outcome.get(
+                        "mae_percent"
+                    )
+                )
+            ]
+            if value is not None
+        ]
+
+        def average(
+            values: list[float],
+        ) -> float | None:
+            if not values:
+                return None
+
+            return round(
+                sum(values)
+                / len(values),
+                4,
+            )
+
+        return {
+            "sample_size": count,
+            "enough_data": (
+                count >= safe_minimum
+            ),
+            "wins": wins,
+            "losses": (
+                count - wins
+            ),
+            "win_rate_percent": (
+                round(
+                    (
+                        wins
+                        / count
+                        * 100.0
+                    ),
+                    4,
+                )
+                if count
+                else 0.0
+            ),
+            "average_return_percent": (
+                average(returns)
+            ),
+            "average_profit_loss": (
+                average(
+                    profit_losses
+                )
+            ),
+            "average_mfe_percent": (
+                average(mfe_values)
+            ),
+            "average_mae_percent": (
+                average(mae_values)
+            ),
+        }
+
+    groups: dict[
+        str,
+        dict[
+            str,
+            list[
+                tuple[
+                    dict[str, Any],
+                    dict[str, Any],
+                ]
+            ],
+        ],
+    ] = {}
+
+    def add_group(
+        feature: str,
+        bucket: Any,
+        row: tuple[
+            dict[str, Any],
+            dict[str, Any],
+        ],
+    ) -> None:
+        if bucket is None:
+            return
+
+        label = str(
+            bucket
+        ).strip()
+
+        if not label:
+            return
+
+        groups.setdefault(
+            feature,
+            {},
+        ).setdefault(
+            label,
+            [],
+        ).append(row)
+
+    for row in joined:
+        outcome, entry = row
+
+        add_group(
+            "strategy_version",
+            entry.get(
+                "strategy_version"
+            ),
+            row,
+        )
+
+        add_group(
+            "signal",
+            entry.get("signal"),
+            row,
+        )
+
+        add_group(
+            "trend",
+            entry.get("trend"),
+            row,
+        )
+
+        add_group(
+            "trend_strength",
+            entry.get(
+                "trend_strength"
+            ),
+            row,
+        )
+
+        add_group(
+            "risk",
+            entry.get("risk"),
+            row,
+        )
+
+        add_group(
+            "market_regime",
+            entry.get(
+                "market_regime"
+            ),
+            row,
+        )
+
+        add_group(
+            "news_sentiment",
+            entry.get(
+                "news_sentiment"
+            ),
+            row,
+        )
+
+        momentum_candidate = (
+            entry.get(
+                "momentum_30_candidate"
+            )
+        )
+
+        if momentum_candidate is not None:
+            add_group(
+                "momentum_candidate",
+                (
+                    "yes"
+                    if bool(
+                        momentum_candidate
+                    )
+                    else "no"
+                ),
+                row,
+            )
+
+        def numeric_bucket(
+            value: Any,
+            ranges: list[
+                tuple[
+                    float | None,
+                    float | None,
+                    str,
+                ]
+            ],
+        ) -> str | None:
+            number = finite_number(
+                value
+            )
+
+            if number is None:
+                return None
+
+            for lower, upper, label in ranges:
+                lower_pass = (
+                    lower is None
+                    or number >= lower
+                )
+
+                upper_pass = (
+                    upper is None
+                    or number < upper
+                )
+
+                if (
+                    lower_pass
+                    and upper_pass
+                ):
+                    return label
+
+            return None
+
+        add_group(
+            "scanner_rank",
+            numeric_bucket(
+                entry.get(
+                    "scanner_rank"
+                ),
+                [
+                    (None, 6, "1-5"),
+                    (6, 11, "6-10"),
+                    (11, 21, "11-20"),
+                    (21, None, "21+"),
+                ],
+            ),
+            row,
+        )
+
+        add_group(
+            "score",
+            numeric_bucket(
+                entry.get("score"),
+                [
+                    (None, 70, "<70"),
+                    (70, 75, "70-74"),
+                    (75, 80, "75-79"),
+                    (80, 90, "80-89"),
+                    (90, None, "90+"),
+                ],
+            ),
+            row,
+        )
+
+        add_group(
+            "confidence",
+            numeric_bucket(
+                entry.get(
+                    "confidence"
+                ),
+                [
+                    (None, 70, "<70"),
+                    (70, 80, "70-79"),
+                    (80, 90, "80-89"),
+                    (90, None, "90+"),
+                ],
+            ),
+            row,
+        )
+
+        add_group(
+            "rsi",
+            numeric_bucket(
+                entry.get("rsi"),
+                [
+                    (None, 30, "<30"),
+                    (30, 50, "30-49"),
+                    (50, 60, "50-59"),
+                    (60, 70, "60-69"),
+                    (70, 80, "70-79"),
+                    (80, None, "80+"),
+                ],
+            ),
+            row,
+        )
+
+        add_group(
+            "volume_ratio",
+            numeric_bucket(
+                entry.get(
+                    "volume_ratio"
+                ),
+                [
+                    (None, 0.7, "<0.7x"),
+                    (0.7, 1.0, "0.7-0.99x"),
+                    (1.0, 1.5, "1.0-1.49x"),
+                    (1.5, 2.0, "1.5-1.99x"),
+                    (2.0, 5.0, "2.0-4.99x"),
+                    (5.0, None, "5.0x+"),
+                ],
+            ),
+            row,
+        )
+
+        add_group(
+            "atr_percent",
+            numeric_bucket(
+                entry.get(
+                    "atr_percent"
+                ),
+                [
+                    (None, 1.0, "<1%"),
+                    (1.0, 2.0, "1-1.99%"),
+                    (2.0, 4.0, "2-3.99%"),
+                    (4.0, 6.0, "4-5.99%"),
+                    (6.0, 8.0, "6-7.99%"),
+                    (8.0, None, "8%+"),
+                ],
+            ),
+            row,
+        )
+
+        add_group(
+            "spread_percent",
+            numeric_bucket(
+                entry.get(
+                    "spread_percent"
+                ),
+                [
+                    (None, 0.10, "<0.10%"),
+                    (0.10, 0.25, "0.10-0.24%"),
+                    (0.25, 0.50, "0.25-0.49%"),
+                    (0.50, 1.0, "0.50-0.99%"),
+                    (1.0, None, "1%+"),
+                ],
+            ),
+            row,
+        )
+
+        add_group(
+            "momentum_move_percent",
+            numeric_bucket(
+                entry.get(
+                    "momentum_move_percent"
+                ),
+                [
+                    (None, 30.0, "<30%"),
+                    (30.0, 50.0, "30-49%"),
+                    (50.0, 100.0, "50-99%"),
+                    (100.0, 200.0, "100-199%"),
+                    (200.0, None, "200%+"),
+                ],
+            ),
+            row,
+        )
+
+        add_group(
+            "one_day_change",
+            numeric_bucket(
+                entry.get(
+                    "one_day_change"
+                ),
+                [
+                    (None, 0.0, "negative"),
+                    (0.0, 5.0, "0-4.99%"),
+                    (5.0, 15.0, "5-14.99%"),
+                    (15.0, 30.0, "15-29.99%"),
+                    (30.0, None, "30%+"),
+                ],
+            ),
+            row,
+        )
+
+        macd = finite_number(
+            entry.get("macd")
+        )
+
+        macd_signal = finite_number(
+            entry.get(
+                "macd_signal"
+            )
+        )
+
+        if (
+            macd is not None
+            and macd_signal is not None
+        ):
+            add_group(
+                "macd_position",
+                (
+                    "above_signal"
+                    if macd > macd_signal
+                    else (
+                        "below_signal"
+                        if macd < macd_signal
+                        else "equal_signal"
+                    )
+                ),
+                row,
+            )
+
+    feature_performance: dict[
+        str,
+        dict[str, Any],
+    ] = {}
+
+    for feature, buckets in groups.items():
+        feature_performance[
+            feature
+        ] = {
+            label: summarize(
+                bucket_rows
+            )
+            for label, bucket_rows
+            in buckets.items()
+        }
+
+    return {
+        "paper": True,
+        "read_only": True,
+        "automatic_strategy_changes": False,
+        "minimum_group_size": (
+            safe_minimum
+        ),
+        "completed_learning_outcomes": (
+            len(outcomes)
+        ),
+        "joined_entry_outcomes": (
+            len(joined)
+        ),
+        "missing_entry_snapshot_count": (
+            len(outcomes)
+            - len(joined)
+        ),
+        "overall": summarize(
+            joined
+        ),
+        "features": (
+            feature_performance
+        ),
+        "warning": (
+            "Feature results are observational paper-trading "
+            "evidence, not proof that a feature causes profit. "
+            "Small samples should not be used to change strategy."
+        ),
+    }
+
 def save_learning_recommendation(
     *,
     recommendation_type: str,

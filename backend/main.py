@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 
 from chart_data import get_chart_data
 from database import (
+    calculate_feature_performance,
     calculate_learning_summary,
     close_trade_book_entry,
     create_trade_book_entry,
@@ -12366,6 +12367,30 @@ def auto_trader_logs(
             ][::-1]
         ),
     }
+
+@app.get("/auto-trader/feature-learning")
+def auto_trader_feature_learning(
+    request: Request,
+    minimum_group_size: int = Query(
+        default=5,
+        ge=1,
+        le=100,
+    ),
+    limit: int = Query(
+        default=5000,
+        ge=1,
+        le=10000,
+    ),
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    return calculate_feature_performance(
+        minimum_group_size=minimum_group_size,
+        limit=limit,
+    )
+
 
 @app.get("/auto-trader/journal")
 def auto_trader_journal(
