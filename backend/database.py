@@ -3575,6 +3575,30 @@ def calculate_feature_performance(
             row,
         )
 
+        one_day_value = finite_number(
+            entry.get("one_day_change")
+        )
+        volume_ratio_value = finite_number(
+            entry.get("volume_ratio")
+        )
+
+        if (
+            one_day_value is not None
+            and volume_ratio_value is not None
+        ):
+            add_group(
+                "negative_day_weak_volume",
+                (
+                    "negative_day_and_volume_below_0.60x"
+                    if (
+                        one_day_value < 0.0
+                        and volume_ratio_value < 0.60
+                    )
+                    else "other"
+                ),
+                row,
+            )
+
         macd = finite_number(
             entry.get("macd")
         )
