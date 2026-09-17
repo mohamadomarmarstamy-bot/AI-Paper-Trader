@@ -1,4 +1,4 @@
-﻿import json
+import json
 from datetime import datetime, timezone
 import math
 import os
@@ -3109,6 +3109,79 @@ def calculate_feature_performance(
             if value is not None
         ]
 
+        excursion_rows = [
+            (
+                outcome,
+                mfe,
+                mae,
+                realized_return,
+            )
+            for outcome, _entry in rows
+            for mfe in [
+                finite_number(
+                    outcome.get(
+                        "mfe_percent"
+                    )
+                )
+            ]
+            for mae in [
+                finite_number(
+                    outcome.get(
+                        "mae_percent"
+                    )
+                )
+            ]
+            for realized_return in [
+                finite_number(
+                    outcome.get(
+                        "realized_return_percent"
+                    )
+                )
+            ]
+            if mfe is not None
+            and mae is not None
+            and realized_return is not None
+        ]
+
+        gave_back_profit_rows = [
+            item
+            for item in excursion_rows
+            if item[1] >= 0.5
+            and item[3] <= 0.0
+        ]
+
+        never_profitable_rows = [
+            item
+            for item in excursion_rows
+            if item[1] <= 0.0
+        ]
+
+        profit_capture_values = [
+            (
+                realized_return
+                / mfe
+            )
+            * 100.0
+            for (
+                _outcome,
+                mfe,
+                _mae,
+                realized_return,
+            ) in excursion_rows
+            if mfe >= 0.5
+        ]
+
+        giveback_values = [
+            mfe - realized_return
+            for (
+                _outcome,
+                mfe,
+                _mae,
+                realized_return,
+            ) in excursion_rows
+            if mfe > 0.0
+        ]
+
         def average(
             values: list[float],
         ) -> float | None:
@@ -3155,6 +3228,53 @@ def calculate_feature_performance(
             ),
             "average_mae_percent": (
                 average(mae_values)
+            ),
+            "excursion_sample_size": len(
+                excursion_rows
+            ),
+            "gave_back_profit_count": len(
+                gave_back_profit_rows
+            ),
+            "gave_back_profit_percent": (
+                round(
+                    (
+                        len(
+                            gave_back_profit_rows
+                        )
+                        / len(excursion_rows)
+                    )
+                    * 100.0,
+                    4,
+                )
+                if excursion_rows
+                else 0.0
+            ),
+            "never_profitable_count": len(
+                never_profitable_rows
+            ),
+            "never_profitable_percent": (
+                round(
+                    (
+                        len(
+                            never_profitable_rows
+                        )
+                        / len(excursion_rows)
+                    )
+                    * 100.0,
+                    4,
+                )
+                if excursion_rows
+                else 0.0
+            ),
+            "average_profit_capture_percent": (
+                average(
+                    profit_capture_values
+                )
+            ),
+            "average_giveback_percent": (
+                average(
+                    giveback_values
+                )
             ),
         }
 
@@ -3821,5 +3941,3 @@ def set_learning_recommendation_active(
         )
         if cursor.rowcount == 0:
             raise ValueError("Learning recommendation was not found.")
-
-
