@@ -6011,6 +6011,96 @@ def submit_alpaca_recovery_oco(
                 ),
             }
 
+    # Re-fetch the position immediately before replacing
+    # protection. The positions snapshot that started this
+    # reconciliation may now be stale after order cancellation
+    # or an execution.
+    try:
+        refreshed_positions = (
+            fetch_alpaca_paper_positions()
+        )
+    except Exception as error:
+        return {
+            "success": False,
+            "paper": True,
+            "automatic": True,
+            "symbol": normalized_symbol,
+            "error": (
+                "Protection was ready to be replaced, "
+                "but the current Alpaca position quantity "
+                "could not be confirmed: "
+                f"{clean_error_message(error)}"
+            ),
+        }
+
+    refreshed_position = next(
+        (
+            position
+            for position in refreshed_positions
+            if (
+                isinstance(position, dict)
+                and clean_symbol(
+                    position.get("symbol")
+                ) == normalized_symbol
+            )
+        ),
+        None,
+    )
+
+    if refreshed_position is None:
+        return {
+            "success": True,
+            "paper": True,
+            "automatic": True,
+            "symbol": normalized_symbol,
+            "position_closed": True,
+            "reconciled": True,
+            "message": (
+                "The position closed before replacement "
+                "protection was submitted."
+            ),
+        }
+
+    refreshed_qty = safe_float(
+        refreshed_position.get("qty")
+    )
+
+    if (
+        refreshed_qty is None
+        or refreshed_qty <= 0
+    ):
+        return {
+            "success": True,
+            "paper": True,
+            "automatic": True,
+            "symbol": normalized_symbol,
+            "position_closed": True,
+            "reconciled": True,
+            "message": (
+                "No positive position quantity remained "
+                "before replacement protection was submitted."
+            ),
+        }
+
+    refreshed_position_shares = math.floor(
+        refreshed_qty
+    )
+
+    if refreshed_position_shares <= 0:
+        return {
+            "success": False,
+            "paper": True,
+            "automatic": True,
+            "symbol": normalized_symbol,
+            "error": (
+                "The refreshed position quantity was below "
+                "one whole share, so recovery protection "
+                "was not submitted."
+            ),
+        }
+
+    shares = refreshed_position_shares
+
     stop_price = round(
         current_price
         * (
