@@ -3499,6 +3499,183 @@ def calculate_feature_performance(
             in buckets.items()
         }
 
+    # Build entry-time feature fingerprints so we can
+    # evaluate combinations instead of isolated indicators.
+    # These remain observational and read-only.
+    combination_features = (
+        "scanner_rank",
+        "rsi",
+        "volume_ratio",
+        "atr_percent",
+        "spread_percent",
+        "one_day_change",
+        "macd_position",
+        "trend",
+        "risk",
+    )
+
+    row_feature_labels: dict[
+        int,
+        dict[str, str],
+    ] = {}
+
+    for feature in combination_features:
+        for label, bucket_rows in groups.get(
+            feature,
+            {},
+        ).items():
+            for row in bucket_rows:
+                row_feature_labels.setdefault(
+                    id(row),
+                    {},
+                )[feature] = label
+
+    two_feature_groups: dict[
+        str,
+        list[
+            tuple[
+                dict[str, Any],
+                dict[str, Any],
+            ]
+        ],
+    ] = {}
+
+    three_feature_groups: dict[
+        str,
+        list[
+            tuple[
+                dict[str, Any],
+                dict[str, Any],
+            ]
+        ],
+    ] = {}
+
+    for row in joined:
+        labels = row_feature_labels.get(
+            id(row),
+            {},
+        )
+
+        available = [
+            (
+                feature,
+                labels[feature],
+            )
+            for feature in combination_features
+            if feature in labels
+        ]
+
+        for first_index in range(
+            len(available)
+        ):
+            first_feature, first_label = (
+                available[first_index]
+            )
+
+            for second_index in range(
+                first_index + 1,
+                len(available),
+            ):
+                second_feature, second_label = (
+                    available[second_index]
+                )
+
+                two_key = (
+                    f"{first_feature}={first_label}"
+                    " | "
+                    f"{second_feature}={second_label}"
+                )
+
+                two_feature_groups.setdefault(
+                    two_key,
+                    [],
+                ).append(row)
+
+                for third_index in range(
+                    second_index + 1,
+                    len(available),
+                ):
+                    third_feature, third_label = (
+                        available[third_index]
+                    )
+
+                    three_key = (
+                        f"{first_feature}={first_label}"
+                        " | "
+                        f"{second_feature}={second_label}"
+                        " | "
+                        f"{third_feature}={third_label}"
+                    )
+
+                    three_feature_groups.setdefault(
+                        three_key,
+                        [],
+                    ).append(row)
+
+    def summarize_combinations(
+        combination_groups: dict[
+            str,
+            list[
+                tuple[
+                    dict[str, Any],
+                    dict[str, Any],
+                ]
+            ],
+        ],
+    ) -> list[dict[str, Any]]:
+        results: list[
+            dict[str, Any]
+        ] = []
+
+        for fingerprint, rows in (
+            combination_groups.items()
+        ):
+            summary = summarize(rows)
+
+            if not summary.get(
+                "enough_data"
+            ):
+                continue
+
+            results.append({
+                "fingerprint": fingerprint,
+                **summary,
+            })
+
+        # This ordering is for analysis/display only.
+        # It does not select trades or modify strategy.
+        results.sort(
+            key=lambda item: (
+                finite_number(
+                    item.get(
+                        "average_return_percent"
+                    )
+                )
+                or 0.0,
+                int(
+                    item.get(
+                        "sample_size",
+                        0,
+                    )
+                ),
+            ),
+            reverse=True,
+        )
+
+        return results
+
+    two_feature_performance = (
+        summarize_combinations(
+            two_feature_groups
+        )
+    )
+
+    three_feature_performance = (
+        summarize_combinations(
+            three_feature_groups
+        )
+    )
+
     return {
         "paper": True,
         "read_only": True,
@@ -3521,6 +3698,17 @@ def calculate_feature_performance(
         ),
         "features": (
             feature_performance
+        ),
+        "feature_combinations": {
+            "two_feature": (
+                two_feature_performance
+            ),
+            "three_feature": (
+                three_feature_performance
+            ),
+        },
+        "combination_feature_set": list(
+            combination_features
         ),
         "warning": (
             "Feature results are observational paper-trading "
