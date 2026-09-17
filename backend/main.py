@@ -9321,6 +9321,12 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                             "one_day_change": safe_float(
                                 candidate.get("change")
                             ),
+                            "negative_day_weak_volume_shadow": (
+                                safe_float(candidate.get("change")) is not None
+                                and safe_float(candidate.get("volume_ratio")) is not None
+                                and safe_float(candidate.get("change")) < 0.0
+                                and safe_float(candidate.get("volume_ratio")) < 0.60
+                            ),
                             "five_day_change": safe_float(
                                 candidate.get(
                                     "five_day_change"
@@ -9603,6 +9609,12 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                             candidate.get(
                                 "change"
                             )
+                        ),
+                        "negative_day_weak_volume_shadow": (
+                            safe_float(candidate.get("change")) is not None
+                            and safe_float(candidate.get("volume_ratio")) is not None
+                            and safe_float(candidate.get("change")) < 0.0
+                            and safe_float(candidate.get("volume_ratio")) < 0.60
                         ),
                         "five_day_change": safe_float(
                             candidate.get(
