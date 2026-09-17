@@ -3172,7 +3172,7 @@ def calculate_feature_performance(
         ]
 
         giveback_values = [
-            mfe - realized_return
+            max(0.0, mfe - realized_return)
             for (
                 _outcome,
                 mfe,
