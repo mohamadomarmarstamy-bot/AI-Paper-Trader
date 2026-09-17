@@ -39,7 +39,9 @@ from database import (
     get_scheduler_state,
     load_trade_excursions,
     upsert_broker_fill,
+    mark_scanner_observation_selected,
     record_trade_book_event,
+    record_scanner_observation,
     save_learning_outcome,
     set_scheduler_state,
     upsert_trade_excursion,
@@ -7756,6 +7758,141 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             )
         ]
 
+        # -------------------------------------------------
+        # Scanner research observations.
+        # -------------------------------------------------
+        # Capture entry-time scanner information without
+        # changing any PAPER-trading decision. The database
+        # writer deduplicates each symbol to one observation
+        # per 15-minute window.
+        observation_timestamp = datetime.now(
+            timezone.utc
+        ).isoformat()
+
+        scanner_observation_ids: dict[str, int] = {}
+
+        for candidate in scanner_results:
+            observation_symbol = clean_symbol(
+                candidate.get("symbol")
+            )
+
+            observation_price = safe_float(
+                candidate.get("price")
+            )
+
+            if (
+                not observation_symbol
+                or observation_price is None
+                or observation_price <= 0
+            ):
+                continue
+
+            try:
+                observation_id = record_scanner_observation(
+                    symbol=observation_symbol,
+                    observed_at=observation_timestamp,
+                    reference_price=observation_price,
+                    signal=candidate.get("signal"),
+                    score=candidate.get("score"),
+                    confidence=candidate.get("confidence"),
+                    scanner_rank=(
+                        candidate.get("scanner_rank")
+                        or candidate.get("rank")
+                    ),
+                    rsi=candidate.get("rsi"),
+                    macd=candidate.get("macd"),
+                    macd_signal=candidate.get(
+                        "macd_signal"
+                    ),
+                    macd_histogram=candidate.get(
+                        "macd_histogram"
+                    ),
+                    volume_ratio=candidate.get(
+                        "volume_ratio"
+                    ),
+                    average_volume=candidate.get(
+                        "average_volume"
+                    ),
+                    one_day_change=candidate.get(
+                        "change"
+                    ),
+                    five_day_change=candidate.get(
+                        "five_day_change"
+                    ),
+                    twenty_day_change=candidate.get(
+                        "twenty_day_change"
+                    ),
+                    atr=candidate.get("atr"),
+                    atr_percent=candidate.get(
+                        "atr_percent"
+                    ),
+                    trend=candidate.get("trend"),
+                    trend_strength=candidate.get(
+                        "trend_strength"
+                    ),
+                    risk=(
+                        candidate.get("risk")
+                        or candidate.get("risk_level")
+                    ),
+                    ma20=candidate.get("ma20"),
+                    ma50=candidate.get("ma50"),
+                    ma200=candidate.get("ma200"),
+                    momentum_candidate=bool(
+                        candidate.get(
+                            "momentum_30_candidate"
+                        )
+                    ),
+                    momentum_move_percent=(
+                        candidate.get(
+                            "momentum_move_percent"
+                        )
+                    ),
+                    market_regime=market_regime.get(
+                        "regime"
+                    ),
+                    market_regime_score=(
+                        market_regime.get("score")
+                    ),
+                    selected_for_entry=False,
+                    strategy_version=(
+                        "momentum_30_v1"
+                        if bool(
+                            candidate.get(
+                                "momentum_30_candidate"
+                            )
+                        )
+                        else AUTO_TRADER_STRATEGY_VERSION
+                    ),
+                    features={
+                        "momentum_30_checks": (
+                            candidate.get(
+                                "momentum_30_checks",
+                                {},
+                            )
+                        ),
+                        "momentum_30_failed_checks": (
+                            candidate.get(
+                                "momentum_30_failed_checks",
+                                [],
+                            )
+                        ),
+                        "research_source": (
+                            "auto_trader_scanner"
+                        ),
+                    },
+                )
+
+                scanner_observation_ids[
+                    observation_symbol
+                ] = observation_id
+
+            except Exception as error:
+                print(
+                    "Scanner observation error for "
+                    f"{observation_symbol}: "
+                    f"{clean_error_message(error)}"
+                )
+
         account = (
             fetch_alpaca_paper_account()
         )
@@ -9779,6 +9916,24 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             if entry_result.get(
                 "success"
             ):
+                observation_id = (
+                    scanner_observation_ids.get(
+                        symbol
+                    )
+                )
+
+                if observation_id is not None:
+                    try:
+                        mark_scanner_observation_selected(
+                            observation_id
+                        )
+                    except Exception as error:
+                        print(
+                            "Scanner observation selection "
+                            f"error for {symbol}: "
+                            f"{clean_error_message(error)}"
+                        )
+
                 new_positions += 1
                 existing_symbols.add(
                     symbol

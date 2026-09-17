@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import math
 import os
 import sqlite3
@@ -129,6 +129,29 @@ def _validate_finite_number(
             raise ValueError(f"{field_name} cannot be negative.")
     elif numeric_value <= 0:
         raise ValueError(f"{field_name} must be greater than zero.")
+
+    return numeric_value
+
+
+def _normalize_optional_finite_number(
+    value: Any,
+    field_name: str,
+) -> float | None:
+    """Normalize an optional finite number, including signed values."""
+    if value is None:
+        return None
+
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"{field_name} must be a valid number."
+        ) from error
+
+    if not math.isfinite(numeric_value):
+        raise ValueError(
+            f"{field_name} must be finite."
+        )
 
     return numeric_value
 
@@ -439,6 +462,61 @@ def initialize_database() -> None:
                 FOREIGN KEY(trade_book_id)
                     REFERENCES trade_book(id)
                     ON DELETE CASCADE
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scanner_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                reference_price REAL NOT NULL,
+                signal TEXT,
+                score REAL,
+                confidence REAL,
+                scanner_rank REAL,
+                rsi REAL,
+                macd REAL,
+                macd_signal REAL,
+                macd_histogram REAL,
+                volume_ratio REAL,
+                average_volume REAL,
+                one_day_change REAL,
+                five_day_change REAL,
+                twenty_day_change REAL,
+                atr REAL,
+                atr_percent REAL,
+                spread_percent REAL,
+                trend TEXT,
+                trend_strength TEXT,
+                risk TEXT,
+                ma20 REAL,
+                ma50 REAL,
+                ma200 REAL,
+                momentum_candidate INTEGER,
+                momentum_move_percent REAL,
+                market_regime TEXT,
+                market_regime_score REAL,
+                news_sentiment TEXT,
+                news_score REAL,
+                selected_for_entry INTEGER NOT NULL DEFAULT 0
+                    CHECK(selected_for_entry IN (0, 1)),
+                strategy_version TEXT,
+                features_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_scanner_observations_symbol_observed_at
+            ON scanner_observations (
+                symbol,
+                observed_at
             )
             """
         )
@@ -1328,6 +1406,256 @@ def record_trade_book_event(
     if event_id is None:
         raise RuntimeError("The trade-book event was saved without an ID.")
     return int(event_id)
+
+
+def record_scanner_observation(
+    *,
+    symbol: str,
+    observed_at: str,
+    reference_price: float,
+    signal: str | None = None,
+    score: Any = None,
+    confidence: Any = None,
+    scanner_rank: Any = None,
+    rsi: Any = None,
+    macd: Any = None,
+    macd_signal: Any = None,
+    macd_histogram: Any = None,
+    volume_ratio: Any = None,
+    average_volume: Any = None,
+    one_day_change: Any = None,
+    five_day_change: Any = None,
+    twenty_day_change: Any = None,
+    atr: Any = None,
+    atr_percent: Any = None,
+    spread_percent: Any = None,
+    trend: str | None = None,
+    trend_strength: str | None = None,
+    risk: str | None = None,
+    ma20: Any = None,
+    ma50: Any = None,
+    ma200: Any = None,
+    momentum_candidate: bool | None = None,
+    momentum_move_percent: Any = None,
+    market_regime: str | None = None,
+    market_regime_score: Any = None,
+    news_sentiment: str | None = None,
+    news_score: Any = None,
+    selected_for_entry: bool = False,
+    strategy_version: str | None = None,
+    features: dict[str, Any] | None = None,
+) -> int:
+    """Record an entry-time scanner snapshot for research."""
+    normalized_symbol = _normalize_symbol(symbol)
+    normalized_observed_at = _validate_timestamp(observed_at)
+    normalized_reference_price = _validate_finite_number(
+        reference_price,
+        "Scanner observation reference price",
+        allow_zero=False,
+    )
+
+    numeric_values = {
+        "score": score,
+        "confidence": confidence,
+        "scanner_rank": scanner_rank,
+        "rsi": rsi,
+        "macd": macd,
+        "macd_signal": macd_signal,
+        "macd_histogram": macd_histogram,
+        "volume_ratio": volume_ratio,
+        "average_volume": average_volume,
+        "one_day_change": one_day_change,
+        "five_day_change": five_day_change,
+        "twenty_day_change": twenty_day_change,
+        "atr": atr,
+        "atr_percent": atr_percent,
+        "spread_percent": spread_percent,
+        "ma20": ma20,
+        "ma50": ma50,
+        "ma200": ma200,
+        "momentum_move_percent": momentum_move_percent,
+        "market_regime_score": market_regime_score,
+        "news_score": news_score,
+    }
+
+    normalized_numbers = {
+        key: _normalize_optional_finite_number(
+            value,
+            f"Scanner observation {key}",
+        )
+        for key, value in numeric_values.items()
+    }
+
+    normalized_momentum_candidate = (
+        None
+        if momentum_candidate is None
+        else int(bool(momentum_candidate))
+    )
+
+    observed_datetime = datetime.fromisoformat(
+        normalized_observed_at.replace("Z", "+00:00")
+    )
+
+    if observed_datetime.tzinfo is None:
+        observed_datetime = observed_datetime.replace(
+            tzinfo=timezone.utc
+        )
+
+    observation_cutoff = (
+        observed_datetime
+        - timedelta(minutes=15)
+    ).isoformat()
+
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    with get_connection() as connection:
+        existing_observation = connection.execute(
+            """
+            SELECT id
+            FROM scanner_observations
+            WHERE symbol = ?
+              AND observed_at >= ?
+              AND observed_at <= ?
+            ORDER BY observed_at DESC
+            LIMIT 1
+            """,
+            (
+                normalized_symbol,
+                observation_cutoff,
+                normalized_observed_at,
+            ),
+        ).fetchone()
+
+        if existing_observation is not None:
+            return int(existing_observation["id"])
+
+        cursor = connection.execute(
+            """
+            INSERT INTO scanner_observations (
+                symbol,
+                observed_at,
+                reference_price,
+                signal,
+                score,
+                confidence,
+                scanner_rank,
+                rsi,
+                macd,
+                macd_signal,
+                macd_histogram,
+                volume_ratio,
+                average_volume,
+                one_day_change,
+                five_day_change,
+                twenty_day_change,
+                atr,
+                atr_percent,
+                spread_percent,
+                trend,
+                trend_strength,
+                risk,
+                ma20,
+                ma50,
+                ma200,
+                momentum_candidate,
+                momentum_move_percent,
+                market_regime,
+                market_regime_score,
+                news_sentiment,
+                news_score,
+                selected_for_entry,
+                strategy_version,
+                features_json,
+                created_at
+            )
+            VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?
+            )
+            """,
+            (
+                normalized_symbol,
+                normalized_observed_at,
+                normalized_reference_price,
+                _normalize_optional_text(signal, "Signal"),
+                normalized_numbers["score"],
+                normalized_numbers["confidence"],
+                normalized_numbers["scanner_rank"],
+                normalized_numbers["rsi"],
+                normalized_numbers["macd"],
+                normalized_numbers["macd_signal"],
+                normalized_numbers["macd_histogram"],
+                normalized_numbers["volume_ratio"],
+                normalized_numbers["average_volume"],
+                normalized_numbers["one_day_change"],
+                normalized_numbers["five_day_change"],
+                normalized_numbers["twenty_day_change"],
+                normalized_numbers["atr"],
+                normalized_numbers["atr_percent"],
+                normalized_numbers["spread_percent"],
+                _normalize_optional_text(trend, "Trend"),
+                _normalize_optional_text(
+                    trend_strength,
+                    "Trend strength",
+                ),
+                _normalize_optional_text(risk, "Risk"),
+                normalized_numbers["ma20"],
+                normalized_numbers["ma50"],
+                normalized_numbers["ma200"],
+                normalized_momentum_candidate,
+                normalized_numbers["momentum_move_percent"],
+                _normalize_optional_text(
+                    market_regime,
+                    "Market regime",
+                ),
+                normalized_numbers["market_regime_score"],
+                _normalize_optional_text(
+                    news_sentiment,
+                    "News sentiment",
+                ),
+                normalized_numbers["news_score"],
+                int(bool(selected_for_entry)),
+                _normalize_optional_text(
+                    strategy_version,
+                    "Strategy version",
+                ),
+                _serialize_json_object(features),
+                created_at,
+            ),
+        )
+        observation_id = cursor.lastrowid
+
+    if observation_id is None:
+        raise RuntimeError(
+            "Scanner observation was saved without an ID."
+        )
+
+    return int(observation_id)
+
+
+def mark_scanner_observation_selected(
+    observation_id: int,
+) -> None:
+    """Mark a scanner observation as resulting in a paper entry."""
+    normalized_observation_id = int(observation_id)
+
+    if normalized_observation_id <= 0:
+        raise ValueError(
+            "Scanner observation ID must be positive."
+        )
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE scanner_observations
+            SET selected_for_entry = 1
+            WHERE id = ?
+            """,
+            (normalized_observation_id,),
+        )
+
 
 def upsert_trade_excursion(
     *,
