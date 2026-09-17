@@ -3796,6 +3796,191 @@ def calculate_feature_performance(
         )
     )
 
+    trade_diagnostics: list[dict[str, Any]] = []
+
+    for outcome, entry in joined:
+        mfe = finite_number(
+            outcome.get("mfe_percent")
+        )
+        mae = finite_number(
+            outcome.get("mae_percent")
+        )
+        realized_return = finite_number(
+            outcome.get(
+                "realized_return_percent"
+            )
+        )
+
+        if (
+            mfe is None
+            or mae is None
+            or realized_return is None
+        ):
+            continue
+
+        observed_giveback = max(
+            0.0,
+            mfe - realized_return,
+        )
+
+        if (
+            mfe >= 0.5
+            and realized_return <= 0.0
+        ):
+            diagnostic_class = (
+                "gave_back_profit"
+            )
+        elif mfe <= 0.0:
+            diagnostic_class = (
+                "never_profitable"
+            )
+        elif realized_return > 0.0:
+            diagnostic_class = (
+                "profitable_exit"
+            )
+        else:
+            diagnostic_class = (
+                "limited_favorable_move"
+            )
+
+        profit_capture = None
+
+        if mfe >= 0.5:
+            profit_capture = (
+                realized_return
+                / mfe
+            ) * 100.0
+
+        trade_diagnostics.append(
+            {
+                "trade_book_id": outcome.get(
+                    "trade_book_id"
+                ),
+                "symbol": outcome.get(
+                    "symbol"
+                ),
+                "diagnostic_class": (
+                    diagnostic_class
+                ),
+                "entry_price": finite_number(
+                    outcome.get(
+                        "entry_price"
+                    )
+                ),
+                "exit_price": finite_number(
+                    outcome.get(
+                        "exit_price"
+                    )
+                ),
+                "shares": finite_number(
+                    outcome.get("shares")
+                ),
+                "realized_profit_loss": (
+                    finite_number(
+                        outcome.get(
+                            "realized_profit_loss"
+                        )
+                    )
+                ),
+                "realized_return_percent": (
+                    realized_return
+                ),
+                "exit_reason": outcome.get(
+                    "exit_reason"
+                ),
+                "holding_seconds": (
+                    finite_number(
+                        outcome.get(
+                            "holding_seconds"
+                        )
+                    )
+                ),
+                "mfe_percent": mfe,
+                "mae_percent": mae,
+                "observed_giveback_percent": (
+                    observed_giveback
+                ),
+                "profit_capture_percent": (
+                    profit_capture
+                ),
+                "excursion_max_price": (
+                    finite_number(
+                        outcome.get(
+                            "excursion_max_price"
+                        )
+                    )
+                ),
+                "excursion_min_price": (
+                    finite_number(
+                        outcome.get(
+                            "excursion_min_price"
+                        )
+                    )
+                ),
+                "excursion_observation_count": (
+                    outcome.get(
+                        "excursion_observation_count"
+                    )
+                ),
+                "excursion_first_observed_at": (
+                    outcome.get(
+                        "excursion_first_observed_at"
+                    )
+                ),
+                "excursion_last_observed_at": (
+                    outcome.get(
+                        "excursion_last_observed_at"
+                    )
+                ),
+                "strategy_version": entry.get(
+                    "strategy_version"
+                ),
+                "scanner_rank": entry.get(
+                    "scanner_rank"
+                ),
+                "score": entry.get("score"),
+                "confidence": entry.get(
+                    "confidence"
+                ),
+                "rsi": entry.get("rsi"),
+                "volume_ratio": entry.get(
+                    "volume_ratio"
+                ),
+                "atr_percent": entry.get(
+                    "atr_percent"
+                ),
+                "spread_percent": entry.get(
+                    "spread_percent"
+                ),
+                "one_day_change": entry.get(
+                    "one_day_change"
+                ),
+                "trend": entry.get("trend"),
+                "risk": entry.get("risk"),
+                "market_regime": entry.get(
+                    "market_regime"
+                ),
+                "news_sentiment": entry.get(
+                    "news_sentiment"
+                ),
+                "momentum_30_candidate": (
+                    entry.get(
+                        "momentum_30_candidate"
+                    )
+                ),
+            }
+        )
+
+    trade_diagnostics.sort(
+        key=lambda item: (
+            item.get(
+                "observed_giveback_percent"
+            )
+            or 0.0
+        ),
+        reverse=True,
+    )
+
     return {
         "paper": True,
         "read_only": True,
@@ -3829,6 +4014,12 @@ def calculate_feature_performance(
         },
         "combination_feature_set": list(
             combination_features
+        ),
+        "trade_diagnostics": (
+            trade_diagnostics
+        ),
+        "trade_diagnostic_count": (
+            len(trade_diagnostics)
         ),
         "warning": (
             "Feature results are observational paper-trading "
