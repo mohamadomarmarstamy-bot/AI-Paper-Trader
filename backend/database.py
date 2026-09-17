@@ -3599,6 +3599,17 @@ def calculate_feature_performance(
                 row,
             )
 
+        if "negative_day_weak_volume_shadow" in entry:
+            add_group(
+                "negative_day_weak_volume_shadow_forward",
+                (
+                    "matched"
+                    if bool(entry.get("negative_day_weak_volume_shadow"))
+                    else "not_matched"
+                ),
+                row,
+            )
+
         macd = finite_number(
             entry.get("macd")
         )
