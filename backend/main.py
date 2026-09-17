@@ -166,6 +166,8 @@ AUTO_TRADER_HARD_MAX_LOSS_PERCENT = 2.5
 # DAILY PORTFOLIO PROTECTION
 # ============================================================
 
+AUTO_TRADER_DAILY_PROFIT_CEILING_DOLLARS = 5000.0
+AUTO_TRADER_DAILY_PROFIT_GIVEBACK_ENABLED = False
 AUTO_TRADER_DAILY_PROFIT_ARM_DOLLARS = 100.0
 AUTO_TRADER_DAILY_PROFIT_GIVEBACK_DOLLARS = 25.0
 AUTO_TRADER_DAILY_PROFIT_GIVEBACK_PERCENT = 40.0
@@ -7732,7 +7734,8 @@ def run_auto_trader_cycle() -> dict[str, Any]:
         )
 
         if (
-            high_water_armed
+            AUTO_TRADER_DAILY_PROFIT_GIVEBACK_ENABLED
+            and high_water_armed
             and (
                 giveback_dollars
                 >= AUTO_TRADER_DAILY_PROFIT_GIVEBACK_DOLLARS
@@ -8581,6 +8584,11 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             <= -AUTO_TRADER_DAILY_LOSS_LIMIT_DOLLARS
         )
 
+        daily_profit_ceiling_hit = (
+            current_daily_pl
+            >= AUTO_TRADER_DAILY_PROFIT_CEILING_DOLLARS
+        )
+
         cycle_result["daily_pl"] = round(
             current_daily_pl,
             2,
@@ -8592,6 +8600,14 @@ def run_auto_trader_cycle() -> dict[str, Any]:
 
         cycle_result["daily_loss_limit_hit"] = (
             daily_loss_limit_hit
+        )
+
+        cycle_result["daily_profit_ceiling"] = (
+            AUTO_TRADER_DAILY_PROFIT_CEILING_DOLLARS
+        )
+
+        cycle_result["daily_profit_ceiling_hit"] = (
+            daily_profit_ceiling_hit
         )
 
         new_positions = 0
@@ -8607,6 +8623,19 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     "entries_paused_reason"
                 ] = (
                     "Daily paper-trading loss limit reached."
+                )
+
+                break
+
+            if daily_profit_ceiling_hit:
+                cycle_result[
+                    "entries_paused"
+                ] = True
+
+                cycle_result[
+                    "entries_paused_reason"
+                ] = (
+                    "Daily paper-trading profit ceiling reached."
                 )
 
                 break
