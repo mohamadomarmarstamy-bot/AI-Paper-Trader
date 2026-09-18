@@ -13150,6 +13150,20 @@ def auto_trader_canonical_broker_trades(
         ),
     )
 
+    trade_book_rows = load_trade_book(
+        limit=5000
+    )
+
+    trade_book_by_entry_order_id = {
+        str(
+            row.get("entry_order_id") or ""
+        ).strip(): row
+        for row in trade_book_rows
+        if str(
+            row.get("entry_order_id") or ""
+        ).strip()
+    }
+
     open_lots: dict[
         str,
         list[dict[str, Any]],
@@ -13222,9 +13236,32 @@ def auto_trader_canonical_broker_trades(
             ):
                 continue
 
+            trade_book_entry = (
+                trade_book_by_entry_order_id.get(
+                    order_id
+                )
+            )
+
+            authoritative_exit_order_id = str(
+                (
+                    trade_book_entry.get(
+                        "exit_order_id"
+                    )
+                    if isinstance(
+                        trade_book_entry,
+                        dict,
+                    )
+                    else ""
+                )
+                or ""
+            ).strip()
+
             entry = {
                 "symbol": symbol,
                 "entry_order_id": order_id,
+                "authoritative_exit_order_id": (
+                    authoritative_exit_order_id
+                ),
                 "entry_client_order_id": (
                     client_order_id
                 ),
@@ -13279,7 +13316,25 @@ def auto_trader_canonical_broker_trades(
             remaining_sell > 0.00000001
             and lots
         ):
-            lot = lots[0]
+            authoritative_lot = next(
+                (
+                    candidate_lot
+                    for candidate_lot in lots
+                    if str(
+                        candidate_lot.get(
+                            "authoritative_exit_order_id"
+                        )
+                        or ""
+                    ).strip() == order_id
+                ),
+                None,
+            )
+
+            lot = (
+                authoritative_lot
+                if authoritative_lot is not None
+                else lots[0]
+            )
 
             lot_remaining = float(
                 lot.get(
@@ -13289,7 +13344,7 @@ def auto_trader_canonical_broker_trades(
             )
 
             if lot_remaining <= 0.00000001:
-                lots.pop(0)
+                lots.remove(lot)
                 continue
 
             matched = min(
@@ -13351,6 +13406,11 @@ def auto_trader_canonical_broker_trades(
                 "exit_allocations"
             ].append(
                 {
+                    "match_method": (
+                        "trade_book_order_link"
+                        if authoritative_lot is not None
+                        else "fifo_fallback"
+                    ),
                     "exit_order_id": (
                         order_id
                     ),
@@ -13383,7 +13443,7 @@ def auto_trader_canonical_broker_trades(
                     "remaining_shares"
                 ] = 0.0
 
-                lots.pop(0)
+                lots.remove(lot)
 
         if remaining_sell > 0.00000001:
             unmatched_sells.append(
@@ -13794,7 +13854,7 @@ def auto_trader_canonical_broker_trades(
     return {
         "paper": True,
         "read_only": True,
-        "source": "broker_fills_fifo_by_entry",
+        "source": "broker_fills_trade_book_link_then_fifo",
         "summary": {
             "broker_fills": len(
                 fills
@@ -18107,4 +18167,3 @@ def sell(
         shares=shares,
         side="sell",
     )
-
