@@ -1126,6 +1126,32 @@ def create_trade_book_entry(
     return int(trade_book_id)
 
 
+def load_trade_book_entry_by_order_id(
+    entry_order_id: str,
+) -> dict[str, Any] | None:
+    """Load the newest trade-book record by entry order ID."""
+    normalized_order_id = _normalize_optional_text(
+        entry_order_id,
+        "Entry order ID",
+    )
+
+    if not normalized_order_id:
+        return None
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM trade_book
+            WHERE entry_order_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (normalized_order_id,),
+        ).fetchone()
+
+    return dict(row) if row is not None else None
+
 def load_trade_book_entry(
     trade_book_id: int,
 ) -> dict[str, Any] | None:

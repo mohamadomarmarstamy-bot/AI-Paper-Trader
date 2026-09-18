@@ -29,6 +29,7 @@ from database import (
     create_trade_book_entry,
     initialize_database,
     load_open_trade_book_entry,
+    load_trade_book_entry_by_order_id,
     load_trade_book,
     load_trade_book_events,
     load_trade_excursions,
@@ -6662,21 +6663,58 @@ def submit_alpaca_auto_bracket_buy(
                             },
                         )
 
-                    trade_book_id = (
-                        create_trade_book_entry(
-                            symbol=normalized_symbol,
-                            shares=filled_shares,
-                            entry_price=entry_price,
-                            entry_timestamp=entry_timestamp,
-                            created_at=entry_timestamp,
-                            entry_order_id=(
-                                entry_order_id
-                                or None
-                            ),
-                            entry_reason="auto_trader_entry",
-                            strategy=strategy_version,
+                    existing_trade_book_entry = (
+                        load_trade_book_entry_by_order_id(
+                            entry_order_id
                         )
                     )
+
+                    trade_book_created = False
+
+                    if existing_trade_book_entry is not None:
+                        existing_symbol = str(
+                            existing_trade_book_entry.get(
+                                "symbol",
+                                "",
+                            )
+                        ).strip().upper()
+                        existing_shares = safe_float(
+                            existing_trade_book_entry.get(
+                                "shares"
+                            )
+                        )
+
+                        if (
+                            existing_symbol != normalized_symbol
+                            or existing_shares is None
+                            or abs(
+                                existing_shares
+                                - filled_shares
+                            ) > 0.000001
+                        ):
+                            raise RuntimeError(
+                                "Existing trade-book entry "
+                                "does not match the confirmed "
+                                "Alpaca BUY fill."
+                            )
+
+                        trade_book_id = int(
+                            existing_trade_book_entry["id"]
+                        )
+                    else:
+                        trade_book_created = True
+                        trade_book_id = (
+                            create_trade_book_entry(
+                                symbol=normalized_symbol,
+                                shares=filled_shares,
+                                entry_price=entry_price,
+                                entry_timestamp=entry_timestamp,
+                                created_at=entry_timestamp,
+                                entry_order_id=entry_order_id,
+                                entry_reason="auto_trader_entry",
+                                strategy=strategy_version,
+                            )
+                        )
 
                     entry_event_details = {
                         "strategy_version": strategy_version,
@@ -6721,13 +6759,14 @@ def submit_alpaca_auto_bracket_buy(
                         "strategy_version"
                     ] = strategy_version
 
-                    record_trade_book_event(
-                        trade_book_id=trade_book_id,
-                        symbol=normalized_symbol,
-                        event="entry",
-                        timestamp=entry_timestamp,
-                        details=entry_event_details,
-                    )
+                    if trade_book_created:
+                        record_trade_book_event(
+                            trade_book_id=trade_book_id,
+                            symbol=normalized_symbol,
+                            event="entry",
+                            timestamp=entry_timestamp,
+                            details=entry_event_details,
+                        )
 
                     result["trade_book_id"] = (
                         trade_book_id
@@ -6737,10 +6776,26 @@ def submit_alpaca_auto_bracket_buy(
                     )
 
             except Exception as error:
+                persistence_error = clean_error_message(
+                    error
+                )
                 print(
                     f"Could not record trade-book entry "
                     f"for {normalized_symbol}: "
-                    f"{clean_error_message(error)}"
+                    f"{persistence_error}"
+                )
+                add_auto_trader_log(
+                    "trade_book_persist_error",
+                    symbol=normalized_symbol,
+                    message=(
+                        "Confirmed BUY fill could not "
+                        "be persisted completely to "
+                        "the trade book."
+                    ),
+                    details={
+                        "order_id": entry_order_id,
+                        "error": persistence_error,
+                    },
                 )
 
         return result
@@ -15275,6 +15330,24 @@ def auto_trader_reconciliation(
                 "filled_at": timestamp,
                 "filled_at_eastern": (
                     fill_eastern.isoformat()
+                ),
+                "client_order_id": str(
+                    order.get("client_order_id")
+                    or ""
+                ).strip(),
+                "order_class": str(
+                    order.get("order_class")
+                    or ""
+                ).strip(),
+                "type": str(
+                    order.get("type")
+                    or ""
+                ).strip(),
+                "auto_entry": str(
+                    order.get("client_order_id")
+                    or ""
+                ).strip().lower().startswith(
+                    "auto-entry-"
                 ),
             }
         )
