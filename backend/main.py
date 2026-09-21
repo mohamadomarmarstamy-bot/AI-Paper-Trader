@@ -271,6 +271,20 @@ APP_SESSION_SECRET = os.getenv(
     "",
 )
 
+# ============================================================
+# JARVIS AI ASSISTANT
+# ============================================================
+
+OPENAI_API_KEY = os.getenv(
+    "OPENAI_API_KEY",
+    "",
+).strip()
+
+JARVIS_MODEL = os.getenv(
+    "JARVIS_MODEL",
+    "gpt-5.6",
+).strip()
+
 APP_SESSION_COOKIE = "ai_paper_trader_session"
 APP_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
 
@@ -18648,3 +18662,135 @@ def sell(
         shares=shares,
         side="sell",
     )
+
+
+@app.get("/jarvis/status")
+def jarvis_status(
+    request: Request,
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    return {
+        "success": True,
+        "name": "Jarvis",
+        "status": "online",
+        "version": "1.0",
+        "paper_trading": True,
+        "chat_ready": bool(OPENAI_API_KEY),
+        "trading_access": False,
+    }
+
+
+
+def call_jarvis_ai(
+    user_message: str,
+) -> str:
+    if not OPENAI_API_KEY:
+        raise RuntimeError(
+            "OPENAI_API_KEY is not configured."
+        )
+
+    message = str(user_message or "").strip()
+
+    if not message:
+        raise ValueError(
+            "Jarvis requires a message."
+        )
+
+    response = requests.post(
+        "https://api.openai.com/v1/responses",
+        headers={
+            "Authorization": (
+                f"Bearer {OPENAI_API_KEY}"
+            ),
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": JARVIS_MODEL,
+            "instructions": (
+                "You are Jarvis, the AI assistant inside "
+                "an AI paper-trading research application. "
+                "Be concise, analytical, and clear. "
+                "Treat all trading as PAPER trading. "
+                "Never claim guaranteed profits or certainty "
+                "about future market performance."
+            ),
+            "input": message,
+        },
+        timeout=60,
+    )
+
+    if not response.ok:
+        raise RuntimeError(
+            "Jarvis AI request failed with status "
+            f"{response.status_code}."
+        )
+
+    payload = response.json()
+
+    for item in payload.get("output", []):
+        if item.get("type") != "message":
+            continue
+
+        for content in item.get("content", []):
+            if content.get("type") == "output_text":
+                text = str(
+                    content.get("text", "")
+                ).strip()
+
+                if text:
+                    return text
+
+    raise RuntimeError(
+        "Jarvis AI returned no text response."
+    )
+
+
+@app.post("/jarvis/chat")
+def jarvis_chat(
+    data: dict[str, Any],
+    request: Request,
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    message = str(
+        data.get("message", "")
+    ).strip()
+
+    if not message:
+        return {
+            "success": False,
+            "error": "Enter a message for Jarvis.",
+        }
+
+    if len(message) > 8000:
+        return {
+            "success": False,
+            "error": (
+                "Jarvis messages are limited "
+                "to 8,000 characters."
+            ),
+        }
+
+    try:
+        reply = call_jarvis_ai(
+            message
+        )
+    except Exception as error:
+        return {
+            "success": False,
+            "error": clean_error_message(
+                error
+            ),
+        }
+
+    return {
+        "success": True,
+        "name": "Jarvis",
+        "reply": reply,
+        "paper_trading": True,
+    }
