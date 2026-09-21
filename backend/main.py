@@ -2383,16 +2383,61 @@ def evaluate_scanner_forward_outcomes(
     """
     now = datetime.now(timezone.utc)
 
-    observations = load_due_scanner_forward_observations(
-        horizon_minutes=horizon_minutes,
-        due_at=now.isoformat(),
-        limit=limit,
+    # Keep current research fresh while still draining
+    # older observations that accumulated before this
+    # forward-research evaluator was deployed.
+    recent_limit = min(15, limit)
+    backlog_limit = max(0, limit - recent_limit)
+
+    recent_observations = (
+        load_due_scanner_forward_observations(
+            horizon_minutes=horizon_minutes,
+            due_at=now.isoformat(),
+            limit=recent_limit,
+            order="newest",
+        )
     )
+
+    observations = list(recent_observations)
+    observation_ids = {
+        int(observation["id"])
+        for observation in observations
+    }
+
+    if backlog_limit > 0:
+        backlog_candidates = (
+            load_due_scanner_forward_observations(
+                horizon_minutes=horizon_minutes,
+                due_at=now.isoformat(),
+                limit=backlog_limit + recent_limit,
+                order="oldest",
+            )
+        )
+
+        for observation in backlog_candidates:
+            observation_id = int(observation["id"])
+
+            if observation_id in observation_ids:
+                continue
+
+            observations.append(observation)
+            observation_ids.add(observation_id)
+
+            if (
+                len(observations)
+                >= recent_limit + backlog_limit
+            ):
+                break
 
     result: dict[str, Any] = {
         "success": True,
         "horizon_minutes": horizon_minutes,
         "due": len(observations),
+        "recent_due": len(recent_observations),
+        "backlog_due": (
+            len(observations)
+            - len(recent_observations)
+        ),
         "saved": 0,
         "unavailable": 0,
         "errors": 0,

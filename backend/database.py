@@ -1969,6 +1969,7 @@ def load_due_scanner_forward_observations(
     horizon_minutes: int,
     due_at: str,
     limit: int = 100,
+    order: str = "oldest",
 ) -> list[dict[str, Any]]:
     """Load scanner observations due for forward evaluation."""
     normalized_horizon = _validate_positive_integer(
@@ -1979,6 +1980,16 @@ def load_due_scanner_forward_observations(
     normalized_limit = _validate_positive_integer(
         limit,
         "Forward observation limit",
+    )
+
+    normalized_order = str(order).strip().lower()
+    if normalized_order not in {"oldest", "newest"}:
+        raise ValueError(
+            "Forward observation order must be oldest or newest."
+        )
+
+    order_direction = (
+        "ASC" if normalized_order == "oldest" else "DESC"
     )
 
     with get_connection() as connection:
@@ -1996,7 +2007,9 @@ def load_due_scanner_forward_observations(
                 '+' || ? || ' minutes'
             ) <= datetime(?)
               AND outcomes.id IS NULL
-            ORDER BY observations.observed_at ASC
+            ORDER BY observations.observed_at """
+            + order_direction
+            + """
             LIMIT ?
             """,
             (
