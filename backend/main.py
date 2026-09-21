@@ -29,6 +29,7 @@ from database import (
     create_trade_book_entry,
     create_trade_book_order_link,
     initialize_database,
+    load_due_scanner_forward_observations,
     load_open_trade_book_entry,
     load_trade_book_by_order_link,
     load_trade_book_entry_by_order_id,
@@ -46,6 +47,7 @@ from database import (
     record_trade_book_event,
     record_scanner_observation,
     save_learning_outcome,
+    save_scanner_forward_outcome,
     set_scheduler_state,
     upsert_trade_excursion,
 )
@@ -2249,6 +2251,224 @@ def alpaca_market_data_request(
     raise RuntimeError(
         "Alpaca market-data request failed without a response."
     )
+
+
+def fetch_forward_research_bar(
+    symbol: str,
+    target_at: str,
+    *,
+    search_minutes: int = 5,
+) -> dict[str, Any] | None:
+    """
+    Fetch the first valid 1-minute IEX bar at or after
+    a research target timestamp.
+
+    This helper is read-only and does not affect trading
+    decisions.
+    """
+    normalized_symbol = clean_symbol(symbol)
+
+    if not normalized_symbol:
+        raise ValueError(
+            "Forward research symbol is required."
+        )
+
+    try:
+        target_datetime = datetime.fromisoformat(
+            str(target_at).replace("Z", "+00:00")
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "Forward research target timestamp is invalid."
+        ) from error
+
+    if target_datetime.tzinfo is None:
+        target_datetime = target_datetime.replace(
+            tzinfo=timezone.utc
+        )
+
+    target_datetime = target_datetime.astimezone(
+        timezone.utc
+    )
+
+    normalized_search_minutes = max(
+        1,
+        int(search_minutes),
+    )
+
+    end_datetime = target_datetime + timedelta(
+        minutes=normalized_search_minutes
+    )
+
+    payload = alpaca_market_data_request(
+        "GET",
+        f"/v2/stocks/{normalized_symbol}/bars",
+        params={
+            "timeframe": "1Min",
+            "start": target_datetime.isoformat(),
+            "end": end_datetime.isoformat(),
+            "limit": normalized_search_minutes + 2,
+            "adjustment": "raw",
+            "feed": "iex",
+            "sort": "asc",
+        },
+    )
+
+    if not isinstance(payload, dict):
+        return None
+
+    bars = payload.get("bars")
+
+    if not isinstance(bars, list):
+        return None
+
+    for bar in bars:
+        if not isinstance(bar, dict):
+            continue
+
+        bar_timestamp = bar.get("t")
+        close_price = safe_float(bar.get("c"))
+
+        if (
+            not bar_timestamp
+            or close_price is None
+            or close_price <= 0
+        ):
+            continue
+
+        try:
+            bar_datetime = datetime.fromisoformat(
+                str(bar_timestamp).replace(
+                    "Z",
+                    "+00:00",
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+
+        if bar_datetime.tzinfo is None:
+            bar_datetime = bar_datetime.replace(
+                tzinfo=timezone.utc
+            )
+
+        bar_datetime = bar_datetime.astimezone(
+            timezone.utc
+        )
+
+        if bar_datetime < target_datetime:
+            continue
+
+        return {
+            "symbol": normalized_symbol,
+            "target_at": target_datetime.isoformat(),
+            "bar_at": bar_datetime.isoformat(),
+            "price": float(close_price),
+            "source": "alpaca_iex_1min",
+        }
+
+    return None
+
+
+def evaluate_scanner_forward_outcomes(
+    *,
+    horizon_minutes: int = 15,
+    limit: int = 25,
+) -> dict[str, Any]:
+    """
+    Evaluate due scanner observations using historical
+    Alpaca 1-minute bars.
+
+    Research-only: this function does not alter trading
+    decisions or strategy settings.
+    """
+    now = datetime.now(timezone.utc)
+
+    observations = load_due_scanner_forward_observations(
+        horizon_minutes=horizon_minutes,
+        due_at=now.isoformat(),
+        limit=limit,
+    )
+
+    result: dict[str, Any] = {
+        "success": True,
+        "horizon_minutes": horizon_minutes,
+        "due": len(observations),
+        "saved": 0,
+        "unavailable": 0,
+        "errors": 0,
+    }
+
+    for observation in observations:
+        try:
+            observed_at = datetime.fromisoformat(
+                str(
+                    observation["observed_at"]
+                ).replace("Z", "+00:00")
+            )
+
+            if observed_at.tzinfo is None:
+                observed_at = observed_at.replace(
+                    tzinfo=timezone.utc
+                )
+
+            observed_at = observed_at.astimezone(
+                timezone.utc
+            )
+
+            target_at = observed_at + timedelta(
+                minutes=horizon_minutes
+            )
+
+            forward_bar = fetch_forward_research_bar(
+                str(observation["symbol"]),
+                target_at.isoformat(),
+            )
+
+            if forward_bar is None:
+                save_scanner_forward_outcome(
+                    scanner_observation_id=int(
+                        observation["id"]
+                    ),
+                    horizon_minutes=horizon_minutes,
+                    target_at=target_at.isoformat(),
+                    evaluated_at=now.isoformat(),
+                    reference_price=float(
+                        observation["reference_price"]
+                    ),
+                    outcome_price=None,
+                    status="unavailable",
+                )
+                result["unavailable"] += 1
+                continue
+
+            save_scanner_forward_outcome(
+                scanner_observation_id=int(
+                    observation["id"]
+                ),
+                horizon_minutes=horizon_minutes,
+                target_at=target_at.isoformat(),
+                evaluated_at=str(
+                    forward_bar["bar_at"]
+                ),
+                reference_price=float(
+                    observation["reference_price"]
+                ),
+                outcome_price=float(
+                    forward_bar["price"]
+                ),
+            )
+
+            result["saved"] += 1
+
+        except Exception as error:
+            result["errors"] += 1
+            print(
+                "Scanner forward outcome error for "
+                f"{observation.get('symbol')}: "
+                f"{clean_error_message(error)}"
+            )
+
+    return result
 
 def get_alpaca_paper_order(
     order_id: str,
@@ -8008,6 +8228,30 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     f"{observation_symbol}: "
                     f"{clean_error_message(error)}"
                 )
+
+        # -------------------------------------------------
+        # Scanner forward-outcome research.
+        # -------------------------------------------------
+        # Evaluate matured scanner observations without
+        # changing any PAPER-trading decision.
+        try:
+            cycle_result[
+                "scanner_forward_outcomes"
+            ] = evaluate_scanner_forward_outcomes(
+                horizon_minutes=15,
+                limit=25,
+            )
+        except Exception as error:
+            cycle_result[
+                "scanner_forward_outcomes"
+            ] = {
+                "success": False,
+                "error": clean_error_message(error),
+            }
+            print(
+                "Scanner forward-outcome evaluator error: "
+                f"{clean_error_message(error)}"
+            )
 
         account = (
             fetch_alpaca_paper_account()

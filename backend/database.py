@@ -523,6 +523,51 @@ def initialize_database() -> None:
 
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS scanner_forward_outcomes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scanner_observation_id INTEGER NOT NULL,
+                horizon_minutes INTEGER NOT NULL,
+                target_at TEXT NOT NULL,
+                evaluated_at TEXT NOT NULL,
+                status TEXT NOT NULL
+                    CHECK(status IN ('measured', 'unavailable')),
+                reference_price REAL NOT NULL,
+                outcome_price REAL,
+                return_percent REAL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(scanner_observation_id)
+                    REFERENCES scanner_observations(id)
+                    ON DELETE CASCADE,
+                UNIQUE(
+                    scanner_observation_id,
+                    horizon_minutes
+                )
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_scanner_forward_outcomes_target_at
+            ON scanner_forward_outcomes (
+                target_at
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_scanner_forward_outcomes_observation
+            ON scanner_forward_outcomes (
+                scanner_observation_id
+            )
+            """
+        )
+
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS broker_fills (
                 order_id TEXT PRIMARY KEY,
                 symbol TEXT NOT NULL,
@@ -1918,6 +1963,179 @@ def mark_scanner_observation_selected(
             (normalized_observation_id,),
         )
 
+
+def load_due_scanner_forward_observations(
+    *,
+    horizon_minutes: int,
+    due_at: str,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Load scanner observations due for forward evaluation."""
+    normalized_horizon = _validate_positive_integer(
+        horizon_minutes,
+        "Forward horizon minutes",
+    )
+    normalized_due_at = _validate_timestamp(due_at)
+    normalized_limit = _validate_positive_integer(
+        limit,
+        "Forward observation limit",
+    )
+
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                observations.*
+            FROM scanner_observations AS observations
+            LEFT JOIN scanner_forward_outcomes AS outcomes
+                ON outcomes.scanner_observation_id =
+                    observations.id
+                AND outcomes.horizon_minutes = ?
+            WHERE datetime(
+                observations.observed_at,
+                '+' || ? || ' minutes'
+            ) <= datetime(?)
+              AND outcomes.id IS NULL
+            ORDER BY observations.observed_at ASC
+            LIMIT ?
+            """,
+            (
+                normalized_horizon,
+                normalized_horizon,
+                normalized_due_at,
+                normalized_limit,
+            ),
+        ).fetchall()
+
+    return [dict(row) for row in rows]
+
+
+def save_scanner_forward_outcome(
+    *,
+    scanner_observation_id: int,
+    horizon_minutes: int,
+    target_at: str,
+    evaluated_at: str,
+    reference_price: float,
+    outcome_price: float | None = None,
+    status: str = "measured",
+) -> int:
+    """Save one measured or unavailable forward outcome."""
+
+    normalized_observation_id = _validate_positive_integer(
+        scanner_observation_id,
+        "Scanner observation ID",
+    )
+    normalized_horizon = _validate_positive_integer(
+        horizon_minutes,
+        "Forward horizon minutes",
+    )
+    normalized_target_at = _validate_timestamp(target_at)
+    normalized_evaluated_at = _validate_timestamp(evaluated_at)
+
+    normalized_status = str(status).strip().lower()
+
+    if normalized_status not in {
+        "measured",
+        "unavailable",
+    }:
+        raise ValueError(
+            "Forward outcome status must be "
+            "'measured' or 'unavailable'."
+        )
+
+    normalized_reference_price = _validate_finite_number(
+        reference_price,
+        "Forward reference price",
+        allow_zero=False,
+    )
+
+    normalized_outcome_price: float | None = None
+    return_percent: float | None = None
+
+    if normalized_status == "measured":
+        if outcome_price is None:
+            raise ValueError(
+                "Measured forward outcomes require "
+                "an outcome price."
+            )
+
+        normalized_outcome_price = _validate_finite_number(
+            outcome_price,
+            "Forward outcome price",
+            allow_zero=False,
+        )
+
+        return_percent = (
+            (
+                normalized_outcome_price
+                - normalized_reference_price
+            )
+            / normalized_reference_price
+            * 100.0
+        )
+    elif outcome_price is not None:
+        raise ValueError(
+            "Unavailable forward outcomes must not "
+            "include an outcome price."
+        )
+
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    with get_connection() as connection:
+        existing_row = connection.execute(
+            """
+            SELECT id
+            FROM scanner_forward_outcomes
+            WHERE scanner_observation_id = ?
+              AND horizon_minutes = ?
+            LIMIT 1
+            """,
+            (
+                normalized_observation_id,
+                normalized_horizon,
+            ),
+        ).fetchone()
+
+        if existing_row is not None:
+            return int(existing_row["id"])
+
+        cursor = connection.execute(
+            """
+            INSERT INTO scanner_forward_outcomes (
+                scanner_observation_id,
+                horizon_minutes,
+                target_at,
+                evaluated_at,
+                status,
+                reference_price,
+                outcome_price,
+                return_percent,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                normalized_observation_id,
+                normalized_horizon,
+                normalized_target_at,
+                normalized_evaluated_at,
+                normalized_status,
+                normalized_reference_price,
+                normalized_outcome_price,
+                return_percent,
+                created_at,
+            ),
+        )
+
+        outcome_id = cursor.lastrowid
+
+    if outcome_id is None:
+        raise RuntimeError(
+            "Scanner forward outcome was saved without an ID."
+        )
+
+    return int(outcome_id)
 
 def upsert_trade_excursion(
     *,
