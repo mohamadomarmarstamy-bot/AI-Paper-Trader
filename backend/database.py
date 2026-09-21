@@ -561,6 +561,43 @@ def initialize_database() -> None:
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS trade_book_order_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_book_id INTEGER NOT NULL,
+                order_id TEXT,
+                client_order_id TEXT,
+                order_role TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(trade_book_id)
+                    REFERENCES trade_book(id)
+                    ON DELETE CASCADE
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_trade_book_order_links_order_id
+            ON trade_book_order_links(order_id)
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_trade_book_order_links_client_order_id
+            ON trade_book_order_links(client_order_id)
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_trade_book_order_links_trade_book_id
+            ON trade_book_order_links(trade_book_id)
+            """
+        )
+
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS scheduler_state (
                 key TEXT PRIMARY KEY,
                 value_json TEXT NOT NULL DEFAULT '{}',
@@ -1173,6 +1210,205 @@ def load_trade_book_entry(
 
     return dict(row) if row is not None else None
 
+
+def create_trade_book_order_link(
+    *,
+    trade_book_id: int,
+    order_id: str | None = None,
+    client_order_id: str | None = None,
+    order_role: str,
+    created_at: str,
+) -> int:
+    """Link a broker order to a trade-book record."""
+    normalized_trade_book_id = _validate_positive_integer(
+        trade_book_id,
+        "Trade-book ID",
+    )
+
+    normalized_order_id = _normalize_optional_text(
+        order_id,
+        "Order ID",
+    )
+
+    normalized_client_order_id = _normalize_optional_text(
+        client_order_id,
+        "Client order ID",
+    )
+
+    normalized_order_role = _normalize_optional_text(
+        order_role,
+        "Order role",
+    )
+
+    if normalized_order_role is None:
+        raise ValueError("Order role cannot be empty.")
+
+    normalized_created_at = _validate_timestamp(
+        created_at
+    )
+
+    if (
+        normalized_order_id is None
+        and normalized_client_order_id is None
+    ):
+        raise ValueError(
+            "At least one order identifier is required."
+        )
+
+    with get_connection() as connection:
+        existing_row = connection.execute(
+            """
+            SELECT id, trade_book_id, order_role
+            FROM trade_book_order_links
+            WHERE (
+                order_id = ?
+                AND ? IS NOT NULL
+            )
+            OR (
+                client_order_id = ?
+                AND ? IS NOT NULL
+            )
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (
+                normalized_order_id,
+                normalized_order_id,
+                normalized_client_order_id,
+                normalized_client_order_id,
+            ),
+        ).fetchone()
+
+        if existing_row is not None:
+            existing_trade_book_id = int(
+                existing_row["trade_book_id"]
+            )
+            existing_order_role = str(
+                existing_row["order_role"]
+            )
+
+            if (
+                existing_trade_book_id
+                != normalized_trade_book_id
+            ):
+                raise RuntimeError(
+                    "Broker order is already linked to "
+                    "a different trade-book record."
+                )
+
+            if (
+                existing_order_role
+                != normalized_order_role
+            ):
+                raise RuntimeError(
+                    "Broker order is already linked with "
+                    "a different order role."
+                )
+
+            return int(existing_row["id"])
+
+        cursor = connection.execute(
+            """
+            INSERT INTO trade_book_order_links (
+                trade_book_id,
+                order_id,
+                client_order_id,
+                order_role,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                normalized_trade_book_id,
+                normalized_order_id,
+                normalized_client_order_id,
+                normalized_order_role,
+                normalized_created_at,
+            ),
+        )
+
+        link_id = cursor.lastrowid
+
+    if link_id is None:
+        raise RuntimeError(
+            "The trade-book order link was saved without an ID."
+        )
+
+    return int(link_id)
+
+
+def load_trade_book_order_links(
+    trade_book_id: int,
+) -> list[dict[str, Any]]:
+    """Load all broker-order links for a trade-book record."""
+    normalized_trade_book_id = _validate_positive_integer(
+        trade_book_id,
+        "Trade-book ID",
+    )
+
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM trade_book_order_links
+            WHERE trade_book_id = ?
+            ORDER BY id ASC
+            """,
+            (normalized_trade_book_id,),
+        ).fetchall()
+
+    return [dict(row) for row in rows]
+
+
+def load_trade_book_by_order_link(
+    *,
+    order_id: str | None = None,
+    client_order_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Find the trade-book record associated with a broker order."""
+    normalized_order_id = _normalize_optional_text(
+        order_id,
+        "Order ID",
+    )
+
+    normalized_client_order_id = _normalize_optional_text(
+        client_order_id,
+        "Client order ID",
+    )
+
+    if (
+        normalized_order_id is None
+        and normalized_client_order_id is None
+    ):
+        return None
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT tb.*
+            FROM trade_book_order_links AS links
+            JOIN trade_book AS tb
+                ON tb.id = links.trade_book_id
+            WHERE (
+                links.order_id = ?
+                AND ? IS NOT NULL
+            )
+            OR (
+                links.client_order_id = ?
+                AND ? IS NOT NULL
+            )
+            ORDER BY links.id DESC
+            LIMIT 1
+            """,
+            (
+                normalized_order_id,
+                normalized_order_id,
+                normalized_client_order_id,
+                normalized_client_order_id,
+            ),
+        ).fetchone()
+
+    return dict(row) if row is not None else None
 
 def load_open_trade_book_entry(
     symbol: str,

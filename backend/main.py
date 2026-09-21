@@ -27,8 +27,10 @@ from database import (
     calculate_learning_summary,
     close_trade_book_entry,
     create_trade_book_entry,
+    create_trade_book_order_link,
     initialize_database,
     load_open_trade_book_entry,
+    load_trade_book_by_order_link,
     load_trade_book_entry_by_order_id,
     load_trade_book,
     load_trade_book_events,
@@ -6760,6 +6762,36 @@ def submit_alpaca_auto_bracket_buy(
                     ] = strategy_version
 
                     if trade_book_created:
+                        try:
+                            create_trade_book_order_link(
+                                trade_book_id=trade_book_id,
+                                order_id=entry_order_id,
+                                client_order_id=latest_order.get(
+                                    "client_order_id"
+                                ),
+                                order_role="ENTRY",
+                                created_at=entry_timestamp,
+                            )
+                        except Exception as error:
+                            add_auto_trader_log(
+                                "trade_book_order_link_error",
+                                symbol=normalized_symbol,
+                                message=(
+                                    "Confirmed BUY fill was saved, "
+                                    "but its trade-book order link "
+                                    "could not be saved."
+                                ),
+                                details={
+                                    "trade_book_id": trade_book_id,
+                                    "order_id": entry_order_id,
+                                    "error": (
+                                        clean_error_message(
+                                            error
+                                        )
+                                    ),
+                                },
+                            )
+
                         record_trade_book_event(
                             trade_book_id=trade_book_id,
                             symbol=normalized_symbol,
@@ -7450,6 +7482,35 @@ def log_new_broker_exit_fills() -> list[dict[str, Any]]:
                         exit_reason=reason,
                     )
                 )
+
+                try:
+                    create_trade_book_order_link(
+                        trade_book_id=trade_book_id,
+                        order_id=(
+                            order_id
+                            or None
+                        ),
+                        client_order_id=None,
+                        order_role="EXIT",
+                        created_at=filled_at,
+                    )
+                except Exception as error:
+                    add_auto_trader_log(
+                        "trade_book_order_link_error",
+                        symbol=symbol,
+                        message=(
+                            "Confirmed SELL fill closed the "
+                            "trade, but its trade-book order "
+                            "link could not be saved."
+                        ),
+                        details={
+                            "trade_book_id": trade_book_id,
+                            "order_id": order_id,
+                            "error": clean_error_message(
+                                error
+                            ),
+                        },
+                    )
 
                 record_trade_book_event(
                     trade_book_id=trade_book_id,
@@ -8516,6 +8577,42 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                                 exit_reason=exit_reason,
                             )
                         )
+
+                        try:
+                            create_trade_book_order_link(
+                                trade_book_id=trade_book_id,
+                                order_id=(
+                                    trade_result.get("id")
+                                    or None
+                                ),
+                                client_order_id=(
+                                    trade_result.get(
+                                        "client_order_id"
+                                    )
+                                    or None
+                                ),
+                                order_role="EXIT",
+                                created_at=exit_timestamp,
+                            )
+                        except Exception as error:
+                            add_auto_trader_log(
+                                "trade_book_order_link_error",
+                                symbol=symbol,
+                                message=(
+                                    "Auto-trader SELL closed the "
+                                    "trade, but its trade-book "
+                                    "order link could not be saved."
+                                ),
+                                details={
+                                    "trade_book_id": trade_book_id,
+                                    "order_id": (
+                                        trade_result.get("id")
+                                    ),
+                                    "error": clean_error_message(
+                                        error
+                                    ),
+                                },
+                            )
 
                         record_trade_book_event(
                             trade_book_id=trade_book_id,
@@ -15379,8 +15476,30 @@ def auto_trader_reconciliation(
 
     for fill in fills:
         order_id = fill["order_id"]
+        client_order_id = str(
+            fill.get("client_order_id")
+            or ""
+        ).strip()
 
-        if order_id and order_id in known_ids:
+        linked_trade = None
+
+        if order_id or client_order_id:
+            linked_trade = (
+                load_trade_book_by_order_link(
+                    order_id=(
+                        order_id
+                        or None
+                    ),
+                    client_order_id=(
+                        client_order_id
+                        or None
+                    ),
+                )
+            )
+
+        if linked_trade is not None:
+            matched.append(fill)
+        elif order_id and order_id in known_ids:
             matched.append(fill)
         else:
             missing.append(fill)
