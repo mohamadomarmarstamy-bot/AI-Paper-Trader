@@ -181,122 +181,147 @@
                     </div>
                     <!-- Account summary -->
 
-                    <section
-                        class="stats-grid"
-                        aria-label="Account summary"
-                    >
-                        <article
-                            class="stat-card stat-card-clickable" role="button" tabindex="0" data-open-section="performance-section" aria-label="View cash and account performance"
-                        >
-                            <div class="stat-card-heading">
-                                <p>
-                                    Cash
+        <section
+            class="stats-grid dashboard-stats-grid"
+            aria-label="Account summary"
+        >
+            <article
+                class="stat-card dashboard-stat-card stat-card-clickable"
+                role="button"
+                tabindex="0"
+                data-open-section="performance-section"
+                aria-label="View portfolio performance"
+            >
+                <div class="stat-card-heading">
+                    <p>Portfolio Value</p>
+
+                    <span class="dashboard-stat-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none">
+                            <path d="M4 19V9" />
+                            <path d="M10 19V5" />
+                            <path d="M16 19v-7" />
+                            <path d="M22 19H2" />
+                        </svg>
+                    </span>
+                </div>
+
+                <h3 id="portfolio-value">$0.00</h3>
+
+                <p class="stat-caption">
+                    Total account equity
+                </p>
+            </article>
+
+            <article
+                class="stat-card dashboard-stat-card stat-card-clickable"
+                role="button"
+                tabindex="0"
+                data-open-section="performance-section"
+                aria-label="View today's profit and loss"
+            >
+                <div class="stat-card-heading">
+                    <p>Today's P / L</p>
+
+                    <span class="dashboard-stat-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none">
+                            <path d="M3 17l6-6 4 4 8-9" />
+                            <path d="M15 6h6v6" />
+                        </svg>
+                    </span>
+                </div>
+
+                <h3 id="profit-loss">$0.00</h3>
+
+                <p class="stat-caption">
+                    Daily account movement
+                </p>
+            </article>
+
+            <article
+                class="stat-card dashboard-stat-card stat-card-clickable"
+                role="button"
+                tabindex="0"
+                data-open-section="positions-section"
+                aria-label="View open positions"
+            >
+                <div class="stat-card-heading">
+                    <p>Open Positions</p>
+
+                    <span class="dashboard-stat-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none">
+                            <rect x="4" y="5" width="16" height="14" rx="2" />
+                            <path d="M8 9h8" />
+                            <path d="M8 13h5" />
+                        </svg>
+                    </span>
+                </div>
+
+                <h3 id="position-count">0</h3>
+
+                <p class="stat-caption">
+                    Active holdings
+                </p>
+            </article>
+
+            <article
+                class="stat-card dashboard-stat-card stat-card-clickable"
+                role="button"
+                tabindex="0"
+                data-open-section="performance-section"
+                aria-label="View trading performance and win rate"
+            >
+                <div class="stat-card-heading">
+                    <p>Win Rate</p>
+
+                    <span class="dashboard-stat-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none">
+                            <circle cx="12" cy="12" r="8" />
+                            <circle cx="12" cy="12" r="4" />
+                            <path d="M12 2v3" />
+                            <path d="M22 12h-3" />
+                        </svg>
+                    </span>
+                </div>
+
+                <h3 id="dashboard-win-rate">0.00%</h3>
+
+                <p class="stat-caption">
+                    Winning closed trades
+                </p>
+            </article>
+        </section>
+        <section class="dashboard-primary-grid" aria-label="Portfolio performance and automatic trader health">
+<section class="panel portfolio-performance-panel dashboard-portfolio-panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">
+                                    Performance
                                 </p>
 
-                                <span aria-hidden="true">
-                                    💵
-                                </span>
+                                <h2>
+                                    Portfolio Performance
+                                </h2>
                             </div>
 
-                            <h3 id="cash">
-                                $0.00
-                            </h3>
+                            <button
+                                id="refresh-portfolio-chart-button"
+                                type="button"
+                                class="secondary-button"
+                                data-action="refresh-portfolio-chart"
+                            >
+                                Refresh
+                            </button>
+                        </div>
 
-                            <p class="stat-caption">
-                                Available funds
-                            </p>
-                        </article>
-
-                        <article
-                            class="stat-card stat-card-clickable" role="button" tabindex="0" data-open-section="performance-section" aria-label="View portfolio performance"
-                        >
-                            <div class="stat-card-heading">
-                                <p>
-                                    Portfolio Value
-                                </p>
-
-                                <span aria-hidden="true">
-                                    📦
-                                </span>
-                            </div>
-
-                            <h3 id="portfolio-value">
-                                $0.00
-                            </h3>
-
-                            <p class="stat-caption">
-                                Cash plus holdings
-                            </p>
-                        </article>
-
-                        <article
-                            class="stat-card stat-card-clickable" role="button" tabindex="0" data-open-section="performance-section" aria-label="View profit and loss details"
-                        >
-                            <div class="stat-card-heading">
-                                <p>
-                                    Today's Profit / Loss
-                                </p>
-
-                                <span aria-hidden="true">
-                                    📈
-                                </span>
-                            </div>
-
-                            <h3 id="profit-loss">
-                                $0.00
-                            </h3>
-
-                            <p class="stat-caption">
-                                Daily P/L
-                            </p>
-                        </article>
-
-                        <article
-                            class="stat-card stat-card-clickable" role="button" tabindex="0" data-open-section="positions-section" aria-label="View open positions"
-                        >
-                            <div class="stat-card-heading">
-                                <p>
-                                    Open Positions
-                                </p>
-
-                                <span aria-hidden="true">
-                                    🧾
-                                </span>
-                            </div>
-
-                            <h3 id="position-count">
-                                0
-                            </h3>
-
-                            <p class="stat-caption">
-                                Active holdings
-                            </p>
-                        </article>
+                        <div
+                            id="portfolio-chart"
+                            class="portfolio-chart"
+                            role="img"
+                            aria-label="Portfolio value over time"
+                        ></div>
                     </section>
 
-
-                    <section class="home-overview-grid" aria-label="Account overview">
-                        <article class="panel home-overview-card">
-                            <p class="panel-kicker">Live Account</p>
-                            <h2>Account at a glance</h2>
-                            <div class="home-mini-metrics">
-                                <div><span>Unrealized P / L</span><strong id="home-unrealized-profit-loss">—</strong></div>
-                                <div><span>Cash Allocation</span><strong id="home-cash-percent">—</strong></div>
-                                <div><span>Invested</span><strong id="home-invested-percent">—</strong></div>
-                            </div>
-                        </article>
-                        <article class="panel home-overview-card">
-                            <p class="panel-kicker">Quick Access</p>
-                            <h2>Workspace</h2>
-                            <div class="home-quick-actions">
-                                <button type="button" class="secondary-button" data-open-section="positions-section">Open positions</button>
-                                <button type="button" class="secondary-button" data-open-section="performance-section">Performance</button>
-                                <button type="button" class="secondary-button" data-open-section="scanner-section">Market scanner</button>
-                                <button type="button" class="secondary-button" data-open-section="activity-section">Trade activity</button>
-                            </div>
-                        </article>
-
-                        <article
+<article
                             class="panel home-overview-card auto-trader-health-card"
                             aria-live="polite"
                         >
@@ -348,6 +373,28 @@
                                 class="stat-caption auto-trader-last-error"
                                 hidden
                             ></p>
+                        </article>
+</section>
+
+<section class="home-overview-grid" aria-label="Account overview">
+                        <article class="panel home-overview-card">
+                            <p class="panel-kicker">Live Account</p>
+                            <h2>Account at a glance</h2>
+                            <div class="home-mini-metrics">
+                                <div><span>Unrealized P / L</span><strong id="home-unrealized-profit-loss">—</strong></div>
+                                <div><span>Cash Allocation</span><strong id="home-cash-percent">—</strong></div>
+                                <div><span>Invested</span><strong id="home-invested-percent">—</strong></div>
+                            </div>
+                        </article>
+                        <article class="panel home-overview-card">
+                            <p class="panel-kicker">Quick Access</p>
+                            <h2>Workspace</h2>
+                            <div class="home-quick-actions">
+                                <button type="button" class="secondary-button" data-open-section="positions-section">Open positions</button>
+                                <button type="button" class="secondary-button" data-open-section="performance-section">Performance</button>
+                                <button type="button" class="secondary-button" data-open-section="scanner-section">Market scanner</button>
+                                <button type="button" class="secondary-button" data-open-section="activity-section">Trade activity</button>
+                            </div>
                         </article>
                     </section>
                 </section>
@@ -696,38 +743,6 @@
                                 <span class="performance-metric-caption">Highest recorded value</span>
                             </article>
                         </div>
-                    </section>
-
-                    <!-- Portfolio performance -->
-
-                    <section class="panel portfolio-performance-panel">
-                        <div class="panel-header">
-                            <div>
-                                <p class="panel-kicker">
-                                    Performance
-                                </p>
-
-                                <h2>
-                                    Portfolio Performance
-                                </h2>
-                            </div>
-
-                            <button
-                                id="refresh-portfolio-chart-button"
-                                type="button"
-                                class="secondary-button"
-                                data-action="refresh-portfolio-chart"
-                            >
-                                Refresh
-                            </button>
-                        </div>
-
-                        <div
-                            id="portfolio-chart"
-                            class="portfolio-chart"
-                            role="img"
-                            aria-label="Portfolio value over time"
-                        ></div>
                     </section>
                 </section>
 

@@ -201,6 +201,11 @@ async function loadAccount() {
         );
 
         setText(
+            "dashboard-win-rate",
+            `${winRate.toFixed(2)}%`
+        );
+
+        setText(
             "closed-trades",
             String(closedTrades)
         );

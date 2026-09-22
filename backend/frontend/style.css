@@ -3701,3 +3701,259 @@ td[colspan] {
         width: 100%;
     }
 }
+
+/* ==========================================================
+   DASHBOARD REDESIGN V1
+   ========================================================== */
+
+.dashboard-stats-grid {
+    gap: 18px;
+}
+
+.dashboard-stat-card {
+    min-height: 164px;
+    padding: 22px 22px 20px;
+
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 18px;
+
+    background:
+        radial-gradient(
+            circle at 100% 0%,
+            rgba(59, 130, 246, 0.12),
+            transparent 42%
+        ),
+        linear-gradient(
+            145deg,
+            rgba(17, 24, 39, 0.96),
+            rgba(10, 15, 27, 0.98)
+        );
+
+    box-shadow:
+        0 16px 40px rgba(0, 0, 0, 0.22),
+        inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.dashboard-stat-card:hover {
+    border-color: rgba(96, 165, 250, 0.42);
+
+    box-shadow:
+        0 22px 50px rgba(0, 0, 0, 0.30),
+        0 0 24px rgba(59, 130, 246, 0.07),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
+
+    transform: translateY(-4px);
+}
+
+.dashboard-stat-card .stat-card-heading {
+    position: relative;
+    z-index: 2;
+}
+
+.dashboard-stat-card .stat-card-heading p {
+    color: #9aa9bd;
+    font-size: 0.76rem;
+    font-weight: 800;
+    letter-spacing: 0.055em;
+    text-transform: uppercase;
+}
+
+.dashboard-stat-icon {
+    display: grid;
+    place-items: center;
+
+    width: 40px !important;
+    height: 40px !important;
+
+    flex: 0 0 40px;
+
+    border: 1px solid rgba(96, 165, 250, 0.20) !important;
+    border-radius: 12px !important;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(59, 130, 246, 0.16),
+            rgba(124, 58, 237, 0.10)
+        ) !important;
+}
+
+.dashboard-stat-icon svg {
+    width: 20px;
+    height: 20px;
+
+    stroke: #7cb5ff;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.dashboard-stat-card h3 {
+    margin-top: 20px;
+
+    color: #f8fafc;
+    font-size: clamp(1.75rem, 2.4vw, 2.25rem);
+    font-weight: 800;
+    letter-spacing: -0.04em;
+}
+
+.dashboard-stat-card .stat-caption {
+    margin-top: 9px;
+    color: #718096;
+    font-size: 0.77rem;
+}
+
+.dashboard-stat-card::after {
+    width: 150px;
+    height: 150px;
+    right: -65px;
+    bottom: -85px;
+
+    background: rgba(59, 130, 246, 0.055);
+}
+
+@media (max-width: 760px) {
+    .dashboard-stat-card {
+        min-height: 145px;
+        padding: 19px;
+    }
+
+    .dashboard-stat-icon {
+        width: 36px !important;
+        height: 36px !important;
+        flex-basis: 36px;
+    }
+
+    .dashboard-stat-icon svg {
+        width: 18px;
+        height: 18px;
+    }
+}
+
+/* ==========================================================
+   DASHBOARD PRIMARY GRID V1
+   ========================================================== */
+
+.dashboard-primary-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(280px, 0.85fr);
+    gap: 18px;
+    align-items: stretch;
+    margin-bottom: 18px;
+}
+
+.dashboard-primary-grid > .panel {
+    min-width: 0;
+    margin: 0;
+}
+
+.dashboard-portfolio-panel,
+.dashboard-primary-grid .auto-trader-health-card {
+    min-height: 430px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 18px;
+    background:
+        radial-gradient(
+            circle at 100% 0%,
+            rgba(59, 130, 246, 0.08),
+            transparent 38%
+        ),
+        linear-gradient(
+            145deg,
+            rgba(17, 24, 39, 0.96),
+            rgba(10, 15, 27, 0.98)
+        );
+    box-shadow:
+        0 16px 40px rgba(0, 0, 0, 0.20),
+        inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.dashboard-portfolio-panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.dashboard-portfolio-panel .panel-header {
+    flex: 0 0 auto;
+    margin-bottom: 14px;
+}
+
+.dashboard-portfolio-panel .portfolio-chart {
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 320px;
+}
+
+.dashboard-primary-grid .auto-trader-health-card {
+    display: flex;
+    flex-direction: column;
+}
+
+.dashboard-primary-grid .auto-trader-health-heading {
+    margin-bottom: 18px;
+}
+
+.dashboard-primary-grid .auto-trader-health-card .home-mini-metrics {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.dashboard-primary-grid .auto-trader-health-card .home-mini-metrics > div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+
+    padding: 13px 14px;
+
+    border: 1px solid rgba(148, 163, 184, 0.10);
+    border-radius: 12px;
+
+    background: rgba(255, 255, 255, 0.025);
+}
+
+.dashboard-primary-grid .auto-trader-health-card .home-mini-metrics span {
+    color: #8492a6;
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+
+.dashboard-primary-grid .auto-trader-health-card .home-mini-metrics strong {
+    color: #f8fafc;
+    font-size: 0.85rem;
+    text-align: right;
+}
+
+.dashboard-primary-grid .auto-trader-health-message {
+    margin-top: auto;
+    padding-top: 18px;
+}
+
+@media (max-width: 1100px) {
+    .dashboard-primary-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .dashboard-portfolio-panel,
+    .dashboard-primary-grid .auto-trader-health-card {
+        min-height: auto;
+    }
+
+    .dashboard-portfolio-panel .portfolio-chart {
+        min-height: 320px;
+    }
+}
+
+@media (max-width: 600px) {
+    .dashboard-primary-grid {
+        gap: 12px;
+        margin-bottom: 12px;
+    }
+
+    .dashboard-portfolio-panel .portfolio-chart {
+        min-height: 260px;
+    }
+}
