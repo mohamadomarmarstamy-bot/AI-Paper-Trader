@@ -3957,13 +3957,3 @@ td[colspan] {
         min-height: 260px;
     }
 }
-
-.dashboard-stat-icon svg path,
-.dashboard-stat-icon svg rect,
-.dashboard-stat-icon svg circle {
-    fill: none !important;
-    stroke: #7cb5ff !important;
-    stroke-width: 1.8 !important;
-    stroke-linecap: round !important;
-    stroke-linejoin: round !important;
-}
