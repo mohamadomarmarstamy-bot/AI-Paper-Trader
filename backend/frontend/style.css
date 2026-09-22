@@ -3957,3 +3957,219 @@ td[colspan] {
         min-height: 260px;
     }
 }
+
+/* ==========================================================
+   JARVIS ORB + VOICE CONTROLS V1
+   ========================================================== */
+
+.jarvis-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.jarvis-voice-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.jarvis-control-button {
+    min-height: 2.25rem;
+    padding: 0.45rem 0.75rem;
+    border: 1px solid rgba(96, 165, 250, 0.24);
+    border-radius: 999px;
+    background: rgba(59, 130, 246, 0.08);
+    color: #cbd5e1;
+    font: inherit;
+    font-size: 0.76rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition:
+        border-color 160ms ease,
+        background 160ms ease,
+        transform 160ms ease,
+        box-shadow 160ms ease;
+}
+
+.jarvis-control-button:hover:not(:disabled) {
+    border-color: rgba(96, 165, 250, 0.55);
+    background: rgba(59, 130, 246, 0.16);
+    box-shadow: 0 0 18px rgba(59, 130, 246, 0.10);
+    transform: translateY(-1px);
+}
+
+.jarvis-control-button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.jarvis-stop-button {
+    border-color: rgba(148, 163, 184, 0.20);
+}
+
+.jarvis-orb {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    z-index: 9999;
+
+    width: 64px;
+    height: 64px;
+    padding: 0;
+
+    border: 1px solid rgba(96, 165, 250, 0.45);
+    border-radius: 50%;
+
+    background:
+        radial-gradient(
+            circle at 35% 30%,
+            rgba(125, 211, 252, 0.30),
+            transparent 32%
+        ),
+        linear-gradient(
+            145deg,
+            rgba(37, 99, 235, 0.92),
+            rgba(109, 40, 217, 0.92)
+        );
+
+    box-shadow:
+        0 10px 35px rgba(0, 0, 0, 0.38),
+        0 0 28px rgba(59, 130, 246, 0.24),
+        inset 0 1px 0 rgba(255, 255, 255, 0.20);
+
+    cursor: pointer;
+
+    display: grid;
+    place-items: center;
+
+    transition:
+        transform 180ms ease,
+        box-shadow 180ms ease,
+        border-color 180ms ease;
+}
+
+.jarvis-orb:hover {
+    transform: translateY(-3px) scale(1.04);
+    border-color: rgba(147, 197, 253, 0.85);
+
+    box-shadow:
+        0 14px 40px rgba(0, 0, 0, 0.42),
+        0 0 38px rgba(59, 130, 246, 0.36),
+        inset 0 1px 0 rgba(255, 255, 255, 0.24);
+}
+
+.jarvis-orb-core {
+    position: relative;
+
+    width: 34px;
+    height: 34px;
+
+    display: grid;
+    place-items: center;
+}
+
+.jarvis-orb-ring {
+    position: absolute;
+    inset: 1px;
+
+    border: 1px solid rgba(219, 234, 254, 0.75);
+    border-radius: 50%;
+
+    box-shadow:
+        0 0 10px rgba(147, 197, 253, 0.65),
+        inset 0 0 8px rgba(191, 219, 254, 0.18);
+}
+
+.jarvis-orb-dot {
+    width: 9px;
+    height: 9px;
+
+    border-radius: 50%;
+
+    background: #e0f2fe;
+
+    box-shadow:
+        0 0 8px rgba(224, 242, 254, 0.95),
+        0 0 18px rgba(125, 211, 252, 0.75);
+}
+
+body.jarvis-thinking .jarvis-orb {
+    animation: jarvis-orb-thinking 1.2s ease-in-out infinite;
+}
+
+body.jarvis-thinking .jarvis-orb-ring {
+    animation: jarvis-ring-spin 1.4s linear infinite;
+}
+
+body.jarvis-speaking .jarvis-orb {
+    animation: jarvis-orb-speaking 0.85s ease-in-out infinite;
+}
+
+body.jarvis-speaking .jarvis-orb-dot {
+    animation: jarvis-dot-pulse 0.65s ease-in-out infinite;
+}
+
+@keyframes jarvis-orb-thinking {
+    0%,
+    100% {
+        box-shadow:
+            0 10px 35px rgba(0, 0, 0, 0.38),
+            0 0 22px rgba(59, 130, 246, 0.20),
+            inset 0 1px 0 rgba(255, 255, 255, 0.20);
+    }
+
+    50% {
+        box-shadow:
+            0 12px 38px rgba(0, 0, 0, 0.40),
+            0 0 42px rgba(96, 165, 250, 0.48),
+            inset 0 1px 0 rgba(255, 255, 255, 0.25);
+    }
+}
+
+@keyframes jarvis-orb-speaking {
+    0%,
+    100% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.08);
+    }
+}
+
+@keyframes jarvis-ring-spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes jarvis-dot-pulse {
+    0%,
+    100% {
+        transform: scale(0.85);
+    }
+
+    50% {
+        transform: scale(1.35);
+    }
+}
+
+@media (max-width: 700px) {
+    .jarvis-header-actions {
+        width: 100%;
+        align-items: flex-start;
+    }
+
+    .jarvis-orb {
+        right: 16px;
+        bottom: 16px;
+        width: 58px;
+        height: 58px;
+    }
+}

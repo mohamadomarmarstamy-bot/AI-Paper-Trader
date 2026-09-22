@@ -1302,18 +1302,40 @@
                                 </p>
                             </div>
 
-                            <div
-                                id="jarvis-status"
-                                class="jarvis-status"
-                                aria-live="polite"
-                            >
-                                <span
-                                    class="jarvis-status-dot"
-                                    aria-hidden="true"
-                                ></span>
-                                <span id="jarvis-status-text">
-                                    Connecting...
-                                </span>
+                            <div class="jarvis-header-actions">
+                                <div
+                                    id="jarvis-status"
+                                    class="jarvis-status"
+                                    aria-live="polite"
+                                >
+                                    <span
+                                        class="jarvis-status-dot"
+                                        aria-hidden="true"
+                                    ></span>
+                                    <span id="jarvis-status-text">
+                                        Connecting...
+                                    </span>
+                                </div>
+
+                                <div class="jarvis-voice-controls">
+                                    <button
+                                        id="jarvis-voice-button"
+                                        type="button"
+                                        class="jarvis-control-button"
+                                        aria-pressed="false"
+                                    >
+                                        🔇 Voice Off
+                                    </button>
+
+                                    <button
+                                        id="jarvis-stop-button"
+                                        type="button"
+                                        class="jarvis-control-button jarvis-stop-button"
+                                        disabled
+                                    >
+                                        Stop
+                                    </button>
+                                </div>
                             </div>
                         </div>
 
@@ -1575,5 +1597,17 @@
             );
         }
     </script>
-</body>
+        <button
+            id="jarvis-orb"
+            class="jarvis-orb"
+            type="button"
+            aria-label="Open Jarvis AI Assistant"
+            title="Jarvis AI Assistant"
+        >
+            <span class="jarvis-orb-core" aria-hidden="true">
+                <span class="jarvis-orb-ring"></span>
+                <span class="jarvis-orb-dot"></span>
+            </span>
+        </button>
+    </body>
 </html>

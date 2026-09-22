@@ -1,9 +1,11 @@
-﻿"use strict";
+"use strict";
 
 (() => {
     const state = {
         ready: false,
         sending: false,
+        voiceEnabled: false,
+        speaking: false,
     };
 
     function getElements() {
@@ -14,6 +16,8 @@
             messages: document.getElementById("jarvis-messages"),
             status: document.getElementById("jarvis-status"),
             statusText: document.getElementById("jarvis-status-text"),
+            voiceButton: document.getElementById("jarvis-voice-button"),
+            stopButton: document.getElementById("jarvis-stop-button"),
         };
     }
 
@@ -30,6 +34,24 @@
             status.classList.toggle(
                 "jarvis-status-online",
                 ready
+            );
+        }
+    }
+
+    function setSpeaking(speaking) {
+        const { status } = getElements();
+
+        state.speaking = speaking;
+
+        document.body.classList.toggle(
+            "jarvis-speaking",
+            speaking
+        );
+
+        if (status) {
+            status.classList.toggle(
+                "jarvis-status-speaking",
+                speaking
             );
         }
     }
@@ -84,6 +106,122 @@
                     : "Send"
             );
         }
+
+        document.body.classList.toggle(
+            "jarvis-thinking",
+            sending
+        );
+    }
+
+    function updateVoiceControls() {
+        const {
+            voiceButton,
+            stopButton,
+        } = getElements();
+
+        if (voiceButton) {
+            voiceButton.textContent = (
+                state.voiceEnabled
+                    ? "🔊 Voice On"
+                    : "🔇 Voice Off"
+            );
+
+            voiceButton.setAttribute(
+                "aria-pressed",
+                String(state.voiceEnabled)
+            );
+        }
+
+        if (stopButton) {
+            stopButton.disabled = !state.speaking;
+        }
+    }
+
+    function stopSpeaking() {
+        if (
+            "speechSynthesis" in window
+        ) {
+            window.speechSynthesis.cancel();
+        }
+
+        setSpeaking(false);
+        updateVoiceControls();
+    }
+
+    function speak(text) {
+        if (
+            !state.voiceEnabled ||
+            !("speechSynthesis" in window)
+        ) {
+            return;
+        }
+
+        const cleanText = String(
+            text || ""
+        )
+            .replace(/```[\s\S]*?```/g, " code block omitted. ")
+            .replace(/`([^`]+)`/g, "$1")
+            .replace(/[*_#>-]/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+
+        if (!cleanText) {
+            return;
+        }
+
+        stopSpeaking();
+
+        const utterance =
+            new SpeechSynthesisUtterance(
+                cleanText
+            );
+
+        utterance.rate = 1.02;
+        utterance.pitch = 1.0;
+        utterance.volume = 1.0;
+
+        const voices =
+            window.speechSynthesis.getVoices();
+
+        const preferredVoice =
+            voices.find(
+                voice =>
+                    /en-US/i.test(
+                        voice.lang
+                    )
+            ) ||
+            voices.find(
+                voice =>
+                    /^en/i.test(
+                        voice.lang
+                    )
+            );
+
+        if (preferredVoice) {
+            utterance.voice =
+                preferredVoice;
+        }
+
+        utterance.onstart = () => {
+            setSpeaking(true);
+            updateVoiceControls();
+        };
+
+        utterance.onend = () => {
+            setSpeaking(false);
+            updateVoiceControls();
+        };
+
+        utterance.onerror = () => {
+            setSpeaking(false);
+            updateVoiceControls();
+        };
+
+        window.speechSynthesis.speak(
+            utterance
+        );
+
+        updateVoiceControls();
     }
 
     async function loadStatus() {
@@ -101,21 +239,34 @@
                 );
             }
 
-            const data = await response.json();
+            const data =
+                await response.json();
 
-            if (data.success && data.chat_ready) {
-                setStatus("Online", true);
+            if (
+                data.success &&
+                data.chat_ready
+            ) {
+                setStatus(
+                    "Online",
+                    true
+                );
                 return;
             }
 
-            setStatus("Unavailable", false);
+            setStatus(
+                "Unavailable",
+                false
+            );
         } catch (error) {
             console.error(
                 "Jarvis status error:",
                 error
             );
 
-            setStatus("Offline", false);
+            setStatus(
+                "Offline",
+                false
+            );
         }
     }
 
@@ -124,27 +275,37 @@
             message || ""
         ).trim();
 
-        if (!cleanMessage || state.sending) {
+        if (
+            !cleanMessage ||
+            state.sending
+        ) {
             return;
         }
 
-        addMessage("user", cleanMessage);
+        addMessage(
+            "user",
+            cleanMessage
+        );
+
         setSending(true);
 
         try {
-            const response = await fetch(
-                "/jarvis/chat",
-                {
-                    method: "POST",
-                    credentials: "same-origin",
-                    headers: {
-                        "Content-Type": "application/json",
-                    },
-                    body: JSON.stringify({
-                        message: cleanMessage,
-                    }),
-                }
-            );
+            const response =
+                await fetch(
+                    "/jarvis/chat",
+                    {
+                        method: "POST",
+                        credentials: "same-origin",
+                        headers: {
+                            "Content-Type":
+                                "application/json",
+                        },
+                        body: JSON.stringify({
+                            message:
+                                cleanMessage,
+                        }),
+                    }
+                );
 
             if (!response.ok) {
                 throw new Error(
@@ -152,18 +313,26 @@
                 );
             }
 
-            const data = await response.json();
+            const data =
+                await response.json();
 
             if (!data.success) {
                 throw new Error(
-                    data.error || "Jarvis could not respond."
+                    data.error ||
+                    "Jarvis could not respond."
                 );
             }
 
+            const reply =
+                data.reply ||
+                "I didn't receive a response.";
+
             addMessage(
                 "assistant",
-                data.reply || "No response received."
+                reply
             );
+
+            speak(reply);
         } catch (error) {
             console.error(
                 "Jarvis chat error:",
@@ -173,13 +342,15 @@
             addMessage(
                 "assistant",
                 `I couldn't complete that request. ${
-                    error.message || "Please try again."
+                    error.message ||
+                    "Please try again."
                 }`
             );
         } finally {
             setSending(false);
 
-            const { input } = getElements();
+            const { input } =
+                getElements();
 
             if (input) {
                 input.focus();
@@ -191,18 +362,95 @@
         const {
             form,
             input,
+            voiceButton,
+            stopButton,
         } = getElements();
+
+        const orb =
+            document.getElementById("jarvis-orb");
+
+        if (orb) {
+            orb.addEventListener(
+                "click",
+                () => {
+                    if (state.speaking) {
+                        stopSpeaking();
+                        return;
+                    }
+
+                    if (
+                        typeof window.openSection ===
+                        "function"
+                    ) {
+                        window.openSection(
+                            "jarvis-section"
+                        );
+                    }
+
+                    window.setTimeout(
+                        () => {
+                            const {
+                                input,
+                            } = getElements();
+
+                            input?.focus();
+                        },
+                        100
+                    );
+                }
+            );
+        }
 
         if (!form || !input) {
             return;
         }
 
+        if (
+            !("speechSynthesis" in window)
+        ) {
+            state.voiceEnabled = false;
+
+            if (voiceButton) {
+                voiceButton.disabled = true;
+                voiceButton.textContent =
+                    "Voice unavailable";
+            }
+        }
+
+        updateVoiceControls();
+
+        if (voiceButton) {
+            voiceButton.addEventListener(
+                "click",
+                () => {
+                    state.voiceEnabled =
+                        !state.voiceEnabled;
+
+                    if (
+                        !state.voiceEnabled
+                    ) {
+                        stopSpeaking();
+                    }
+
+                    updateVoiceControls();
+                }
+            );
+        }
+
+        if (stopButton) {
+            stopButton.addEventListener(
+                "click",
+                stopSpeaking
+            );
+        }
+
         form.addEventListener(
             "submit",
-            async (event) => {
+            async event => {
                 event.preventDefault();
 
-                const message = input.value.trim();
+                const message =
+                    input.value.trim();
 
                 if (!message) {
                     return;
@@ -210,13 +458,15 @@
 
                 input.value = "";
 
-                await sendMessage(message);
+                await sendMessage(
+                    message
+                );
             }
         );
 
         input.addEventListener(
             "keydown",
-            (event) => {
+            event => {
                 if (
                     event.key === "Enter" &&
                     !event.shiftKey
@@ -227,6 +477,13 @@
             }
         );
 
+        if (
+            "speechSynthesis" in window
+        ) {
+            window.speechSynthesis
+                .getVoices();
+        }
+
         loadStatus();
     }
 
@@ -235,5 +492,10 @@
         bindJarvis
     );
 
-    window.refreshJarvisStatus = loadStatus;
+    window.refreshJarvisStatus =
+        loadStatus;
+
+    window.jarvisSpeak = speak;
+    window.jarvisStopSpeaking =
+        stopSpeaking;
 })();
