@@ -18699,6 +18699,88 @@ def call_jarvis_ai(
             "Jarvis requires a message."
         )
 
+    trader_status = get_auto_trader_status()
+
+    try:
+        account_data = build_alpaca_dashboard_account()
+    except Exception as error:
+        account_data = {
+            "error": clean_error_message(error),
+        }
+
+    positions = account_data.get(
+        "positions",
+        [],
+    )
+
+    if not isinstance(positions, list):
+        positions = []
+
+    jarvis_context = {
+        "automatic_trader": {
+            "paper": trader_status.get("paper"),
+            "enabled": trader_status.get("enabled"),
+            "health": trader_status.get("health"),
+            "cycle_running": trader_status.get(
+                "cycle_running"
+            ),
+            "last_cycle_at": trader_status.get(
+                "last_cycle_at"
+            ),
+            "last_successful_cycle_at": (
+                trader_status.get(
+                    "last_successful_cycle_at"
+                )
+            ),
+            "last_scan_at": trader_status.get(
+                "last_scan_at"
+            ),
+            "scan_age_seconds": trader_status.get(
+                "scan_age_seconds"
+            ),
+            "last_trade_at": trader_status.get(
+                "last_trade_at"
+            ),
+        },
+        "account": {
+            "status": account_data.get("status"),
+            "source": account_data.get("source"),
+            "paper": account_data.get("paper"),
+            "equity": account_data.get("equity"),
+            "cash": account_data.get("cash"),
+            "buying_power": account_data.get(
+                "buying_power"
+            ),
+            "profit_loss": account_data.get(
+                "profit_loss"
+            ),
+            "profit_loss_percent": account_data.get(
+                "profit_loss_percent"
+            ),
+            "total_profit_loss": account_data.get(
+                "total_profit_loss"
+            ),
+            "total_return_percent": account_data.get(
+                "total_return_percent"
+            ),
+            "unrealized_profit_loss": account_data.get(
+                "unrealized_profit_loss"
+            ),
+            "realized_profit_loss": account_data.get(
+                "realized_profit_loss"
+            ),
+            "open_position_count": len(positions),
+            "positions": positions,
+            "error": account_data.get("error"),
+        },
+    }
+
+    context_text = json.dumps(
+        jarvis_context,
+        default=str,
+        separators=(",", ":"),
+    )
+
     response = requests.post(
         "https://api.openai.com/v1/responses",
         headers={
@@ -18714,10 +18796,24 @@ def call_jarvis_ai(
                 "an AI paper-trading research application. "
                 "Be concise, analytical, and clear. "
                 "Treat all trading as PAPER trading. "
+                "You have READ-ONLY access to the live "
+                "paper-trading snapshot supplied with each "
+                "message. Use that snapshot when answering "
+                "questions about the account, positions, "
+                "scanner, or automatic trader. "
+                "Never claim access to data that is not in "
+                "the supplied snapshot. "
                 "Never claim guaranteed profits or certainty "
-                "about future market performance."
+                "about future market performance. "
+                "You cannot place, cancel, or modify trades "
+                "and cannot change trader settings."
             ),
-            "input": message,
+            "input": (
+                "LIVE PAPER-TRADING SNAPSHOT:\n"
+                f"{context_text}\n\n"
+                "USER MESSAGE:\n"
+                f"{message}"
+            ),
         },
         timeout=60,
     )
@@ -18736,17 +18832,16 @@ def call_jarvis_ai(
 
         for content in item.get("content", []):
             if content.get("type") == "output_text":
-                text = str(
+                reply_text = str(
                     content.get("text", "")
                 ).strip()
 
-                if text:
-                    return text
+                if reply_text:
+                    return reply_text
 
     raise RuntimeError(
         "Jarvis AI returned no text response."
     )
-
 
 @app.post("/jarvis/chat")
 def jarvis_chat(

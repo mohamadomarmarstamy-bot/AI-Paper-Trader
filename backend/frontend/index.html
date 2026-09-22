@@ -100,6 +100,7 @@
                 </button>
                 <button type="button" class="nav-button" data-section="scanner-section" aria-controls="scanner-section"><span aria-hidden="true">🔎</span><span>Scanner</span></button>
                 <button type="button" class="nav-button" data-section="strategy-section" aria-controls="strategy-section"><span aria-hidden="true">🤖</span><span>Research Lab</span></button>
+                <button type="button" class="nav-button" data-section="jarvis-section" aria-controls="jarvis-section"><span aria-hidden="true">&#129302;</span><span>Jarvis</span></button>
                 <button type="button" class="nav-button" data-section="trade-journal-section" aria-controls="trade-journal-section"><span aria-hidden="true">&#128211;</span><span>Trade Journal</span></button>
                 <button type="button" class="nav-button" data-section="taxes-section" aria-controls="taxes-section"><span aria-hidden="true">&#129534;</span><span>Taxes</span></button>
             </nav>
@@ -1269,6 +1270,80 @@
                         </div>
                     </article>
                 </section>
+                <section
+                    id="jarvis-section"
+                    class="jarvis-section app-section hidden"
+                    aria-labelledby="jarvis-title"
+                    hidden
+                >
+                    <article class="panel jarvis-panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">AI Assistant</p>
+                                <h2 id="jarvis-title">Jarvis</h2>
+                                <p>
+                                    Your AI assistant for paper-trading research,
+                                    portfolio analysis, and market questions.
+                                </p>
+                            </div>
+
+                            <div
+                                id="jarvis-status"
+                                class="jarvis-status"
+                                aria-live="polite"
+                            >
+                                <span
+                                    class="jarvis-status-dot"
+                                    aria-hidden="true"
+                                ></span>
+                                <span id="jarvis-status-text">
+                                    Connecting...
+                                </span>
+                            </div>
+                        </div>
+
+                        <div
+                            id="jarvis-messages"
+                            class="jarvis-messages"
+                            aria-live="polite"
+                        >
+                            <div class="jarvis-message jarvis-message-assistant">
+                                <strong>Jarvis</strong>
+                                <p>
+                                    Systems ready. What would you like to analyze?
+                                </p>
+                            </div>
+                        </div>
+
+                        <form
+                            id="jarvis-form"
+                            class="jarvis-composer"
+                        >
+                            <label
+                                class="visually-hidden"
+                                for="jarvis-input"
+                            >
+                                Message Jarvis
+                            </label>
+
+                            <textarea
+                                id="jarvis-input"
+                                rows="2"
+                                maxlength="8000"
+                                placeholder="Ask Jarvis about your paper trader..."
+                                required
+                            ></textarea>
+
+                            <button
+                                id="jarvis-send-button"
+                                type="submit"
+                                class="primary-button"
+                            >
+                                Send
+                            </button>
+                        </form>
+                    </article>
+                </section>
             </main>
         </div>
     </div>
@@ -1289,6 +1364,7 @@
     <script src="js/watchlist.js"></script>
     <script src="js/portfolio.js"></script>
     <script src="js/strategy.js"></script>
+    <script src="js/jarvis.js"></script>
 
     <!-- =====================================
          Button bindings
