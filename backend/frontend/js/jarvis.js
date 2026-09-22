@@ -6,6 +6,8 @@
         sending: false,
         voiceEnabled: false,
         speaking: false,
+        listening: false,
+        recognition: null,
     };
 
     function getElements() {
@@ -17,6 +19,7 @@
             status: document.getElementById("jarvis-status"),
             statusText: document.getElementById("jarvis-status-text"),
             voiceButton: document.getElementById("jarvis-voice-button"),
+            listenButton: document.getElementById("jarvis-listen-button"),
             stopButton: document.getElementById("jarvis-stop-button"),
         };
     }
@@ -116,6 +119,7 @@
     function updateVoiceControls() {
         const {
             voiceButton,
+            listenButton,
             stopButton,
         } = getElements();
 
@@ -224,6 +228,78 @@
         updateVoiceControls();
     }
 
+    function setListening(listening) {
+        const {
+            listenButton,
+            statusText,
+        } = getElements();
+
+        state.listening = listening;
+
+        document.body.classList.toggle(
+            "jarvis-listening",
+            listening
+        );
+
+        if (listenButton) {
+            listenButton.textContent = (
+                listening
+                    ? "Listening..."
+                    : "Listen"
+            );
+
+            listenButton.setAttribute(
+                "aria-pressed",
+                String(listening)
+            );
+        }
+
+        if (
+            statusText &&
+            listening
+        ) {
+            statusText.textContent =
+                "Listening...";
+        }
+    }
+
+    function stopListening() {
+        if (
+            state.recognition &&
+            state.listening
+        ) {
+            state.recognition.stop();
+        }
+
+        setListening(false);
+    }
+
+    function startListening() {
+        if (!state.recognition) {
+            setStatus(
+                "Microphone unavailable",
+                state.ready
+            );
+            return;
+        }
+
+        if (state.sending) {
+            return;
+        }
+
+        if (state.speaking) {
+            stopSpeaking();
+        }
+
+        try {
+            state.recognition.start();
+        } catch (error) {
+            console.warn(
+                "Jarvis microphone could not start:",
+                error
+            );
+        }
+    }
     async function loadStatus() {
         try {
             const response = await fetch(
@@ -363,6 +439,7 @@
             form,
             input,
             voiceButton,
+            listenButton,
             stopButton,
         } = getElements();
 
@@ -378,13 +455,13 @@
                         return;
                     }
 
-                    if (
-                        typeof window.openSection ===
-                        "function"
-                    ) {
-                        window.openSection(
-                            "jarvis-section"
+                    const jarvisNav =
+                        document.querySelector(
+                            '.nav-button[data-section="jarvis-section"]'
                         );
+
+                    if (jarvisNav) {
+                        jarvisNav.click();
                     }
 
                     window.setTimeout(
@@ -403,6 +480,83 @@
 
         if (!form || !input) {
             return;
+        }
+
+        const SpeechRecognition =
+            window.SpeechRecognition ||
+            window.webkitSpeechRecognition;
+
+        if (SpeechRecognition) {
+            const recognition =
+                new SpeechRecognition();
+
+            recognition.lang = "en-US";
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            recognition.maxAlternatives = 1;
+
+            state.recognition = recognition;
+
+            recognition.onstart = () => {
+                setListening(true);
+            };
+
+            recognition.onend = () => {
+                setListening(false);
+            };
+
+            recognition.onerror = event => {
+                setListening(false);
+
+                console.warn(
+                    "Jarvis microphone error:",
+                    event.error
+                );
+
+                if (
+                    event.error === "not-allowed" ||
+                    event.error === "service-not-allowed"
+                ) {
+                    setStatus(
+                        "Microphone permission denied",
+                        state.ready
+                    );
+                }
+            };
+
+            recognition.onresult = event => {
+                const transcript =
+                    event.results?.[0]?.[0]
+                        ?.transcript?.trim();
+
+                if (!transcript) {
+                    return;
+                }
+
+                input.value = transcript;
+
+                stopListening();
+
+                sendMessage(transcript);
+            };
+
+            if (listenButton) {
+                listenButton.addEventListener(
+                    "click",
+                    () => {
+                        if (state.listening) {
+                            stopListening();
+                            return;
+                        }
+
+                        startListening();
+                    }
+                );
+            }
+        } else if (listenButton) {
+            listenButton.disabled = true;
+            listenButton.textContent =
+                "Mic unavailable";
         }
 
         if (
