@@ -145,6 +145,20 @@
     }
 
     function stopSpeaking() {
+        if (state.currentAudio) {
+            try {
+                state.currentAudio.pause();
+                state.currentAudio.currentTime = 0;
+            } catch (error) {
+                console.warn(
+                    "Jarvis audio could not stop:",
+                    error
+                );
+            }
+
+            state.currentAudio = null;
+        }
+
         if (
             "speechSynthesis" in window
         ) {
@@ -155,20 +169,24 @@
         updateVoiceControls();
     }
 
-    function speak(text) {
-        if (
-            !state.voiceEnabled ||
-            !("speechSynthesis" in window)
-        ) {
+    async function speak(text) {
+        if (!state.voiceEnabled) {
             return;
         }
 
         const cleanText = String(
             text || ""
         )
-            .replace(/```[\s\S]*?```/g, " code block omitted. ")
+            .replace(
+                /```[\s\S]*?```/g,
+                " code block omitted. "
+            )
             .replace(/`([^`]+)`/g, "$1")
             .replace(/[*_#>-]/g, " ")
+            .replace(
+                /[\p{Extended_Pictographic}\uFE0F]/gu,
+                ""
+            )
             .replace(/\s+/g, " ")
             .trim();
 
@@ -177,6 +195,144 @@
         }
 
         stopSpeaking();
+        stopListening();
+
+        const resumeListening = () => {
+            setSpeaking(false);
+            updateVoiceControls();
+
+            if (
+                state.voiceSession &&
+                !state.muted
+            ) {
+                updateVoiceMode(
+                    "listening",
+                    "Listening..."
+                );
+
+                window.setTimeout(
+                    () => {
+                        if (
+                            state.voiceSession &&
+                            !state.muted &&
+                            !state.sending &&
+                            !state.speaking &&
+                            !state.listening &&
+                            !state.recognitionStarting
+                        ) {
+                            startListening();
+                        }
+                    },
+                    300
+                );
+            }
+        };
+
+        const beginSpeaking = () => {
+            setSpeaking(true);
+            updateVoiceControls();
+
+            if (state.voiceSession) {
+                updateVoiceMode(
+                    "speaking",
+                    "Speaking..."
+                );
+            }
+        };
+
+        try {
+            if (state.voiceSession) {
+                updateVoiceMode(
+                    "thinking",
+                    "Preparing voice..."
+                );
+            }
+
+            const response = await fetch(
+                "/jarvis/speech",
+                {
+                    method: "POST",
+                    credentials: "same-origin",
+                    headers: {
+                        "Content-Type":
+                            "application/json",
+                    },
+                    body: JSON.stringify({
+                        text: cleanText,
+                    }),
+                }
+            );
+
+            if (!response.ok) {
+                throw new Error(
+                    `Neural speech failed (${response.status}).`
+                );
+            }
+
+            const audioBlob =
+                await response.blob();
+
+            const audioUrl =
+                URL.createObjectURL(
+                    audioBlob
+                );
+
+            const audio =
+                new Audio(audioUrl);
+
+            state.currentAudio = audio;
+
+            audio.onplay = () => {
+                beginSpeaking();
+            };
+
+            audio.onended = () => {
+                URL.revokeObjectURL(
+                    audioUrl
+                );
+
+                if (
+                    state.currentAudio ===
+                    audio
+                ) {
+                    state.currentAudio =
+                        null;
+                }
+
+                resumeListening();
+            };
+
+            audio.onerror = () => {
+                URL.revokeObjectURL(
+                    audioUrl
+                );
+
+                if (
+                    state.currentAudio ===
+                    audio
+                ) {
+                    state.currentAudio =
+                        null;
+                }
+
+                resumeListening();
+            };
+
+            await audio.play();
+            return;
+        } catch (error) {
+            console.warn(
+                "Jarvis neural voice failed; using browser fallback:",
+                error
+            );
+        }
+
+        if (
+            !("speechSynthesis" in window)
+        ) {
+            resumeListening();
+            return;
+        }
 
         const utterance =
             new SpeechSynthesisUtterance(
@@ -188,12 +344,13 @@
         utterance.volume = 1.0;
 
         const voices =
-            window.speechSynthesis.getVoices();
+            window.speechSynthesis
+                .getVoices();
 
         const preferredVoice =
             voices.find(
                 voice =>
-                    /en-US/i.test(
+                    /en-GB/i.test(
                         voice.lang
                     )
             ) ||
@@ -209,75 +366,14 @@
                 preferredVoice;
         }
 
-        utterance.onstart = () => {
-            setSpeaking(true);
-            updateVoiceControls();
+        utterance.onstart =
+            beginSpeaking;
 
-            if (state.voiceSession) {
-                updateVoiceMode(
-                    "speaking",
-                    "Speaking..."
-                );
-            }
-        };
+        utterance.onend =
+            resumeListening;
 
-        utterance.onend = () => {
-            setSpeaking(false);
-            updateVoiceControls();
-
-            if (
-                state.voiceSession &&
-                !state.muted
-            ) {
-                updateVoiceMode(
-                    "listening",
-                    "Listening..."
-                );
-
-                window.setTimeout(
-                    () => {
-                        if (
-                            state.voiceSession &&
-                            !state.muted &&
-                            !state.sending &&
-                            !state.speaking
-                        ) {
-                            startListening();
-                        }
-                    },
-                    300
-                );
-            }
-        };
-
-        utterance.onerror = () => {
-            setSpeaking(false);
-            updateVoiceControls();
-
-            if (
-                state.voiceSession &&
-                !state.muted
-            ) {
-                updateVoiceMode(
-                    "listening",
-                    "Listening..."
-                );
-
-                window.setTimeout(
-                    () => {
-                        if (
-                            state.voiceSession &&
-                            !state.muted &&
-                            !state.sending &&
-                            !state.speaking
-                        ) {
-                            startListening();
-                        }
-                    },
-                    300
-                );
-            }
-        };
+        utterance.onerror =
+            resumeListening;
 
         window.speechSynthesis.speak(
             utterance
@@ -285,7 +381,6 @@
 
         updateVoiceControls();
     }
-
     function updateVoiceMode(
         mode,
         caption

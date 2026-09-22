@@ -18903,3 +18903,102 @@ def jarvis_chat(
         "reply": reply,
         "paper_trading": True,
     }
+
+@app.post("/jarvis/speech")
+def jarvis_speech(
+    data: dict[str, Any],
+    request: Request,
+) -> Response:
+    require_app_session(
+        request
+    )
+
+    text = str(
+        data.get("text", "")
+    ).strip()
+
+    if not text:
+        raise HTTPException(
+            status_code=400,
+            detail="Jarvis has nothing to say.",
+        )
+
+    if len(text) > 4000:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Jarvis speech is limited "
+                "to 4,000 characters."
+            ),
+        )
+
+    if not OPENAI_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Jarvis speech is not configured."
+            ),
+        )
+
+    speech_instructions = (
+        "Speak in polished British English with "
+        "a sophisticated, composed, intelligent "
+        "male-presenting delivery. Use a smooth "
+        "medium-low register, precise diction, "
+        "calm confidence, and subtle dry wit. "
+        "Sound natural and conversational, like "
+        "an advanced personal AI assistant. Use "
+        "natural pauses and restrained emotional "
+        "expression. Never sound rushed, overly "
+        "theatrical, or robotic. Do not read "
+        "markdown formatting or emoji names aloud."
+    )
+
+    try:
+        response = requests.post(
+            "https://api.openai.com/v1/audio/speech",
+            headers={
+                "Authorization": (
+                    f"Bearer {OPENAI_API_KEY}"
+                ),
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "gpt-4o-mini-tts",
+                "voice": "cedar",
+                "input": text,
+                "instructions": speech_instructions,
+                "response_format": "mp3",
+            },
+            timeout=60,
+        )
+
+        if not response.ok:
+            raise RuntimeError(
+                "OpenAI speech request failed "
+                f"with HTTP {response.status_code}: "
+                f"{response.text[:500]}"
+            )
+
+        if not response.content:
+            raise RuntimeError(
+                "OpenAI speech returned no audio."
+            )
+
+        return Response(
+            content=response.content,
+            media_type="audio/mpeg",
+            headers={
+                "Cache-Control": "no-store",
+            },
+        )
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(
+            status_code=502,
+            detail=clean_error_message(
+                error
+            ),
+        ) from error
