@@ -1285,6 +1285,82 @@
                         </div>
                     </article>
                 </section>
+                <div
+                    id="jarvis-drawer-backdrop"
+                    class="jarvis-drawer-backdrop"
+                    aria-hidden="true"
+                ></div>
+
+                <aside
+                    id="jarvis-drawer"
+                    class="jarvis-drawer"
+                    aria-label="Jarvis AI Assistant"
+                    aria-hidden="true"
+                >
+                    <div
+                        id="jarvis-voice-mode"
+                        class="jarvis-voice-mode"
+                        aria-hidden="true"
+                    >
+                        <div class="jarvis-voice-mode-top">
+                            <span>Jarvis Voice</span>
+
+                            <span
+                                id="jarvis-voice-mode-status"
+                                class="jarvis-voice-mode-status"
+                            >
+                                Ready
+                            </span>
+                        </div>
+
+                        <div class="jarvis-voice-stage">
+                            <div
+                                id="jarvis-voice-orb"
+                                class="jarvis-voice-orb"
+                                aria-hidden="true"
+                            >
+                                <span class="jarvis-voice-orb-glow"></span>
+                                <span class="jarvis-voice-orb-ring"></span>
+                                <span class="jarvis-voice-orb-core"></span>
+                            </div>
+
+                            <p
+                                id="jarvis-voice-caption"
+                                class="jarvis-voice-caption"
+                                aria-live="polite"
+                            >
+                                Listening
+                            </p>
+                        </div>
+
+                        <div class="jarvis-voice-mode-controls">
+                            <button
+                                id="jarvis-voice-mute"
+                                class="jarvis-voice-action"
+                                type="button"
+                                aria-pressed="false"
+                            >
+                                Mute
+                            </button>
+
+                            <button
+                                id="jarvis-voice-end"
+                                class="jarvis-voice-action jarvis-voice-end"
+                                type="button"
+                            >
+                                End
+                            </button>
+                        </div>
+                    </div>
+                    <button
+                        id="jarvis-drawer-close"
+                        class="jarvis-drawer-close"
+                        type="button"
+                        aria-label="Close Jarvis"
+                    >
+                        &times;
+                    </button>
+
                 <section
                     id="jarvis-section"
                     class="jarvis-section app-section hidden"
@@ -1388,6 +1464,7 @@
                         </form>
                     </article>
                 </section>
+                            </aside>
             </main>
         </div>
     </div>

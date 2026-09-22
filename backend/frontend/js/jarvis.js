@@ -8,6 +8,9 @@
         speaking: false,
         listening: false,
         recognition: null,
+        voiceSession: false,
+        muted: false,
+        recognitionStarting: false,
     };
 
     function getElements() {
@@ -209,16 +212,71 @@
         utterance.onstart = () => {
             setSpeaking(true);
             updateVoiceControls();
+
+            if (state.voiceSession) {
+                updateVoiceMode(
+                    "speaking",
+                    "Speaking..."
+                );
+            }
         };
 
         utterance.onend = () => {
             setSpeaking(false);
             updateVoiceControls();
+
+            if (
+                state.voiceSession &&
+                !state.muted
+            ) {
+                updateVoiceMode(
+                    "listening",
+                    "Listening..."
+                );
+
+                window.setTimeout(
+                    () => {
+                        if (
+                            state.voiceSession &&
+                            !state.muted &&
+                            !state.sending &&
+                            !state.speaking
+                        ) {
+                            startListening();
+                        }
+                    },
+                    300
+                );
+            }
         };
 
         utterance.onerror = () => {
             setSpeaking(false);
             updateVoiceControls();
+
+            if (
+                state.voiceSession &&
+                !state.muted
+            ) {
+                updateVoiceMode(
+                    "listening",
+                    "Listening..."
+                );
+
+                window.setTimeout(
+                    () => {
+                        if (
+                            state.voiceSession &&
+                            !state.muted &&
+                            !state.sending &&
+                            !state.speaking
+                        ) {
+                            startListening();
+                        }
+                    },
+                    300
+                );
+            }
         };
 
         window.speechSynthesis.speak(
@@ -228,6 +286,176 @@
         updateVoiceControls();
     }
 
+    function updateVoiceMode(
+        mode,
+        caption
+    ) {
+        const voiceMode =
+            document.getElementById(
+                "jarvis-voice-mode"
+            );
+        const status =
+            document.getElementById(
+                "jarvis-voice-mode-status"
+            );
+        const captionElement =
+            document.getElementById(
+                "jarvis-voice-caption"
+            );
+
+        if (!voiceMode) {
+            return;
+        }
+
+        voiceMode.classList.remove(
+            "listening",
+            "thinking",
+            "speaking"
+        );
+
+        if (mode) {
+            voiceMode.classList.add(mode);
+        }
+
+        if (status) {
+            status.textContent =
+                caption || "Ready";
+        }
+
+        if (captionElement) {
+            captionElement.textContent =
+                caption || "Ready";
+        }
+    }
+
+    function startVoiceSession() {
+        const voiceMode =
+            document.getElementById(
+                "jarvis-voice-mode"
+            );
+
+        if (
+            !voiceMode ||
+            !state.recognition
+        ) {
+            setStatus(
+                "Microphone unavailable",
+                state.ready
+            );
+            return;
+        }
+
+        state.voiceSession = true;
+        state.muted = false;
+        state.voiceEnabled = true;
+
+        voiceMode.classList.add("active");
+        voiceMode.classList.remove("muted");
+
+        voiceMode.setAttribute(
+            "aria-hidden",
+            "false"
+        );
+
+        const muteButton =
+            document.getElementById(
+                "jarvis-voice-mute"
+            );
+
+        if (muteButton) {
+            muteButton.textContent = "Mute";
+            muteButton.setAttribute(
+                "aria-pressed",
+                "false"
+            );
+        }
+
+        updateVoiceControls();
+        updateVoiceMode(
+            "listening",
+            "Listening..."
+        );
+
+        startListening();
+    }
+
+    function endVoiceSession() {
+        const voiceMode =
+            document.getElementById(
+                "jarvis-voice-mode"
+            );
+
+        state.voiceSession = false;
+        state.muted = false;
+
+        stopListening();
+        stopSpeaking();
+
+        voiceMode?.classList.remove(
+            "active",
+            "listening",
+            "thinking",
+            "speaking",
+            "muted"
+        );
+
+        voiceMode?.setAttribute(
+            "aria-hidden",
+            "true"
+        );
+
+        updateVoiceControls();
+    }
+
+    function toggleVoiceMute() {
+        if (!state.voiceSession) {
+            return;
+        }
+
+        const voiceMode =
+            document.getElementById(
+                "jarvis-voice-mode"
+            );
+        const muteButton =
+            document.getElementById(
+                "jarvis-voice-mute"
+            );
+
+        state.muted = !state.muted;
+
+        voiceMode?.classList.toggle(
+            "muted",
+            state.muted
+        );
+
+        if (muteButton) {
+            muteButton.textContent =
+                state.muted
+                    ? "Unmute"
+                    : "Mute";
+
+            muteButton.setAttribute(
+                "aria-pressed",
+                String(state.muted)
+            );
+        }
+
+        if (state.muted) {
+            stopListening();
+
+            updateVoiceMode(
+                null,
+                "Muted"
+            );
+        } else {
+            updateVoiceMode(
+                "listening",
+                "Listening..."
+            );
+
+            startListening();
+        }
+    }
     function setListening(listening) {
         const {
             listenButton,
@@ -283,17 +511,26 @@
             return;
         }
 
-        if (state.sending) {
+        if (
+            state.sending ||
+            state.speaking ||
+            state.listening ||
+            state.recognitionStarting ||
+            (
+                state.voiceSession &&
+                state.muted
+            )
+        ) {
             return;
         }
 
-        if (state.speaking) {
-            stopSpeaking();
-        }
+        state.recognitionStarting = true;
 
         try {
             state.recognition.start();
         } catch (error) {
+            state.recognitionStarting = false;
+
             console.warn(
                 "Jarvis microphone could not start:",
                 error
@@ -425,6 +662,35 @@
         } finally {
             setSending(false);
 
+            if (
+                state.voiceSession &&
+                !state.muted &&
+                !state.speaking &&
+                !state.listening &&
+                !state.recognitionStarting
+            ) {
+                updateVoiceMode(
+                    "listening",
+                    "Listening..."
+                );
+
+                window.setTimeout(
+                    () => {
+                        if (
+                            state.voiceSession &&
+                            !state.muted &&
+                            !state.sending &&
+                            !state.speaking &&
+                            !state.listening &&
+                            !state.recognitionStarting
+                        ) {
+                            startListening();
+                        }
+                    },
+                    350
+                );
+            }
+
             const { input } =
                 getElements();
 
@@ -455,13 +721,40 @@
                         return;
                     }
 
-                    const jarvisNav =
-                        document.querySelector(
-                            '.nav-button[data-section="jarvis-section"]'
+                    const drawer =
+                        document.getElementById(
+                            "jarvis-drawer"
+                        );
+                    const backdrop =
+                        document.getElementById(
+                            "jarvis-drawer-backdrop"
                         );
 
-                    if (jarvisNav) {
-                        jarvisNav.click();
+                    if (drawer) {
+                        drawer.classList.toggle("open");
+
+                        const isOpen =
+                            drawer.classList.contains("open");
+
+                        drawer.setAttribute(
+                            "aria-hidden",
+                            String(!isOpen)
+                        );
+
+                        backdrop?.classList.toggle(
+                            "open",
+                            isOpen
+                        );
+
+                        backdrop?.setAttribute(
+                            "aria-hidden",
+                            String(!isOpen)
+                        );
+
+                        document.body.classList.toggle(
+                            "jarvis-drawer-open",
+                            isOpen
+                        );
                     }
 
                     window.setTimeout(
@@ -478,6 +771,62 @@
             );
         }
 
+        const closeDrawer = () => {
+            const drawer =
+                document.getElementById(
+                    "jarvis-drawer"
+                );
+            const backdrop =
+                document.getElementById(
+                    "jarvis-drawer-backdrop"
+                );
+
+            drawer?.classList.remove("open");
+            backdrop?.classList.remove("open");
+
+            drawer?.setAttribute(
+                "aria-hidden",
+                "true"
+            );
+
+            backdrop?.setAttribute(
+                "aria-hidden",
+                "true"
+            );
+
+            document.body.classList.remove(
+                "jarvis-drawer-open"
+            );
+        };
+
+        const drawerClose =
+            document.getElementById(
+                "jarvis-drawer-close"
+            );
+
+        const drawerBackdrop =
+            document.getElementById(
+                "jarvis-drawer-backdrop"
+            );
+
+        drawerClose?.addEventListener(
+            "click",
+            closeDrawer
+        );
+
+        drawerBackdrop?.addEventListener(
+            "click",
+            closeDrawer
+        );
+
+        document.addEventListener(
+            "keydown",
+            event => {
+                if (event.key === "Escape") {
+                    closeDrawer();
+                }
+            }
+        );
         if (!form || !input) {
             return;
         }
@@ -498,14 +847,30 @@
             state.recognition = recognition;
 
             recognition.onstart = () => {
+                state.recognitionStarting = false;
+
                 setListening(true);
+
+                if (
+                    state.voiceSession &&
+                    !state.muted
+                ) {
+                    updateVoiceMode(
+                        "listening",
+                        "Listening..."
+                    );
+                }
             };
 
             recognition.onend = () => {
+                state.recognitionStarting = false;
+
                 setListening(false);
             };
 
             recognition.onerror = event => {
+                state.recognitionStarting = false;
+
                 setListening(false);
 
                 console.warn(
@@ -517,9 +882,28 @@
                     event.error === "not-allowed" ||
                     event.error === "service-not-allowed"
                 ) {
+                    state.voiceSession = false;
+
+                    updateVoiceMode(
+                        null,
+                        "Microphone permission denied"
+                    );
+
                     setStatus(
                         "Microphone permission denied",
                         state.ready
+                    );
+
+                    return;
+                }
+
+                if (
+                    state.voiceSession &&
+                    !state.muted
+                ) {
+                    updateVoiceMode(
+                        null,
+                        "Microphone paused"
                     );
                 }
             };
@@ -535,6 +919,13 @@
 
                 input.value = transcript;
 
+                if (state.voiceSession) {
+                    updateVoiceMode(
+                        "thinking",
+                        "Thinking..."
+                    );
+                }
+
                 stopListening();
 
                 sendMessage(transcript);
@@ -544,15 +935,35 @@
                 listenButton.addEventListener(
                     "click",
                     () => {
-                        if (state.listening) {
-                            stopListening();
+                        if (state.voiceSession) {
+                            endVoiceSession();
                             return;
                         }
 
-                        startListening();
+                        startVoiceSession();
                     }
                 );
             }
+
+            const voiceMuteButton =
+                document.getElementById(
+                    "jarvis-voice-mute"
+                );
+
+            const voiceEndButton =
+                document.getElementById(
+                    "jarvis-voice-end"
+                );
+
+            voiceMuteButton?.addEventListener(
+                "click",
+                toggleVoiceMute
+            );
+
+            voiceEndButton?.addEventListener(
+                "click",
+                endVoiceSession
+            );
         } else if (listenButton) {
             listenButton.disabled = true;
             listenButton.textContent =
