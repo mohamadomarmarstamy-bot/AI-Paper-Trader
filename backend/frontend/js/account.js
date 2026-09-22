@@ -200,9 +200,27 @@ async function loadAccount() {
             `${winRate.toFixed(2)}%`
         );
 
+        let dashboardWinRate = winRate;
+
+        try {
+            const historyPayload = await fetchJson(
+                `${getApiUrl()}/auto-trader/history?limit=500`
+            );
+
+            dashboardWinRate = toNumber(
+                historyPayload?.summary?.win_rate_percent ??
+                winRate
+            );
+        } catch (error) {
+            console.warn(
+                "Dashboard win rate fallback:",
+                error
+            );
+        }
+
         setText(
             "dashboard-win-rate",
-            `${winRate.toFixed(2)}%`
+            `${dashboardWinRate.toFixed(2)}%`
         );
 
         setText(
