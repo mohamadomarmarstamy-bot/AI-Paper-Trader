@@ -848,6 +848,201 @@ def initialize_database() -> None:
         )
 
 
+
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS jarvis_profile (
+                id INTEGER PRIMARY KEY
+                    CHECK(id = 1),
+                preferred_name TEXT NOT NULL DEFAULT '',
+                address_as TEXT NOT NULL DEFAULT 'Sir',
+                timezone TEXT NOT NULL DEFAULT 'America/New_York',
+                language TEXT NOT NULL DEFAULT 'en-US',
+                voice TEXT NOT NULL DEFAULT 'cedar',
+                wake_phrase TEXT NOT NULL DEFAULT 'Hey Jarvis',
+                voice_activation INTEGER NOT NULL DEFAULT 0
+                    CHECK(voice_activation IN (0, 1)),
+                automatic_greeting INTEGER NOT NULL DEFAULT 1
+                    CHECK(automatic_greeting IN (0, 1)),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+def load_jarvis_profile() -> dict[str, Any]:
+    """Load Jarvis user profile and voice settings."""
+    defaults = {
+        "preferred_name": "",
+        "address_as": "Sir",
+        "timezone": "America/New_York",
+        "language": "en-US",
+        "voice": "cedar",
+        "wake_phrase": "Hey Jarvis",
+        "voice_activation": False,
+        "automatic_greeting": True,
+    }
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT
+                preferred_name,
+                address_as,
+                timezone,
+                language,
+                voice,
+                wake_phrase,
+                voice_activation,
+                automatic_greeting,
+                created_at,
+                updated_at
+            FROM jarvis_profile
+            WHERE id = 1
+            """
+        ).fetchone()
+
+    if row is None:
+        return defaults
+
+    profile = dict(row)
+    profile["voice_activation"] = bool(
+        profile.get("voice_activation")
+    )
+    profile["automatic_greeting"] = bool(
+        profile.get("automatic_greeting")
+    )
+
+    return profile
+
+
+def save_jarvis_profile(
+    profile: dict[str, Any],
+) -> dict[str, Any]:
+    """Create or update Jarvis user profile and voice settings."""
+    current = load_jarvis_profile()
+
+    preferred_name = str(
+        profile.get(
+            "preferred_name",
+            current.get("preferred_name", ""),
+        )
+    ).strip()[:100]
+
+    address_as = str(
+        profile.get(
+            "address_as",
+            current.get("address_as", "Sir"),
+        )
+    ).strip()[:100] or "Sir"
+
+    timezone_name = str(
+        profile.get(
+            "timezone",
+            current.get(
+                "timezone",
+                "America/New_York",
+            ),
+        )
+    ).strip()[:100] or "America/New_York"
+
+    language = str(
+        profile.get(
+            "language",
+            current.get("language", "en-US"),
+        )
+    ).strip()[:50] or "en-US"
+
+    voice = str(
+        profile.get(
+            "voice",
+            current.get("voice", "cedar"),
+        )
+    ).strip()[:50] or "cedar"
+
+    wake_phrase = str(
+        profile.get(
+            "wake_phrase",
+            current.get(
+                "wake_phrase",
+                "Hey Jarvis",
+            ),
+        )
+    ).strip()[:100] or "Hey Jarvis"
+
+    voice_activation = int(
+        bool(
+            profile.get(
+                "voice_activation",
+                current.get(
+                    "voice_activation",
+                    False,
+                ),
+            )
+        )
+    )
+
+    automatic_greeting = int(
+        bool(
+            profile.get(
+                "automatic_greeting",
+                current.get(
+                    "automatic_greeting",
+                    True,
+                ),
+            )
+        )
+    )
+
+    now = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO jarvis_profile (
+                id,
+                preferred_name,
+                address_as,
+                timezone,
+                language,
+                voice,
+                wake_phrase,
+                voice_activation,
+                automatic_greeting,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            ON CONFLICT(id) DO UPDATE SET
+                preferred_name = excluded.preferred_name,
+                address_as = excluded.address_as,
+                timezone = excluded.timezone,
+                language = excluded.language,
+                voice = excluded.voice,
+                wake_phrase = excluded.wake_phrase,
+                voice_activation = excluded.voice_activation,
+                automatic_greeting = excluded.automatic_greeting,
+                updated_at = excluded.updated_at
+            """,
+            (
+                preferred_name,
+                address_as,
+                timezone_name,
+                language,
+                voice,
+                wake_phrase,
+                voice_activation,
+                automatic_greeting,
+                now,
+                now,
+            ),
+        )
+
+    return load_jarvis_profile()
+
 def save_trade(
     symbol: str,
     shares: int,

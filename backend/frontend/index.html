@@ -88,19 +88,20 @@
                 class="main-nav"
                 aria-label="Application sections"
             >
-                <button type="button" class="nav-button active" data-section="dashboard-section" aria-controls="dashboard-section" aria-current="page"><span aria-hidden="true">🏠</span><span>Dashboard</span></button>
-                <button type="button" class="nav-button" data-section="trade-section" aria-controls="trade-section"><span aria-hidden="true">💹</span><span>Trade</span></button>
-                <button type="button" class="nav-button" data-section="positions-section" aria-controls="positions-section"><span aria-hidden="true">🧾</span><span>Positions</span></button>
-                <button type="button" class="nav-button" data-section="performance-section" aria-controls="performance-section"><span aria-hidden="true">📈</span><span>Performance</span></button>
-                <button type="button" class="nav-button" data-section="activity-section" aria-controls="activity-section"><span aria-hidden="true">🕘</span><span>Activity</span></button>
+                <button type="button" class="nav-button active" data-section="dashboard-section" aria-controls="dashboard-section" aria-current="page"><span aria-hidden="true">ðŸ </span><span>Dashboard</span></button>
+                <button type="button" class="nav-button" data-section="trade-section" aria-controls="trade-section"><span aria-hidden="true">ðŸ’¹</span><span>Trade</span></button>
+                <button type="button" class="nav-button" data-section="positions-section" aria-controls="positions-section"><span aria-hidden="true">ðŸ§¾</span><span>Positions</span></button>
+                <button type="button" class="nav-button" data-section="performance-section" aria-controls="performance-section"><span aria-hidden="true">ðŸ“ˆ</span><span>Performance</span></button>
+                <button type="button" class="nav-button" data-section="activity-section" aria-controls="activity-section"><span aria-hidden="true">ðŸ•˜</span><span>Activity</span></button>
                 <button type="button" class="nav-button notification-nav-button" data-section="notifications-section" aria-controls="notifications-section">
-                    <span aria-hidden="true">🔔</span>
+                    <span aria-hidden="true">ðŸ””</span>
                     <span>Notifications</span>
                     <span id="notification-badge" class="notification-badge hidden" aria-label="Unread notifications">0</span>
                 </button>
-                <button type="button" class="nav-button" data-section="scanner-section" aria-controls="scanner-section"><span aria-hidden="true">🔎</span><span>Scanner</span></button>
-                <button type="button" class="nav-button" data-section="strategy-section" aria-controls="strategy-section"><span aria-hidden="true">🤖</span><span>Research Lab</span></button>
+                <button type="button" class="nav-button" data-section="scanner-section" aria-controls="scanner-section"><span aria-hidden="true">ðŸ”Ž</span><span>Scanner</span></button>
+                <button type="button" class="nav-button" data-section="strategy-section" aria-controls="strategy-section"><span aria-hidden="true">ðŸ¤–</span><span>Research Lab</span></button>
                 <button type="button" class="nav-button" data-section="jarvis-section" aria-controls="jarvis-section"><span aria-hidden="true">&#129302;</span><span>Jarvis</span></button>
+                <button type="button" class="nav-button" data-section="profile-section" aria-controls="profile-section"><span aria-hidden="true">&#128100;</span><span>Profile</span></button>
                 <button type="button" class="nav-button" data-section="trade-journal-section" aria-controls="trade-journal-section"><span aria-hidden="true">&#128211;</span><span>Trade Journal</span></button>
                 <button type="button" class="nav-button" data-section="taxes-section" aria-controls="taxes-section"><span aria-hidden="true">&#129534;</span><span>Taxes</span></button>
             </nav>
@@ -156,7 +157,7 @@
                         data-action="refresh-dashboard"
                     >
                         <span aria-hidden="true">
-                            ↻
+                            â†»
                         </span>
 
                         Refresh Dashboard
@@ -381,9 +382,9 @@
                             <p class="panel-kicker">Live Account</p>
                             <h2>Account at a glance</h2>
                             <div class="home-mini-metrics">
-                                <div><span>Unrealized P / L</span><strong id="home-unrealized-profit-loss">—</strong></div>
-                                <div><span>Cash Allocation</span><strong id="home-cash-percent">—</strong></div>
-                                <div><span>Invested</span><strong id="home-invested-percent">—</strong></div>
+                                <div><span>Unrealized P / L</span><strong id="home-unrealized-profit-loss">â€”</strong></div>
+                                <div><span>Cash Allocation</span><strong id="home-cash-percent">â€”</strong></div>
+                                <div><span>Invested</span><strong id="home-invested-percent">â€”</strong></div>
                             </div>
                         </article>
                         <article class="panel home-overview-card">
@@ -532,7 +533,7 @@
                                     data-action="add-watchlist"
                                 >
                                     <span aria-hidden="true">
-                                        ⭐
+                                        â­
                                     </span>
 
                                     Add to Watchlist
@@ -845,7 +846,7 @@
                                 </label>
 
                                 <div class="notification-status">
-                                    <span id="notification-feed-status">Waiting for activity…</span>
+                                    <span id="notification-feed-status">Waiting for activityâ€¦</span>
                                 </div>
                             </div>
 
@@ -984,7 +985,7 @@
                                 aria-live="polite"
                             >
                                 <p class="watchlist-status">
-                                    Loading watchlist…
+                                    Loading watchlistâ€¦
                                 </p>
                             </div>
                         </article>
@@ -1400,7 +1401,7 @@
                                         class="jarvis-control-button"
                                         aria-pressed="false"
                                     >
-                                        🔇 Voice Off
+                                        ðŸ”‡ Voice Off
                                     </button>
 
                                     <button
@@ -1408,7 +1409,7 @@
                                 type="button"
                                 class="jarvis-control-button jarvis-listen-button"
                             >
-                                🎙 Listen
+                                ðŸŽ™ Listen
                             </button>
                             <button
                                         id="jarvis-stop-button"
@@ -1464,6 +1465,160 @@
                         </form>
                     </article>
                 </section>
+                <!-- =====================================
+                     Jarvis Profile section
+                ====================================== -->
+
+                <section
+                    id="profile-section"
+                    class="profile-section app-section hidden"
+                    aria-labelledby="profile-title"
+                    hidden
+                >
+                    <div class="section-heading">
+                        <p class="panel-kicker">Personal Settings</p>
+                        <h2 id="profile-title">Jarvis Profile</h2>
+                        <p>
+                            Configure how Jarvis knows you, speaks to you,
+                            and handles voice interaction.
+                        </p>
+                    </div>
+
+                    <article class="panel profile-panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">Identity</p>
+                                <h3>How Jarvis addresses you</h3>
+                            </div>
+                        </div>
+
+                        <div class="profile-grid">
+                            <label class="profile-field">
+                                <span>Preferred name</span>
+                                <input
+                                    id="jarvis-profile-name"
+                                    type="text"
+                                    maxlength="80"
+                                    placeholder="Your name"
+                                    autocomplete="name"
+                                >
+                            </label>
+
+                            <label class="profile-field">
+                                <span>Address me as</span>
+                                <input
+                                    id="jarvis-profile-address-as"
+                                    type="text"
+                                    maxlength="40"
+                                    placeholder="Sir"
+                                >
+                            </label>
+
+                            <label class="profile-field">
+                                <span>Timezone</span>
+                                <select id="jarvis-profile-timezone">
+                                    <option value="America/New_York">Eastern Time</option>
+                                    <option value="America/Chicago">Central Time</option>
+                                    <option value="America/Denver">Mountain Time</option>
+                                    <option value="America/Los_Angeles">Pacific Time</option>
+                                    <option value="America/Anchorage">Alaska Time</option>
+                                    <option value="Pacific/Honolulu">Hawaii Time</option>
+                                    <option value="UTC">UTC</option>
+                                </select>
+                            </label>
+                        </div>
+
+                        <div class="panel-header profile-subheader">
+                            <div>
+                                <p class="panel-kicker">Voice</p>
+                                <h3>Jarvis voice preferences</h3>
+                            </div>
+                        </div>
+
+                        <div class="profile-grid">
+                            <label class="profile-field">
+                                <span>Language</span>
+                                <select id="jarvis-profile-language">
+                                    <option value="en-US">English — United States</option>
+                                    <option value="en-GB">English — United Kingdom</option>
+                                    <option value="ar">Arabic</option>
+                                    <option value="es">Spanish</option>
+                                    <option value="fr">French</option>
+                                    <option value="de">German</option>
+                                </select>
+                            </label>
+
+                            <label class="profile-field">
+                                <span>Voice</span>
+                                <select id="jarvis-profile-voice">
+                                    <option value="cedar">Cedar — British-style Jarvis</option>
+                                    <option value="marin">Marin — British-style alternative</option>
+                                    <option value="coral">Coral</option>
+                                    <option value="alloy">Alloy</option>
+                                </select>
+                            </label>
+
+                            <label class="profile-field">
+                                <span>Wake phrase</span>
+                                <input
+                                    id="jarvis-profile-wake-phrase"
+                                    type="text"
+                                    maxlength="80"
+                                    placeholder="Hey Jarvis"
+                                >
+                            </label>
+                        </div>
+
+                        <div class="profile-options">
+                            <label class="profile-toggle">
+                                <input
+                                    id="jarvis-profile-voice-activation"
+                                    type="checkbox"
+                                >
+                                <span>
+                                    <strong>Voice activation</strong>
+                                    <small>
+                                        Allow Jarvis to listen for the configured
+                                        wake phrase when supported by the browser.
+                                    </small>
+                                </span>
+                            </label>
+
+                            <label class="profile-toggle">
+                                <input
+                                    id="jarvis-profile-automatic-greeting"
+                                    type="checkbox"
+                                    checked
+                                >
+                                <span>
+                                    <strong>Automatic greeting</strong>
+                                    <small>
+                                        Let Jarvis greet you using your saved
+                                        name and address preference.
+                                    </small>
+                                </span>
+                            </label>
+                        </div>
+
+                        <div class="profile-actions">
+                            <button
+                                id="jarvis-profile-save"
+                                type="button"
+                                class="primary-button"
+                            >
+                                Save Profile
+                            </button>
+
+                            <span
+                                id="jarvis-profile-status"
+                                class="profile-save-status"
+                                role="status"
+                                aria-live="polite"
+                            ></span>
+                        </div>
+                    </article>
+                </section>
+
                             </aside>
             </main>
         </div>
@@ -1486,6 +1641,7 @@
     <script src="js/portfolio.js"></script>
     <script src="js/strategy.js"></script>
     <script src="js/jarvis.js"></script>
+    <script src="js/profile.js"></script>
 
     <!-- =====================================
          Button bindings

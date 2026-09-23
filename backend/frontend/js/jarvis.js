@@ -6,11 +6,24 @@
         sending: false,
         voiceEnabled: false,
         speaking: false,
+        speechPending: false,
+        currentAudio: null,
+        currentAudioUrl: null,
+        speechController: null,
         listening: false,
         recognition: null,
         voiceSession: false,
         muted: false,
         recognitionStarting: false,
+        conversationHistory: [],
+        bargeInStream: null,
+        bargeInContext: null,
+        bargeInAnalyser: null,
+        bargeInFrame: null,
+        bargeInStartedAt: 0,
+        bargeInLoudSince: 0,
+        bargeInBaseline: 0,
+        bargeInTriggered: false,
     };
 
     function getElements() {
@@ -145,8 +158,26 @@
     }
 
     function stopSpeaking() {
+        stopBargeInDetection();
+
+        if (state.speechController) {
+            try {
+                state.speechController.abort();
+            } catch (error) {
+                console.warn(
+                    "Jarvis speech request could not abort:",
+                    error
+                );
+            }
+
+            state.speechController = null;
+        }
+
         if (state.currentAudio) {
             try {
+                state.currentAudio.onplay = null;
+                state.currentAudio.onended = null;
+                state.currentAudio.onerror = null;
                 state.currentAudio.pause();
                 state.currentAudio.currentTime = 0;
             } catch (error) {
@@ -159,11 +190,21 @@
             state.currentAudio = null;
         }
 
+        if (state.currentAudioUrl) {
+            URL.revokeObjectURL(
+                state.currentAudioUrl
+            );
+
+            state.currentAudioUrl = null;
+        }
+
         if (
             "speechSynthesis" in window
         ) {
             window.speechSynthesis.cancel();
         }
+
+        state.speechPending = false;
 
         setSpeaking(false);
         updateVoiceControls();
@@ -198,6 +239,7 @@
         stopListening();
 
         const resumeListening = () => {
+            stopBargeInDetection();
             setSpeaking(false);
             updateVoiceControls();
 
@@ -217,6 +259,7 @@
                             !state.muted &&
                             !state.sending &&
                             !state.speaking &&
+                            !state.speechPending &&
                             !state.listening &&
                             !state.recognitionStarting
                         ) {
@@ -237,10 +280,20 @@
                     "speaking",
                     "Speaking..."
                 );
+
+                startBargeInDetection();
             }
         };
 
         try {
+            state.speechPending = true;
+
+            const speechController =
+                new AbortController();
+
+            state.speechController =
+                speechController;
+
             if (state.voiceSession) {
                 updateVoiceMode(
                     "thinking",
@@ -253,6 +306,8 @@
                 {
                     method: "POST",
                     credentials: "same-origin",
+                    signal:
+                        speechController.signal,
                     headers: {
                         "Content-Type":
                             "application/json",
@@ -272,10 +327,22 @@
             const audioBlob =
                 await response.blob();
 
+            if (
+                state.speechController ===
+                speechController
+            ) {
+                state.speechController = null;
+            }
+
+            state.speechPending = false;
+
             const audioUrl =
                 URL.createObjectURL(
                     audioBlob
                 );
+
+            state.currentAudioUrl =
+                audioUrl;
 
             const audio =
                 new Audio(audioUrl);
@@ -286,10 +353,18 @@
                 beginSpeaking();
             };
 
-            audio.onended = () => {
-                URL.revokeObjectURL(
+            const finishAudio = () => {
+                if (
+                    state.currentAudioUrl ===
                     audioUrl
-                );
+                ) {
+                    URL.revokeObjectURL(
+                        audioUrl
+                    );
+
+                    state.currentAudioUrl =
+                        null;
+                }
 
                 if (
                     state.currentAudio ===
@@ -302,25 +377,28 @@
                 resumeListening();
             };
 
-            audio.onerror = () => {
-                URL.revokeObjectURL(
-                    audioUrl
-                );
-
-                if (
-                    state.currentAudio ===
-                    audio
-                ) {
-                    state.currentAudio =
-                        null;
-                }
-
-                resumeListening();
-            };
+            audio.onended = finishAudio;
+            audio.onerror = finishAudio;
 
             await audio.play();
             return;
         } catch (error) {
+            if (
+                state.speechController ===
+                speechController
+            ) {
+                state.speechController = null;
+            }
+
+            state.speechPending = false;
+
+            if (
+                error?.name ===
+                "AbortError"
+            ) {
+                return;
+            }
+
             console.warn(
                 "Jarvis neural voice failed; using browser fallback:",
                 error
@@ -597,6 +675,253 @@
         setListening(false);
     }
 
+    function stopBargeInDetection() {
+        if (state.bargeInFrame) {
+            window.cancelAnimationFrame(
+                state.bargeInFrame
+            );
+
+            state.bargeInFrame = null;
+        }
+
+        if (state.bargeInStream) {
+            for (
+                const track of
+                state.bargeInStream.getTracks()
+            ) {
+                track.stop();
+            }
+
+            state.bargeInStream = null;
+        }
+
+        if (state.bargeInContext) {
+            const context =
+                state.bargeInContext;
+
+            state.bargeInContext = null;
+
+            if (
+                context.state !== "closed"
+            ) {
+                context.close().catch(
+                    () => {}
+                );
+            }
+        }
+
+        state.bargeInAnalyser = null;
+        state.bargeInStartedAt = 0;
+        state.bargeInLoudSince = 0;
+        state.bargeInBaseline = 0;
+        state.bargeInTriggered = false;
+    }
+
+    async function startBargeInDetection() {
+        if (
+            !state.voiceSession ||
+            state.muted ||
+            state.bargeInStream ||
+            state.bargeInTriggered
+        ) {
+            return;
+        }
+
+        if (
+            !navigator.mediaDevices ||
+            !navigator.mediaDevices.getUserMedia
+        ) {
+            return;
+        }
+
+        try {
+            const stream =
+                await navigator.mediaDevices
+                    .getUserMedia({
+                        audio: {
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            autoGainControl: true,
+                        },
+                    });
+
+            if (
+                !state.voiceSession ||
+                state.muted ||
+                (
+                    !state.speaking &&
+                    !state.speechPending
+                )
+            ) {
+                for (
+                    const track of
+                    stream.getTracks()
+                ) {
+                    track.stop();
+                }
+
+                return;
+            }
+
+            const AudioContextClass =
+                window.AudioContext ||
+                window.webkitAudioContext;
+
+            if (!AudioContextClass) {
+                for (
+                    const track of
+                    stream.getTracks()
+                ) {
+                    track.stop();
+                }
+
+                return;
+            }
+
+            const context =
+                new AudioContextClass();
+
+            const source =
+                context.createMediaStreamSource(
+                    stream
+                );
+
+            const analyser =
+                context.createAnalyser();
+
+            analyser.fftSize = 1024;
+            analyser.smoothingTimeConstant =
+                0.35;
+
+            source.connect(analyser);
+
+            state.bargeInStream = stream;
+            state.bargeInContext = context;
+            state.bargeInAnalyser = analyser;
+            state.bargeInStartedAt =
+                performance.now();
+            state.bargeInLoudSince = 0;
+            state.bargeInBaseline = 0;
+            state.bargeInTriggered = false;
+
+            const samples =
+                new Float32Array(
+                    analyser.fftSize
+                );
+
+            const detect = now => {
+                if (
+                    !state.bargeInAnalyser ||
+                    !state.voiceSession ||
+                    state.muted ||
+                    (
+                        !state.speaking &&
+                        !state.speechPending
+                    )
+                ) {
+                    stopBargeInDetection();
+                    return;
+                }
+
+                analyser.getFloatTimeDomainData(
+                    samples
+                );
+
+                let sum = 0;
+
+                for (
+                    let index = 0;
+                    index < samples.length;
+                    index += 1
+                ) {
+                    const value =
+                        samples[index];
+
+                    sum += value * value;
+                }
+
+                const rms = Math.sqrt(
+                    sum / samples.length
+                );
+
+                const age =
+                    now -
+                    state.bargeInStartedAt;
+
+                if (age < 450) {
+                    state.bargeInBaseline =
+                        Math.max(
+                            state.bargeInBaseline,
+                            rms
+                        );
+                }
+
+                const threshold =
+                    Math.max(
+                        0.035,
+                        state.bargeInBaseline *
+                            2.6
+                    );
+
+                if (
+                    age >= 450 &&
+                    rms >= threshold
+                ) {
+                    if (
+                        !state.bargeInLoudSince
+                    ) {
+                        state.bargeInLoudSince =
+                            now;
+                    }
+
+                    if (
+                        now -
+                            state.bargeInLoudSince >=
+                        180
+                    ) {
+                        state.bargeInTriggered =
+                            true;
+
+                        stopSpeaking();
+
+                        window.setTimeout(
+                            () => {
+                                if (
+                                    state.voiceSession &&
+                                    !state.muted
+                                ) {
+                                    startListening();
+                                }
+                            },
+                            120
+                        );
+
+                        return;
+                    }
+                } else {
+                    state.bargeInLoudSince = 0;
+                }
+
+                state.bargeInFrame =
+                    window.requestAnimationFrame(
+                        detect
+                    );
+            };
+
+            state.bargeInFrame =
+                window.requestAnimationFrame(
+                    detect
+                );
+        } catch (error) {
+            stopBargeInDetection();
+
+            console.warn(
+                "Jarvis barge-in detection unavailable:",
+                error
+            );
+        }
+    }
+
     function startListening() {
         if (!state.recognition) {
             setStatus(
@@ -609,6 +934,7 @@
         if (
             state.sending ||
             state.speaking ||
+            state.speechPending ||
             state.listening ||
             state.recognitionStarting ||
             (
@@ -711,6 +1037,10 @@
                         body: JSON.stringify({
                             message:
                                 cleanMessage,
+                            history:
+                                state.conversationHistory.slice(
+                                    -12
+                                ),
                         }),
                     }
                 );
@@ -740,6 +1070,26 @@
                 reply
             );
 
+            state.conversationHistory.push(
+                {
+                    role: "user",
+                    content: cleanMessage,
+                },
+                {
+                    role: "assistant",
+                    content: reply,
+                }
+            );
+
+            if (
+                state.conversationHistory.length > 12
+            ) {
+                state.conversationHistory =
+                    state.conversationHistory.slice(
+                        -12
+                    );
+            }
+
             speak(reply);
         } catch (error) {
             console.error(
@@ -761,6 +1111,7 @@
                 state.voiceSession &&
                 !state.muted &&
                 !state.speaking &&
+                !state.speechPending &&
                 !state.listening &&
                 !state.recognitionStarting
             ) {
@@ -776,6 +1127,7 @@
                             !state.muted &&
                             !state.sending &&
                             !state.speaking &&
+                            !state.speechPending &&
                             !state.listening &&
                             !state.recognitionStarting
                         ) {

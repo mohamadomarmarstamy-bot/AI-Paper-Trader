@@ -29,6 +29,8 @@ from database import (
     create_trade_book_entry,
     create_trade_book_order_link,
     initialize_database,
+    load_jarvis_profile,
+    save_jarvis_profile,
     load_due_scanner_forward_observations,
     load_open_trade_book_entry,
     load_trade_book_by_order_link,
@@ -18664,6 +18666,57 @@ def sell(
     )
 
 
+@app.get("/jarvis/profile")
+def get_jarvis_profile(
+    request: Request,
+) -> dict[str, Any]:
+    require_app_session(request)
+
+    return {
+        "success": True,
+        "profile": load_jarvis_profile(),
+    }
+
+
+@app.post("/jarvis/profile")
+def update_jarvis_profile(
+    data: dict[str, Any],
+    request: Request,
+) -> dict[str, Any]:
+    require_app_session(request)
+
+    allowed_fields = {
+        "preferred_name",
+        "address_as",
+        "timezone",
+        "language",
+        "voice",
+        "wake_phrase",
+        "voice_activation",
+        "automatic_greeting",
+    }
+
+    updates = {
+        key: value
+        for key, value in data.items()
+        if key in allowed_fields
+    }
+
+    if not updates:
+        raise HTTPException(
+            status_code=400,
+            detail="No valid Jarvis profile settings were provided.",
+        )
+
+    profile = save_jarvis_profile(
+        updates
+    )
+
+    return {
+        "success": True,
+        "profile": profile,
+    }
+
 @app.get("/jarvis/status")
 def jarvis_status(
     request: Request,
@@ -18686,6 +18739,7 @@ def jarvis_status(
 
 def call_jarvis_ai(
     user_message: str,
+    conversation_history: list[dict[str, str]] | None = None,
 ) -> str:
     if not OPENAI_API_KEY:
         raise RuntimeError(
@@ -18698,6 +18752,63 @@ def call_jarvis_ai(
         raise ValueError(
             "Jarvis requires a message."
         )
+
+    normalized_history: list[dict[str, str]] = []
+
+    if isinstance(conversation_history, list):
+        for item in conversation_history[-12:]:
+            if not isinstance(item, dict):
+                continue
+
+            role = str(
+                item.get("role", "")
+            ).strip().lower()
+
+            content = str(
+                item.get("content", "")
+            ).strip()
+
+            if role not in {
+                "user",
+                "assistant",
+            }:
+                continue
+
+            if not content:
+                continue
+
+            normalized_history.append(
+                {
+                    "role": role,
+                    "content": content[:4000],
+                }
+            )
+
+    profile = load_jarvis_profile()
+
+    profile_timezone = str(
+        profile.get(
+            "timezone",
+            "America/New_York",
+        )
+    ).strip()
+
+    try:
+        local_timezone = ZoneInfo(
+            profile_timezone
+        )
+    except Exception:
+        profile_timezone = "America/New_York"
+        local_timezone = ZoneInfo(
+            profile_timezone
+        )
+
+    now_utc = datetime.now(
+        timezone.utc
+    )
+    now_local = now_utc.astimezone(
+        local_timezone
+    )
 
     trader_status = get_auto_trader_status()
 
@@ -18717,6 +18828,40 @@ def call_jarvis_ai(
         positions = []
 
     jarvis_context = {
+        "user_profile": {
+            "preferred_name": profile.get(
+                "preferred_name",
+                "",
+            ),
+            "address_as": profile.get(
+                "address_as",
+                "Sir",
+            ),
+            "timezone": profile_timezone,
+            "language": profile.get(
+                "language",
+                "en-US",
+            ),
+            "voice": profile.get(
+                "voice",
+                "cedar",
+            ),
+            "wake_phrase": profile.get(
+                "wake_phrase",
+                "Hey Jarvis",
+            ),
+        },
+        "current_time": {
+            "timezone": profile_timezone,
+            "local_iso": now_local.isoformat(),
+            "utc_iso": now_utc.isoformat(),
+            "local_date": now_local.strftime(
+                "%A, %B %d, %Y"
+            ),
+            "local_time": now_local.strftime(
+                "%I:%M:%S %p"
+            ),
+        },
         "automatic_trader": {
             "paper": trader_status.get("paper"),
             "enabled": trader_status.get("enabled"),
@@ -18792,42 +18937,71 @@ def call_jarvis_ai(
         json={
             "model": JARVIS_MODEL,
             "instructions": (
-                "You are Jarvis, the conversational AI assistant "
+                "You are Jarvis, the user's personal AI assistant "
                 "inside an AI paper-trading research application. "
-                "Talk naturally, like a capable assistant having "
-                "an ongoing conversation with the user. Match the "
-                "user's tone without forcing slang or sounding "
-                "scripted. For simple questions, answer simply. "
-                "For deeper analysis, explain the important details "
-                "clearly and then expand when useful. Avoid robotic "
-                "headings, repetitive disclaimers, giant walls of "
-                "text, and unnecessary restatement of the question. "
-                "Do not repeatedly announce that trading is paper "
-                "trading unless that distinction matters to the "
-                "answer. Use normal conversational paragraphs by "
-                "default and lists only when they improve clarity. "
-                "When discussing live trader data, use natural "
-                "rounded values when exact precision is unnecessary. "
-                "If something looks unusual in the supplied data, "
-                "point it out plainly and explain why it matters. "
-                "Treat all trading as PAPER trading. "
-                "You have READ-ONLY access to the live paper-trading "
-                "snapshot supplied with each message. Use that "
-                "snapshot when answering questions about the account, "
-                "positions, scanner, or automatic trader. Never claim "
-                "access to data that is not in the supplied snapshot. "
-                "Clearly distinguish known data from interpretation "
-                "or uncertainty. Never claim guaranteed profits or "
-                "certainty about future market performance. You cannot "
-                "place, cancel, or modify trades and cannot change "
-                "trader settings."
+                "Be intelligent, composed, conversational, concise "
+                "when appropriate, and detailed when useful. Speak "
+                "naturally rather than sounding scripted or robotic. "
+                "Use subtle dry wit occasionally when it fits, but "
+                "never force jokes or slang. "
+
+                "The supplied user_profile contains the user's saved "
+                "preferences. If preferred_name is present, remember "
+                "that this is the name the user wants you to use. "
+                "The address_as field specifies how the user prefers "
+                "to be addressed. Use it naturally, especially in "
+                "greetings, acknowledgements, or short confirmations, "
+                "but do not repeat it in every sentence. Never invent "
+                "a name or personal detail that is not supplied. "
+
+                "The supplied current_time object is authoritative for "
+                "the current date and time available to you. Use its "
+                "local date, local time, and timezone when the user "
+                "asks what day, date, or time it is. Do not guess the "
+                "user's physical location from their timezone. "
+
+                "Respect the user's saved language preference when "
+                "practical. Match the user's conversational language "
+                "when they clearly choose another language. "
+
+                "For simple questions, answer simply. For deeper "
+                "analysis, explain the important details clearly and "
+                "expand when useful. Avoid robotic headings, repetitive "
+                "disclaimers, giant walls of text, and unnecessary "
+                "restatement of the question. Use normal conversational "
+                "paragraphs by default and lists only when they improve "
+                "clarity. "
+
+                "When discussing live trader data, use natural rounded "
+                "values when exact precision is unnecessary. If "
+                "something looks unusual in the supplied data, point "
+                "it out plainly and explain why it matters. "
+
+                "Treat all trading as PAPER trading. You have READ-ONLY "
+                "access to the live paper-trading snapshot supplied "
+                "with each message. Use that snapshot when answering "
+                "questions about the account, positions, scanner, or "
+                "automatic trader. Never claim access to data that is "
+                "not in the supplied snapshot. Clearly distinguish "
+                "known data from interpretation or uncertainty. Never "
+                "claim guaranteed profits or certainty about future "
+                "market performance. You cannot place, cancel, or "
+                "modify trades and cannot change trader settings."
             ),
-            "input": (
-                "LIVE PAPER-TRADING SNAPSHOT:\n"
-                f"{context_text}\n\n"
-                "USER MESSAGE:\n"
-                f"{message}"
-            ),
+            "input": [
+                {
+                    "role": "developer",
+                    "content": (
+                        "CURRENT JARVIS CONTEXT:\n"
+                        f"{context_text}"
+                    ),
+                },
+                *normalized_history,
+                {
+                    "role": "user",
+                    "content": message,
+                },
+            ],
         },
         timeout=60,
     )
@@ -18885,9 +19059,18 @@ def jarvis_chat(
             ),
         }
 
+    history = data.get(
+        "history",
+        [],
+    )
+
+    if not isinstance(history, list):
+        history = []
+
     try:
         reply = call_jarvis_ai(
-            message
+            message,
+            conversation_history=history,
         )
     except Exception as error:
         return {
@@ -18940,16 +19123,45 @@ def jarvis_speech(
             ),
         )
 
+    profile = load_jarvis_profile()
+
+    selected_voice = str(
+        profile.get(
+            "voice",
+            "cedar",
+        )
+    ).strip() or "cedar"
+
+    selected_language = str(
+        profile.get(
+            "language",
+            "en-US",
+        )
+    ).strip() or "en-US"
+
+    language_names = {
+        "en-US": "American English",
+        "en-GB": "British English",
+        "ar": "Arabic",
+        "es": "Spanish",
+        "fr": "French",
+        "de": "German",
+    }
+
+    language_name = language_names.get(
+        selected_language,
+        selected_language,
+    )
+
     speech_instructions = (
-        "Speak in polished British English with "
-        "a sophisticated, composed, intelligent "
-        "male-presenting delivery. Use a smooth "
-        "medium-low register, precise diction, "
-        "calm confidence, and subtle dry wit. "
-        "Sound natural and conversational, like "
-        "an advanced personal AI assistant. Use "
-        "natural pauses and restrained emotional "
-        "expression. Never sound rushed, overly "
+        f"Speak in natural {language_name}. "
+        "Use a sophisticated, composed, "
+        "intelligent male-presenting delivery. "
+        "Use precise diction, calm confidence, "
+        "natural pauses, and restrained emotional "
+        "expression. Sound natural and "
+        "conversational, like an advanced personal "
+        "AI assistant. Never sound rushed, overly "
         "theatrical, or robotic. Do not read "
         "markdown formatting or emoji names aloud."
     )
@@ -18965,7 +19177,7 @@ def jarvis_speech(
             },
             json={
                 "model": "gpt-4o-mini-tts",
-                "voice": "cedar",
+                "voice": selected_voice,
                 "input": text,
                 "instructions": speech_instructions,
                 "response_format": "mp3",
