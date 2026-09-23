@@ -34,6 +34,7 @@ from database import (
     load_due_scanner_forward_observations,
     load_open_trade_book_entry,
     load_trade_book_by_order_link,
+    load_all_trade_book_order_links,
     load_trade_book_entry_by_order_id,
     load_trade_book,
     load_trade_book_events,
@@ -2540,6 +2541,9 @@ def get_alpaca_paper_order(
     payload = alpaca_paper_request(
         "GET",
         f"/v2/orders/{order_id}",
+        params={
+            "nested": "true",
+        },
     )
 
     if not isinstance(payload, dict):
@@ -3774,6 +3778,7 @@ def fetch_alpaca_paper_orders(
             "status": "all",
             "limit": safe_limit,
             "direction": "desc",
+            "nested": "true",
         },
     )
 
@@ -3811,6 +3816,7 @@ def fetch_alpaca_paper_trade_history(
             "status": "all",
             "limit": safe_limit,
             "direction": "desc",
+            "nested": "true",
         },
     )
 
@@ -3871,6 +3877,7 @@ def fetch_alpaca_paper_trade_history_paginated(
             "status": "all",
             "limit": request_limit,
             "direction": "desc",
+            "nested": "true",
         }
 
         if before_order_id:
@@ -4094,6 +4101,61 @@ def sync_alpaca_broker_fills(
         max_orders=limit,
         batch_size=500,
     )
+
+    flattened_orders: list[dict[str, Any]] = []
+    seen_order_ids: set[str] = set()
+
+    for parent_order in raw_orders:
+        if not isinstance(
+            parent_order,
+            dict,
+        ):
+            continue
+
+        orders_to_add = [
+            parent_order,
+        ]
+
+        legs = parent_order.get(
+            "legs"
+        )
+
+        if isinstance(
+            legs,
+            list,
+        ):
+            orders_to_add.extend(
+                leg
+                for leg in legs
+                if isinstance(
+                    leg,
+                    dict,
+                )
+            )
+
+        for candidate_order in orders_to_add:
+            candidate_order_id = str(
+                candidate_order.get("id")
+                or ""
+            ).strip()
+
+            if (
+                candidate_order_id
+                and candidate_order_id
+                in seen_order_ids
+            ):
+                continue
+
+            if candidate_order_id:
+                seen_order_ids.add(
+                    candidate_order_id
+                )
+
+            flattened_orders.append(
+                candidate_order
+            )
+
+    raw_orders = flattened_orders
 
     examined = 0
     filled = 0
@@ -7073,6 +7135,84 @@ def submit_alpaca_auto_bracket_buy(
                                 },
                             )
 
+                        bracket_legs = (
+                            latest_order.get("legs")
+                            if isinstance(
+                                latest_order,
+                                dict,
+                            )
+                            else None
+                        )
+
+                        if isinstance(
+                            bracket_legs,
+                            list,
+                        ):
+                            for leg in bracket_legs:
+                                if not isinstance(
+                                    leg,
+                                    dict,
+                                ):
+                                    continue
+
+                                leg_side = str(
+                                    leg.get("side")
+                                    or ""
+                                ).strip().upper()
+
+                                leg_order_id = str(
+                                    leg.get("id")
+                                    or ""
+                                ).strip()
+
+                                if (
+                                    leg_side != "SELL"
+                                    or not leg_order_id
+                                ):
+                                    continue
+
+                                try:
+                                    create_trade_book_order_link(
+                                        trade_book_id=trade_book_id,
+                                        order_id=leg_order_id,
+                                        client_order_id=leg.get(
+                                            "client_order_id"
+                                        ),
+                                        order_role="EXIT",
+                                        created_at=(
+                                            leg.get(
+                                                "created_at"
+                                            )
+                                            or entry_timestamp
+                                        ),
+                                    )
+                                except Exception as error:
+                                    add_auto_trader_log(
+                                        "trade_book_order_link_error",
+                                        symbol=normalized_symbol,
+                                        message=(
+                                            "Bracket EXIT leg could "
+                                            "not be linked to its "
+                                            "trade-book entry."
+                                        ),
+                                        details={
+                                            "trade_book_id": (
+                                                trade_book_id
+                                            ),
+                                            "entry_order_id": (
+                                                entry_order_id
+                                            ),
+                                            "exit_order_id": (
+                                                leg_order_id
+                                            ),
+                                            "error": (
+                                                clean_error_message(
+                                                    error
+                                                )
+                                            ),
+                                        },
+                                    )
+
                         record_trade_book_event(
                             trade_book_id=trade_book_id,
                             symbol=normalized_symbol,
@@ -7469,13 +7609,60 @@ def detect_new_broker_exit_fills() -> list[dict[str, Any]]:
         )
         return results
 
-    for order in orders:
+    flattened_orders: list[dict[str, Any]] = []
+    seen_order_ids: set[str] = set()
+
+    for parent_order in orders:
         if not isinstance(
-            order,
+            parent_order,
             dict,
         ):
             continue
 
+        orders_to_scan = [
+            parent_order,
+        ]
+
+        legs = parent_order.get(
+            "legs"
+        )
+
+        if isinstance(
+            legs,
+            list,
+        ):
+            orders_to_scan.extend(
+                leg
+                for leg in legs
+                if isinstance(
+                    leg,
+                    dict,
+                )
+            )
+
+        for candidate_order in orders_to_scan:
+            candidate_order_id = str(
+                candidate_order.get("id")
+                or ""
+            ).strip()
+
+            if (
+                candidate_order_id
+                and candidate_order_id
+                in seen_order_ids
+            ):
+                continue
+
+            if candidate_order_id:
+                seen_order_ids.add(
+                    candidate_order_id
+                )
+
+            flattened_orders.append(
+                candidate_order
+            )
+
+    for order in flattened_orders:
         order_id = str(
             order.get(
                 "id",
@@ -13621,6 +13808,75 @@ def auto_trader_canonical_broker_trades(
         ).strip()
     }
 
+    trade_book_exit_order_ids: dict[
+        int,
+        set[str],
+    ] = {}
+
+    for row in trade_book_rows:
+        trade_book_id = int(
+            row["id"]
+        )
+
+        exit_ids: set[str] = set()
+
+        legacy_exit_order_id = str(
+            row.get("exit_order_id") or ""
+        ).strip()
+
+        if legacy_exit_order_id:
+            exit_ids.add(
+                legacy_exit_order_id
+            )
+
+        trade_book_exit_order_ids[
+            trade_book_id
+        ] = exit_ids
+
+    try:
+        all_order_links = (
+            load_all_trade_book_order_links()
+        )
+    except Exception:
+        all_order_links = []
+
+    for link in all_order_links:
+        if (
+            str(
+                link.get("order_role") or ""
+            ).strip().upper()
+            != "EXIT"
+        ):
+            continue
+
+        linked_order_id = str(
+            link.get("order_id") or ""
+        ).strip()
+
+        linked_trade_book_id = (
+            safe_float(
+                link.get("trade_book_id")
+            )
+        )
+
+        if (
+            not linked_order_id
+            or linked_trade_book_id is None
+            or linked_trade_book_id <= 0
+        ):
+            continue
+
+        linked_trade_book_id = int(
+            linked_trade_book_id
+        )
+
+        trade_book_exit_order_ids.setdefault(
+            linked_trade_book_id,
+            set(),
+        ).add(
+            linked_order_id
+        )
+
     open_lots: dict[
         str,
         list[dict[str, Any]],
@@ -13699,25 +13955,66 @@ def auto_trader_canonical_broker_trades(
                 )
             )
 
-            authoritative_exit_order_id = str(
-                (
-                    trade_book_entry.get(
-                        "exit_order_id"
-                    )
-                    if isinstance(
-                        trade_book_entry,
+            broker_exit_order_ids: set[str] = set()
+
+            bracket_legs = raw_order.get(
+                "legs"
+            )
+
+            if isinstance(
+                bracket_legs,
+                list,
+            ):
+                for leg in bracket_legs:
+                    if not isinstance(
+                        leg,
                         dict,
-                    )
-                    else ""
+                    ):
+                        continue
+
+                    leg_side = str(
+                        leg.get("side")
+                        or ""
+                    ).strip().upper()
+
+                    leg_order_id = str(
+                        leg.get("id")
+                        or ""
+                    ).strip()
+
+                    if (
+                        leg_side == "SELL"
+                        and leg_order_id
+                    ):
+                        broker_exit_order_ids.add(
+                            leg_order_id
+                        )
+
+            linked_exit_order_ids: set[str] = set()
+
+            if isinstance(
+                trade_book_entry,
+                dict,
+            ):
+                trade_book_id = int(
+                    trade_book_entry["id"]
                 )
-                or ""
-            ).strip()
+
+                linked_exit_order_ids.update(
+                    trade_book_exit_order_ids.get(
+                        trade_book_id,
+                        set(),
+                    )
+                )
 
             entry = {
                 "symbol": symbol,
                 "entry_order_id": order_id,
-                "authoritative_exit_order_id": (
-                    authoritative_exit_order_id
+                "broker_exit_order_ids": (
+                    broker_exit_order_ids
+                ),
+                "linked_exit_order_ids": (
+                    linked_exit_order_ids
                 ),
                 "entry_client_order_id": (
                     client_order_id
@@ -13773,24 +14070,44 @@ def auto_trader_canonical_broker_trades(
             remaining_sell > 0.00000001
             and lots
         ):
-            authoritative_lot = next(
+            broker_bracket_lot = next(
                 (
                     candidate_lot
                     for candidate_lot in lots
-                    if str(
+                    if order_id
+                    in (
                         candidate_lot.get(
-                            "authoritative_exit_order_id"
+                            "broker_exit_order_ids"
                         )
-                        or ""
-                    ).strip() == order_id
+                        or set()
+                    )
+                ),
+                None,
+            )
+
+            trade_book_linked_lot = next(
+                (
+                    candidate_lot
+                    for candidate_lot in lots
+                    if order_id
+                    in (
+                        candidate_lot.get(
+                            "linked_exit_order_ids"
+                        )
+                        or set()
+                    )
                 ),
                 None,
             )
 
             lot = (
-                authoritative_lot
-                if authoritative_lot is not None
-                else lots[0]
+                broker_bracket_lot
+                if broker_bracket_lot is not None
+                else (
+                    trade_book_linked_lot
+                    if trade_book_linked_lot is not None
+                    else lots[0]
+                )
             )
 
             lot_remaining = float(

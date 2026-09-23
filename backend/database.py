@@ -1600,6 +1600,23 @@ def load_trade_book_order_links(
     return [dict(row) for row in rows]
 
 
+def load_all_trade_book_order_links() -> list[dict[str, Any]]:
+    """Load all broker-order links in one query."""
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM trade_book_order_links
+            ORDER BY id ASC
+            """
+        ).fetchall()
+
+    return [
+        dict(row)
+        for row in rows
+    ]
+
+
 def load_trade_book_by_order_link(
     *,
     order_id: str | None = None,
