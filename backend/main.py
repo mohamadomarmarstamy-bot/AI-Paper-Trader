@@ -14181,9 +14181,13 @@ def auto_trader_canonical_broker_trades(
             ].append(
                 {
                     "match_method": (
-                        "trade_book_order_link"
-                        if authoritative_lot is not None
-                        else "fifo_fallback"
+                        "broker_bracket_leg"
+                        if broker_bracket_lot is not None
+                        else (
+                            "trade_book_order_link"
+                            if trade_book_linked_lot is not None
+                            else "fifo_fallback"
+                        )
                     ),
                     "exit_order_id": (
                         order_id
