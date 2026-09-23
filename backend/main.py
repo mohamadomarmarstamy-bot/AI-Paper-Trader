@@ -7921,8 +7921,19 @@ def log_new_broker_exit_fills() -> list[dict[str, Any]]:
         # completed broker exit into learning memory.
         # -------------------------------------------------
         try:
+            linked_book_entry = None
+
+            if order_id:
+                linked_book_entry = (
+                    load_trade_book_by_order_link(
+                        order_id=order_id
+                    )
+                )
+
             open_book_entry = (
-                load_open_trade_book_entry(
+                linked_book_entry
+                if linked_book_entry is not None
+                else load_open_trade_book_entry(
                     symbol
                 )
             )
