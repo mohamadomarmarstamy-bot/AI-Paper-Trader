@@ -1650,7 +1650,7 @@
     <script>
         "use strict";
 
-🎙 Listener(
+document.addEventListener(
             "DOMContentLoaded",
             () => {
                 bindPageAction(
@@ -1771,14 +1771,14 @@
             };
 
             navButtons.forEach(button => {
-🎙 Listener("click", () => openSection(button.dataset.section));
+button.addEventListener("click", () => openSection(button.dataset.section));
             });
 
             links.forEach(link => {
                 const activate = () => openSection(link.dataset.openSection);
 
-🎙 Listener("click", activate);
-🎙 Listener("keydown", event => {
+link.addEventListener("click", activate);
+link.addEventListener("keydown", event => {
                     if (event.key !== "Enter" && event.key !== " ") return;
                     event.preventDefault();
                     activate();
@@ -1831,7 +1831,7 @@
                 return;
             }
 
-🎙 Listener(
+element.addEventListener(
                 "click",
                 callback
             );
