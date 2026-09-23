@@ -88,18 +88,18 @@
                 class="main-nav"
                 aria-label="Application sections"
             >
-                <button type="button" class="nav-button active" data-section="dashboard-section" aria-controls="dashboard-section" aria-current="page"><span aria-hidden="true">ðŸ </span><span>Dashboard</span></button>
-                <button type="button" class="nav-button" data-section="trade-section" aria-controls="trade-section"><span aria-hidden="true">ðŸ’¹</span><span>Trade</span></button>
-                <button type="button" class="nav-button" data-section="positions-section" aria-controls="positions-section"><span aria-hidden="true">ðŸ§¾</span><span>Positions</span></button>
-                <button type="button" class="nav-button" data-section="performance-section" aria-controls="performance-section"><span aria-hidden="true">ðŸ“ˆ</span><span>Performance</span></button>
-                <button type="button" class="nav-button" data-section="activity-section" aria-controls="activity-section"><span aria-hidden="true">ðŸ•˜</span><span>Activity</span></button>
+                <button type="button" class="nav-button active" data-section="dashboard-section" aria-controls="dashboard-section" aria-current="page"><span aria-hidden="true">📊</span><span>Dashboard</span></button>
+                <button type="button" class="nav-button" data-section="trade-section" aria-controls="trade-section"><span aria-hidden="true">💹</span><span>Trade</span></button>
+                <button type="button" class="nav-button" data-section="positions-section" aria-controls="positions-section"><span aria-hidden="true">🧾</span><span>Positions</span></button>
+                <button type="button" class="nav-button" data-section="performance-section" aria-controls="performance-section"><span aria-hidden="true">📈</span><span>Performance</span></button>
+                <button type="button" class="nav-button" data-section="activity-section" aria-controls="activity-section"><span aria-hidden="true">🕘</span><span>Activity</span></button>
                 <button type="button" class="nav-button notification-nav-button" data-section="notifications-section" aria-controls="notifications-section">
-                    <span aria-hidden="true">ðŸ””</span>
+                    <span aria-hidden="true">🔔</span>
                     <span>Notifications</span>
                     <span id="notification-badge" class="notification-badge hidden" aria-label="Unread notifications">0</span>
                 </button>
-                <button type="button" class="nav-button" data-section="scanner-section" aria-controls="scanner-section"><span aria-hidden="true">ðŸ”Ž</span><span>Scanner</span></button>
-                <button type="button" class="nav-button" data-section="strategy-section" aria-controls="strategy-section"><span aria-hidden="true">ðŸ¤–</span><span>Research Lab</span></button>
+                <button type="button" class="nav-button" data-section="scanner-section" aria-controls="scanner-section"><span aria-hidden="true">🔎</span><span>Scanner</span></button>
+                <button type="button" class="nav-button" data-section="strategy-section" aria-controls="strategy-section"><span aria-hidden="true">🤖</span><span>Research Lab</span></button>
                 <button type="button" class="nav-button" data-section="jarvis-section" aria-controls="jarvis-section"><span aria-hidden="true">&#129302;</span><span>Jarvis</span></button>
                 <button type="button" class="nav-button" data-section="profile-section" aria-controls="profile-section"><span aria-hidden="true">&#128100;</span><span>Profile</span></button>
                 <button type="button" class="nav-button" data-section="trade-journal-section" aria-controls="trade-journal-section"><span aria-hidden="true">&#128211;</span><span>Trade Journal</span></button>
@@ -157,7 +157,7 @@
                         data-action="refresh-dashboard"
                     >
                         <span aria-hidden="true">
-                            â†»
+                            &#8635;
                         </span>
 
                         Refresh Dashboard
@@ -382,9 +382,9 @@
                             <p class="panel-kicker">Live Account</p>
                             <h2>Account at a glance</h2>
                             <div class="home-mini-metrics">
-                                <div><span>Unrealized P / L</span><strong id="home-unrealized-profit-loss">â€”</strong></div>
-                                <div><span>Cash Allocation</span><strong id="home-cash-percent">â€”</strong></div>
-                                <div><span>Invested</span><strong id="home-invested-percent">â€”</strong></div>
+                                <div><span>Unrealized P / L</span><strong id="home-unrealized-profit-loss">&#8212;</strong></div>
+                                <div><span>Cash Allocation</span><strong id="home-cash-percent">&#8212;</strong></div>
+                                <div><span>Invested</span><strong id="home-invested-percent">&#8212;</strong></div>
                             </div>
                         </article>
                         <article class="panel home-overview-card">
@@ -846,7 +846,7 @@
                                 </label>
 
                                 <div class="notification-status">
-                                    <span id="notification-feed-status">Waiting for activityâ€¦</span>
+                                    <span id="notification-feed-status">Waiting for activity&#8230;</span>
                                 </div>
                             </div>
 
@@ -985,7 +985,7 @@
                                 aria-live="polite"
                             >
                                 <p class="watchlist-status">
-                                    Loading watchlistâ€¦
+                                    Loading watchlist&#8230;
                                 </p>
                             </div>
                         </article>
@@ -1330,7 +1330,7 @@
                                 class="jarvis-voice-caption"
                                 aria-live="polite"
                             >
-                                Listening
+🎙 Listening
                             </p>
                         </div>
 
@@ -1401,7 +1401,7 @@
                                         class="jarvis-control-button"
                                         aria-pressed="false"
                                     >
-                                        ðŸ”‡ Voice Off
+🔇 Voice Off
                                     </button>
 
                                     <button
@@ -1409,7 +1409,7 @@
                                 type="button"
                                 class="jarvis-control-button jarvis-listen-button"
                             >
-                                ðŸŽ™ Listen
+🎙 Listen
                             </button>
                             <button
                                         id="jarvis-stop-button"
@@ -1650,7 +1650,7 @@
     <script>
         "use strict";
 
-        document.addEventListener(
+🎙 Listener(
             "DOMContentLoaded",
             () => {
                 bindPageAction(
@@ -1771,14 +1771,14 @@
             };
 
             navButtons.forEach(button => {
-                button.addEventListener("click", () => openSection(button.dataset.section));
+🎙 Listener("click", () => openSection(button.dataset.section));
             });
 
             links.forEach(link => {
                 const activate = () => openSection(link.dataset.openSection);
 
-                link.addEventListener("click", activate);
-                link.addEventListener("keydown", event => {
+🎙 Listener("click", activate);
+🎙 Listener("keydown", event => {
                     if (event.key !== "Enter" && event.key !== " ") return;
                     event.preventDefault();
                     activate();
@@ -1831,7 +1831,7 @@
                 return;
             }
 
-            element.addEventListener(
+🎙 Listener(
                 "click",
                 callback
             );
