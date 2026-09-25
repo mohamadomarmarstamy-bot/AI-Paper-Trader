@@ -307,7 +307,7 @@
             createMetric("Gross Losses", formatCurrency(summary.gross_loss)
             ),
             createMetric(
-                "Known Closed-Trade P/L (before fees)",
+                "Known Realized P/L (including partial exits; before fees)",
                 formatCurrency(
                     summary.total_realized_profit_loss
                 )
