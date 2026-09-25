@@ -17,7 +17,7 @@ let liveAccountInitialized = false;
 
 const ACCOUNT_REQUEST_TIMEOUT_MS = 15_000;
 const LIVE_ACCOUNT_REQUEST_TIMEOUT_MS = 8_000;
-const LIVE_ACCOUNT_REFRESH_MS = 2_000;
+const LIVE_ACCOUNT_REFRESH_MS = 10_000;
 
 const DEFAULT_STARTING_BALANCE = 100_000;
 
@@ -138,7 +138,7 @@ async function loadAccount() {
 }
 
 async function refreshTradingSummary() {
-    if (performanceRefreshInProgress || Date.now() - lastPerformanceRefresh < 30_000) return;
+    if (performanceRefreshInProgress || Date.now() - lastPerformanceRefresh < 60_000) return;
     performanceRefreshInProgress = true;
     lastPerformanceRefresh = Date.now();
     const controller = new AbortController();

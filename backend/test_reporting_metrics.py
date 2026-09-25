@@ -3,6 +3,7 @@ import ast
 from datetime import datetime, timezone
 from pathlib import Path
 import time
+from types import SimpleNamespace
 import unittest
 
 from reporting_metrics import (
@@ -30,11 +31,12 @@ def fill(order_id, side, qty, price, timestamp, *, auto=True, legs=None):
 
 def actual_functions(**overrides):
     source = ast.parse((Path(__file__).parent / "main.py").read_text(encoding="utf-8"))
-    selected = {"auto_trader_history", "auto_trader_canonical_broker_trades", "build_alpaca_live_account_snapshot", "build_alpaca_dashboard_account"}
+    selected = {"auto_trader_history", "auto_trader_canonical_broker_trades", "build_alpaca_live_account_snapshot", "_fetch_alpaca_live_account_snapshot", "build_alpaca_dashboard_account"}
     nodes = [node for node in source.body if isinstance(node, ast.FunctionDef) and node.name in selected]
     for node in nodes:
         node.decorator_list = []
     ns = {
+        "_dashboard_snapshot_cache": SimpleNamespace(get=lambda loader: loader()),
         "Query": lambda default=None, **kwargs: default,
         "safe_float": lambda v: float(number(v)) if number(v) is not None else None,
         "clean_symbol": lambda value: str(value or "").strip().upper(),

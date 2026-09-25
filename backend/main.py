@@ -21,6 +21,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from broker_throttle import BrokerRequestGate, BrokerRateLimited, DisplaySnapshotCache, has_matching_stop
+
+_broker_request_gate = BrokerRequestGate()
+_dashboard_snapshot_cache = DisplaySnapshotCache(ttl=10.0)
+
 from reporting_metrics import (account_equity_metrics, summarize_trades, daily_realized_summaries, annotate_order_history, timestamp_sort_key)
 from entry_quality import evaluate_entry_quality, tighten_score_minimum
 from chart_data import get_chart_data
@@ -78,7 +83,7 @@ from scanner import (
 )
 
 
-APP_VERSION = "2.7.2"
+APP_VERSION = "2.7.3"
 AUTO_PORTFOLIO_REFRESH_SECONDS = 300
 
 
@@ -2107,6 +2112,7 @@ def alpaca_paper_request(
     last_error: Exception | None = None
 
     for attempt in range(attempts):
+        _broker_request_gate.acquire(wait_budget=min(timeout, 2.0))
         try:
             response = requests.request(
                 method=normalized_method,
@@ -2130,6 +2136,12 @@ def alpaca_paper_request(
                 continue
 
             raise
+
+        _broker_request_gate.observe(response.status_code, response.headers)
+        if response.status_code == 429:
+            # Share the cooldown across dashboard and trading callers. Never
+            # blindly replay a POST/DELETE after a rate-limit or timeout.
+            raise BrokerRateLimited(_broker_request_gate.retry_after())
 
         try:
             payload = response.json()
@@ -4372,6 +4384,11 @@ def normalize_alpaca_order_for_history(
 
 
 def build_alpaca_live_account_snapshot() -> dict[str, Any]:
+    """Share a ten-second display snapshot across dashboard callers."""
+    return _dashboard_snapshot_cache.get(_fetch_alpaca_live_account_snapshot)
+
+
+def _fetch_alpaca_live_account_snapshot() -> dict[str, Any]:
     """Read-only equity snapshot; timestamp precedes requests to order UI updates."""
     snapshot_at = time.time()
     account = fetch_alpaca_paper_account()
@@ -5771,6 +5788,10 @@ def submit_alpaca_recovery_oco(
                 normalized_symbol
             )
         )
+    except BrokerRateLimited as error:
+        return {"success": False, "paper": True, "symbol": normalized_symbol,
+                "deferred": True, "retry_after_seconds": error.retry_after,
+                "error": str(error)}
     except Exception as error:
         return {
             "success": False,
@@ -5923,6 +5944,10 @@ def submit_alpaca_recovery_oco(
                     if isinstance(item, dict)
                 )
 
+            except BrokerRateLimited as error:
+                return {"success": False, "paper": True, "symbol": normalized_symbol,
+                        "deferred": True, "retry_after_seconds": error.retry_after,
+                        "error": str(error)}
             except Exception as error:
                 return {
                     "success": False,
@@ -5969,6 +5994,10 @@ def submit_alpaca_recovery_oco(
                         normalized_symbol
                     )
                 )
+            except BrokerRateLimited as error:
+                return {"success": False, "paper": True, "symbol": normalized_symbol,
+                        "deferred": True, "retry_after_seconds": error.retry_after,
+                        "error": str(error)}
             except Exception as error:
                 return {
                     "success": False,
@@ -6005,6 +6034,10 @@ def submit_alpaca_recovery_oco(
         refreshed_positions = (
             fetch_alpaca_paper_positions()
         )
+    except BrokerRateLimited as error:
+        return {"success": False, "paper": True, "symbol": normalized_symbol,
+                "deferred": True, "retry_after_seconds": error.retry_after,
+                "error": str(error)}
     except Exception as error:
         return {
             "success": False,
@@ -6183,6 +6216,10 @@ def submit_alpaca_recovery_oco(
             "order": payload,
         }
 
+    except BrokerRateLimited as error:
+        return {"success": False, "paper": True, "symbol": normalized_symbol,
+                "deferred": True, "retry_after_seconds": error.retry_after,
+                "error": str(error)}
     except Exception as error:
         return {
             "success": False,
@@ -6205,6 +6242,32 @@ def reconcile_unprotected_positions(
     results: list[
         dict[str, Any]
     ] = []
+
+    if not positions:
+        return results
+
+    # A single complete open-order snapshot avoids one request per already
+    # protected holding on each 15-second cycle. Never infer missing protection
+    # from a failed or truncated list; replacement always performs fresh reads.
+    try:
+        open_orders = alpaca_paper_request(
+            "GET", "/v2/orders",
+            params={"status": "open", "limit": 500, "nested": "true"},
+        )
+        if not isinstance(open_orders, list):
+            raise RuntimeError("Alpaca returned an invalid protection snapshot.")
+    except BrokerRateLimited as error:
+        add_auto_trader_log(
+            "protection_restore_deferred",
+            message="Protection checks deferred until Alpaca's request cooldown ends.",
+            details={"retry_after_seconds": error.retry_after, "position_count": len(positions)},
+        )
+        return [{"symbol": clean_symbol(p.get("symbol")), "result": {
+            "success": False, "paper": True, "deferred": True,
+            "retry_after_seconds": error.retry_after, "error": str(error),
+        }} for p in positions if isinstance(p, dict)]
+    complete_snapshot = len(open_orders) < 500
+    deferred_logged = False
 
     for position in positions:
         if not isinstance(
@@ -6241,6 +6304,13 @@ def reconcile_unprotected_positions(
         if shares <= 0:
             continue
 
+        if complete_snapshot and has_matching_stop(open_orders, symbol, qty):
+            results.append({"symbol": symbol, "result": {
+                "success": True, "paper": True, "already_protected": True,
+                "position_shares": qty,
+            }})
+            continue
+
         current_price = safe_float(
             position.get(
                 "current_price"
@@ -6270,18 +6340,28 @@ def reconcile_unprotected_positions(
                 ),
             }
         else:
-            result = (
-                submit_alpaca_recovery_oco(
-                    symbol=symbol,
-                    shares=shares,
-                    current_price=current_price,
+            try:
+                result = submit_alpaca_recovery_oco(
+                    symbol=symbol, shares=shares, current_price=current_price,
                 )
-            )
+            except BrokerRateLimited as error:
+                result = {"success": False, "paper": True, "deferred": True,
+                          "retry_after_seconds": error.retry_after, "error": str(error)}
 
         results.append({
             "symbol": symbol,
             "result": result,
         })
+
+        if result.get("deferred"):
+            if not deferred_logged:
+                add_auto_trader_log(
+                    "protection_restore_deferred",
+                    message="Protection recovery deferred; it will recheck orders and quantity next cycle.",
+                    details={"retry_after_seconds": result.get("retry_after_seconds")},
+                )
+                deferred_logged = True
+            continue
 
         if result.get(
             "already_protected"
@@ -8956,6 +9036,12 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             )
         )
 
+        if any(item.get("result", {}).get("deferred")
+               for item in cycle_result["protection_reconciliation"]):
+            cycle_result.update({"success": False, "deferred": True,
+                                 "reason": "Protection recovery is waiting for broker request capacity."})
+            return cycle_result
+
         # Refresh positions again after protection
         # orders are restored.
         positions = (
@@ -10192,6 +10278,13 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             time.time()
         )
 
+        return cycle_result
+
+    except BrokerRateLimited as error:
+        cycle_result.update({"success": False, "deferred": True,
+                             "retry_after_seconds": error.retry_after, "error": str(error)})
+        add_auto_trader_log("cycle_deferred", message=str(error),
+                            details={"retry_after_seconds": error.retry_after})
         return cycle_result
 
     except Exception as error:
