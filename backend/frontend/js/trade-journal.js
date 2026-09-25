@@ -1,5 +1,6 @@
 (() => {
     let tradeJournalLoaded = false;
+    let journalLoading = false;
 
     function getApiUrl() {
         return String(
@@ -10,7 +11,7 @@
     }
 
     function formatCurrency(value) {
-        const number = Number(value);
+        const number = value === null || value === undefined || value === "" ? NaN : Number(value);
 
         if (!Number.isFinite(number)) {
             return "\u2014";
@@ -26,7 +27,7 @@
     }
 
     function formatPercent(value) {
-        const number = Number(value);
+        const number = value === null || value === undefined || value === "" ? NaN : Number(value);
 
         if (!Number.isFinite(number)) {
             return "\u2014";
@@ -50,7 +51,7 @@
     }
 
     function formatHoldingTime(seconds) {
-        const value = Number(seconds);
+        const value = seconds === null || seconds === undefined ? NaN : Number(seconds);
 
         if (!Number.isFinite(value) || value < 0) {
             return "\u2014";
@@ -295,13 +296,18 @@
                 )
             ),
             createMetric(
-                "Win Rate",
-                formatPercent(
-                    summary.win_rate_percent
-                )
+                "Money Win Rate",
+                formatPercent(summary.money_win_rate_percent)
             ),
             createMetric(
-                "Realized P/L",
+                "Trade Win Rate (complete trades)",
+                formatPercent(summary.win_rate_percent)
+            ),
+            createMetric("Gross Profits", formatCurrency(summary.gross_profit)),
+            createMetric("Gross Losses", formatCurrency(summary.gross_loss)
+            ),
+            createMetric(
+                "Known Closed-Trade P/L (before fees)",
                 formatCurrency(
                     summary.total_realized_profit_loss
                 )
@@ -352,15 +358,21 @@
             )
         );
 
-        container.appendChild(
-            metrics
-        );
+        container.appendChild(metrics);
+        const note = document.createElement("p");
+        note.className = "trade-journal-accounting-note";
+        note.textContent = `Rates use ${summary.rate_sample_trades ?? 0} complete trades; ${summary.incomplete_trades ?? 0} incomplete trades excluded. `
+            + `${summary.unmatched_sell_fills ?? 0} unmatched sell fills. `
+            + (summary.realized_profit_loss_complete ? "" : "Known P/L is partial, not a complete account total. ")
+            + `Showing ${payload.returned_count ?? payload.count} of ${payload.total_count ?? summary.completed_trades} recorded closed trades; realized totals include partial exits across the full loaded ledger. `
+            + (summary.ledger_limit_reached ? "Ledger row limit reached; older records are excluded. " : "")
+            + "Money win rate = gross profits / (gross profits + gross losses). All journal P/L is before fees. Daily fill P/L uses Eastern time and differs from account equity change.";
+        container.appendChild(note);
     }
 
     function getTradeDayKey(trade) {
         const value =
-            trade?.exit_timestamp ??
-            trade?.entry_timestamp;
+            trade?.exit_timestamp;
 
         if (!value) {
             return "unknown";
@@ -372,24 +384,17 @@
             return "unknown";
         }
 
-        const year = date.getFullYear();
-
-        const month = String(
-            date.getMonth() + 1
-        ).padStart(2, "0");
-
-        const day = String(
-            date.getDate()
-        ).padStart(2, "0");
-
-        return `${year}-${month}-${day}`;
+        const parts = new Intl.DateTimeFormat("en-US", {
+            timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+        }).formatToParts(date);
+        const part = type => parts.find(item => item.type === type).value;
+        return `${part("year")}-${part("month")}-${part("day")}`;
     }
 
 
     function formatTradeDayLabel(trade) {
         const value =
-            trade?.exit_timestamp ??
-            trade?.entry_timestamp;
+            trade?.exit_timestamp;
 
         if (!value) {
             return "Unknown Date";
@@ -404,6 +409,7 @@
         return date.toLocaleDateString(
             "en-US",
             {
+                timeZone: "America/New_York",
                 month: "long",
                 day: "numeric",
                 year: "numeric",
@@ -489,15 +495,13 @@
             );
 
         const pnlValue =
-            Number(
-                trade.realized_profit_loss
-            );
+            trade.realized_profit_loss == null ? NaN : Number(trade.realized_profit_loss);
 
         pnl.className =
             "trade-journal-pnl";
 
         pnl.textContent =
-            formatCurrency(pnlValue);
+            formatCurrency(pnlValue) + (trade.pnl_complete === false && Number.isFinite(pnlValue) ? " known" : "");
 
         if (pnlValue > 0) {
             pnl.classList.add(
@@ -645,7 +649,7 @@
     }
 
 
-    function renderTrades(trades) {
+    function renderTrades(trades, dailyRealized = {}) {
         const container =
             document.getElementById(
                 "trade-journal-list"
@@ -659,7 +663,7 @@
 
         if (
             !Array.isArray(trades) ||
-            !trades.length
+            (!trades.length && !Object.keys(dailyRealized).length)
         ) {
             const empty =
                 document.createElement("p");
@@ -672,8 +676,11 @@
             return;
         }
 
-        const groupedDays =
-            groupTradesByDay(trades);
+        const dayMap = new Map(groupTradesByDay(trades));
+        for (const day of Object.keys(dailyRealized)) {
+            if (!dayMap.has(day)) dayMap.set(day, []);
+        }
+        const groupedDays = [...dayMap.entries()].sort(([a], [b]) => b.localeCompare(a));
 
         for (
             const [dayKey, dayTrades]
@@ -708,25 +715,10 @@
 
             dayLabel.textContent =
                 formatTradeDayLabel(
-                    dayTrades[0]
+                    dayTrades[0] ?? {exit_timestamp: `${dayKey}T12:00:00-04:00`}
                 );
 
-            const dayPnl =
-                dayTrades.reduce(
-                    (total, trade) => {
-                        const value =
-                            Number(
-                                trade.realized_profit_loss
-                            );
-
-                        return total + (
-                            Number.isFinite(value)
-                                ? value
-                                : 0
-                        );
-                    },
-                    0
-                );
+            const dayPnl = dailyRealized[dayKey]?.known_realized_profit_loss ?? null;
 
             const incompleteTrades =
                 dayTrades.filter(
@@ -747,26 +739,8 @@
             pnl.className =
                 "trade-journal-pnl";
 
-            pnl.textContent =
-                incompleteCount > 0
-                    ? `${formatCurrency(dayPnl)} known`
-                    : formatCurrency(dayPnl);
-
-            pnl.title =
-                incompleteCount > 0
-                    ? (
-                        "Known realized P/L only. "
-                        + `${incompleteCount} trade${
-                            incompleteCount === 1
-                                ? ""
-                                : "s"
-                        } ${
-                            incompleteCount === 1
-                                ? "has"
-                                : "have"
-                        } incomplete broker-fill history.`
-                    )
-                    : "Realized P/L";
+            pnl.textContent = `${formatCurrency(dayPnl)} known fill P/L`;
+            pnl.title = "Matched exit fills on this Eastern date, including partial exits. Before fees; missing fills are excluded.";
 
             if (dayPnl > 0) {
                 pnl.classList.add(
@@ -784,7 +758,7 @@
                 );
 
             count.textContent =
-                `${dayTrades.length} trade${
+                `${dayTrades.length} closed trade${
                     dayTrades.length === 1
                         ? ""
                         : "s"
@@ -803,7 +777,7 @@
                     ? (
                         `${incompleteCount} incomplete`
                     )
-                    : "Complete";
+                    : "Matched fills only";
 
             accountingWarning.title =
                 incompleteCount > 0
@@ -814,8 +788,8 @@
                         + "a complete total."
                     )
                     : (
-                        "All displayed trades have "
-                        + "complete broker-fill accounting."
+                        "The header totals fills on this date, including partial exits. "
+                        + "Rows show each trade's lifetime result and may include other dates."
                     );
 
             const pdfButton =
@@ -1085,6 +1059,7 @@
         } = {}
     ) {
         initializeTradeJournalReports();
+        if (journalLoading) return;
         if (
             tradeJournalLoaded &&
             !force
@@ -1119,10 +1094,11 @@
                 "Loading completed trades\u2026";
         }
 
+        journalLoading = true;
         try {
             const response =
                 await fetch(
-                    `${apiUrl}/auto-trader/history?limit=500`,
+                    `${apiUrl}/auto-trader/history?limit=5000`,
                     {
                         credentials:
                             "include",
@@ -1143,8 +1119,9 @@
             );
 
             renderTrades(
-                payload?.trades ?? []
+                payload?.trades ?? [], payload?.daily_realized ?? {}
             );
+            window.renderTradingSummary?.(payload.summary, payload.generated_at);
 
             tradeJournalLoaded =
                 true;
@@ -1164,6 +1141,8 @@
                 listContainer.textContent =
                     message;
             }
+        } finally {
+            journalLoading = false;
         }
     }
 
@@ -1178,6 +1157,11 @@
                     force: true,
                 })
         );
+
+    window.setInterval(() => {
+        const section = document.getElementById("trade-journal-section");
+        if (!document.hidden && section && !section.hidden) loadTradeJournal({force: true});
+    }, 30_000);
 
     window.loadTradeJournal =
         loadTradeJournal;

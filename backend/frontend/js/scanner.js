@@ -708,15 +708,14 @@ function createScannerCard(stock) {
         document.createElement("span");
 
     confidenceLabel.textContent =
-        "AI Confidence";
+        "Signal Strength";
 
     const confidenceValue =
         document.createElement("strong");
 
-    confidenceValue.textContent =
-        `${Math.round(
-            stock.confidence
-        )}%`;
+    confidenceValue.textContent = `${Math.round(stock.confidence)}/100`;
+    const confidenceNote = document.createElement("small");
+    confidenceNote.textContent = "Score-based indicator strength; not a measured probability of profit.";
 
     confidenceHeader.append(
         confidenceLabel,
@@ -768,7 +767,8 @@ function createScannerCard(stock) {
 
     confidence.append(
         confidenceHeader,
-        confidenceBar
+        confidenceBar,
+        confidenceNote
     );
 
     const metrics =

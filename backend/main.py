@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from reporting_metrics import (account_equity_metrics, summarize_trades, daily_realized_summaries, annotate_order_history, timestamp_sort_key)
 from entry_quality import evaluate_entry_quality, tighten_score_minimum
 from chart_data import get_chart_data
 from database import (
@@ -2278,8 +2279,8 @@ def fetch_forward_research_bar(
     search_minutes: int = 5,
 ) -> dict[str, Any] | None:
     """
-    Fetch the first valid 1-minute IEX bar at or after
-    a research target timestamp.
+    Fetch the first completed 1-minute IEX bar whose close is at or
+    after the research target, within the bounded search window.
 
     This helper is read-only and does not affect trading
     decisions.
@@ -2323,7 +2324,7 @@ def fetch_forward_research_bar(
         f"/v2/stocks/{normalized_symbol}/bars",
         params={
             "timeframe": "1Min",
-            "start": target_datetime.isoformat(),
+            "start": (target_datetime - timedelta(minutes=1)).isoformat(),
             "end": end_datetime.isoformat(),
             "limit": normalized_search_minutes + 2,
             "adjustment": "raw",
@@ -2373,13 +2374,17 @@ def fetch_forward_research_bar(
             timezone.utc
         )
 
-        if bar_datetime < target_datetime:
+        bar_closed_at = bar_datetime + timedelta(minutes=1)
+        if not target_datetime <= bar_closed_at <= end_datetime:
+            continue
+        if bar_closed_at > datetime.now(timezone.utc):
             continue
 
         return {
             "symbol": normalized_symbol,
             "target_at": target_datetime.isoformat(),
             "bar_at": bar_datetime.isoformat(),
+            "bar_closed_at": bar_closed_at.isoformat(),
             "price": float(close_price),
             "source": "alpaca_iex_1min",
         }
@@ -2401,6 +2406,8 @@ def evaluate_scanner_forward_outcomes(
     """
     now = datetime.now(timezone.utc)
 
+    # Wait for the five-minute search window plus one minute for data arrival.
+    # Otherwise a not-yet-published bar becomes permanently "unavailable".
     # Keep current research fresh while still draining
     # older observations that accumulated before this
     # forward-research evaluator was deployed.
@@ -2410,7 +2417,7 @@ def evaluate_scanner_forward_outcomes(
     recent_observations = (
         load_due_scanner_forward_observations(
             horizon_minutes=horizon_minutes,
-            due_at=now.isoformat(),
+            due_at=(now - timedelta(minutes=6)).isoformat(),
             limit=recent_limit,
             order="newest",
         )
@@ -2426,7 +2433,7 @@ def evaluate_scanner_forward_outcomes(
         backlog_candidates = (
             load_due_scanner_forward_observations(
                 horizon_minutes=horizon_minutes,
-                due_at=now.isoformat(),
+                due_at=(now - timedelta(minutes=6)).isoformat(),
                 limit=backlog_limit + recent_limit,
                 order="oldest",
             )
@@ -2511,7 +2518,7 @@ def evaluate_scanner_forward_outcomes(
                 horizon_minutes=horizon_minutes,
                 target_at=target_at.isoformat(),
                 evaluated_at=str(
-                    forward_bar["bar_at"]
+                    forward_bar["bar_closed_at"]
                 ),
                 reference_price=float(
                     observation["reference_price"]
@@ -4365,424 +4372,54 @@ def normalize_alpaca_order_for_history(
 
 
 def build_alpaca_live_account_snapshot() -> dict[str, Any]:
-    """
-    Lightweight read-only dashboard snapshot for frequent frontend polling.
-    This does not download recent order history and does not change trading logic.
-    """
+    """Read-only equity snapshot; timestamp precedes requests to order UI updates."""
+    snapshot_at = time.time()
     account = fetch_alpaca_paper_account()
     raw_positions = fetch_alpaca_paper_positions()
-
-    positions = [
-        normalize_alpaca_position(position)
-        for position in raw_positions
-        if isinstance(position, dict)
-    ]
-
-    positions = [
-        position
-        for position in positions
-        if position.get("symbol")
-    ]
-
-    cash = safe_float(account.get("cash")) or 0.0
-    equity = safe_float(account.get("equity"))
-    portfolio_value = equity if equity is not None else cash
-
-    last_equity = safe_float(account.get("last_equity"))
-    if last_equity is None or last_equity <= 0:
-        last_equity = portfolio_value
-
-    unrealized_profit_loss = sum(
-        safe_float(position.get("unrealized_profit")) or 0.0
-        for position in positions
-    )
-
-    profit_loss = portfolio_value - last_equity
-    profit_loss_percent = (
-        (profit_loss / last_equity) * 100
-        if last_equity > 0
-        else 0.0
-    )
-
-    invested_value = sum(
-        abs(safe_float(position.get("position_value")) or 0.0)
-        for position in positions
-    )
-
-    allocation_total = cash + invested_value
-
+    positions = [normalize_alpaca_position(p) for p in raw_positions if isinstance(p, dict)]
+    positions = [p for p in positions if p.get("symbol")]
+    cash = safe_float(account.get("cash"))
+    unrealized = sum(safe_float(p.get("unrealized_profit")) or 0.0 for p in positions)
+    invested = sum(abs(safe_float(p.get("position_value")) or 0.0) for p in positions)
+    allocation = (cash or 0.0) + invested
     return {
-        "source": "alpaca_paper",
-        "paper": True,
-        "timestamp": time.time(),
-        "cash": round(cash, 2),
-        "buying_power": safe_float(account.get("buying_power")) or 0.0,
-        "portfolio_value": round(portfolio_value, 2),
-        "total_value": round(portfolio_value, 2),
-        "equity": round(portfolio_value, 2),
-        "starting_balance": round(last_equity, 2),
-        "starting_cash": round(last_equity, 2),
-        "profit_loss": round(profit_loss, 2),
-        "total_profit_loss": round(profit_loss, 2),
-        "profit_loss_percent": round(profit_loss_percent, 4),
-        "total_return_percent": round(profit_loss_percent, 4),
-        "unrealized_profit_loss": round(unrealized_profit_loss, 2),
-        "cash_percent": round(
-            (cash / allocation_total) * 100
-            if allocation_total > 0
-            else 0.0,
-            4,
-        ),
-        "invested_percent": round(
-            (invested_value / allocation_total) * 100
-            if allocation_total > 0
-            else 0.0,
-            4,
-        ),
-        "open_positions": len(positions),
-        "position_count": len(positions),
+        "source": "alpaca_paper", "paper": True, "timestamp": snapshot_at,
+        "cash": round(cash, 2) if cash is not None else None,
+        "buying_power": safe_float(account.get("buying_power")),
+        **account_equity_metrics(account),
+        "unrealized_profit_loss": round(unrealized, 2),
+        "cash_percent": round(cash / allocation * 100, 4) if cash is not None and allocation > 0 else None,
+        "invested_percent": round(invested / allocation * 100, 4) if allocation > 0 else None,
+        "open_positions": len(positions), "position_count": len(positions),
         "positions": positions,
     }
 
 
 def build_alpaca_dashboard_account() -> dict[str, Any]:
-    """
-    Build the /account response entirely from Alpaca PAPER data.
-
-    This keeps the existing frontend working while making Alpaca the
-    source of truth for cash, equity, open positions, and recent fills.
-    """
-    account = fetch_alpaca_paper_account()
-
-    raw_positions = (
-        fetch_alpaca_paper_positions()
-    )
-
-    raw_orders = fetch_alpaca_paper_trade_history(
-        limit=500
-    )
-
-    positions = [
-        normalize_alpaca_position(
-            position
-        )
-        for position in raw_positions
-    ]
-
-    positions = [
-        position
-        for position in positions
-        if position.get("symbol")
-    ]
-
-    history: list[dict[str, Any]] = []
-
-    for order in raw_orders:
-        trade = (
-            normalize_alpaca_order_for_history(
-                order
-            )
-        )
-
-        if trade is not None:
-            history.append(trade)
-
-    buy_lots_by_symbol: dict[str, list[dict[str, float]]] = {}
-
-    for trade in sorted(
-        history,
-        key=lambda item: str(
-            item.get("timestamp") or ""
-        ),
-    ):
-        symbol = clean_symbol(
-            trade.get("symbol")
-        )
-
-        side = str(
-            trade.get("side", "")
-        ).strip().upper()
-
-        shares = safe_float(
-            trade.get("shares")
-        )
-
-        price = safe_float(
-            trade.get("price")
-        )
-
-        if (
-            not symbol
-            or shares is None
-            or shares <= 0
-            or price is None
-            or price <= 0
-        ):
-            continue
-
-        if side == "BUY":
-            buy_lots_by_symbol.setdefault(
-                symbol,
-                [],
-            ).append({
-                "shares": shares,
-                "price": price,
-            })
-
-            trade["profit_loss_dollars"] = None
-            trade["profit_loss_percent"] = None
-
-            continue
-
-        if side != "SELL":
-            continue
-
-        remaining_to_match = shares
-        realized_pl = 0.0
-        matched_cost = 0.0
-
-        lots = buy_lots_by_symbol.setdefault(
-            symbol,
-            [],
-        )
-
-        while (
-            remaining_to_match > 0
-            and lots
-        ):
-            lot = lots[0]
-
-            lot_shares = safe_float(
-                lot.get("shares")
-            ) or 0.0
-
-            lot_price = safe_float(
-                lot.get("price")
-            ) or 0.0
-
-            matched_shares = min(
-                remaining_to_match,
-                lot_shares,
-            )
-
-            realized_pl += (
-                price - lot_price
-            ) * matched_shares
-
-            matched_cost += (
-                lot_price
-                * matched_shares
-            )
-
-            remaining_to_match -= (
-                matched_shares
-            )
-
-            lot["shares"] = (
-                lot_shares
-                - matched_shares
-            )
-
-            if lot["shares"] <= 0:
-                lots.pop(0)
-
-        if matched_cost > 0:
-            trade["profit_loss_dollars"] = round(
-                realized_pl,
-                2,
-            )
-
-            trade["profit_loss_percent"] = round(
-                (
-                    realized_pl
-                    / matched_cost
-                )
-                * 100,
-                4,
-            )
-        else:
-            trade["profit_loss_dollars"] = None
-            trade["profit_loss_percent"] = None
-
-    cash = safe_float(
-        account.get("cash")
-    ) or 0.0
-
-    equity = safe_float(
-        account.get("equity")
-    )
-
-    portfolio_value = (
-        equity
-        if equity is not None
-        else cash
-    )
-
-    last_equity = safe_float(
-        account.get(
-            "last_equity"
-        )
-    )
-
-    if (
-        last_equity is None
-        or last_equity <= 0
-    ):
-        last_equity = portfolio_value
-
-    unrealized_profit_loss = sum(
-        safe_float(
-            position.get(
-                "unrealized_profit"
-            )
-        ) or 0.0
-        for position in positions
-    )
-
-    # Alpaca's account endpoint exposes current and prior equity, but
-    # not a simple all-time realized-P/L field. For now the dashboard's
-    # realized metric remains zero until we add activity-based accounting.
-    realized_profit_loss = 0.0
-
-    profit_loss = (
-        portfolio_value
-        - last_equity
-    )
-
-    profit_loss_percent = (
-        (
-            profit_loss
-            / last_equity
-        )
-        * 100
-        if last_equity > 0
-        else 0.0
-    )
-
-    invested_value = sum(
-        abs(
-            safe_float(
-                position.get(
-                    "position_value"
-                )
-            ) or 0.0
-        )
-        for position in positions
-    )
-
-    allocation_total = (
-        cash
-        + invested_value
-    )
-
-    cash_percent = (
-        (
-            cash
-            / allocation_total
-        )
-        * 100
-        if allocation_total > 0
-        else 0.0
-    )
-
-    invested_percent = (
-        (
-            invested_value
-            / allocation_total
-        )
-        * 100
-        if allocation_total > 0
-        else 0.0
-    )
-
-    closed_sells = sum(
-        1
-        for trade in history
-        if str(
-            trade.get(
-                "side",
-                "",
-            )
-        ).upper() == "SELL"
-    )
-
+    """Account movement and bot journal totals have distinct, explicit scopes."""
+    snapshot = build_alpaca_live_account_snapshot()
+    orders = fetch_alpaca_paper_trade_history(limit=500)
+    history = [normalize_alpaca_order_for_history(o) for o in orders if isinstance(o, dict)]
+    history = [row for row in history if row is not None]
+    summary = None
+    accounting_error = None
+    canonical = []
+    try:
+        payload = auto_trader_canonical_broker_trades()
+        canonical = payload.get("trades") or []
+        summary = summarize_trades(canonical, ledger_summary=payload.get("summary"))
+    except Exception:
+        accounting_error = "Journal accounting is unavailable; no zero-profit estimate was substituted."
+    annotate_order_history(history, canonical)
     return {
-        "source": "alpaca_paper",
-        "paper": True,
-        "account_id": account.get("id"),
-        "status": account.get("status"),
-        "cash": round(cash, 2),
-        "buying_power": safe_float(
-            account.get(
-                "buying_power"
-            )
-        ) or 0.0,
-        "portfolio_value": round(
-            portfolio_value,
-            2,
-        ),
-        "total_value": round(
-            portfolio_value,
-            2,
-        ),
-        "equity": round(
-            portfolio_value,
-            2,
-        ),
-        "starting_balance": round(
-            last_equity,
-            2,
-        ),
-        "starting_cash": round(
-            last_equity,
-            2,
-        ),
-        "profit_loss": round(
-            profit_loss,
-            2,
-        ),
-        "total_profit_loss": round(
-            profit_loss,
-            2,
-        ),
-        "profit_loss_percent": round(
-            profit_loss_percent,
-            4,
-        ),
-        "total_return_percent": round(
-            profit_loss_percent,
-            4,
-        ),
-        "realized_profit_loss": round(
-            realized_profit_loss,
-            2,
-        ),
-        "unrealized_profit_loss": round(
-            unrealized_profit_loss,
-            2,
-        ),
-        "win_rate": 0.0,
-        "closed_trades": closed_sells,
-        "cash_percent": round(
-            cash_percent,
-            4,
-        ),
-        "invested_percent": round(
-            invested_percent,
-            4,
-        ),
-        "positions": positions,
-        "history": history,
-        "trades": history,
-        "performance": {
-            "highest_value": round(
-                max(
-                    portfolio_value,
-                    last_equity,
-                ),
-                2,
-            ),
-        },
+        **snapshot,
+        "realized_profit_loss": summary["total_realized_profit_loss"] if summary else None,
+        "realized_profit_loss_complete": summary["realized_profit_loss_complete"] if summary else False,
+        "win_rate": summary["win_rate_percent"] if summary else None,
+        "money_win_rate_percent": summary["money_win_rate_percent"] if summary else None,
+        "closed_trades": summary["completed_trades"] if summary else None,
+        "performance_summary": summary, "accounting_error": accounting_error,
+        "history": history, "trades": history,
     }
 
 
@@ -8368,12 +8005,14 @@ def run_auto_trader_cycle() -> dict[str, Any]:
         scanner_observation_ids: dict[str, int] = {}
 
         for candidate in scanner_results:
+            if candidate.get("scanner_stale") is not False:
+                continue
             observation_symbol = clean_symbol(
                 candidate.get("symbol")
             )
 
             observation_price = safe_float(
-                candidate.get("price")
+                candidate.get("research_reference_price", candidate.get("price"))
             )
 
             if (
@@ -8472,9 +8111,9 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                                 [],
                             )
                         ),
-                        "research_source": (
-                            "auto_trader_scanner"
-                        ),
+                        "research_source": "auto_trader_scanner",
+                        "reference_price_basis": "scanner_daily_bar_close",
+                        "scanner_generated_at": candidate.get("scanner_generated_at"),
                     },
                 )
 
@@ -13745,8 +13384,9 @@ def auto_trader_canonical_broker_trades(
 
     fills = sorted(
         fills,
-        key=lambda item: str(
-            item.get("filled_at") or ""
+        key=lambda item: (
+            timestamp_sort_key(item.get("filled_at")),
+            str(item.get("side", "")).upper() == "SELL",
         ),
     )
 
@@ -13896,14 +13536,7 @@ def auto_trader_canonical_broker_trades(
         ).strip()
 
         if side == "BUY":
-            if not (
-                client_order_id
-                .lower()
-                .startswith(
-                    "auto-entry-"
-                )
-            ):
-                continue
+            is_bot_entry = client_order_id.lower().startswith("auto-entry-")
 
             trade_book_entry = (
                 trade_book_by_entry_order_id.get(
@@ -13975,6 +13608,7 @@ def auto_trader_canonical_broker_trades(
                 "entry_client_order_id": (
                     client_order_id
                 ),
+                "is_bot_entry": is_bot_entry,
                 "entry_timestamp": (
                     fill.get(
                         "filled_at"
@@ -14270,7 +13904,7 @@ def auto_trader_canonical_broker_trades(
 
         else:
             average_exit_price = None
-            realized_pl = 0.0
+            realized_pl = None
             realized_return = None
 
         if remaining_shares <= 0.00000001:
@@ -14294,6 +13928,7 @@ def auto_trader_canonical_broker_trades(
                         "entry_client_order_id"
                     ]
                 ),
+                "is_bot_entry": entry["is_bot_entry"],
                 "entry_timestamp": (
                     entry[
                         "entry_timestamp"
@@ -14345,9 +13980,8 @@ def auto_trader_canonical_broker_trades(
                     )
                     or []
                 ),
-                "realized_profit_loss": round(
-                    realized_pl,
-                    4,
+                "realized_profit_loss": (
+                    round(realized_pl, 4) if realized_pl is not None else None
                 ),
                 "realized_return_percent": (
                     round(
@@ -14362,12 +13996,7 @@ def auto_trader_canonical_broker_trades(
         )
 
     canonical.sort(
-        key=lambda item: str(
-            item.get(
-                "entry_timestamp"
-            )
-            or ""
-        ),
+        key=lambda item: timestamp_sort_key(item.get("entry_timestamp")),
         reverse=True,
     )
 
@@ -14457,12 +14086,7 @@ def auto_trader_canonical_broker_trades(
         # FIFO selling leaves the newest lots open,
         # so allocate current broker shares newest first.
         items.sort(
-            key=lambda item: str(
-                item.get(
-                    "entry_timestamp"
-                )
-                or ""
-            ),
+            key=lambda item: timestamp_sort_key(item.get("entry_timestamp")),
             reverse=True,
         )
 
@@ -14543,6 +14167,10 @@ def auto_trader_canonical_broker_trades(
                     "status"
                 ] = "CLOSED"
 
+    # Manual lots participate in matching and live-position reconciliation,
+    # but never become bot trades or enter bot performance statistics.
+    canonical = [item for item in canonical if item.pop("is_bot_entry")]
+
     closed = [
         item
         for item in canonical
@@ -14590,6 +14218,8 @@ def auto_trader_canonical_broker_trades(
         "read_only": True,
         "source": "broker_fills_trade_book_link_then_fifo",
         "summary": {
+            "ledger_limit_reached": len(fills) >= 10000,
+            "ledger_last_fill_at": fills[-1].get("filled_at") if fills else None,
             "broker_fills": len(
                 fills
             ),
@@ -16197,11 +15827,11 @@ def auto_trader_history(
         reverse=True,
     )
 
-    closed_canonical = (
-        closed_canonical[
-            :limit
-        ]
+    report_summary = summarize_trades(
+        canonical_trades, ledger_summary=canonical_payload.get("summary"),
     )
+    daily_summaries = daily_realized_summaries(canonical_trades)
+    closed_canonical = closed_canonical[:limit]
 
     legacy_trades = load_trade_book(
         limit=5000,
@@ -16485,6 +16115,7 @@ def auto_trader_history(
                     )
                 ),
                 "pnl_complete": pnl_complete,
+                "exit_allocations": canonical.get("exit_allocations") or [],
                 "entry_price": canonical.get(
                     "entry_price"
                 ),
@@ -16715,31 +16346,8 @@ def auto_trader_history(
         ),
         "count": completed,
         "summary": {
-            "completed_trades": completed,
-            "complete_trades": (
-                complete_count
-            ),
-            "incomplete_trades": (
-                incomplete_count
-            ),
-            "wins": wins,
-            "losses": losses,
-            "breakeven": breakeven,
-            "win_rate_percent": round(
-                win_rate_percent,
-                2,
-            ),
-            "total_realized_profit_loss": round(
-                total_profit_loss,
-                2,
-            ),
-            "realized_profit_loss_complete": (
-                incomplete_count == 0
-            ),
-            "average_return_percent": round(
-                average_return_percent,
-                4,
-            ),
+            **report_summary,
+            "completed_trades": report_summary["completed_trades"],
             "open_trades": (
                 canonical_summary.get(
                     "open_trades",
@@ -16798,6 +16406,11 @@ def auto_trader_history(
             ),
         },
         "trades": history,
+        "returned_count": len(history),
+        "total_count": report_summary["completed_trades"],
+        "has_more": len(history) < report_summary["completed_trades"],
+        "daily_realized": daily_summaries,
+        "generated_at": time.time(),
     }
 
 

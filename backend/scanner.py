@@ -906,6 +906,7 @@ def analyze_stock(
     return {
         "symbol": symbol,
         "price": round(price, 2),
+        "research_reference_price": price,
         "change": round(one_day_change, 2),
         "five_day_change": round(five_day_change, 2),
         "twenty_day_change": round(twenty_day_change, 2),

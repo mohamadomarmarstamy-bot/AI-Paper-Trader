@@ -45,442 +45,132 @@ const ALLOCATION_COLORS = [
     "#8b5cf6",
 ];
 
+let newestAccountTimestamp = 0;
+let newestPerformanceTimestamp = 0;
+let lastPerformanceRefresh = 0;
+let performanceRefreshInProgress = false;
+
+function reportNumber(value) {
+    if (value === null || value === undefined || value === "" || typeof value === "boolean") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+}
+
+function reportMoney(value) {
+    const number = reportNumber(value);
+    return number === null ? "—" : formatSignedMoney(number);
+}
+
+function reportPercent(value) {
+    const number = reportNumber(value);
+    return number === null ? "—" : `${number.toFixed(2)}%`;
+}
+
+function renderAccountOverview(account) {
+    const timestamp = reportNumber(account.timestamp);
+    if (timestamp === null || timestamp < newestAccountTimestamp) return false;
+    newestAccountTimestamp = timestamp;
+    const positions = normalizePositions(account.positions);
+    setText("cash", reportMoney(account.cash));
+    setText("portfolio-value", reportMoney(account.portfolio_value));
+    setText("profit-loss", reportMoney(account.daily_equity_change));
+    setText("total-return-percent", reportPercent(account.daily_equity_change_percent));
+    setText("unrealized-profit-loss", reportMoney(account.unrealized_profit_loss));
+    setText("position-count", String(positions.length));
+    setText("cash-percent", reportPercent(account.cash_percent));
+    setText("invested-percent", reportPercent(account.invested_percent));
+    setText("daily-pl-note", account.daily_pl_available
+        ? `Since prior close • updated ${new Date(timestamp * 1000).toLocaleTimeString()}`
+        : "Unavailable: broker equity or prior close is missing");
+    for (const [id, value] of [
+        ["profit-loss", account.daily_equity_change],
+        ["total-return-percent", account.daily_equity_change_percent],
+        ["unrealized-profit-loss", account.unrealized_profit_loss],
+    ]) updateMetricColor(id, value);
+    renderPositions(document.getElementById("positions-table"), positions);
+    renderAllocationChart(positions, toNumber(account.cash));
+    return true;
+}
+
+function renderTradingSummary(summary, timestamp = 0) {
+    if (timestamp < newestPerformanceTimestamp) return;
+    newestPerformanceTimestamp = timestamp;
+    const moneyRate = reportPercent(summary?.money_win_rate_percent);
+    setText("dashboard-win-rate", moneyRate);
+    setText("win-rate", moneyRate);
+    const known = summary?.realized_profit_loss_complete === false;
+    setText("realized-profit-loss", reportMoney(summary?.total_realized_profit_loss) + (known ? " known" : ""));
+    setText("closed-trades", summary ? String(summary.completed_trades) : "—");
+    setText("gross-profit", reportMoney(summary?.gross_profit));
+    setText("gross-loss", reportMoney(summary?.gross_loss));
+    updateMetricColor("realized-profit-loss", summary?.total_realized_profit_loss);
+    const caption = summary
+        ? `${summary.rate_sample_trades} complete trades • ${summary.incomplete_trades} incomplete excluded`
+        : "Journal accounting unavailable";
+    setText("money-win-rate-note", caption);
+    setText("accounting-note", summary
+        ? `Matched bot exits, including partial exits, before fees. ${caption}. ${summary.unmatched_sell_fills} unmatched sell fills. `
+          + (summary.ledger_limit_reached ? "Ledger row limit reached; older history is excluded. " : "")
+          + "Money win rate = gross profits ÷ (gross profits + gross losses)."
+        : "Journal accounting unavailable. Missing values are not zero.");
+}
+window.renderTradingSummary = renderTradingSummary;
+
 async function loadAccount() {
-    const positionsTable =
-        document.getElementById("positions-table");
-
-    const historyTable =
-        document.getElementById("history-table");
-
-    setTableMessage(
-        positionsTable,
-        7,
-        "Loading positions…"
-    );
-
-    setTableMessage(
-        historyTable,
-        5,
-        "Loading trade history…"
-    );
-
-    if (accountRequestController) {
-        accountRequestController.abort();
-    }
-
-    accountRequestController =
-        new AbortController();
-
-    const timeoutId = window.setTimeout(
-        () => accountRequestController?.abort(),
-        ACCOUNT_REQUEST_TIMEOUT_MS
-    );
-
+    accountRequestController?.abort();
+    const controller = new AbortController();
+    accountRequestController = controller;
+    const timeout = window.setTimeout(() => controller.abort(), ACCOUNT_REQUEST_TIMEOUT_MS);
     try {
-        const account = await fetchJson(
-            `${getApiUrl()}/account`,
-            {
-                signal:
-                    accountRequestController.signal,
-            }
-        );
-
-        const cash =
-            toNumber(account.cash);
-
-        const portfolioValue = toNumber(
-            account.portfolio_value ??
-            account.total_value ??
-            account.equity ??
-            cash
-        );
-
-        const startingBalance = toNumber(
-            account.starting_cash ??
-            account.starting_balance ??
-            account.initial_balance ??
-            DEFAULT_STARTING_BALANCE
-        );
-
-        const profitLoss = toNumber(
-            account.profit_loss ??
-            account.total_profit_loss ??
-            portfolioValue - startingBalance
-        );
-
-        const profitLossPercent = toNumber(
-            account.profit_loss_percent ??
-            account.total_return_percent
-        );
-
-        const realizedProfitLoss = toNumber(
-            account.realized_profit_loss
-        );
-
-        const unrealizedProfitLoss = toNumber(
-            account.unrealized_profit_loss
-        );
-
-        const winRate = toNumber(
-            account.win_rate
-        );
-
-        const closedTrades = Math.max(
-            0,
-            Math.trunc(
-                toNumber(account.closed_trades)
-            )
-        );
-
-        const cashPercent = toNumber(
-            account.cash_percent
-        );
-
-        const investedPercent = toNumber(
-            account.invested_percent
-        );
-
-        const highestPortfolioValue = toNumber(
-            account.performance?.highest_value ??
-            portfolioValue
-        );
-
-        const positions =
-            normalizePositions(account.positions);
-
-        const history = normalizeHistory(
-            account.history ??
-            account.trades ??
-            []
-        );
-
-        setText(
-            "cash",
-            formatMoney(cash)
-        );
-
-        setText(
-            "portfolio-value",
-            formatMoney(portfolioValue)
-        );
-
-        setText(
-            "profit-loss",
-            formatSignedMoney(profitLoss)
-        );
-
-        setText(
-            "position-count",
-            String(positions.length)
-        );
-
-        setText(
-            "total-return-percent",
-            formatSignedPercentage(
-                profitLossPercent
-            )
-        );
-
-        setText(
-            "realized-profit-loss",
-            formatSignedMoney(
-                realizedProfitLoss
-            )
-        );
-
-        setText(
-            "unrealized-profit-loss",
-            formatSignedMoney(
-                unrealizedProfitLoss
-            )
-        );
-
-        setText(
-            "win-rate",
-            `${winRate.toFixed(2)}%`
-        );
-
-        let dashboardWinRate = winRate;
-
-        try {
-            const historyPayload = await fetchJson(
-                `${getApiUrl()}/auto-trader/history?limit=500`
-            );
-
-            dashboardWinRate = toNumber(
-                historyPayload?.summary?.win_rate_percent ??
-                winRate
-            );
-        } catch (error) {
-            console.warn(
-                "Dashboard win rate fallback:",
-                error
-            );
-        }
-
-        setText(
-            "dashboard-win-rate",
-            `${dashboardWinRate.toFixed(2)}%`
-        );
-
-        setText(
-            "closed-trades",
-            String(closedTrades)
-        );
-
-        setText(
-            "cash-percent",
-            `${cashPercent.toFixed(2)}%`
-        );
-
-        setText(
-            "invested-percent",
-            `${investedPercent.toFixed(2)}%`
-        );
-
-        setText(
-            "highest-portfolio-value",
-            formatMoney(
-                highestPortfolioValue
-            )
-        );
-
-        updateProfitLossColor(profitLoss);
-
-        updateMetricColor(
-            "total-return-percent",
-            profitLossPercent
-        );
-
-        updateMetricColor(
-            "realized-profit-loss",
-            realizedProfitLoss
-        );
-
-        updateMetricColor(
-            "unrealized-profit-loss",
-            unrealizedProfitLoss
-        );
-
-        renderPositions(
-            positionsTable,
-            positions
-        );
-
-        renderAllocationChart(
-            positions,
-            cash
-        );
-
-        renderHistory(
-            historyTable,
-            history
-        );
+        const account = await fetchJson(`${getApiUrl()}/account`, {signal: controller.signal, cache: "no-store"});
+        if (account.error) throw new Error(account.error);
+        renderAccountOverview(account);
+        renderTradingSummary(account.performance_summary, account.timestamp);
+        renderHistory(document.getElementById("history-table"), normalizeHistory(account.history ?? []));
     } catch (error) {
-        if (error?.name === "AbortError") {
-            console.warn(
-                "Account request was cancelled or timed out."
-            );
-        } else {
-            console.error(
-                "Account error:",
-                error
-            );
-        }
-
-        setTableMessage(
-            positionsTable,
-            7,
-            "Could not load account information."
-        );
-
-        setTableMessage(
-            historyTable,
-            5,
-            "Could not load trade history."
-        );
-
-        showAllocationError();
+        if (controller.signal.aborted && accountRequestController !== controller) return;
+        console.warn("Account refresh failed:", error);
+        setText("accounting-note", "Account refresh failed. Previously displayed values may be out of date.");
     } finally {
-        window.clearTimeout(timeoutId);
-        accountRequestController = null;
+        window.clearTimeout(timeout);
+        if (accountRequestController === controller) accountRequestController = null;
+    }
+}
+
+async function refreshTradingSummary() {
+    if (performanceRefreshInProgress || Date.now() - lastPerformanceRefresh < 30_000) return;
+    performanceRefreshInProgress = true;
+    lastPerformanceRefresh = Date.now();
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), ACCOUNT_REQUEST_TIMEOUT_MS);
+    try {
+        const payload = await fetchJson(`${getApiUrl()}/auto-trader/history?limit=1`, {signal: controller.signal, cache: "no-store"});
+        renderTradingSummary(payload.summary, payload.generated_at);
+    } catch (error) {
+        console.warn("Journal summary refresh failed:", error);
+        setText("money-win-rate-note", "Refresh failed • last available values shown");
+    } finally {
+        window.clearTimeout(timeout);
+        performanceRefreshInProgress = false;
     }
 }
 
 async function refreshLiveAccountMetrics() {
-    if (
-        document.hidden ||
-        liveAccountRefreshInProgress
-    ) {
-        return;
-    }
-
+    if (document.hidden || liveAccountRefreshInProgress) return;
     liveAccountRefreshInProgress = true;
-
-    liveAccountRequestController?.abort();
-
-    liveAccountRequestController =
-        new AbortController();
-
-    const timeoutId = window.setTimeout(
-        () =>
-            liveAccountRequestController?.abort(),
-        LIVE_ACCOUNT_REQUEST_TIMEOUT_MS
-    );
-
+    const controller = new AbortController();
+    liveAccountRequestController = controller;
+    const timeout = window.setTimeout(() => controller.abort(), LIVE_ACCOUNT_REQUEST_TIMEOUT_MS);
     try {
-        const account = await fetchJson(
-            `${getApiUrl()}/account/live`,
-            {
-                signal:
-                    liveAccountRequestController.signal,
-                cache: "no-store",
-            }
-        );
-
-        if (
-            !account ||
-            typeof account !== "object" ||
-            account.error
-        ) {
-            throw new Error(
-                account?.error ??
-                "Live account snapshot was unavailable."
-            );
-        }
-
-        const cash =
-            toNumber(account.cash);
-
-        const portfolioValue =
-            toNumber(
-                account.portfolio_value ??
-                account.total_value ??
-                account.equity ??
-                cash
-            );
-
-        const startingBalance =
-            toNumber(
-                account.starting_cash ??
-                account.starting_balance ??
-                DEFAULT_STARTING_BALANCE
-            );
-
-        const profitLoss =
-            toNumber(
-                account.profit_loss ??
-                account.total_profit_loss ??
-                portfolioValue -
-                    startingBalance
-            );
-
-        const profitLossPercent =
-            toNumber(
-                account.profit_loss_percent ??
-                account.total_return_percent
-            );
-
-        const unrealizedProfitLoss =
-            toNumber(
-                account.unrealized_profit_loss
-            );
-
-        const cashPercent =
-            toNumber(account.cash_percent);
-
-        const investedPercent =
-            toNumber(account.invested_percent);
-
-        const positions =
-            normalizePositions(
-                account.positions
-            );
-
-        setText(
-            "cash",
-            formatMoney(cash)
-        );
-
-        setText(
-            "portfolio-value",
-            formatMoney(portfolioValue)
-        );
-
-        setText(
-            "profit-loss",
-            formatSignedMoney(profitLoss)
-        );
-
-        setText(
-            "position-count",
-            String(
-                account.position_count ??
-                account.open_positions ??
-                positions.length
-            )
-        );
-
-        setText(
-            "total-return-percent",
-            formatSignedPercentage(
-                profitLossPercent
-            )
-        );
-
-        setText(
-            "unrealized-profit-loss",
-            formatSignedMoney(
-                unrealizedProfitLoss
-            )
-        );
-
-        setText(
-            "cash-percent",
-            `${cashPercent.toFixed(2)}%`
-        );
-
-        setText(
-            "invested-percent",
-            `${investedPercent.toFixed(2)}%`
-        );
-
-        updateProfitLossColor(
-            profitLoss
-        );
-
-        updateMetricColor(
-            "total-return-percent",
-            profitLossPercent
-        );
-
-        updateMetricColor(
-            "unrealized-profit-loss",
-            unrealizedProfitLoss
-        );
-
-        renderPositions(
-            document.getElementById(
-                "positions-table"
-            ),
-            positions
-        );
-
-        renderAllocationChart(
-            positions,
-            cash
-        );
-
+        const account = await fetchJson(`${getApiUrl()}/account/live`, {signal: controller.signal, cache: "no-store"});
+        if (!account || account.error) throw new Error(account?.error ?? "Account unavailable");
+        renderAccountOverview(account);
+        void refreshTradingSummary();
     } catch (error) {
-        if (error?.name !== "AbortError") {
-            console.warn(
-                "Live account refresh failed:",
-                error
-            );
-        }
+        console.warn("Live account refresh failed:", error);
+        setText("daily-pl-note", "Refresh failed • last available values shown");
     } finally {
-        window.clearTimeout(timeoutId);
-
+        window.clearTimeout(timeout);
         liveAccountRequestController = null;
         liveAccountRefreshInProgress = false;
     }

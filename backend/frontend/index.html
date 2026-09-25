@@ -206,7 +206,7 @@
                     </span>
                 </div>
 
-                <h3 id="portfolio-value">$0.00</h3>
+                <h3 id="portfolio-value">—</h3>
 
                 <p class="stat-caption">
                     Total account equity
@@ -231,10 +231,10 @@
                     </span>
                 </div>
 
-                <h3 id="profit-loss">$0.00</h3>
+                <h3 id="profit-loss">—</h3>
 
-                <p class="stat-caption">
-                    Daily account movement
+                <p class="stat-caption" id="daily-pl-note">
+                    Since prior market close
                 </p>
             </article>
 
@@ -272,7 +272,7 @@
                 aria-label="View trading performance and win rate"
             >
                 <div class="stat-card-heading">
-                    <p>Win Rate</p>
+                    <p>Money Win Rate</p>
 
                     <span class="dashboard-stat-icon" aria-hidden="true">
                         <svg viewBox="0 0 24 24" fill="none" stroke="#7cb5ff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -284,10 +284,10 @@
                     </span>
                 </div>
 
-                <h3 id="dashboard-win-rate">0.00%</h3>
+                <h3 id="dashboard-win-rate">—</h3>
 
-                <p class="stat-caption">
-                    Winning closed trades
+                <p class="stat-caption" id="money-win-rate-note">
+                    Gross profits / total gains and losses
                 </p>
             </article>
         </section>
@@ -695,35 +695,36 @@
                             </div>
                         </div>
 
-                        <div class="performance-metrics-grid">
+                        <p id="accounting-note" role="status">Loading broker-backed journal accounting…</p>
+<div class="performance-metrics-grid">
                             <article class="performance-metric">
-                                <p class="performance-metric-label">Total Return</p>
-                                <strong id="total-return-percent" class="performance-metric-value neutral">0.00%</strong>
-                                <span class="performance-metric-caption">Since account start</span>
+                                <p class="performance-metric-label">Daily Equity Return</p>
+                                <strong id="total-return-percent" class="performance-metric-value neutral">—</strong>
+                                <span class="performance-metric-caption">Since previous market close; includes open positions</span>
                             </article>
 
                             <article class="performance-metric">
-                                <p class="performance-metric-label">Realized P / L</p>
-                                <strong id="realized-profit-loss" class="performance-metric-value neutral">$0.00</strong>
-                                <span class="performance-metric-caption">Closed trades</span>
+                                <p class="performance-metric-label">Bot Realized P / L</p>
+                                <strong id="realized-profit-loss" class="performance-metric-value neutral">—</strong>
+                                <span class="performance-metric-caption">Matched bot exits, including partial exits; before fees</span>
                             </article>
 
                             <article class="performance-metric">
                                 <p class="performance-metric-label">Unrealized P / L</p>
-                                <strong id="unrealized-profit-loss" class="performance-metric-value neutral">$0.00</strong>
+                                <strong id="unrealized-profit-loss" class="performance-metric-value neutral">—</strong>
                                 <span class="performance-metric-caption">Open positions</span>
                             </article>
 
                             <article class="performance-metric">
-                                <p class="performance-metric-label">Win Rate</p>
-                                <strong id="win-rate" class="performance-metric-value">0.00%</strong>
-                                <span class="performance-metric-caption">Winning vs. losing closes</span>
+                                <p class="performance-metric-label">Money Win Rate</p>
+                                <strong id="win-rate" class="performance-metric-value">—</strong>
+                                <span class="performance-metric-caption">Gross profits / (gross profits + gross losses)</span>
                             </article>
 
                             <article class="performance-metric">
                                 <p class="performance-metric-label">Closed Trades</p>
-                                <strong id="closed-trades" class="performance-metric-value">0</strong>
-                                <span class="performance-metric-caption">Completed sells</span>
+                                <strong id="closed-trades" class="performance-metric-value">—</strong>
+                                <span class="performance-metric-caption">Recorded closed bot trades, including incomplete</span>
                             </article>
 
                             <article class="performance-metric">
@@ -739,9 +740,14 @@
                             </article>
 
                             <article class="performance-metric">
-                                <p class="performance-metric-label">High Water Mark</p>
-                                <strong id="highest-portfolio-value" class="performance-metric-value">$0.00</strong>
-                                <span class="performance-metric-caption">Highest recorded value</span>
+                                <p class="performance-metric-label">Gross Profits</p>
+                                <strong id="gross-profit" class="performance-metric-value">—</strong>
+                                <span class="performance-metric-caption">Complete closed bot trades; before fees</span>
+                            </article>
+                            <article class="performance-metric">
+                                <p class="performance-metric-label">Gross Losses</p>
+                                <strong id="gross-loss" class="performance-metric-value">—</strong>
+                                <span class="performance-metric-caption">Absolute losses on complete closed bot trades</span>
                             </article>
                         </div>
                     </section>
