@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from entry_quality import evaluate_entry_quality, tighten_score_minimum
 from chart_data import get_chart_data
 from database import (
     calculate_feature_performance,
@@ -76,7 +77,7 @@ from scanner import (
 )
 
 
-APP_VERSION = "2.7.1"
+APP_VERSION = "2.7.2"
 AUTO_PORTFOLIO_REFRESH_SECONDS = 300
 
 
@@ -9610,19 +9611,15 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     win_rate < 35.0
                     or average_return < -1.0
                 ):
-                    learning_score_min = min(
-                        90.0,
-                        AUTO_TRADER_ENTRY_SCORE_MIN
-                        + 5.0,
+                    learning_score_min = tighten_score_minimum(
+                        AUTO_TRADER_ENTRY_SCORE_MIN, 5.0,
                     )
                 elif (
                     win_rate < 45.0
                     or average_return < 0
                 ):
-                    learning_score_min = min(
-                        90.0,
-                        AUTO_TRADER_ENTRY_SCORE_MIN
-                        + 2.0,
+                    learning_score_min = tighten_score_minimum(
+                        AUTO_TRADER_ENTRY_SCORE_MIN, 2.0,
                     )
             learning_adjusted = (
                 learning_score_min
@@ -9651,9 +9648,8 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     learning_score_min
                 )
 
-                learning_score_min = min(
-                    90.0,
-                    learning_score_min + 5.0,
+                learning_score_min = tighten_score_minimum(
+                    learning_score_min, 5.0,
                 )
 
                 market_regime_adjusted = (
@@ -9682,12 +9678,6 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 or candidate.get("rank")
             )
 
-            scanner_rank_pass = (
-                scanner_rank is None
-                or scanner_rank
-                <= AUTO_TRADER_MAX_ENTRY_SCANNER_RANK
-            )
-
             momentum_30_candidate = bool(
                 candidate.get(
                     "momentum_30_candidate"
@@ -9700,24 +9690,14 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 else AUTO_TRADER_STRATEGY_VERSION
             )
 
-            normal_entry_pass = (
-                signal == "BUY"
-                and score is not None
-                and score >= learning_score_min
-                and confidence is not None
-                and confidence
-                >= learning_confidence_min
-                and scanner_rank_pass
+            entry_quality = evaluate_entry_quality(
+                candidate,
+                score_min=learning_score_min,
+                confidence_min=learning_confidence_min,
+                max_scanner_rank=AUTO_TRADER_MAX_ENTRY_SCANNER_RANK,
+                max_atr_percent=AUTO_TRADER_MAX_ENTRY_ATR_PERCENT,
             )
-
-            momentum_entry_pass = (
-                momentum_30_candidate
-            )
-
-            preliminary_entry_pass = (
-                normal_entry_pass
-                or momentum_entry_pass
-            )
+            preliminary_entry_pass = entry_quality["passed"]
 
             if preliminary_entry_pass:
                 news_context = (
@@ -9741,9 +9721,8 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         learning_score_min
                     )
 
-                    learning_score_min = min(
-                        90.0,
-                        learning_score_min + 5.0,
+                    learning_score_min = tighten_score_minimum(
+                        learning_score_min, 5.0,
                     )
 
                     news_adjusted = (
@@ -9754,52 +9733,16 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             # Every candidate must pass the FINAL,
             # learning, regime, and news-adjusted
             # requirements.
-            normal_entry_pass = (
-                signal == "BUY"
-                and score is not None
-                and score >= learning_score_min
-                and confidence is not None
-                and confidence
-                >= learning_confidence_min
-                and scanner_rank_pass
+            entry_quality = evaluate_entry_quality(
+                candidate,
+                score_min=learning_score_min,
+                confidence_min=learning_confidence_min,
+                max_scanner_rank=AUTO_TRADER_MAX_ENTRY_SCANNER_RANK,
+                max_atr_percent=AUTO_TRADER_MAX_ENTRY_ATR_PERCENT,
             )
 
-            momentum_entry_pass = (
-                momentum_30_candidate
-            )
-
-            if not (
-                normal_entry_pass
-                or momentum_entry_pass
-            ):
-                failed_requirements = []
-
-                if signal != "BUY":
-                    failed_requirements.append(
-                        "signal_not_buy"
-                    )
-
-                if (
-                    score is None
-                    or score < learning_score_min
-                ):
-                    failed_requirements.append(
-                        "score_below_adjusted_minimum"
-                    )
-
-                if (
-                    confidence is None
-                    or confidence
-                    < learning_confidence_min
-                ):
-                    failed_requirements.append(
-                        "confidence_below_minimum"
-                    )
-
-                if not scanner_rank_pass:
-                    failed_requirements.append(
-                        "scanner_rank_above_maximum"
-                    )
+            if not entry_quality["passed"]:
+                failed_requirements = entry_quality["failed_requirements"]
 
                 cycle_result[
                     "skipped_candidates"
@@ -9808,6 +9751,7 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     "reason": (
                         "entry requirements not met"
                     ),
+                    "entry_quality": entry_quality,
                     "failed_requirements": (
                         failed_requirements
                     ),
@@ -10034,6 +9978,7 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                             selected_strategy_version
                         ),
                         entry_context={
+                            "entry_quality": entry_quality,
                             # Execution / market quality.
                             "reference_price": (
                                 reference_price

@@ -188,14 +188,21 @@ def _get_cached_results(
         if not allow_stale and not cache_is_fresh:
             return None
 
-        return _copy_results(cached_results)
+        results = _copy_results(cached_results)
+        for candidate in results:
+            candidate["scanner_stale"] = not cache_is_fresh
+        return results
 
 
 def _set_cached_results(results: list[dict[str, Any]]) -> None:
     """Replace the scanner cache atomically."""
     with _cache_lock:
+        updated_at = time.time()
+        for candidate in results:
+            candidate["scanner_stale"] = False
+            candidate["scanner_generated_at"] = updated_at
         _scan_cache["results"] = _copy_results(results)
-        _scan_cache["updated_at"] = time.time()
+        _scan_cache["updated_at"] = updated_at
 
 
 # =========================================================
@@ -1131,8 +1138,8 @@ def scan_market(
     """
     Scan the market universe, rank valid stocks, and return balanced results.
 
-    Fresh results are cached for 15 minutes. If a refresh fails, the most
-    recent stale cache is returned when available.
+    Results use SCAN_CACHE_SECONDS. Failed refreshes return explicitly
+    stale cached candidates for display; these cannot qualify for new entries.
     """
     if not force_refresh:
         fresh_cache = _get_cached_results(allow_stale=False)
@@ -1183,6 +1190,8 @@ def scan_market(
                 logger.warning(
                     "Returning stale scanner cache after universe failure."
                 )
+                for candidate in stale_cache:
+                    candidate["scanner_stale"] = True
                 return stale_cache
 
             return []
@@ -1204,6 +1213,8 @@ def scan_market(
                 logger.warning(
                     "Returning stale scanner cache because the universe is empty."
                 )
+                for candidate in stale_cache:
+                    candidate["scanner_stale"] = True
                 return stale_cache
 
             return []
@@ -1275,6 +1286,8 @@ def scan_market(
                 logger.warning(
                     "Returning stale scanner cache after download failure."
                 )
+                for candidate in stale_cache:
+                    candidate["scanner_stale"] = True
                 return stale_cache
 
             return []
@@ -1286,6 +1299,8 @@ def scan_market(
                 logger.warning(
                     "Returning stale scanner cache because no candidates passed."
                 )
+                for candidate in stale_cache:
+                    candidate["scanner_stale"] = True
                 return stale_cache
 
             return []
