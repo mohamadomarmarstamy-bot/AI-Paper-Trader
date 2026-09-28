@@ -7057,6 +7057,13 @@ def get_open_protective_stop_order(
             )
 
     for order in candidate_orders:
+        order_symbol = clean_symbol(
+            order.get("symbol")
+        )
+
+        if order_symbol != normalized_symbol:
+            continue
+
         side = str(
             order.get(
                 "side",

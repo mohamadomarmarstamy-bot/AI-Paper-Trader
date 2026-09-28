@@ -31,7 +31,7 @@ def stop(symbol='TEST', qty=2, **extra):
 
 
 def functions(**overrides):
-    names = {'alpaca_paper_request', 'submit_alpaca_recovery_oco', 'reconcile_unprotected_positions', 'run_auto_trader_cycle'}
+    names = {'alpaca_paper_request', 'submit_alpaca_recovery_oco', 'reconcile_unprotected_positions', 'run_auto_trader_cycle', 'get_open_protective_stop_order'}
     source = ast.parse((Path(__file__).parent / 'main.py').read_text(encoding='utf-8'))
     nodes = [n for n in source.body if isinstance(n, ast.FunctionDef) and n.name in names]
     ns = {'BrokerRateLimited': BrokerRateLimited, 'has_matching_stop': has_matching_stop,
@@ -194,6 +194,32 @@ class ProtectionTests(unittest.TestCase):
         result = ns['submit_alpaca_recovery_oco'](symbol='TEST', shares=2, current_price=100)
         self.assertTrue(result['deferred']); self.assertEqual(result['retry_after_seconds'], 60)
 
+
+    def test_profit_lock_bulk_snapshot_selects_requested_symbol(self):
+        ns = functions()
+        snapshot = [
+            stop(symbol='MSFT', id='msft-stop', stop_price='400'),
+            stop(symbol='AAPL', id='aapl-stop', stop_price='200'),
+        ]
+        result = ns['get_open_protective_stop_order'](
+            'AAPL',
+            open_orders_snapshot=snapshot,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result['id'], 'aapl-stop')
+
+    def test_profit_lock_bulk_snapshot_selects_requested_symbol(self):
+        ns = functions()
+        snapshot = [
+            stop(symbol='MSFT', id='msft-stop', stop_price='400'),
+            stop(symbol='AAPL', id='aapl-stop', stop_price='200'),
+        ]
+        result = ns['get_open_protective_stop_order'](
+            'AAPL',
+            open_orders_snapshot=snapshot,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result['id'], 'aapl-stop')
 
 if __name__ == '__main__':
     unittest.main()
