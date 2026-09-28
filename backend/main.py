@@ -36,6 +36,7 @@ from database import (
     create_trade_book_entry,
     create_trade_book_order_link,
     initialize_database,
+    has_trade_book_order_link,
     load_jarvis_profile,
     save_jarvis_profile,
     load_due_scanner_forward_observations,
@@ -7470,6 +7471,18 @@ def detect_new_broker_exit_fills() -> list[dict[str, Any]]:
             order_id
             in _auto_trader_seen_exit_order_ids
         ):
+            continue
+
+        # The in-memory seen set is lost when the app restarts.
+        # Use the permanent EXIT order link so an already-reconciled
+        # broker fill is not processed and closed a second time.
+        if has_trade_book_order_link(
+            order_id=order_id,
+            order_role="EXIT",
+        ):
+            _auto_trader_seen_exit_order_ids.add(
+                order_id
+            )
             continue
 
         symbol = clean_symbol(

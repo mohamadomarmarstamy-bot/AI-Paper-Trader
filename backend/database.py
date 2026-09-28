@@ -1617,6 +1617,45 @@ def load_all_trade_book_order_links() -> list[dict[str, Any]]:
     ]
 
 
+def has_trade_book_order_link(
+    *,
+    order_id: str,
+    order_role: str,
+) -> bool:
+    """Return whether a broker order already has the requested role link."""
+    normalized_order_id = _normalize_optional_text(
+        order_id,
+        "Order ID",
+    )
+    normalized_order_role = _normalize_optional_text(
+        order_role,
+        "Order role",
+    )
+
+    if (
+        normalized_order_id is None
+        or normalized_order_role is None
+    ):
+        return False
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT 1
+            FROM trade_book_order_links
+            WHERE order_id = ?
+              AND order_role = ?
+            LIMIT 1
+            """,
+            (
+                normalized_order_id,
+                normalized_order_role,
+            ),
+        ).fetchone()
+
+    return row is not None
+
+
 def load_trade_book_by_order_link(
     *,
     order_id: str | None = None,

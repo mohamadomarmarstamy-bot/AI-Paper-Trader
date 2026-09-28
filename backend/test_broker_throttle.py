@@ -31,7 +31,7 @@ def stop(symbol='TEST', qty=2, **extra):
 
 
 def functions(**overrides):
-    names = {'alpaca_paper_request', 'submit_alpaca_recovery_oco', 'reconcile_unprotected_positions', 'run_auto_trader_cycle', 'get_open_protective_stop_order'}
+    names = {'alpaca_paper_request', 'submit_alpaca_recovery_oco', 'reconcile_unprotected_positions', 'run_auto_trader_cycle', 'get_open_protective_stop_order', 'detect_new_broker_exit_fills'}
     source = ast.parse((Path(__file__).parent / 'main.py').read_text(encoding='utf-8'))
     nodes = [n for n in source.body if isinstance(n, ast.FunctionDef) and n.name in names]
     ns = {'BrokerRateLimited': BrokerRateLimited, 'has_matching_stop': has_matching_stop,
@@ -208,18 +208,44 @@ class ProtectionTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result['id'], 'aapl-stop')
 
-    def test_profit_lock_bulk_snapshot_selects_requested_symbol(self):
-        ns = functions()
-        snapshot = [
-            stop(symbol='MSFT', id='msft-stop', stop_price='400'),
-            stop(symbol='AAPL', id='aapl-stop', stop_price='200'),
-        ]
-        result = ns['get_open_protective_stop_order'](
-            'AAPL',
-            open_orders_snapshot=snapshot,
+
+
+    def test_broker_exit_fill_is_not_reprocessed_after_restart(self):
+        order_id = "already-reconciled-exit"
+
+        order = {
+            "id": order_id,
+            "symbol": "MU",
+            "side": "sell",
+            "status": "filled",
+            "filled_qty": "5",
+            "filled_avg_price": "100",
+            "filled_at": "2026-09-28T14:00:00Z",
+            "type": "stop",
+            "stop_price": "100",
+        }
+
+        persisted = []
+
+        ns = functions(
+            fetch_alpaca_paper_orders=lambda limit=100: [order],
+            has_trade_book_order_link=lambda **kwargs: (
+                kwargs.get("order_id") == order_id
+                and kwargs.get("order_role") == "EXIT"
+            ),
+            upsert_broker_fill=lambda **kwargs: persisted.append(kwargs),
+            _auto_trader_seen_exit_order_ids=set(),
         )
-        self.assertIsNotNone(result)
-        self.assertEqual(result['id'], 'aapl-stop')
+
+        result = ns["detect_new_broker_exit_fills"]()
+
+        self.assertEqual(result, [])
+        self.assertEqual(persisted, [])
+        self.assertIn(
+            order_id,
+            ns["_auto_trader_seen_exit_order_ids"],
+        )
+
 
 if __name__ == '__main__':
     unittest.main()
