@@ -1307,13 +1307,23 @@ async def pro_ticker_scheduler_loop() -> None:
                             f"{clean_error_message(coverage_error)}"
                         )
 
+                except BrokerRateLimited as error:
+                    _broker_fill_backup_last_error = (
+                        str(error)
+                    )
+
+                    print(
+                        "Broker-fill backup sync "
+                        "deferred: "
+                        f"{error.retry_after} seconds."
+                    )
+
                 except Exception as error:
                     _broker_fill_backup_last_error = (
                         clean_error_message(
                             error
                         )
                     )
-
                     try:
                         await asyncio.to_thread(
                             persist_broker_fill_backup_state
