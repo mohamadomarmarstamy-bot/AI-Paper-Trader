@@ -2674,15 +2674,36 @@ def fetch_alpaca_market_clock() -> dict[str, Any]:
     return payload
 
 
+_alpaca_market_calendar_today_date: str | None = None
+_alpaca_market_calendar_today_entry: dict[str, Any] | None = None
+_alpaca_market_calendar_today_cached = False
+
+
 def fetch_alpaca_market_calendar_today() -> dict[str, Any] | None:
     """
     Return today's Alpaca US market calendar entry, if one exists.
+
+    Cache the result by Eastern calendar date because today's market
+    schedule does not need to be fetched from Alpaca every minute.
     """
+    global _alpaca_market_calendar_today_date
+    global _alpaca_market_calendar_today_entry
+    global _alpaca_market_calendar_today_cached
+
     eastern_now = datetime.now(
         ZoneInfo("America/New_York")
     )
 
     today = eastern_now.date().isoformat()
+
+    if (
+        _alpaca_market_calendar_today_cached
+        and _alpaca_market_calendar_today_date == today
+    ):
+        if _alpaca_market_calendar_today_entry is None:
+            return None
+
+        return dict(_alpaca_market_calendar_today_entry)
 
     payload = alpaca_paper_request(
         "GET",
@@ -2699,6 +2720,9 @@ def fetch_alpaca_market_calendar_today() -> dict[str, Any] | None:
         )
 
     if not payload:
+        _alpaca_market_calendar_today_date = today
+        _alpaca_market_calendar_today_entry = None
+        _alpaca_market_calendar_today_cached = True
         return None
 
     entry = payload[0]
@@ -2708,7 +2732,11 @@ def fetch_alpaca_market_calendar_today() -> dict[str, Any] | None:
             "Alpaca returned an invalid market-calendar entry."
         )
 
-    return entry
+    _alpaca_market_calendar_today_date = today
+    _alpaca_market_calendar_today_entry = dict(entry)
+    _alpaca_market_calendar_today_cached = True
+
+    return dict(entry)
 
 
 def fetch_alpaca_market_calendar_range(
