@@ -3722,6 +3722,494 @@ def load_learning_outcomes(
     return results
 
 
+_shadow_entry_cache = {
+    "loaded_at": 0.0,
+    "performance": None,
+}
+
+
+def calculate_shadow_entry_evidence(
+    candidate: dict[str, Any],
+    *,
+    minimum_group_size: int = 5,
+    limit: int = 5000,
+    cache_seconds: int = 300,
+) -> dict[str, Any]:
+    """
+    Read-only historical evidence for a prospective entry.
+
+    Uses the exact bucket definitions already used by
+    calculate_feature_performance().
+
+    This does NOT change strategy settings, entry requirements,
+    position sizing, or order behavior.
+    """
+    import itertools
+    import time
+
+    now = time.time()
+
+    cached = _shadow_entry_cache.get("performance")
+
+    if (
+        cached is None
+        or now - float(
+            _shadow_entry_cache.get(
+                "loaded_at",
+                0.0,
+            )
+        ) >= max(30, int(cache_seconds))
+    ):
+        cached = calculate_feature_performance(
+            minimum_group_size=max(
+                1,
+                int(minimum_group_size),
+            ),
+            limit=max(
+                1,
+                min(int(limit), 10000),
+            ),
+        )
+
+        _shadow_entry_cache["performance"] = cached
+        _shadow_entry_cache["loaded_at"] = now
+
+    features = cached.get(
+        "features",
+        {},
+    )
+
+    combinations = cached.get(
+        "feature_combinations",
+        {},
+    )
+
+    def number(value: Any) -> float | None:
+        try:
+            result = float(value)
+        except (
+            TypeError,
+            ValueError,
+        ):
+            return None
+
+        if not math.isfinite(result):
+            return None
+
+        return result
+
+    def numeric_bucket(
+        value: Any,
+        ranges: list[
+            tuple[
+                float | None,
+                float | None,
+                str,
+            ]
+        ],
+    ) -> str | None:
+        value_number = number(value)
+
+        if value_number is None:
+            return None
+
+        for lower, upper, label in ranges:
+            if lower is not None and value_number < lower:
+                continue
+
+            if upper is not None and value_number >= upper:
+                continue
+
+            return label
+
+        return None
+
+    scanner_rank = candidate.get(
+        "scanner_rank"
+    )
+
+    if scanner_rank is None:
+        scanner_rank = candidate.get(
+            "rank"
+        )
+
+    macd = number(
+        candidate.get("macd")
+    )
+
+    macd_signal = number(
+        candidate.get("macd_signal")
+    )
+
+    if (
+        macd is not None
+        and macd_signal is not None
+    ):
+        if macd > macd_signal:
+            macd_position = "above_signal"
+        elif macd < macd_signal:
+            macd_position = "below_signal"
+        else:
+            macd_position = "equal_signal"
+    else:
+        macd_position = candidate.get(
+            "macd_position"
+        )
+
+    candidate_labels: dict[str, str] = {}
+
+    bucket_definitions = {
+        "scanner_rank": (
+            scanner_rank,
+            [
+                (None, 6, "1-5"),
+                (6, 11, "6-10"),
+                (11, 21, "11-20"),
+                (21, None, "21+"),
+            ],
+        ),
+        "score": (
+            candidate.get("score"),
+            [
+                (None, 70, "<70"),
+                (70, 75, "70-74"),
+                (75, 80, "75-79"),
+                (80, 90, "80-89"),
+                (90, None, "90+"),
+            ],
+        ),
+        "confidence": (
+            candidate.get("confidence"),
+            [
+                (None, 70, "<70"),
+                (70, 80, "70-79"),
+                (80, 90, "80-89"),
+                (90, None, "90+"),
+            ],
+        ),
+        "rsi": (
+            candidate.get("rsi"),
+            [
+                (None, 30, "<30"),
+                (30, 50, "30-49"),
+                (50, 60, "50-59"),
+                (60, 70, "60-69"),
+                (70, 80, "70-79"),
+                (80, None, "80+"),
+            ],
+        ),
+        "volume_ratio": (
+            candidate.get("volume_ratio"),
+            [
+                (None, 0.7, "<0.7x"),
+                (0.7, 1.0, "0.7-0.99x"),
+                (1.0, 1.5, "1.0-1.49x"),
+                (1.5, 2.0, "1.5-1.99x"),
+                (2.0, 5.0, "2.0-4.99x"),
+                (5.0, None, "5.0x+"),
+            ],
+        ),
+        "atr_percent": (
+            candidate.get("atr_percent"),
+            [
+                (None, 1.0, "<1%"),
+                (1.0, 2.0, "1-1.99%"),
+                (2.0, 4.0, "2-3.99%"),
+                (4.0, 6.0, "4-5.99%"),
+                (6.0, 8.0, "6-7.99%"),
+                (8.0, None, "8%+"),
+            ],
+        ),
+        "spread_percent": (
+            candidate.get("spread_percent"),
+            [
+                (None, 0.10, "<0.10%"),
+                (0.10, 0.25, "0.10-0.24%"),
+                (0.25, 0.50, "0.25-0.49%"),
+                (0.50, 1.0, "0.50-0.99%"),
+                (1.0, None, "1%+"),
+            ],
+        ),
+        "momentum_move_percent": (
+            candidate.get("momentum_move_percent"),
+            [
+                (None, 30.0, "<30%"),
+                (30.0, 50.0, "30-49%"),
+                (50.0, 100.0, "50-99%"),
+                (100.0, 200.0, "100-199%"),
+                (200.0, None, "200%+"),
+            ],
+        ),
+        "one_day_change": (
+            candidate.get("one_day_change"),
+            [
+                (None, 0.0, "negative"),
+                (0.0, 5.0, "0-4.99%"),
+                (5.0, 15.0, "5-14.99%"),
+                (15.0, 30.0, "15-29.99%"),
+                (30.0, None, "30%+"),
+            ],
+        ),
+    }
+
+    for feature_name, (
+        value,
+        ranges,
+    ) in bucket_definitions.items():
+        label = numeric_bucket(
+            value,
+            ranges,
+        )
+
+        if label is not None:
+            candidate_labels[
+                feature_name
+            ] = label
+
+    for feature_name in (
+        "strategy_version",
+        "signal",
+        "trend",
+        "trend_strength",
+        "risk",
+        "market_regime",
+        "news_sentiment",
+    ):
+        value = candidate.get(
+            feature_name
+        )
+
+        if value is None:
+            continue
+
+        label = str(
+            value
+        ).strip()
+
+        if label:
+            candidate_labels[
+                feature_name
+            ] = label
+
+    if macd_position is not None:
+        macd_position_label = str(
+            macd_position
+        ).strip()
+
+        if macd_position_label:
+            candidate_labels[
+                "macd_position"
+            ] = macd_position_label
+
+    one_day_value = number(
+        candidate.get("one_day_change")
+    )
+
+    volume_ratio_value = number(
+        candidate.get("volume_ratio")
+    )
+
+    if (
+        one_day_value is not None
+        and volume_ratio_value is not None
+    ):
+        candidate_labels[
+            "negative_day_weak_volume"
+        ] = (
+            "negative_day_and_volume_below_0.60x"
+            if (
+                one_day_value < 0.0
+                and volume_ratio_value < 0.60
+            )
+            else "other"
+        )
+
+    matching_features = []
+
+    for feature_name, label in candidate_labels.items():
+        feature_groups = features.get(
+            feature_name,
+            {},
+        )
+
+        if not isinstance(
+            feature_groups,
+            dict,
+        ):
+            continue
+
+        historical = feature_groups.get(
+            label
+        )
+
+        if not isinstance(
+            historical,
+            dict,
+        ):
+            continue
+
+        matching_features.append({
+            "feature": feature_name,
+            "bucket": label,
+            "historical": historical,
+        })
+
+    combination_features = (
+        "scanner_rank",
+        "rsi",
+        "volume_ratio",
+        "atr_percent",
+        "spread_percent",
+        "one_day_change",
+        "macd_position",
+        "trend",
+        "risk",
+    )
+
+    available = [
+        (
+            feature_name,
+            candidate_labels[feature_name],
+        )
+        for feature_name in combination_features
+        if feature_name in candidate_labels
+    ]
+
+    two_lookup = {}
+
+    for row in (
+        combinations.get(
+            "two_feature",
+            [],
+        )
+        if isinstance(combinations, dict)
+        else []
+    ):
+        if not isinstance(row, dict):
+            continue
+
+        fingerprint = str(
+            row.get("fingerprint") or ""
+        ).strip()
+
+        if fingerprint:
+            two_lookup[
+                fingerprint
+            ] = row
+
+    three_lookup = {}
+
+    for row in (
+        combinations.get(
+            "three_feature",
+            [],
+        )
+        if isinstance(combinations, dict)
+        else []
+    ):
+        if not isinstance(row, dict):
+            continue
+
+        fingerprint = str(
+            row.get("fingerprint") or ""
+        ).strip()
+
+        if fingerprint:
+            three_lookup[
+                fingerprint
+            ] = row
+
+    matching_two_feature = []
+
+    for first, second in itertools.combinations(
+        available,
+        2,
+    ):
+        fingerprint = (
+            f"{first[0]}={first[1]}"
+            " | "
+            f"{second[0]}={second[1]}"
+        )
+
+        historical = two_lookup.get(
+            fingerprint
+        )
+
+        if historical is not None:
+            matching_two_feature.append({
+                "fingerprint": fingerprint,
+                **historical,
+            })
+
+    matching_three_feature = []
+
+    for first, second, third in itertools.combinations(
+        available,
+        3,
+    ):
+        fingerprint = (
+            f"{first[0]}={first[1]}"
+            " | "
+            f"{second[0]}={second[1]}"
+            " | "
+            f"{third[0]}={third[1]}"
+        )
+
+        historical = three_lookup.get(
+            fingerprint
+        )
+
+        if historical is not None:
+            matching_three_feature.append({
+                "fingerprint": fingerprint,
+                **historical,
+            })
+
+    return {
+        "paper": True,
+        "read_only": True,
+        "shadow_mode": True,
+        "automatic_strategy_changes": False,
+        "cache_seconds": max(
+            30,
+            int(cache_seconds),
+        ),
+        "candidate_features": candidate_labels,
+        "candidate_raw_features": {
+            key: candidate.get(key)
+            for key in (
+                "scanner_rank",
+                "rank",
+                "score",
+                "confidence",
+                "rsi",
+                "volume_ratio",
+                "atr_percent",
+                "spread_percent",
+                "momentum_move_percent",
+                "one_day_change",
+                "macd",
+                "macd_signal",
+                "trend",
+                "risk",
+            )
+        },
+        "historical_feature_groups": matching_features,
+        "two_feature_groups": matching_two_feature,
+        "three_feature_groups": matching_three_feature,
+        "historical_data_loaded_at": (
+            _shadow_entry_cache[
+                "loaded_at"
+            ]
+        ),
+        "message": (
+            "Historical entry evidence is "
+            "research-only and does not alter "
+            "trading decisions."
+        ),
+    }
+
+
 def calculate_learning_summary(
     *,
     minimum_required: int = 10,

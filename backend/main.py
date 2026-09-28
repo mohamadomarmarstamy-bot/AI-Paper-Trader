@@ -31,6 +31,7 @@ from entry_quality import evaluate_entry_quality, tighten_score_minimum
 from chart_data import get_chart_data
 from database import (
     calculate_feature_performance,
+    calculate_shadow_entry_evidence,
     calculate_learning_summary,
     close_trade_book_entry,
     create_trade_book_entry,
@@ -13073,6 +13074,25 @@ def auto_trader_feature_learning(
     return calculate_feature_performance(
         minimum_group_size=minimum_group_size,
         limit=limit,
+    )
+
+
+
+@app.post("/auto-trader/shadow-entry")
+def auto_trader_shadow_entry(
+    request: Request,
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Evaluate a prospective entry against historical learning evidence.
+
+    Research-only. This endpoint never submits an order and never
+    changes the live/paper trading policy.
+    """
+    require_app_session(request)
+
+    return calculate_shadow_entry_evidence(
+        candidate
     )
 
 
