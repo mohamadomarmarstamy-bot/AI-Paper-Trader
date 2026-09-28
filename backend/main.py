@@ -9081,11 +9081,19 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                                  "reason": "Protection recovery is waiting for broker request capacity."})
             return cycle_result
 
-        # Refresh positions again after protection
-        # orders are restored.
-        positions = (
-            fetch_alpaca_paper_positions()
+        # Protection recovery normally changes orders, not
+        # positions. Reuse the current position snapshot unless
+        # reconciliation reports that a position actually closed.
+        protection_position_closed = any(
+            item.get("result", {}).get("position_closed")
+            for item in cycle_result["protection_reconciliation"]
         )
+
+        if protection_position_closed:
+            positions = (
+                fetch_alpaca_paper_positions()
+            )
+
         cycle_result[
             "profit_lock_updates"
         ] = []
