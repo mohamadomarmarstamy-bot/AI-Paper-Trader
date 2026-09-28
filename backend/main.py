@@ -197,7 +197,7 @@ AUTO_TRADER_DAILY_PROFIT_GIVEBACK_PERCENT = 40.0
 # Once the paper account loses this much during the trading day,
 # stop opening NEW positions for the rest of that daily session.
 # Existing positions can still be managed/exited.
-AUTO_TRADER_DAILY_LOSS_LIMIT_DOLLARS = 300.0
+AUTO_TRADER_DAILY_LOSS_LIMIT_DOLLARS = 1000.0
 
 
 # ============================================================
@@ -3773,6 +3773,449 @@ def submit_alpaca_paper_market_order(
                 error
             ),
         }
+
+
+
+def close_alpaca_paper_position_manually(
+    *,
+    symbol: str,
+    shares: int,
+) -> dict[str, Any]:
+    """
+    Manually close a whole-share Alpaca PAPER position.
+
+    This uses the same paper broker path as automatic exits while
+    preserving trade-book, EXIT-link, journal, and learning records.
+    """
+    normalized_symbol = clean_symbol(symbol)
+
+    if not normalized_symbol:
+        return {
+            "success": False,
+            "paper": True,
+            "error": "A stock symbol is required.",
+        }
+
+    if shares <= 0:
+        return {
+            "success": False,
+            "paper": True,
+            "error": "Share quantity must be greater than zero.",
+        }
+
+    # Confirm the broker currently has the position and prevent a
+    # manual close from accidentally selling more than is owned.
+    try:
+        positions = fetch_alpaca_paper_positions()
+    except Exception as error:
+        return {
+            "success": False,
+            "paper": True,
+            "error": (
+                "Could not verify the PAPER position before closing it: "
+                f"{clean_error_message(error)}"
+            ),
+        }
+
+    broker_position = next(
+        (
+            position
+            for position in positions
+            if clean_symbol(position.get("symbol")) == normalized_symbol
+        ),
+        None,
+    )
+
+    if broker_position is None:
+        return {
+            "success": False,
+            "paper": True,
+            "error": (
+                f"No open PAPER position was found for "
+                f"{normalized_symbol}."
+            ),
+        }
+
+    broker_qty = safe_float(
+        broker_position.get("qty")
+    )
+
+    if (
+        broker_qty is None
+        or broker_qty <= 0
+        or not float(broker_qty).is_integer()
+    ):
+        return {
+            "success": False,
+            "paper": True,
+            "error": (
+                f"{normalized_symbol} does not have a valid "
+                "whole-share PAPER position."
+            ),
+        }
+
+    broker_shares = int(broker_qty)
+
+    if shares > broker_shares:
+        return {
+            "success": False,
+            "paper": True,
+            "error": (
+                f"Cannot sell {shares} shares of {normalized_symbol}; "
+                f"the PAPER account currently holds {broker_shares}."
+            ),
+        }
+
+    # Always close the full quantity verified directly from the PAPER broker.
+    shares = broker_shares
+
+    # A manual full-position close should not leave old stop-loss or
+    # take-profit orders behind.
+    try:
+        existing_open_orders = (
+            fetch_alpaca_open_orders_for_symbol(
+                normalized_symbol
+            )
+        )
+
+        canceled_orders = []
+
+        if existing_open_orders:
+            canceled_orders = (
+                cancel_alpaca_open_orders_for_symbol(
+                    normalized_symbol
+                )
+            )
+
+            if not canceled_orders:
+                return {
+                    "success": False,
+                    "paper": True,
+                    "error": (
+                        f"{normalized_symbol} had open protective orders, "
+                        "but their cancellation could not be confirmed "
+                        "before the manual close."
+                    ),
+                }
+
+    except Exception as error:
+        return {
+            "success": False,
+            "paper": True,
+            "error": (
+                "Could not safely clear protective PAPER orders before "
+                f"closing {normalized_symbol}: "
+                f"{clean_error_message(error)}"
+            ),
+        }
+
+    exit_result = submit_alpaca_paper_market_order(
+        symbol=normalized_symbol,
+        shares=shares,
+        side="sell",
+    )
+
+    if not exit_result.get("success"):
+        exit_result["canceled_protective_orders"] = (
+            canceled_orders
+        )
+        return exit_result
+
+    trade_result = (
+        exit_result.get("trade")
+        if isinstance(
+            exit_result.get("trade"),
+            dict,
+        )
+        else {}
+    )
+
+    status = str(
+        trade_result.get("status", "")
+    ).strip().lower()
+
+    # If Alpaca accepted the order but it has not filled yet, leave
+    # reconciliation to observe the eventual broker fill.
+    if status != "filled":
+        exit_result["manual_close"] = True
+        exit_result["accounting_recorded"] = False
+        exit_result["canceled_protective_orders"] = (
+            canceled_orders
+        )
+        return exit_result
+
+    exit_price = safe_float(
+        trade_result.get("execution_price")
+    )
+
+    exit_timestamp = str(
+        trade_result.get("filled_at")
+        or ""
+    ).strip()
+
+    order_id = str(
+        trade_result.get("id")
+        or ""
+    ).strip()
+
+    client_order_id = str(
+        trade_result.get("client_order_id")
+        or ""
+    ).strip()
+
+    accounting_recorded = False
+    accounting_error = None
+    closed_book_entry = None
+
+    try:
+        open_book_entry = (
+            load_open_trade_book_entry(
+                normalized_symbol
+            )
+        )
+
+        if (
+            open_book_entry
+            and exit_price is not None
+            and exit_price > 0
+            and exit_timestamp
+        ):
+            trade_book_id = int(
+                open_book_entry["id"]
+            )
+
+            closed_book_entry = (
+                close_trade_book_entry(
+                    trade_book_id,
+                    exit_price=exit_price,
+                    exit_timestamp=exit_timestamp,
+                    updated_at=exit_timestamp,
+                    exit_order_id=(
+                        order_id or None
+                    ),
+                    exit_reason="manual_close",
+                )
+            )
+
+            try:
+                create_trade_book_order_link(
+                    trade_book_id=trade_book_id,
+                    order_id=(
+                        order_id or None
+                    ),
+                    client_order_id=(
+                        client_order_id or None
+                    ),
+                    order_role="EXIT",
+                    created_at=exit_timestamp,
+                )
+            except Exception as error:
+                add_auto_trader_log(
+                    "trade_book_order_link_error",
+                    symbol=normalized_symbol,
+                    message=(
+                        "Manual PAPER close succeeded, but its "
+                        "EXIT order link could not be saved."
+                    ),
+                    details={
+                        "trade_book_id": trade_book_id,
+                        "order_id": order_id,
+                        "error": clean_error_message(
+                            error
+                        ),
+                    },
+                )
+
+            record_trade_book_event(
+                trade_book_id=trade_book_id,
+                symbol=normalized_symbol,
+                event="exit",
+                timestamp=exit_timestamp,
+                details={
+                    "exit_reason": "manual_close",
+                    "manual": True,
+                    "shares": shares,
+                    "exit_price": exit_price,
+                    "order_id": order_id,
+                },
+            )
+
+            entry_details: dict[str, Any] = {}
+
+            entry_events = load_trade_book_events(
+                trade_book_id=trade_book_id,
+                limit=50,
+            )
+
+            for event in entry_events:
+                if (
+                    str(
+                        event.get(
+                            "event",
+                            "",
+                        )
+                    ).strip().lower()
+                    == "entry"
+                ):
+                    details = event.get(
+                        "details"
+                    )
+
+                    if isinstance(
+                        details,
+                        dict,
+                    ):
+                        entry_details = details
+
+                    break
+
+            save_learning_outcome(
+                trade_book_id=trade_book_id,
+                symbol=normalized_symbol,
+                entry_price=float(
+                    closed_book_entry[
+                        "entry_price"
+                    ]
+                ),
+                exit_price=float(
+                    closed_book_entry[
+                        "exit_price"
+                    ]
+                ),
+                shares=float(
+                    closed_book_entry[
+                        "shares"
+                    ]
+                ),
+                realized_profit_loss=float(
+                    closed_book_entry[
+                        "realized_profit_loss"
+                    ]
+                ),
+                realized_return_percent=float(
+                    closed_book_entry[
+                        "realized_return_percent"
+                    ]
+                ),
+                created_at=exit_timestamp,
+                entry_score=safe_float(
+                    entry_details.get(
+                        "score"
+                    )
+                ),
+                entry_confidence=safe_float(
+                    entry_details.get(
+                        "confidence"
+                    )
+                ),
+                entry_signal=(
+                    str(
+                        entry_details.get(
+                            "signal",
+                            "",
+                        )
+                    ).strip()
+                    or None
+                ),
+                scanner_rank=safe_float(
+                    entry_details.get(
+                        "scanner_rank"
+                    )
+                ),
+                spread_percent=safe_float(
+                    entry_details.get(
+                        "spread_percent"
+                    )
+                ),
+                stop_loss_percent=safe_float(
+                    entry_details.get(
+                        "stop_loss_percent"
+                    )
+                ),
+                take_profit_percent=safe_float(
+                    entry_details.get(
+                        "take_profit_percent"
+                    )
+                ),
+                holding_seconds=(
+                    calculate_holding_seconds(
+                        closed_book_entry.get(
+                            "entry_timestamp"
+                        ),
+                        exit_timestamp,
+                    )
+                ),
+                exit_reason="manual_close",
+                metadata={
+                    "manual": True,
+                },
+            )
+
+            accounting_recorded = True
+
+    except Exception as error:
+        accounting_error = clean_error_message(
+            error
+        )
+
+        add_auto_trader_log(
+            "manual_close_accounting_error",
+            symbol=normalized_symbol,
+            message=(
+                "The PAPER position was manually closed at the broker, "
+                "but local trade accounting could not be completed."
+            ),
+            details={
+                "order_id": order_id,
+                "error": accounting_error,
+            },
+        )
+
+    mark_auto_trader_symbol_cooldown(
+        normalized_symbol
+    )
+
+    add_auto_trader_journal_entry(
+        symbol=normalized_symbol,
+        event="exit",
+        details={
+            "reason": "manual_close",
+            "manual": True,
+            "shares": shares,
+            "exit_price": exit_price,
+            "order_id": order_id,
+            "accounting_recorded": accounting_recorded,
+        },
+    )
+
+    add_auto_trader_log(
+        "manual_close",
+        symbol=normalized_symbol,
+        message=(
+            "User manually closed the PAPER position."
+        ),
+        details={
+            "shares": shares,
+            "exit_price": exit_price,
+            "order_id": order_id,
+            "accounting_recorded": accounting_recorded,
+            "accounting_error": accounting_error,
+        },
+    )
+
+    exit_result["manual_close"] = True
+    exit_result["accounting_recorded"] = (
+        accounting_recorded
+    )
+    exit_result["accounting_error"] = (
+        accounting_error
+    )
+    exit_result["canceled_protective_orders"] = (
+        canceled_orders
+    )
+
+    return exit_result
+
 
 
 # =========================================================
@@ -18888,6 +19331,145 @@ def sell(
         shares=shares,
         side="sell",
     )
+
+
+@app.post("/auto-trader/positions/close")
+def close_auto_trader_position(
+    data: dict[str, Any],
+    request: Request,
+) -> dict[str, Any]:
+    """
+    Manually close one PAPER position while preserving
+    auto-trader accounting and learning records.
+    """
+    require_app_session(
+        request
+    )
+
+    symbol, shares = parse_trade_request(
+        data
+    )
+
+    if symbol is None or shares is None:
+        return {
+            "success": False,
+            "paper": True,
+            "error": (
+                "Enter a valid stock symbol and a "
+                "whole number of shares greater than zero."
+            ),
+        }
+
+    result = (
+        close_alpaca_paper_position_manually(
+            symbol=symbol,
+            shares=shares,
+        )
+    )
+
+    return result
+
+
+
+@app.post("/auto-trader/positions/close-all")
+def close_all_auto_trader_positions(
+    request: Request,
+) -> dict[str, Any]:
+    """
+    Manually close all whole-share PAPER positions while preserving
+    the normal auto-trader accounting and learning path for each one.
+    """
+    require_app_session(request)
+
+    try:
+        positions = fetch_alpaca_paper_positions()
+    except Exception as error:
+        return {
+            "success": False,
+            "paper": True,
+            "error": (
+                "Could not load PAPER positions before closing them: "
+                f"{clean_error_message(error)}"
+            ),
+        }
+
+    positions_to_close: list[tuple[str, int]] = []
+
+    for position in positions:
+        symbol = clean_symbol(position.get("symbol"))
+        quantity = safe_float(position.get("qty"))
+
+        if (
+            not symbol
+            or quantity is None
+            or quantity <= 0
+            or not float(quantity).is_integer()
+        ):
+            continue
+
+        positions_to_close.append(
+            (symbol, int(quantity))
+        )
+
+    if not positions_to_close:
+        return {
+            "success": True,
+            "paper": True,
+            "message": "There are no whole-share PAPER positions to close.",
+            "requested_positions": 0,
+            "closed_positions": 0,
+            "failed_positions": 0,
+            "results": [],
+        }
+
+    results: list[dict[str, Any]] = []
+
+    for symbol, shares in positions_to_close:
+        try:
+            result = close_alpaca_paper_position_manually(
+                symbol=symbol,
+                shares=shares,
+            )
+        except Exception as error:
+            result = {
+                "success": False,
+                "paper": True,
+                "error": clean_error_message(error),
+            }
+
+        results.append(
+            {
+                "symbol": symbol,
+                "shares": shares,
+                "success": result.get("success") is True,
+                "trade": result.get("trade"),
+                "accounting_recorded": result.get(
+                    "accounting_recorded"
+                ),
+                "error": result.get("error"),
+            }
+        )
+
+    successful_results = [
+        result
+        for result in results
+        if result["success"]
+    ]
+
+    failed_results = [
+        result
+        for result in results
+        if not result["success"]
+    ]
+
+    return {
+        "success": len(failed_results) == 0,
+        "paper": True,
+        "requested_positions": len(results),
+        "closed_positions": len(successful_results),
+        "failed_positions": len(failed_results),
+        "results": results,
+    }
 
 
 @app.get("/jarvis/profile")

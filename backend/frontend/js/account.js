@@ -459,6 +459,18 @@ function renderPositions(
                             returnPercentage
                         )}
                     </td>
+
+                    <td>
+                        <button
+                            type="button"
+                            class="position-close-button"
+                            data-close-position-symbol="${escapeHtml(symbol)}"
+                            data-close-position-shares="${escapeHtml(String(shares))}"
+                            aria-label="Close ${escapeHtml(symbol)} position"
+                        >
+                            Close
+                        </button>
+                    </td>
                 </tr>
             `;
         })
@@ -1218,7 +1230,275 @@ function selectSymbol(symbol) {
     }
 }
 
+async function closePaperPosition(button) {
+    if (!button || button.disabled) {
+        return;
+    }
+
+    const symbol = String(
+        button.dataset.closePositionSymbol ?? ""
+    )
+        .trim()
+        .toUpperCase();
+
+    const shares = Number(
+        button.dataset.closePositionShares
+    );
+
+    if (
+        !symbol ||
+        !Number.isInteger(shares) ||
+        shares <= 0
+    ) {
+        window.alert(
+            "This PAPER position has an invalid symbol or share count."
+        );
+        return;
+    }
+
+    const confirmed = window.confirm(
+        `Close the entire ${symbol} PAPER position (${shares} shares)?`
+    );
+
+    if (!confirmed) {
+        return;
+    }
+
+    const originalText =
+        button.textContent;
+
+    button.disabled = true;
+    button.textContent = "Closing...";
+
+    try {
+        const response = await fetch(
+            "/auto-trader/positions/close",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type":
+                        "application/json",
+                },
+                body: JSON.stringify({
+                    symbol,
+                    shares,
+                }),
+            }
+        );
+
+        let result = {};
+
+        try {
+            result = await response.json();
+        } catch {
+            result = {};
+        }
+
+        if (
+            !response.ok ||
+            result?.success !== true
+        ) {
+            const message =
+                result?.error ||
+                `Close request failed (${response.status}).`;
+
+            throw new Error(message);
+        }
+
+        const tradeStatus = String(
+            result?.trade?.status ?? ""
+        )
+            .trim()
+            .toLowerCase();
+
+        if (tradeStatus === "filled") {
+            window.alert(
+                `${symbol} PAPER position was closed successfully.`
+            );
+        } else {
+            window.alert(
+                `${symbol} close order was submitted. ` +
+                "The dashboard will update when the broker confirms the fill."
+            );
+        }
+
+        await loadAccount();
+
+    } catch (error) {
+        console.error(
+            `Failed to close ${symbol} PAPER position:`,
+            error
+        );
+
+        window.alert(
+            error?.message ||
+            `Could not close ${symbol} PAPER position.`
+        );
+
+    } finally {
+        /*
+         * The account refresh normally replaces this row.
+         * If it does not, restore the existing button so the
+         * user is not left with a permanently disabled control.
+         */
+        if (button.isConnected) {
+            button.disabled = false;
+            button.textContent =
+                originalText || "Close";
+        }
+    }
+}
+
+
+async function closeAllPaperPositions() {
+    const button = document.getElementById(
+        "close-all-positions-button"
+    );
+
+    if (!button || button.disabled) {
+        return;
+    }
+
+    const confirmed = window.confirm(
+        "Close ALL whole-share PAPER positions? This will submit close orders for every eligible open position."
+    );
+
+    if (!confirmed) {
+        return;
+    }
+
+    const originalText = button.textContent;
+
+    button.disabled = true;
+    button.textContent = "Closing All...";
+
+    try {
+        const response = await fetch(
+            "/auto-trader/positions/close-all",
+            {
+                method: "POST",
+            }
+        );
+
+        let result = {};
+
+        try {
+            result = await response.json();
+        } catch {
+            result = {};
+        }
+
+        const requested = Number(
+            result?.requested_positions ?? 0
+        );
+
+        const closed = Number(
+            result?.closed_positions ?? 0
+        );
+
+        const failed = Number(
+            result?.failed_positions ?? 0
+        );
+
+        if (!response.ok) {
+            throw new Error(
+                result?.error ||
+                `Close-all request failed (${response.status}).`
+            );
+        }
+
+        if (requested === 0 && result?.success === true) {
+            window.alert(
+                result?.message ||
+                "There are no whole-share PAPER positions to close."
+            );
+
+            await loadAccount();
+            return;
+        }
+
+        if (failed > 0) {
+            const failures = Array.isArray(result?.results)
+                ? result.results
+                    .filter((item) => item?.success !== true)
+                    .map((item) => {
+                        const symbol = String(
+                            item?.symbol ?? "Unknown"
+                        );
+
+                        const error = String(
+                            item?.error ?? "Close failed."
+                        );
+
+                        return `${symbol}: ${error}`;
+                    })
+                    .join("\n")
+                : "";
+
+            window.alert(
+                `Close All finished: ${closed} closed, ${failed} failed.` +
+                (failures ? `\n\n${failures}` : "")
+            );
+        } else if (result?.success === true) {
+            window.alert(
+                `Close All submitted successfully for ${closed} PAPER position${closed === 1 ? "" : "s"}.`
+            );
+        } else {
+            throw new Error(
+                result?.error ||
+                "Close All did not complete successfully."
+            );
+        }
+
+        await loadAccount();
+
+    } catch (error) {
+        console.error(
+            "Failed to close all PAPER positions:",
+            error
+        );
+
+        window.alert(
+            error?.message ||
+            "Could not close all PAPER positions."
+        );
+
+    } finally {
+        if (button.isConnected) {
+            button.disabled = false;
+            button.textContent =
+                originalText || "Close All Trades";
+        }
+    }
+}
+
+
+
 function handleAccountTableClick(event) {
+    const closeAllButton =
+        event.target.closest(
+            "#close-all-positions-button"
+        );
+
+    if (closeAllButton) {
+        closeAllPaperPositions();
+
+        return;
+    }
+
+    const closeButton =
+        event.target.closest(
+            "[data-close-position-symbol]"
+        );
+
+    if (closeButton) {
+        closePaperPosition(
+            closeButton
+        );
+
+        return;
+    }
+
     const positionButton =
         event.target.closest(
             "[data-position-symbol]"
