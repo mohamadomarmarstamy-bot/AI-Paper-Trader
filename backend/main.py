@@ -7003,6 +7003,7 @@ def get_scanner_result_by_symbol(
 
 def get_open_protective_stop_order(
     symbol: str,
+    open_orders_snapshot: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     normalized_symbol = clean_symbol(
         symbol
@@ -7011,14 +7012,17 @@ def get_open_protective_stop_order(
     if not normalized_symbol:
         return None
 
-    try:
-        open_orders = (
-            fetch_alpaca_open_orders_for_symbol(
-                normalized_symbol
+    if open_orders_snapshot is not None:
+        open_orders = open_orders_snapshot
+    else:
+        try:
+            open_orders = (
+                fetch_alpaca_open_orders_for_symbol(
+                    normalized_symbol
+                )
             )
-        )
-    except Exception:
-        return None
+        except Exception:
+            return None
 
     candidate_orders: list[
         dict[str, Any]
@@ -9051,6 +9055,30 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             "profit_lock_updates"
         ] = []
 
+        try:
+            profit_lock_open_orders = alpaca_paper_request(
+                "GET",
+                "/v2/orders",
+                params={
+                    "status": "open",
+                    "limit": 500,
+                    "nested": "true",
+                },
+            )
+            if not isinstance(profit_lock_open_orders, list):
+                raise RuntimeError("Alpaca returned an invalid profit-lock order snapshot.")
+        except BrokerRateLimited as error:
+            cycle_result.update({
+                "success": False,
+                "deferred": True,
+                "reason": (
+                    "Profit-lock checks are waiting for "
+                    "broker request capacity."
+                ),
+                "retry_after_seconds": error.retry_after,
+            })
+            return cycle_result
+
         for position in positions:
             symbol = clean_symbol(
                 position.get(
@@ -9083,7 +9111,8 @@ def run_auto_trader_cycle() -> dict[str, Any]:
 
             stop_order = (
                 get_open_protective_stop_order(
-                    symbol
+                    symbol,
+                    open_orders_snapshot=profit_lock_open_orders,
                 )
             )
 
