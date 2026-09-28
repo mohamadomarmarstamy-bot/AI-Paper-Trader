@@ -10741,56 +10741,56 @@ async def auto_trader_health_watchdog() -> None:
             )
 
             if should_monitor:
-                try:
-                    clock = await asyncio.to_thread(
-                        fetch_alpaca_market_clock
-                    )
+                now = time.time()
 
+                cached_clock_age = (
+                    now - _auto_trader_last_market_clock_at
+                    if _auto_trader_last_market_clock_at
+                    is not None
+                    else None
+                )
+
+                cached_clock_available = (
+                    _auto_trader_last_market_clock
+                    is not None
+                    and cached_clock_age is not None
+                    and cached_clock_age
+                    <= AUTO_TRADER_MARKET_CLOCK_CACHE_SECONDS
+                )
+
+                if cached_clock_available:
                     market_is_open = bool(
-                        clock.get("is_open")
+                        _auto_trader_last_market_clock.get(
+                            "is_open"
+                        )
                     )
 
-                except Exception as clock_error:
-                    error_message = clean_error_message(
-                        clock_error
-                    )
-
-                    print(
-                        "Auto-trader health watchdog "
-                        "clock error: "
-                        f"{error_message}"
-                    )
-
-                    add_auto_trader_log(
-                        "health_watchdog_error",
-                        message=error_message,
-                    )
-
-                    now = time.time()
-
-                    cached_clock_age = (
-                        now - _auto_trader_last_market_clock_at
-                        if _auto_trader_last_market_clock_at
-                        is not None
-                        else None
-                    )
-
-                    cached_clock_available = (
-                        _auto_trader_last_market_clock
-                        is not None
-                        and cached_clock_age is not None
-                        and cached_clock_age
-                        <= AUTO_TRADER_MARKET_CLOCK_CACHE_SECONDS
-                    )
-
-                    if cached_clock_available:
-                        market_is_open = bool(
-                            _auto_trader_last_market_clock.get(
-                                "is_open"
-                            )
+                else:
+                    try:
+                        clock = await asyncio.to_thread(
+                            fetch_alpaca_market_clock
                         )
 
-                    else:
+                        market_is_open = bool(
+                            clock.get("is_open")
+                        )
+
+                    except Exception as clock_error:
+                        error_message = clean_error_message(
+                            clock_error
+                        )
+
+                        print(
+                            "Auto-trader health watchdog "
+                            "clock error: "
+                            f"{error_message}"
+                        )
+
+                        add_auto_trader_log(
+                            "health_watchdog_error",
+                            message=error_message,
+                        )
+
                         try:
                             calendar_entry = await asyncio.to_thread(
                                 fetch_alpaca_market_calendar_today
