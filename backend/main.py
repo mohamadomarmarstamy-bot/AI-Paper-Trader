@@ -28,6 +28,7 @@ _dashboard_snapshot_cache = DisplaySnapshotCache(ttl=10.0)
 
 from reporting_metrics import (account_equity_metrics, summarize_trades, daily_realized_summaries, annotate_order_history, timestamp_sort_key)
 from entry_quality import evaluate_entry_quality, tighten_score_minimum
+from adaptive_entry import calculate_adaptive_entry_decision
 from chart_data import get_chart_data
 from database import (
     calculate_feature_performance,
@@ -9654,6 +9655,111 @@ def run_auto_trader_cycle() -> dict[str, Any]:
 
                 continue
 
+            # -------------------------------------------------
+            # Adaptive historical entry intelligence.
+            # -------------------------------------------------
+            #
+            # Historical evidence may approve or reject the
+            # candidate. Hard risk controls remain mandatory.
+            #
+            # PAPER TRADING ONLY.
+            adaptive_entry_decision = None
+
+            try:
+                adaptive_evidence = (
+                    calculate_shadow_entry_evidence(
+                        candidate,
+                        minimum_group_size=5,
+                        limit=5000,
+                        cache_seconds=300,
+                    )
+                )
+
+                adaptive_entry_decision = (
+                    calculate_adaptive_entry_decision(
+                        candidate,
+                        adaptive_evidence,
+                    )
+                )
+
+            except Exception as adaptive_error:
+                add_auto_trader_log(
+                    "adaptive_entry_error",
+                    symbol=symbol,
+                    message=(
+                        "Adaptive entry analysis failed; "
+                        "candidate skipped safely."
+                    ),
+                    details={
+                        "error": str(
+                            adaptive_error
+                        ),
+                    },
+                )
+
+                cycle_result[
+                    "skipped_candidates"
+                ].append({
+                    "symbol": symbol,
+                    "reason": (
+                        "adaptive entry analysis failed"
+                    ),
+                    "adaptive_entry_error": str(
+                        adaptive_error
+                    ),
+                })
+
+                continue
+
+            adaptive_decision = str(
+                adaptive_entry_decision.get(
+                    "decision"
+                ) or ""
+            ).upper()
+
+            if adaptive_decision != "BUY":
+                cycle_result[
+                    "skipped_candidates"
+                ].append({
+                    "symbol": symbol,
+                    "reason": (
+                        "adaptive entry decision rejected"
+                    ),
+                    "adaptive_entry_decision": (
+                        adaptive_entry_decision
+                    ),
+                })
+
+                add_auto_trader_log(
+                    "adaptive_entry_skip",
+                    symbol=symbol,
+                    message=(
+                        "Adaptive historical intelligence "
+                        "rejected PAPER entry candidate."
+                    ),
+                    details={
+                        "adaptive_entry_decision": (
+                            adaptive_entry_decision
+                        ),
+                    },
+                )
+
+                continue
+
+            add_auto_trader_log(
+                "adaptive_entry_buy",
+                symbol=symbol,
+                message=(
+                    "Adaptive historical intelligence "
+                    "approved PAPER entry candidate."
+                ),
+                details={
+                    "adaptive_entry_decision": (
+                        adaptive_entry_decision
+                    ),
+                },
+            )
+
             if symbol in existing_symbols:
                 cycle_result[
                     "skipped_candidates"
@@ -10114,6 +10220,9 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         # Entry decision.
                         "score": score,
                         "confidence": confidence,
+                        "adaptive_entry_decision": (
+                            adaptive_entry_decision
+                        ),
                         "signal": candidate.get(
                             "signal"
                         ),
@@ -13091,9 +13200,26 @@ def auto_trader_shadow_entry(
     """
     require_app_session(request)
 
-    return calculate_shadow_entry_evidence(
-        candidate
+    evidence = calculate_shadow_entry_evidence(
+        candidate,
+        minimum_group_size=5,
+        limit=5000,
+        cache_seconds=300,
     )
+
+    adaptive_decision = (
+        calculate_adaptive_entry_decision(
+            candidate,
+            evidence,
+        )
+    )
+
+    return {
+        **evidence,
+        "adaptive_entry_decision": (
+            adaptive_decision
+        ),
+    }
 
 
 @app.get("/auto-trader/journal")
