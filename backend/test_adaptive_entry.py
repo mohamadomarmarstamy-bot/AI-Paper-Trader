@@ -185,6 +185,69 @@ def test_audit_metadata_is_accurate():
 
 
 def test_database_bucket_parity():
+    # scanner_rank boundaries
+    assert _bucket("scanner_rank", 1) == "1-5"
+    assert _bucket("scanner_rank", 5) == "1-5"
+    assert _bucket("scanner_rank", 6) == "6-10"
+    assert _bucket("scanner_rank", 10) == "6-10"
+    assert _bucket("scanner_rank", 11) == "11-20"
+    assert _bucket("scanner_rank", 20) == "11-20"
+    assert _bucket("scanner_rank", 21) == "21+"
+
+    # score boundaries
+    assert _bucket("score", 69.99) == "<70"
+    assert _bucket("score", 70) == "70-74"
+    assert _bucket("score", 74.99) == "70-74"
+    assert _bucket("score", 75) == "75-79"
+    assert _bucket("score", 79.99) == "75-79"
+    assert _bucket("score", 80) == "80-89"
+    assert _bucket("score", 89.99) == "80-89"
+    assert _bucket("score", 90) == "90+"
+
+    # confidence boundaries
+    assert _bucket("confidence", 69.99) == "<70"
+    assert _bucket("confidence", 70) == "70-79"
+    assert _bucket("confidence", 79.99) == "70-79"
+    assert _bucket("confidence", 80) == "80-89"
+    assert _bucket("confidence", 89.99) == "80-89"
+    assert _bucket("confidence", 90) == "90+"
+
+    # RSI boundaries
+    assert _bucket("rsi", 29.99) == "<30"
+    assert _bucket("rsi", 30) == "30-49"
+    assert _bucket("rsi", 49.99) == "30-49"
+    assert _bucket("rsi", 50) == "50-59"
+    assert _bucket("rsi", 59.99) == "50-59"
+    assert _bucket("rsi", 60) == "60-69"
+    assert _bucket("rsi", 69.99) == "60-69"
+    assert _bucket("rsi", 70) == "70-79"
+    assert _bucket("rsi", 79.99) == "70-79"
+    assert _bucket("rsi", 80) == "80+"
+
+    # volume_ratio boundaries
+    assert _bucket("volume_ratio", 0.69) == "<0.7x"
+    assert _bucket("volume_ratio", 0.70) == "0.7-0.99x"
+    assert _bucket("volume_ratio", 0.99) == "0.7-0.99x"
+    assert _bucket("volume_ratio", 1.00) == "1.0-1.49x"
+    assert _bucket("volume_ratio", 1.49) == "1.0-1.49x"
+    assert _bucket("volume_ratio", 1.50) == "1.5-1.99x"
+    assert _bucket("volume_ratio", 1.99) == "1.5-1.99x"
+    assert _bucket("volume_ratio", 2.00) == "2.0-4.99x"
+    assert _bucket("volume_ratio", 4.99) == "2.0-4.99x"
+    assert _bucket("volume_ratio", 5.00) == "5.0x+"
+
+    # atr_percent boundaries
+    assert _bucket("atr_percent", 0.99) == "<1%"
+    assert _bucket("atr_percent", 1.00) == "1-1.99%"
+    assert _bucket("atr_percent", 1.99) == "1-1.99%"
+    assert _bucket("atr_percent", 2.00) == "2-3.99%"
+    assert _bucket("atr_percent", 3.99) == "2-3.99%"
+    assert _bucket("atr_percent", 4.00) == "4-5.99%"
+    assert _bucket("atr_percent", 5.99) == "4-5.99%"
+    assert _bucket("atr_percent", 6.00) == "6-7.99%"
+    assert _bucket("atr_percent", 7.99) == "6-7.99%"
+    assert _bucket("atr_percent", 8.00) == "8%+"
+
     # one_day_change boundaries
     assert _bucket("one_day_change", -0.01) == "negative"
     assert _bucket("one_day_change", 0) == "0-4.99%"

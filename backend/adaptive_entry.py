@@ -24,15 +24,28 @@ def _bucket(feature: str, value: Any) -> str | None:
     if feature == "scanner_rank":
         if number is None:
             return None
-        if number <= 5:
+        if number < 6:
             return "1-5"
-        if number <= 10:
+        if number < 11:
             return "6-10"
-        if number <= 20:
+        if number < 21:
             return "11-20"
-        return "20+"
+        return "21+"
 
-    if feature in {"score", "confidence"}:
+    if feature == "score":
+        if number is None:
+            return None
+        if number < 70:
+            return "<70"
+        if number < 75:
+            return "70-74"
+        if number < 80:
+            return "75-79"
+        if number < 90:
+            return "80-89"
+        return "90+"
+
+    if feature == "confidence":
         if number is None:
             return None
         if number < 70:
@@ -48,36 +61,38 @@ def _bucket(feature: str, value: Any) -> str | None:
             return None
         if number < 30:
             return "<30"
-        if number < 40:
-            return "30-39"
         if number < 50:
-            return "40-49"
+            return "30-49"
         if number < 60:
             return "50-59"
         if number < 70:
             return "60-69"
-        return "70+"
+        if number < 80:
+            return "70-79"
+        return "80+"
 
     if feature == "volume_ratio":
         if number is None:
             return None
-        if number < 0.60:
-            return "<0.60x"
+        if number < 0.70:
+            return "<0.7x"
         if number < 1.00:
-            return "0.60-0.99x"
+            return "0.7-0.99x"
         if number < 1.50:
             return "1.0-1.49x"
         if number < 2.00:
             return "1.5-1.99x"
-        if number < 3.00:
-            return "2.0-2.99x"
-        return "3.0x+"
+        if number < 5.00:
+            return "2.0-4.99x"
+        return "5.0x+"
 
     if feature == "atr_percent":
         if number is None:
             return None
+        if number < 1:
+            return "<1%"
         if number < 2:
-            return "<2%"
+            return "1-1.99%"
         if number < 4:
             return "2-3.99%"
         if number < 6:
