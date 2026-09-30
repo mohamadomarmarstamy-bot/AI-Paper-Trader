@@ -122,6 +122,22 @@ class SnapshotTests(unittest.TestCase):
         def fail(): raise RuntimeError('broker unavailable')
         with self.assertRaises(RuntimeError): cache.get(fail)
 
+    def test_last_successful_snapshot_can_be_read_after_expiry(self):
+        c = Clock()
+        cache = DisplaySnapshotCache(clock=c.read)
+
+        cache.get(lambda: {"positions": [1]})
+        c.sleep(10)
+
+        stale = cache.get_last_successful()
+        self.assertEqual(stale, {"positions": [1]})
+
+        stale["positions"].append(2)
+        self.assertEqual(
+            cache.get_last_successful(),
+            {"positions": [1]},
+        )
+
     def test_concurrent_tabs_share_one_loader(self):
         cache = DisplaySnapshotCache(); calls = []
         barrier = threading.Barrier(8)

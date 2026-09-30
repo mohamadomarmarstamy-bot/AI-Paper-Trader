@@ -6,6 +6,7 @@ import time
 from types import SimpleNamespace
 import unittest
 
+from broker_throttle import BrokerRateLimited, DisplaySnapshotCache
 from reporting_metrics import (
     account_equity_metrics, annotate_order_history, daily_realized_summaries,
     number, summarize_trades, timestamp_sort_key,
@@ -37,6 +38,8 @@ def actual_functions(**overrides):
         node.decorator_list = []
     ns = {
         "_dashboard_snapshot_cache": SimpleNamespace(get=lambda loader: loader()),
+        "_history_snapshot_cache": DisplaySnapshotCache(ttl=60.0),
+        "BrokerRateLimited": BrokerRateLimited,
         "Query": lambda default=None, **kwargs: default,
         "safe_float": lambda v: float(number(v)) if number(v) is not None else None,
         "clean_symbol": lambda value: str(value or "").strip().upper(),

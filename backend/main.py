@@ -25,6 +25,7 @@ from broker_throttle import BrokerRequestGate, BrokerRateLimited, DisplaySnapsho
 
 _broker_request_gate = BrokerRequestGate()
 _dashboard_snapshot_cache = DisplaySnapshotCache(ttl=10.0)
+_history_snapshot_cache = DisplaySnapshotCache(ttl=60.0)
 
 from reporting_metrics import (account_equity_metrics, summarize_trades, daily_realized_summaries, annotate_order_history, timestamp_sort_key)
 from entry_quality import evaluate_entry_quality, tighten_score_minimum
@@ -16680,11 +16681,28 @@ def auto_trader_history(
             request
         )
 
-    canonical_payload = (
-        auto_trader_canonical_broker_trades(
-            request=request
+    try:
+        canonical_payload = (
+            _history_snapshot_cache.get(
+                lambda: auto_trader_canonical_broker_trades(
+                    request=request
+                )
+            )
         )
-    )
+    except BrokerRateLimited:
+        canonical_payload = (
+            _history_snapshot_cache.get_last_successful()
+        )
+
+        if canonical_payload is None:
+            raise
+
+        canonical_payload = dict(
+            canonical_payload
+        )
+        canonical_payload[
+            "stale_due_to_broker_rate_limit"
+        ] = True
 
     canonical_trades = (
         canonical_payload.get(

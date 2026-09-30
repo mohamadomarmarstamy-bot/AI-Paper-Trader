@@ -85,6 +85,12 @@ class DisplaySnapshotCache:
             self.expires = self.clock() + self.ttl
             return value
 
+    def get_last_successful(self):
+        with self.lock:
+            if self.value is None:
+                return None
+            return copy.deepcopy(self.value)
+
 
 def has_matching_stop(orders, symbol, shares):
     """Conservative skip check; all actual replacements still re-read the broker."""
