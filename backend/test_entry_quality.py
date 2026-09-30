@@ -1,4 +1,4 @@
-"""Offline regressions: no app startup, network, orders, or database writes.
+﻿"""Offline regressions: no app startup, network, orders, or database writes.
 
 Run: python -m unittest discover -s backend -p test_entry_quality.py -v
 """
@@ -114,6 +114,11 @@ class ActualEntryFlowTests(unittest.TestCase):
         namespace = {
             "evaluate_entry_quality": evaluate_entry_quality,
             "tighten_score_minimum": tighten_score_minimum,
+            "calculate_shadow_entry_evidence": lambda *args, **kwargs: {},
+            "calculate_adaptive_entry_decision": lambda *args, **kwargs: {
+                "decision": "BUY"
+            },
+            "add_auto_trader_log": lambda *args, **kwargs: None,
             "safe_float": lambda value: float(value) if value is not None else None,
             "score_symbol_news_context": lambda context: context,
             "AUTO_TRADER_ENTRY_CONFIDENCE_MIN": 70,
@@ -218,3 +223,4 @@ class ScannerCacheTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -9718,6 +9718,33 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             )
         }
 
+        # Prevent duplicate entry submissions while a BUY
+        # order from an earlier cycle is still open at Alpaca.
+        #
+        # Reuse the broker snapshot already fetched for the
+        # profit-lock pass so this does not consume another
+        # broker request.
+        pending_entry_symbols = {
+            clean_symbol(
+                order.get(
+                    "symbol"
+                )
+            )
+            for order in profit_lock_open_orders
+            if (
+                isinstance(order, dict)
+                and str(
+                    order.get("side")
+                    or ""
+                ).strip().upper() == "BUY"
+                and clean_symbol(
+                    order.get(
+                        "symbol"
+                    )
+                )
+            )
+        }
+
         # -------------------------------------------------
         # Entries.
         # -------------------------------------------------
@@ -9815,6 +9842,16 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             )
 
             if not symbol:
+                continue
+
+            if symbol in pending_entry_symbols:
+                skipped_candidates.append({
+                    "symbol": symbol,
+                    "reason": (
+                        "PAPER entry order is already "
+                        "pending at the broker."
+                    ),
+                })
                 continue
 
             signal = str(
@@ -10548,9 +10585,22 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     ),
                 }
 
-            mark_auto_trader_symbol_cooldown(
-                symbol
+            entry_trade = (
+                entry_result.get("trade")
+                if isinstance(entry_result, dict)
+                else None
             )
+            entry_filled = (
+                isinstance(entry_trade, dict)
+                and str(
+                    entry_trade.get("status", "")
+                ).strip().lower() == "filled"
+            )
+
+            if entry_filled:
+                mark_auto_trader_symbol_cooldown(
+                    symbol
+                )
 
             cycle_result["entries"].append({
                 "symbol": symbol,
