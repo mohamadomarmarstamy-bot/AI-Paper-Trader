@@ -10146,6 +10146,13 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                             )
                         )
                     ),
+                    "atr_percent": (
+                        safe_float(
+                            candidate.get(
+                                "atr_percent"
+                            )
+                        )
+                    ),
                     "scanner_rank": scanner_rank,
                     "maximum_scanner_rank": (
                         AUTO_TRADER_MAX_ENTRY_SCANNER_RANK
