@@ -431,6 +431,45 @@ def calculate_adaptive_entry_decision(
             2,
         ),
         "historical_samples": historical_samples,
+        "score_components": {
+            "base_score": 50.0,
+            "positive_return_average": positive_return,
+            "positive_return_contribution": (
+                max(-10.0, min(20.0, positive_return * 8.0))
+                if positive_return is not None
+                else 0.0
+            ),
+            "negative_return_average": negative_return,
+            "negative_return_contribution": (
+                max(-20.0, min(5.0, negative_return * 6.0))
+                if negative_return is not None
+                else 0.0
+            ),
+            "average_win_rate_percent": average_win_rate,
+            "win_rate_contribution": (
+                max(
+                    -15.0,
+                    min(
+                        15.0,
+                        (average_win_rate - 50.0) * 0.25,
+                    ),
+                )
+                if average_win_rate is not None
+                else 0.0
+            ),
+            "specificity_bonus": (
+                3.0 if three else (1.0 if two else 0.0)
+            ),
+            "sample_penalty": (
+                -15.0
+                if historical_samples < 10
+                else (
+                    -5.0
+                    if historical_samples < 20
+                    else 0.0
+                )
+            ),
+        },
         "matching_two_feature_patterns": len(two),
         "matching_three_feature_patterns": len(three),
         "evidence_basis": (
