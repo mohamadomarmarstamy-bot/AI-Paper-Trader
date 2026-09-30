@@ -4671,6 +4671,21 @@ def calculate_adaptive_forward_evaluation(
             outcome.get("realized_return_percent")
         )
 
+        positive_patterns = decision.get(
+            "positive_patterns"
+        ) or []
+        negative_patterns = decision.get(
+            "negative_patterns"
+        ) or []
+
+        evidence_basis = decision.get(
+            "evidence_basis"
+        )
+
+        historical_samples = int(
+            decision.get("historical_samples") or 0
+        )
+
         evaluated.append({
             "trade_book_id": outcome.get(
                 "trade_book_id"
@@ -4692,6 +4707,27 @@ def calculate_adaptive_forward_evaluation(
             "confidence": decision.get(
                 "confidence"
             ),
+            "score_diagnostics": {
+                "evidence_basis": evidence_basis,
+                "historical_samples": historical_samples,
+                "positive_pattern_count": len(
+                    positive_patterns
+                ),
+                "negative_pattern_count": len(
+                    negative_patterns
+                ),
+                "actual_evidence_score": decision.get(
+                    "evidence_score"
+                ),
+                "actual_decision": decision.get(
+                    "decision"
+                ),
+                "actual_confidence": decision.get(
+                    "confidence"
+                ),
+                "positive_patterns": positive_patterns,
+                "negative_patterns": negative_patterns,
+            },
         })
 
     def summarize_evaluated(
