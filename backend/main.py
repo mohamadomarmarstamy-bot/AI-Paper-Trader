@@ -317,6 +317,8 @@ _auto_trader_health_alerted_at: float | None = None
 AUTO_TRADER_ERROR_EMAIL_COOLDOWN_SECONDS = 30 * 60
 AUTO_TRADER_MARKET_CLOCK_CACHE_SECONDS = 60 * 60
 _auto_trader_error_email_last_sent: dict[str, float] = {}
+AUTO_TRADER_INACTIVE_PROTECTION_COOLDOWN_SECONDS = 6 * 60 * 60
+_auto_trader_inactive_protection_until: dict[str, float] = {}
 _auto_trader_symbol_cooldowns: dict[str, float] = {}
 _auto_trader_log: list[dict[str, Any]] = []
 _auto_trader_journal: list[dict[str, Any]] = []
@@ -6796,6 +6798,35 @@ def reconcile_unprotected_positions(
             }})
             continue
 
+        inactive_until = (
+            _auto_trader_inactive_protection_until.get(
+                symbol
+            )
+        )
+
+        if (
+            inactive_until is not None
+            and inactive_until > time.time()
+        ):
+            results.append({
+                "symbol": symbol,
+                "result": {
+                    "success": False,
+                    "paper": True,
+                    "deferred": True,
+                    "inactive_asset": True,
+                    "retry_after_seconds": round(
+                        inactive_until - time.time(),
+                        1,
+                    ),
+                    "error": (
+                        "Protection recovery is temporarily "
+                        "suppressed because Alpaca reported "
+                        "the asset as inactive."
+                    ),
+                },
+            })
+            continue
         current_price = safe_float(
             position.get(
                 "current_price"
@@ -6902,6 +6933,21 @@ def reconcile_unprotected_positions(
             )
 
         else:
+            protection_error = str(
+                result.get("error") or ""
+            )
+            inactive_asset_error = (
+                "asset " in protection_error.lower()
+                and " is not active" in protection_error.lower()
+            )
+
+            if inactive_asset_error:
+                _auto_trader_inactive_protection_until[
+                    symbol
+                ] = (
+                    time.time()
+                    + AUTO_TRADER_INACTIVE_PROTECTION_COOLDOWN_SECONDS
+                )
             add_auto_trader_log(
                 "protection_restore_failed",
                 symbol=symbol,

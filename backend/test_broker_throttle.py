@@ -41,6 +41,8 @@ def functions(**overrides):
           'clean_symbol': lambda s: str(s or '').strip().upper(), 'safe_float': lambda x: float(x) if x is not None else None,
           'clean_error_message': str, 'math': math, 'uuid': uuid,
           'AUTO_TRADER_STOP_LOSS_PERCENT': 2, 'AUTO_TRADER_TAKE_PROFIT_PERCENT': 4,
+          'AUTO_TRADER_INACTIVE_PROTECTION_COOLDOWN_SECONDS': 6 * 60 * 60,
+          '_auto_trader_inactive_protection_until': {},
           'time': SimpleNamespace(sleep=lambda s: None), 'add_auto_trader_log': lambda *a, **kw: None}
     ns.update(overrides)
     exec(compile(ast.Module(body=ast.parse('from __future__ import annotations').body + nodes,
@@ -179,6 +181,45 @@ class ProtectionTests(unittest.TestCase):
         ns['reconcile_unprotected_positions']([{'symbol': 'TEST', 'qty': 2, 'current_price': 100}])
         self.assertEqual(len(calls), 1)
 
+    def test_inactive_asset_failure_suppresses_repeated_recovery(self):
+        clock = SimpleNamespace(time=lambda: 1000.0, sleep=lambda s: None)
+        ns = functions(time=clock)
+        recovery_calls = []
+
+        ns["alpaca_paper_request"] = lambda *a, **kw: []
+        ns["submit_alpaca_recovery_oco"] = (
+            lambda **kw: recovery_calls.append(kw) or {
+                "success": False,
+                "paper": True,
+                "symbol": "DBRG",
+                "error": (
+                    "POST /v2/orders failed with HTTP 422: "
+                    "asset DBRG is not active"
+                ),
+            }
+        )
+
+        position = {
+            "symbol": "DBRG",
+            "qty": 120,
+            "current_price": 2.00,
+        }
+
+        first = ns["reconcile_unprotected_positions"](
+            [position]
+        )
+        second = ns["reconcile_unprotected_positions"](
+            [position]
+        )
+
+        self.assertEqual(len(recovery_calls), 1)
+        self.assertFalse(first[0]["result"]["success"])
+        self.assertTrue(second[0]["result"]["deferred"])
+        self.assertTrue(second[0]["result"]["inactive_asset"])
+        self.assertGreater(
+            ns["_auto_trader_inactive_protection_until"]["DBRG"],
+            1000.0,
+        )
     def test_recovery_still_refreshes_quantity_before_post(self):
         ns = functions(fetch_alpaca_open_orders_for_symbol=lambda s: [],
                        fetch_alpaca_paper_positions=lambda: [{'symbol': 'TEST', 'qty': 44}])
