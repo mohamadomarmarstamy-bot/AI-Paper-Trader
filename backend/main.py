@@ -31,6 +31,7 @@ from entry_quality import evaluate_entry_quality, tighten_score_minimum
 from adaptive_entry import calculate_adaptive_entry_decision
 from chart_data import get_chart_data
 from database import (
+    calculate_adaptive_forward_evaluation,
     calculate_feature_performance,
     calculate_shadow_entry_evidence,
     calculate_learning_summary,
@@ -13678,6 +13679,37 @@ def auto_trader_feature_learning(
         limit=limit,
     )
 
+
+
+@app.get("/auto-trader/adaptive-forward-evaluation")
+def auto_trader_adaptive_forward_evaluation(
+    request: Request,
+    minimum_group_size: int = Query(
+        default=5,
+        ge=1,
+        le=100,
+    ),
+    limit: int = Query(
+        default=5000,
+        ge=1,
+        le=10000,
+    ),
+) -> dict[str, Any]:
+    """
+    Evaluate the adaptive entry policy against historical
+    PAPER outcomes using time-safe, forward-only evidence.
+
+    Research-only. This endpoint never submits an order and
+    never changes the trading strategy.
+    """
+    require_app_session(
+        request
+    )
+
+    return calculate_adaptive_forward_evaluation(
+        minimum_group_size=minimum_group_size,
+        limit=limit,
+    )
 
 
 @app.post("/auto-trader/shadow-entry")

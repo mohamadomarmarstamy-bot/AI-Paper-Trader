@@ -4210,6 +4210,601 @@ def calculate_shadow_entry_evidence(
     }
 
 
+
+def calculate_adaptive_forward_evaluation(
+    *,
+    minimum_group_size: int = 5,
+    limit: int = 5000,
+) -> dict[str, Any]:
+    """
+    Forward-only evaluation of the PAPER adaptive-entry model.
+
+    Each completed trade is evaluated using only completed
+    trades that came before it. The current trade and all
+    future outcomes are excluded from its evidence.
+
+    This is read-only and does not change strategy settings,
+    place orders, or write learning outcomes.
+    """
+    from adaptive_entry import (
+        calculate_adaptive_entry_decision,
+    )
+
+    safe_minimum = max(
+        1,
+        int(minimum_group_size),
+    )
+    safe_limit = max(
+        1,
+        min(
+            int(limit),
+            5000,
+        ),
+    )
+
+    outcomes = load_learning_outcomes(
+        limit=safe_limit,
+    )
+    entry_events = load_trade_book_events(
+        event="entry",
+        limit=safe_limit,
+    )
+
+    entry_by_trade_id: dict[int, dict[str, Any]] = {}
+
+    for event in entry_events:
+        trade_book_id = event.get("trade_book_id")
+        details = event.get("details")
+
+        if (
+            isinstance(trade_book_id, int)
+            and isinstance(details, dict)
+            and trade_book_id not in entry_by_trade_id
+        ):
+            entry_by_trade_id[trade_book_id] = {
+                "details": details,
+                "timestamp": event.get("timestamp"),
+            }
+
+    joined: list[
+        tuple[
+            dict[str, Any],
+            dict[str, Any],
+            str,
+        ]
+    ] = []
+
+    for outcome in outcomes:
+        trade_book_id = outcome.get("trade_book_id")
+
+        if not isinstance(trade_book_id, int):
+            continue
+
+        entry_record = entry_by_trade_id.get(
+            trade_book_id
+        )
+
+        if not isinstance(entry_record, dict):
+            continue
+
+        entry = entry_record.get("details")
+        entry_timestamp = entry_record.get("timestamp")
+
+        if (
+            isinstance(entry, dict)
+            and isinstance(entry_timestamp, str)
+            and entry_timestamp.strip()
+        ):
+            joined.append((
+                outcome,
+                entry,
+                entry_timestamp.strip(),
+            ))
+
+    def parse_timestamp(value: Any):
+        if not isinstance(value, str):
+            return None
+
+        normalized = value.strip()
+
+        if not normalized:
+            return None
+
+        try:
+            parsed = datetime.fromisoformat(
+                normalized.replace("Z", "+00:00")
+            )
+        except ValueError:
+            return None
+
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(
+                tzinfo=timezone.utc
+            )
+
+        return parsed.astimezone(timezone.utc)
+
+    # Evaluate entries in actual chronological order.
+    joined.sort(
+        key=lambda row: (
+            parse_timestamp(row[2])
+            or datetime.max.replace(
+                tzinfo=timezone.utc
+            )
+        )
+    )
+
+    def finite_number(value: Any) -> float | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+        if not math.isfinite(number):
+            return None
+
+        return number
+
+    def candidate_from_entry(
+        entry: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "scanner_rank": entry.get("scanner_rank"),
+            "rank": entry.get("scanner_rank"),
+            "score": entry.get("score"),
+            "confidence": entry.get("confidence"),
+            "rsi": entry.get("rsi"),
+            "volume_ratio": entry.get("volume_ratio"),
+            "atr_percent": entry.get("atr_percent"),
+            "spread_percent": entry.get("spread_percent"),
+            "change": entry.get("one_day_change"),
+            "one_day_change": entry.get("one_day_change"),
+            "macd": entry.get("macd"),
+            "macd_signal": entry.get("macd_signal"),
+            "trend": entry.get("trend"),
+            "risk": entry.get("risk"),
+        }
+
+    evaluated: list[dict[str, Any]] = []
+
+    for outcome, entry, entry_timestamp in joined:
+        current_entry_time = parse_timestamp(
+            entry_timestamp
+        )
+
+        # Evidence is allowed only if that outcome had already
+        # completed before this entry happened. This prevents
+        # the historical evaluator from seeing future results.
+        prior_rows = []
+
+        if current_entry_time is not None:
+            for (
+                prior_outcome,
+                prior_entry,
+                _prior_entry_timestamp,
+            ) in joined:
+                prior_completed_time = parse_timestamp(
+                    prior_outcome.get("created_at")
+                )
+
+                if (
+                    prior_completed_time is not None
+                    and prior_completed_time
+                    < current_entry_time
+                ):
+                    prior_rows.append((
+                        prior_outcome,
+                        prior_entry,
+                    ))
+
+        if not prior_rows:
+            evidence = {
+                "two_feature_groups": [],
+                "three_feature_groups": [],
+            }
+        else:
+            # Reconstruct feature evidence using only outcomes
+            # that were actually known at entry time.
+
+            combination_features = (
+                "scanner_rank",
+                "rsi",
+                "volume_ratio",
+                "atr_percent",
+                "spread_percent",
+                "one_day_change",
+                "macd_position",
+                "trend",
+                "risk",
+            )
+
+            def bucket(
+                feature: str,
+                entry_row: dict[str, Any],
+            ) -> str | None:
+                candidate = candidate_from_entry(entry_row)
+
+                if feature == "trend":
+                    value = candidate.get("trend")
+                    return (
+                        str(value).strip()
+                        if value is not None
+                        else None
+                    )
+
+                if feature == "risk":
+                    value = candidate.get("risk")
+                    return (
+                        str(value).strip()
+                        if value is not None
+                        else None
+                    )
+
+                if feature == "macd_position":
+                    macd = finite_number(
+                        candidate.get("macd")
+                    )
+                    signal = finite_number(
+                        candidate.get("macd_signal")
+                    )
+
+                    if macd is None or signal is None:
+                        return None
+
+                    if macd > signal:
+                        return "above_signal"
+                    if macd < signal:
+                        return "below_signal"
+                    return "equal_signal"
+
+                value_map = {
+                    "scanner_rank": candidate.get(
+                        "scanner_rank"
+                    ),
+                    "rsi": candidate.get("rsi"),
+                    "volume_ratio": candidate.get(
+                        "volume_ratio"
+                    ),
+                    "atr_percent": candidate.get(
+                        "atr_percent"
+                    ),
+                    "spread_percent": candidate.get(
+                        "spread_percent"
+                    ),
+                    "one_day_change": candidate.get(
+                        "one_day_change"
+                    ),
+                }
+
+                number = finite_number(
+                    value_map.get(feature)
+                )
+
+                if number is None:
+                    return None
+
+                ranges = {
+                    "scanner_rank": [
+                        (None, 6, "1-5"),
+                        (6, 11, "6-10"),
+                        (11, 21, "11-20"),
+                        (21, None, "21+"),
+                    ],
+                    "rsi": [
+                        (None, 30, "<30"),
+                        (30, 50, "30-49"),
+                        (50, 60, "50-59"),
+                        (60, 70, "60-69"),
+                        (70, 80, "70-79"),
+                        (80, None, "80+"),
+                    ],
+                    "volume_ratio": [
+                        (None, 0.7, "<0.7x"),
+                        (0.7, 1.0, "0.7-0.99x"),
+                        (1.0, 1.5, "1.0-1.49x"),
+                        (1.5, 2.0, "1.5-1.99x"),
+                        (2.0, 5.0, "2.0-4.99x"),
+                        (5.0, None, "5.0x+"),
+                    ],
+                    "atr_percent": [
+                        (None, 1.0, "<1%"),
+                        (1.0, 2.0, "1-1.99%"),
+                        (2.0, 4.0, "2-3.99%"),
+                        (4.0, 6.0, "4-5.99%"),
+                        (6.0, 8.0, "6-7.99%"),
+                        (8.0, None, "8%+"),
+                    ],
+                    "spread_percent": [
+                        (None, 0.10, "<0.10%"),
+                        (0.10, 0.25, "0.10-0.24%"),
+                        (0.25, 0.50, "0.25-0.49%"),
+                        (0.50, 1.0, "0.50-0.99%"),
+                        (1.0, None, "1%+"),
+                    ],
+                    "one_day_change": [
+                        (None, 0.0, "negative"),
+                        (0.0, 5.0, "0-4.99%"),
+                        (5.0, 15.0, "5-14.99%"),
+                        (15.0, 30.0, "15-29.99%"),
+                        (30.0, None, "30%+"),
+                    ],
+                }
+
+                for lower, upper, label in ranges.get(
+                    feature,
+                    [],
+                ):
+                    if (
+                        (lower is None or number >= lower)
+                        and
+                        (upper is None or number < upper)
+                    ):
+                        return label
+
+                return None
+
+            group_rows: dict[
+                int,
+                tuple[
+                    dict[str, Any],
+                    dict[str, Any],
+                    dict[str, str],
+                ],
+            ] = {}
+
+            for prior_outcome, prior_entry in prior_rows:
+                labels: dict[str, str] = {}
+
+                for feature in combination_features:
+                    label = bucket(feature, prior_entry)
+
+                    if label:
+                        labels[feature] = label
+
+                trade_id = prior_outcome.get(
+                    "trade_book_id"
+                )
+
+                if isinstance(trade_id, int):
+                    group_rows[trade_id] = (
+                        prior_outcome,
+                        prior_entry,
+                        labels,
+                    )
+
+            def combination_summaries(
+                size: int,
+            ) -> list[dict[str, Any]]:
+                grouped: dict[
+                    str,
+                    list[dict[str, Any]],
+                ] = {}
+
+                import itertools
+
+                for (
+                    prior_outcome,
+                    _prior_entry,
+                    labels,
+                ) in group_rows.values():
+                    available = [
+                        (feature, labels[feature])
+                        for feature in combination_features
+                        if feature in labels
+                    ]
+
+                    for combo in itertools.combinations(
+                        available,
+                        size,
+                    ):
+                        fingerprint = " | ".join(
+                            f"{feature}={label}"
+                            for feature, label in combo
+                        )
+
+                        grouped.setdefault(
+                            fingerprint,
+                            [],
+                        ).append(prior_outcome)
+
+                results: list[dict[str, Any]] = []
+
+                for fingerprint, rows in grouped.items():
+                    if len(rows) < safe_minimum:
+                        continue
+
+                    returns = [
+                        value
+                        for row in rows
+                        for value in [
+                            finite_number(
+                                row.get(
+                                    "realized_return_percent"
+                                )
+                            )
+                        ]
+                        if value is not None
+                    ]
+
+                    wins = sum(
+                        1
+                        for row in rows
+                        if bool(row.get("won"))
+                    )
+
+                    results.append({
+                        "fingerprint": fingerprint,
+                        "sample_size": len(rows),
+                        "wins": wins,
+                        "losses": len(rows) - wins,
+                        "win_rate_percent": (
+                            wins / len(rows) * 100.0
+                            if rows
+                            else 0.0
+                        ),
+                        "average_return_percent": (
+                            sum(returns) / len(returns)
+                            if returns
+                            else None
+                        ),
+                    })
+
+                return results
+
+            evidence = {
+                "two_feature_groups": (
+                    combination_summaries(2)
+                ),
+                "three_feature_groups": (
+                    combination_summaries(3)
+                ),
+            }
+
+        candidate = candidate_from_entry(entry)
+
+        decision = calculate_adaptive_entry_decision(
+            candidate,
+            evidence,
+        )
+
+        realized_return = finite_number(
+            outcome.get("realized_return_percent")
+        )
+
+        evaluated.append({
+            "trade_book_id": outcome.get(
+                "trade_book_id"
+            ),
+            "symbol": outcome.get("symbol"),
+            "actual_won": bool(
+                outcome.get("won")
+            ),
+            "realized_return_percent": realized_return,
+            "adaptive_decision": decision.get(
+                "decision"
+            ),
+            "evidence_score": decision.get(
+                "evidence_score"
+            ),
+            "historical_samples": decision.get(
+                "historical_samples"
+            ),
+            "confidence": decision.get(
+                "confidence"
+            ),
+        })
+
+    def summarize_evaluated(
+        rows: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        returns = [
+            value
+            for row in rows
+            for value in [
+                finite_number(
+                    row.get(
+                        "realized_return_percent"
+                    )
+                )
+            ]
+            if value is not None
+        ]
+
+        wins = sum(
+            1
+            for row in rows
+            if row.get("actual_won")
+        )
+
+        return {
+            "trades": len(rows),
+            "wins": wins,
+            "losses": len(rows) - wins,
+            "win_rate_percent": (
+                round(
+                    wins / len(rows) * 100.0,
+                    4,
+                )
+                if rows
+                else 0.0
+            ),
+            "average_return_percent": (
+                round(
+                    sum(returns) / len(returns),
+                    4,
+                )
+                if returns
+                else None
+            ),
+        }
+
+    decision_groups = {
+        name: summarize_evaluated([
+            row
+            for row in evaluated
+            if row.get("adaptive_decision") == name
+        ])
+        for name in (
+            "BUY",
+            "SKIP",
+            "INSUFFICIENT_EVIDENCE",
+        )
+    }
+
+    score_ranges = (
+        (0.0, 40.0, "0-39.99"),
+        (40.0, 50.0, "40-49.99"),
+        (50.0, 55.0, "50-54.99"),
+        (55.0, 60.0, "55-59.99"),
+        (60.0, 65.0, "60-64.99"),
+        (65.0, 70.0, "65-69.99"),
+        (70.0, 80.0, "70-79.99"),
+        (80.0, 101.0, "80-100"),
+    )
+
+    score_groups: dict[str, Any] = {}
+
+    for lower, upper, label in score_ranges:
+        rows = [
+            row
+            for row in evaluated
+            if (
+                finite_number(
+                    row.get("evidence_score")
+                )
+                is not None
+                and lower
+                <= float(row["evidence_score"])
+                < upper
+            )
+        ]
+
+        score_groups[label] = (
+            summarize_evaluated(rows)
+        )
+
+    return {
+        "paper": True,
+        "read_only": True,
+        "forward_only": True,
+        "time_safe": True,
+        "evidence_rule": (
+            "outcome.created_at < entry.timestamp"
+        ),
+        "automatic_strategy_changes": False,
+        "minimum_group_size": safe_minimum,
+        "completed_outcomes_loaded": len(outcomes),
+        "joined_entry_outcomes": len(joined),
+        "evaluated_trades": len(evaluated),
+        "decision_performance": decision_groups,
+        "score_performance": score_groups,
+        "evaluations": evaluated,
+        "warning": (
+            "Historical PAPER evaluation only. "
+            "Results do not prove future performance."
+        ),
+    }
+
 def calculate_learning_summary(
     *,
     minimum_required: int = 10,
