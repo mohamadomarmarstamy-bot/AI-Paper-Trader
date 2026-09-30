@@ -9591,8 +9591,11 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             )
         )
 
-        if any(item.get("result", {}).get("deferred")
-               for item in cycle_result["protection_reconciliation"]):
+        if any(
+            item.get("result", {}).get("deferred")
+            and not item.get("result", {}).get("inactive_asset")
+            for item in cycle_result["protection_reconciliation"]
+        ):
             cycle_result.update({"success": False, "deferred": True,
                                  "reason": "Protection recovery is waiting for broker request capacity."})
             return cycle_result
