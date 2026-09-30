@@ -10246,24 +10246,14 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             ).upper()
 
             if adaptive_decision != "BUY":
-                cycle_result[
-                    "skipped_candidates"
-                ].append({
-                    "symbol": symbol,
-                    "reason": (
-                        "adaptive entry decision rejected"
-                    ),
-                    "adaptive_entry_decision": (
-                        adaptive_entry_decision
-                    ),
-                })
-
                 add_auto_trader_log(
-                    "adaptive_entry_skip",
+                    "adaptive_entry_advisory",
                     symbol=symbol,
                     message=(
                         "Adaptive historical intelligence "
-                        "rejected PAPER entry candidate."
+                        "did not approve this PAPER candidate; "
+                        "continuing through existing entry and "
+                        "risk safeguards."
                     ),
                     details={
                         "adaptive_entry_decision": (
@@ -10271,22 +10261,20 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         ),
                     },
                 )
-
-                continue
-
-            add_auto_trader_log(
-                "adaptive_entry_buy",
-                symbol=symbol,
-                message=(
-                    "Adaptive historical intelligence "
-                    "approved PAPER entry candidate."
-                ),
-                details={
-                    "adaptive_entry_decision": (
-                        adaptive_entry_decision
+            else:
+                add_auto_trader_log(
+                    "adaptive_entry_buy",
+                    symbol=symbol,
+                    message=(
+                        "Adaptive historical intelligence "
+                        "approved PAPER entry candidate."
                     ),
-                },
-            )
+                    details={
+                        "adaptive_entry_decision": (
+                            adaptive_entry_decision
+                        ),
+                    },
+                )
 
             if symbol in existing_symbols:
                 cycle_result[
