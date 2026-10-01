@@ -9754,6 +9754,16 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         ),
                     },
                 )
+                add_auto_trader_journal_entry(
+                    symbol=symbol,
+                    event="profit_lock_updated",
+                    details={
+                        "entry_price": entry_price,
+                        "current_price": current_price,
+                        "old_stop_price": existing_stop_price,
+                        "new_stop_price": new_stop_price,
+                    },
+                )
 
         existing_symbols = {
             clean_symbol(
