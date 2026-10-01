@@ -10850,6 +10850,38 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     ),
                 }
 
+                cycle_result["entries"].append({
+                    "symbol": symbol,
+                    "shares": None,
+                    "score": score,
+                    "strategy_version": (
+                        selected_strategy_version
+                    ),
+                    "entry_success": False,
+                    "confidence": confidence,
+                    "result": entry_result,
+                })
+
+                add_auto_trader_log(
+                    "entry_attempt",
+                    symbol=symbol,
+                    message=(
+                        "Automatic PAPER entry candidate "
+                        "failed before order submission."
+                    ),
+                    details={
+                        "shares": None,
+                        "score": score,
+                        "confidence": confidence,
+                        "result_success": False,
+                        "error": entry_result.get(
+                            "error"
+                        ),
+                    },
+                )
+
+                continue
+
             entry_trade = (
                 entry_result.get("trade")
                 if isinstance(entry_result, dict)
