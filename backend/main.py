@@ -156,6 +156,10 @@ RISK_BLOCK_SHORT_SELLING = True
 # How often the trader checks the latest scanner results.
 AUTO_TRADER_SCAN_SECONDS = 15
 
+# Closed-market monitoring for existing PAPER positions only.
+# This does not enable scanning or new entries outside regular hours.
+AUTO_TRADER_AFTER_HOURS_MONITOR_SECONDS = 60
+
 # Auto-trader health watchdog.
 AUTO_TRADER_HEALTH_STALE_SECONDS = 30 * 60
 AUTO_TRADER_HEALTH_CHECK_SECONDS = 60
@@ -308,6 +312,8 @@ _auto_trader_last_cycle_at: float | None = None
 _auto_trader_last_successful_cycle_at: float | None = None
 _auto_trader_last_cycle_result: dict[str, Any] | None = None
 _auto_trader_last_scan_at: float | None = None
+_auto_trader_last_after_hours_monitor_at: float | None = None
+_auto_trader_after_hours_high_water: dict[str, float] = {}
 _auto_trader_last_trade_at: float | None = None
 _auto_trader_daily_health_email_date: str | None = None
 _auto_trader_last_market_clock: dict[str, Any] | None = None
@@ -7830,6 +7836,129 @@ def calculate_position_return_percent(
     ) * 100
 
 
+def monitor_after_hours_positions() -> dict[str, Any]:
+    """
+    Observe existing PAPER positions while the regular market is closed.
+
+    This function is intentionally read-only. It does not scan for entries,
+    submit orders, cancel orders, or modify protective orders.
+    """
+    global _auto_trader_last_after_hours_monitor_at
+
+    now_monotonic = time.monotonic()
+
+    if (
+        _auto_trader_last_after_hours_monitor_at is not None
+        and (
+            now_monotonic
+            - _auto_trader_last_after_hours_monitor_at
+        )
+        < AUTO_TRADER_AFTER_HOURS_MONITOR_SECONDS
+    ):
+        return {
+            "success": True,
+            "paper": True,
+            "skipped": True,
+            "reason": "After-hours monitor interval has not elapsed.",
+        }
+
+    _auto_trader_last_after_hours_monitor_at = now_monotonic
+
+    positions = fetch_alpaca_paper_positions()
+
+    open_symbols: set[str] = set()
+    observations: list[dict[str, Any]] = []
+
+    for position in positions:
+        symbol = clean_symbol(
+            position.get("symbol")
+        )
+
+        if not symbol:
+            continue
+
+        open_symbols.add(symbol)
+
+        entry_price = safe_float(
+            position.get("avg_entry_price")
+        )
+        current_price = safe_float(
+            position.get("current_price")
+        )
+
+        if (
+            entry_price is None
+            or entry_price <= 0
+            or current_price is None
+            or current_price <= 0
+        ):
+            continue
+
+        previous_high = (
+            _auto_trader_after_hours_high_water.get(
+                symbol
+            )
+        )
+
+        if (
+            previous_high is None
+            or current_price > previous_high
+        ):
+            _auto_trader_after_hours_high_water[
+                symbol
+            ] = current_price
+
+        high_water = (
+            _auto_trader_after_hours_high_water[
+                symbol
+            ]
+        )
+
+        return_percent = (
+            calculate_position_return_percent(
+                entry_price=entry_price,
+                current_price=current_price,
+            )
+        )
+
+        high_water_return_percent = (
+            calculate_position_return_percent(
+                entry_price=entry_price,
+                current_price=high_water,
+            )
+        )
+
+        observations.append({
+            "symbol": symbol,
+            "entry_price": entry_price,
+            "current_price": current_price,
+            "return_percent": return_percent,
+            "high_water_price": high_water,
+            "high_water_return_percent": (
+                high_water_return_percent
+            ),
+        })
+
+    stale_symbols = (
+        set(_auto_trader_after_hours_high_water)
+        - open_symbols
+    )
+
+    for symbol in stale_symbols:
+        _auto_trader_after_hours_high_water.pop(
+            symbol,
+            None,
+        )
+
+    return {
+        "success": True,
+        "paper": True,
+        "skipped": False,
+        "position_count": len(observations),
+        "positions": observations,
+    }
+
+
 def should_hard_max_loss_exit(
     *,
     entry_price: float,
@@ -8585,6 +8714,38 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     )
                 ),
             })
+
+            try:
+                cycle_result[
+                    "after_hours_monitor"
+                ] = (
+                    monitor_after_hours_positions()
+                )
+            except BrokerRateLimited as error:
+                cycle_result[
+                    "after_hours_monitor"
+                ] = {
+                    "success": False,
+                    "paper": True,
+                    "deferred": True,
+                    "reason": (
+                        "After-hours monitoring is waiting "
+                        "for broker request capacity."
+                    ),
+                    "retry_after_seconds": (
+                        error.retry_after
+                    ),
+                }
+            except Exception as error:
+                cycle_result[
+                    "after_hours_monitor"
+                ] = {
+                    "success": False,
+                    "paper": True,
+                    "error": clean_error_message(
+                        error
+                    ),
+                }
 
             return cycle_result
 
