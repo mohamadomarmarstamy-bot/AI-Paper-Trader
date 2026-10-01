@@ -9887,6 +9887,10 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             )
 
             if new_stop_price is None:
+                _auto_trader_after_hours_high_water.pop(
+                    symbol,
+                    None,
+                )
                 continue
 
             # An overnight high may imply a trailing stop that
@@ -9909,6 +9913,10 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         "not below the live market price."
                     ),
                 })
+                _auto_trader_after_hours_high_water.pop(
+                    symbol,
+                    None,
+                )
                 continue
 
             update_result = (
@@ -9943,6 +9951,11 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     "changed"
                 )
             ):
+                _auto_trader_after_hours_high_water.pop(
+                    symbol,
+                    None,
+                )
+
                 add_auto_trader_log(
                     "profit_lock_updated",
                     symbol=symbol,
