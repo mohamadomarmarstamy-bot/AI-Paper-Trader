@@ -313,6 +313,7 @@ _auto_trader_last_successful_cycle_at: float | None = None
 _auto_trader_last_cycle_result: dict[str, Any] | None = None
 _auto_trader_last_scan_at: float | None = None
 _auto_trader_last_after_hours_monitor_at: float | None = None
+_auto_trader_last_after_hours_monitor_result: dict[str, Any] | None = None
 _auto_trader_after_hours_high_water: dict[str, float] = {}
 _auto_trader_last_trade_at: float | None = None
 _auto_trader_daily_health_email_date: str | None = None
@@ -7844,6 +7845,7 @@ def monitor_after_hours_positions() -> dict[str, Any]:
     submit orders, cancel orders, or modify protective orders.
     """
     global _auto_trader_last_after_hours_monitor_at
+    global _auto_trader_last_after_hours_monitor_result
 
     now_monotonic = time.monotonic()
 
@@ -7950,13 +7952,18 @@ def monitor_after_hours_positions() -> dict[str, Any]:
             None,
         )
 
-    return {
+    result = {
         "success": True,
         "paper": True,
         "skipped": False,
+        "observed_at": time.time(),
         "position_count": len(observations),
         "positions": observations,
     }
+
+    _auto_trader_last_after_hours_monitor_result = result
+
+    return result
 
 
 def should_hard_max_loss_exit(
@@ -11906,6 +11913,9 @@ def get_auto_trader_status() -> dict[str, Any]:
         ),
         "last_cycle_result": (
             _auto_trader_last_cycle_result
+        ),
+        "last_after_hours_monitor_result": (
+            _auto_trader_last_after_hours_monitor_result
         ),
         "health": health,
         "last_scan_at": (
