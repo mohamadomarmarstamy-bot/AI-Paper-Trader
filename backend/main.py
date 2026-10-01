@@ -9857,10 +9857,29 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 )
             )
 
+            overnight_high_water = (
+                _auto_trader_after_hours_high_water.get(
+                    symbol
+                )
+            )
+
+            profit_lock_reference_price = current_price
+
+            if (
+                overnight_high_water is not None
+                and overnight_high_water
+                > profit_lock_reference_price
+            ):
+                profit_lock_reference_price = (
+                    overnight_high_water
+                )
+
             new_stop_price = (
                 calculate_profit_lock_stop(
                     entry_price=entry_price,
-                    current_price=current_price,
+                    current_price=(
+                        profit_lock_reference_price
+                    ),
                     existing_stop_price=(
                         existing_stop_price
                     ),
@@ -9868,6 +9887,28 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             )
 
             if new_stop_price is None:
+                continue
+
+            # An overnight high may imply a trailing stop that
+            # is already above the live regular-hours price.
+            # Never submit that stale/invalid stop.
+            if new_stop_price >= current_price:
+                cycle_result[
+                    "profit_lock_updates"
+                ].append({
+                    "symbol": symbol,
+                    "entry_price": entry_price,
+                    "current_price": current_price,
+                    "overnight_high_water": (
+                        overnight_high_water
+                    ),
+                    "new_stop_price": new_stop_price,
+                    "skipped": True,
+                    "reason": (
+                        "Overnight profit-lock target is "
+                        "not below the live market price."
+                    ),
+                })
                 continue
 
             update_result = (
