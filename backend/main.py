@@ -4896,11 +4896,64 @@ def _fetch_alpaca_live_account_snapshot() -> dict[str, Any]:
     unrealized = sum(safe_float(p.get("unrealized_profit")) or 0.0 for p in positions)
     invested = sum(abs(safe_float(p.get("position_value")) or 0.0) for p in positions)
     allocation = (cash or 0.0) + invested
+
+    equity_metrics = account_equity_metrics(account)
+    current_equity = safe_float(account.get("equity"))
+
+    current_date = datetime.fromtimestamp(
+        snapshot_at,
+        tz=timezone.utc,
+    ).astimezone(
+        ZoneInfo("America/New_York")
+    ).date().isoformat()
+
+    verified_prior_close = get_auto_trader_daily_pl_baseline(
+        current_date
+    )
+
+    if (
+        current_equity is not None
+        and verified_prior_close > 0
+    ):
+        daily_equity_change = (
+            current_equity - verified_prior_close
+        )
+        daily_equity_change_percent = (
+            daily_equity_change
+            / verified_prior_close
+            * 100
+        )
+
+        equity_metrics.update({
+            "previous_close_equity": round(verified_prior_close, 2),
+            "starting_balance": round(verified_prior_close, 2),
+            "starting_cash": round(verified_prior_close, 2),
+            "daily_equity_change": round(daily_equity_change, 2),
+            "daily_equity_change_percent": round(
+                daily_equity_change_percent,
+                4,
+            ),
+            "profit_loss": round(daily_equity_change, 2),
+            "total_profit_loss": round(daily_equity_change, 2),
+            "profit_loss_percent": round(
+                daily_equity_change_percent,
+                4,
+            ),
+            "total_return_percent": round(
+                daily_equity_change_percent,
+                4,
+            ),
+            "daily_pl_available": True,
+            "daily_pl_basis": (
+                "current_equity_minus_verified_prior_session_close"
+            ),
+        })
+
     return {
         "source": "alpaca_paper", "paper": True, "timestamp": snapshot_at,
         "cash": round(cash, 2) if cash is not None else None,
         "buying_power": safe_float(account.get("buying_power")),
-        **account_equity_metrics(account),
+        **equity_metrics,
         "unrealized_profit_loss": round(unrealized, 2),
         "cash_percent": round(cash / allocation * 100, 4) if cash is not None and allocation > 0 else None,
         "invested_percent": round(invested / allocation * 100, 4) if allocation > 0 else None,
