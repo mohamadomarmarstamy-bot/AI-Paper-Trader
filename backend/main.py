@@ -333,6 +333,8 @@ _auto_trader_journal: list[dict[str, Any]] = []
 _auto_trader_seen_exit_order_ids: set[str] = set()
 _auto_trader_daily_pl_high_water = 0.0
 _auto_trader_daily_pl_date: str | None = None
+_auto_trader_daily_pl_baseline_date: str | None = None
+_auto_trader_daily_pl_baseline_equity: float | None = None
 _auto_trader_defensive_mode = False
 
 
@@ -5002,6 +5004,59 @@ def fetch_alpaca_portfolio_history() -> list[dict[str, Any]]:
     return history
 
 
+def get_auto_trader_daily_pl_baseline(
+    current_date: str,
+) -> float:
+    """
+    Return a verified prior-close PAPER equity baseline for the
+    current trading date.
+
+    Resolve it from Alpaca portfolio history once per trading date,
+    then keep it fixed for that date.
+    """
+    global _auto_trader_daily_pl_baseline_date
+    global _auto_trader_daily_pl_baseline_equity
+
+    if (
+        _auto_trader_daily_pl_baseline_date == current_date
+        and _auto_trader_daily_pl_baseline_equity is not None
+        and _auto_trader_daily_pl_baseline_equity > 0
+    ):
+        return _auto_trader_daily_pl_baseline_equity
+
+    history = fetch_alpaca_portfolio_history()
+    prior_equity: float | None = None
+
+    for point in history:
+        if not isinstance(point, dict):
+            continue
+
+        timestamp = safe_float(point.get("timestamp"))
+        equity = safe_float(point.get("equity"))
+
+        if timestamp is None or equity is None or equity <= 0:
+            continue
+
+        point_date = datetime.fromtimestamp(
+            timestamp,
+            tz=timezone.utc,
+        ).astimezone(
+            ZoneInfo("America/New_York")
+        ).date().isoformat()
+
+        if point_date < current_date:
+            prior_equity = equity
+
+    if prior_equity is None:
+        raise RuntimeError(
+            "Unable to establish verified prior-close PAPER equity."
+        )
+
+    _auto_trader_daily_pl_baseline_date = current_date
+    _auto_trader_daily_pl_baseline_equity = prior_equity
+
+    return prior_equity
+
 def fetch_alpaca_non_trade_activities(
     *,
     after: str | None = None,
@@ -9009,18 +9064,20 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             account.get("equity")
         ) or 0.0
 
-        last_equity = safe_float(
-            account.get("last_equity")
-        ) or current_equity
-
-        current_daily_pl = (
-            current_equity
-            - last_equity
-        )
-
         current_date = str(
             clock.get("timestamp", "")
         )[:10]
+
+        daily_pl_baseline = (
+            get_auto_trader_daily_pl_baseline(
+                current_date
+            )
+        )
+
+        current_daily_pl = (
+            current_equity
+            - daily_pl_baseline
+        )
 
         if (
             _auto_trader_daily_pl_date

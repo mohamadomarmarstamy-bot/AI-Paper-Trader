@@ -110,5 +110,74 @@ class ScannerOutcomeAccuracyTests(unittest.TestCase):
         self.assertTrue(all(t == '2026-09-25T14:54:00+00:00' for t in due))
 
 
+def daily_pl_baseline_functions(history):
+    source = ast.parse(
+        (Path(__file__).parent / "main.py").read_text(encoding="utf-8")
+    )
+    node = next(
+        n
+        for n in source.body
+        if isinstance(n, ast.FunctionDef)
+        and n.name == "get_auto_trader_daily_pl_baseline"
+    )
+    calls = []
+
+    def fetch_history():
+        calls.append(True)
+        return history
+
+    ns = {
+        "datetime": datetime,
+        "timezone": timezone,
+        "ZoneInfo": __import__("zoneinfo").ZoneInfo,
+        "safe_float": lambda n: float(n) if n is not None else None,
+        "fetch_alpaca_portfolio_history": fetch_history,
+        "_auto_trader_daily_pl_baseline_date": None,
+        "_auto_trader_daily_pl_baseline_equity": None,
+    }
+    exec(
+        compile(
+            ast.Module(
+                body=ast.parse("from __future__ import annotations").body + [node],
+                type_ignores=[],
+            ),
+            "main.py",
+            "exec",
+        ),
+        ns,
+    )
+    return ns, calls
+
+
+class DailyPlBaselineAccuracyTests(unittest.TestCase):
+    def test_uses_prior_session_close_and_keeps_it_fixed_for_date(self):
+        history = [
+            {
+                "timestamp": datetime(
+                    2026, 10, 1, 20, 0, tzinfo=timezone.utc
+                ).timestamp(),
+                "equity": 95442.93,
+            },
+            {
+                "timestamp": datetime(
+                    2026, 10, 2, 13, 30, tzinfo=timezone.utc
+                ).timestamp(),
+                "equity": 95717.21,
+            },
+        ]
+        ns, calls = daily_pl_baseline_functions(history)
+
+        baseline = ns["get_auto_trader_daily_pl_baseline"](
+            "2026-10-02"
+        )
+        self.assertEqual(baseline, 95442.93)
+
+        history[0]["equity"] = 1.0
+        second = ns["get_auto_trader_daily_pl_baseline"](
+            "2026-10-02"
+        )
+        self.assertEqual(second, 95442.93)
+        self.assertEqual(len(calls), 1)
+
 if __name__ == '__main__':
     unittest.main()
