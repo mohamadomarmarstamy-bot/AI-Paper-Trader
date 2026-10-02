@@ -12446,6 +12446,18 @@ def account_pl_audit(
     return {
         "paper": True,
         "source": "alpaca_paper",
+        "raw_account_diagnostics": {
+            "cash": safe_float(account.get("cash")),
+            "long_market_value": safe_float(account.get("long_market_value")),
+            "short_market_value": safe_float(account.get("short_market_value")),
+            "accrued_fees": safe_float(account.get("accrued_fees")),
+            "last_equity": safe_float(account.get("last_equity")),
+            "equity": safe_float(account.get("equity")),
+            "portfolio_value": safe_float(account.get("portfolio_value")),
+            "buying_power": safe_float(account.get("buying_power")),
+            "regt_buying_power": safe_float(account.get("regt_buying_power")),
+            "daytrading_buying_power": safe_float(account.get("daytrading_buying_power")),
+        },
         "equity": round(
             equity,
             2,
