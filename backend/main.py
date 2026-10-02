@@ -12545,17 +12545,45 @@ def account_pl_audit(
 @app.get("/account/portfolio-history-audit")
 def account_portfolio_history_audit(
     request: Request,
+    period: str = Query(default="1A"),
+    timeframe: str = Query(default="1D"),
 ) -> dict[str, Any]:
     require_app_session(
         request
     )
 
+    allowed_periods = {
+        "1D",
+        "7D",
+        "1M",
+        "3M",
+        "1A",
+    }
+    allowed_timeframes = {
+        "5Min",
+        "15Min",
+        "1H",
+        "1D",
+    }
+
+    if period not in allowed_periods:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported portfolio-history audit period.",
+        )
+
+    if timeframe not in allowed_timeframes:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported portfolio-history audit timeframe.",
+        )
+
     payload = alpaca_paper_request(
         "GET",
         "/v2/account/portfolio/history",
         params={
-            "period": "1A",
-            "timeframe": "1D",
+            "period": period,
+            "timeframe": timeframe,
         },
     )
 
