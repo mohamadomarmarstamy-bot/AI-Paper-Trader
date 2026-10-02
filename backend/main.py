@@ -5008,11 +5008,12 @@ def get_auto_trader_daily_pl_baseline(
     current_date: str,
 ) -> float:
     """
-    Return a verified prior-close PAPER equity baseline for the
-    current trading date.
+    Return the most recent verified PAPER equity point from the
+    previous trading session.
 
-    Resolve it from Alpaca portfolio history once per trading date,
-    then keep it fixed for that date.
+    Uses Alpaca 5-minute portfolio history so the baseline is the
+    actual prior-session close rather than account.last_equity or
+    an older daily history point.
     """
     global _auto_trader_daily_pl_baseline_date
     global _auto_trader_daily_pl_baseline_equity
@@ -5024,32 +5025,66 @@ def get_auto_trader_daily_pl_baseline(
     ):
         return _auto_trader_daily_pl_baseline_equity
 
-    history = fetch_alpaca_portfolio_history()
+    payload = alpaca_paper_request(
+        "GET",
+        "/v2/account/portfolio/history",
+        params={
+            "period": "7D",
+            "timeframe": "5Min",
+        },
+    )
+
+    timestamps = (
+        payload.get("timestamp")
+        if isinstance(payload, dict)
+        else None
+    )
+
+    equity_values = (
+        payload.get("equity")
+        if isinstance(payload, dict)
+        else None
+    )
+
     prior_equity: float | None = None
+    prior_timestamp: float | None = None
 
-    for point in history:
-        if not isinstance(point, dict):
-            continue
+    if (
+        isinstance(timestamps, list)
+        and isinstance(equity_values, list)
+    ):
+        for timestamp_value, equity_value in zip(
+            timestamps,
+            equity_values,
+        ):
+            timestamp = safe_float(timestamp_value)
+            equity = safe_float(equity_value)
 
-        timestamp = safe_float(point.get("timestamp"))
-        equity = safe_float(point.get("equity"))
+            if (
+                timestamp is None
+                or equity is None
+                or equity <= 0
+            ):
+                continue
 
-        if timestamp is None or equity is None or equity <= 0:
-            continue
+            point_date = datetime.fromtimestamp(
+                timestamp,
+                tz=timezone.utc,
+            ).astimezone(
+                ZoneInfo("America/New_York")
+            ).date().isoformat()
 
-        point_date = datetime.fromtimestamp(
-            timestamp,
-            tz=timezone.utc,
-        ).astimezone(
-            ZoneInfo("America/New_York")
-        ).date().isoformat()
-
-        if point_date < current_date:
-            prior_equity = equity
+            if point_date != current_date:
+                if (
+                    prior_timestamp is None
+                    or timestamp > prior_timestamp
+                ):
+                    prior_timestamp = timestamp
+                    prior_equity = equity
 
     if prior_equity is None:
         raise RuntimeError(
-            "Unable to establish verified prior-close PAPER equity."
+            "Unable to establish verified prior-session PAPER equity."
         )
 
     _auto_trader_daily_pl_baseline_date = current_date

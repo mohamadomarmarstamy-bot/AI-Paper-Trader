@@ -126,12 +126,30 @@ def daily_pl_baseline_functions(history):
         calls.append(True)
         return history
 
+    def alpaca_paper_request(method, path, params=None):
+        calls.append({
+            "method": method,
+            "path": path,
+            "params": params,
+        })
+        return {
+            "timestamp": [
+                point["timestamp"]
+                for point in history
+            ],
+            "equity": [
+                point["equity"]
+                for point in history
+            ],
+        }
+
     ns = {
         "datetime": datetime,
         "timezone": timezone,
         "ZoneInfo": __import__("zoneinfo").ZoneInfo,
         "safe_float": lambda n: float(n) if n is not None else None,
         "fetch_alpaca_portfolio_history": fetch_history,
+        "alpaca_paper_request": alpaca_paper_request,
         "_auto_trader_daily_pl_baseline_date": None,
         "_auto_trader_daily_pl_baseline_equity": None,
     }
