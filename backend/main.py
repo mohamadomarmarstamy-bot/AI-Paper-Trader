@@ -5002,6 +5002,48 @@ def fetch_alpaca_portfolio_history() -> list[dict[str, Any]]:
     return history
 
 
+def fetch_alpaca_non_trade_activities(
+    *,
+    after: str | None = None,
+    until: str | None = None,
+    page_size: int = 100,
+) -> list[dict[str, Any]]:
+    """Fetch read-only non-trade activity from the Alpaca PAPER account."""
+    safe_page_size = max(
+        1,
+        min(int(page_size), 100),
+    )
+
+    params: dict[str, Any] = {
+        "category": "non_trade_activity",
+        "direction": "desc",
+        "page_size": safe_page_size,
+    }
+
+    if after:
+        params["after"] = after
+
+    if until:
+        params["until"] = until
+
+    payload = alpaca_paper_request(
+        "GET",
+        "/v2/account/activities",
+        params=params,
+    )
+
+    if not isinstance(payload, list):
+        raise RuntimeError(
+            "Alpaca returned an invalid account-activities response."
+        )
+
+    return [
+        activity
+        for activity in payload
+        if isinstance(activity, dict)
+    ]
+
+
 # =========================================================
 # Yahoo Finance helpers
 # =========================================================
@@ -12519,6 +12561,32 @@ def portfolio_history(
 
         return []
 
+
+
+@app.get("/account/non-trade-activities")
+def account_non_trade_activities(
+    request: Request,
+    after: str | None = Query(default=None),
+    until: str | None = Query(default=None),
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    activities = fetch_alpaca_non_trade_activities(
+        after=after,
+        until=until,
+        page_size=100,
+    )
+
+    return {
+        "paper": True,
+        "source": "alpaca_paper",
+        "after": after,
+        "until": until,
+        "count": len(activities),
+        "activities": activities,
+    }
 
 
 @app.get("/auto-trader/pnl-reconciliation")
