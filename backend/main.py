@@ -12661,6 +12661,56 @@ def account_portfolio_history_audit(
     }
 
 
+
+@app.get("/auto-trader/daily-pl-diagnostic")
+def auto_trader_daily_pl_diagnostic(
+    request: Request,
+) -> dict[str, Any]:
+    require_app_session(request)
+
+    clock = fetch_alpaca_market_clock()
+    account = fetch_alpaca_paper_account()
+
+    current_date = str(
+        clock.get("timestamp", "")
+    )[:10]
+
+    current_equity = safe_float(
+        account.get("equity")
+    ) or 0.0
+
+    baseline = get_auto_trader_daily_pl_baseline(
+        current_date
+    )
+
+    internal_daily_pl = (
+        current_equity - baseline
+    )
+
+    return {
+        "paper": True,
+        "current_date": current_date,
+        "current_equity": round(current_equity, 2),
+        "verified_prior_close_baseline": round(baseline, 2),
+        "internal_daily_pl": round(
+            internal_daily_pl,
+            2,
+        ),
+        "alpaca_last_equity": safe_float(
+            account.get("last_equity")
+        ),
+        "alpaca_daily_pl_comparison": round(
+            current_equity
+            - (
+                safe_float(
+                    account.get("last_equity")
+                )
+                or current_equity
+            ),
+            2,
+        ),
+    }
+
 @app.get("/portfolio-history")
 def portfolio_history(
     request: Request,
