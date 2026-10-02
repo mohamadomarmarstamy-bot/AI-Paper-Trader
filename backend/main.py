@@ -12542,6 +12542,40 @@ def account_pl_audit(
         ),
     }
 
+@app.get("/account/portfolio-history-audit")
+def account_portfolio_history_audit(
+    request: Request,
+) -> dict[str, Any]:
+    require_app_session(
+        request
+    )
+
+    payload = alpaca_paper_request(
+        "GET",
+        "/v2/account/portfolio/history",
+        params={
+            "period": "1A",
+            "timeframe": "1D",
+        },
+    )
+
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            "Alpaca returned an invalid portfolio-history response."
+        )
+
+    return {
+        "paper": True,
+        "source": "alpaca_paper",
+        "base_value": payload.get("base_value"),
+        "timestamp": payload.get("timestamp"),
+        "equity": payload.get("equity"),
+        "profit_loss": payload.get("profit_loss"),
+        "profit_loss_pct": payload.get("profit_loss_pct"),
+        "timeframe": payload.get("timeframe"),
+    }
+
+
 @app.get("/portfolio-history")
 def portfolio_history(
     request: Request,
