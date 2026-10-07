@@ -2401,6 +2401,173 @@ def save_scanner_forward_outcome(
 
     return int(outcome_id)
 
+
+def calculate_scanner_forward_research(
+    *,
+    horizon_minutes: int = 15,
+    limit: int = 5000,
+) -> dict[str, Any]:
+    """Summarize measured scanner outcomes for read-only research."""
+
+    normalized_horizon = _validate_positive_integer(
+        horizon_minutes,
+        "Forward horizon minutes",
+    )
+    normalized_limit = _validate_positive_integer(
+        limit,
+        "Scanner forward research limit",
+    )
+
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                observations.id AS scanner_observation_id,
+                observations.symbol,
+                observations.observed_at,
+                observations.signal,
+                observations.score,
+                observations.confidence,
+                observations.scanner_rank,
+                observations.rsi,
+                observations.volume_ratio,
+                observations.one_day_change,
+                observations.five_day_change,
+                observations.twenty_day_change,
+                observations.atr_percent,
+                observations.spread_percent,
+                observations.risk,
+                observations.momentum_candidate,
+                observations.market_regime,
+                observations.selected_for_entry,
+                observations.strategy_version,
+                outcomes.horizon_minutes,
+                outcomes.reference_price,
+                outcomes.outcome_price,
+                outcomes.return_percent,
+                outcomes.target_at,
+                outcomes.evaluated_at
+            FROM scanner_observations AS observations
+            JOIN scanner_forward_outcomes AS outcomes
+              ON outcomes.scanner_observation_id = observations.id
+            WHERE outcomes.horizon_minutes = ?
+              AND outcomes.status = 'measured'
+              AND outcomes.return_percent IS NOT NULL
+              AND UPPER(COALESCE(observations.signal, '')) = 'BUY'
+            ORDER BY observations.observed_at DESC
+            LIMIT ?
+            """,
+            (
+                normalized_horizon,
+                normalized_limit,
+            ),
+        ).fetchall()
+
+    records = [dict(row) for row in rows]
+
+    def rank_bucket(value: Any) -> str | None:
+        try:
+            rank = float(value)
+        except (TypeError, ValueError):
+            return None
+
+        if not math.isfinite(rank) or rank <= 0:
+            return None
+        if rank <= 5:
+            return "1-5"
+        if rank <= 10:
+            return "6-10"
+        if rank <= 20:
+            return "11-20"
+        if rank <= 30:
+            return "21-30"
+        return "31+"
+
+    def summarize(items: list[dict[str, Any]]) -> dict[str, Any]:
+        returns: list[float] = []
+
+        for item in items:
+            try:
+                value = float(item.get("return_percent"))
+            except (TypeError, ValueError, OverflowError):
+                continue
+
+            if math.isfinite(value):
+                returns.append(value)
+
+        if not returns:
+            return {
+                "samples": 0,
+                "wins": 0,
+                "losses": 0,
+                "win_rate_percent": None,
+                "average_return_percent": None,
+                "median_return_percent": None,
+            }
+
+        wins = sum(value > 0 for value in returns)
+        losses = sum(value < 0 for value in returns)
+        ordered = sorted(returns)
+        count = len(ordered)
+        middle = count // 2
+
+        if count % 2:
+            median = ordered[middle]
+        else:
+            median = (
+                ordered[middle - 1] + ordered[middle]
+            ) / 2.0
+
+        return {
+            "samples": count,
+            "wins": wins,
+            "losses": losses,
+            "win_rate_percent": round(wins / count * 100.0, 4),
+            "average_return_percent": round(
+                sum(returns) / count,
+                6,
+            ),
+            "median_return_percent": round(median, 6),
+        }
+
+    rank_groups = {
+        "1-5": [],
+        "6-10": [],
+        "11-20": [],
+        "21-30": [],
+        "31+": [],
+    }
+
+    selected_groups = {
+        "selected": [],
+        "rejected": [],
+    }
+
+    for record in records:
+        bucket = rank_bucket(record.get("scanner_rank"))
+        if bucket is not None:
+            rank_groups[bucket].append(record)
+
+        if bool(record.get("selected_for_entry")):
+            selected_groups["selected"].append(record)
+        else:
+            selected_groups["rejected"].append(record)
+
+    return {
+        "paper": True,
+        "read_only": True,
+        "horizon_minutes": normalized_horizon,
+        "measured_outcomes": len(records),
+        "rank_performance": {
+            bucket: summarize(items)
+            for bucket, items in rank_groups.items()
+        },
+        "selection_performance": {
+            group: summarize(items)
+            for group, items in selected_groups.items()
+        },
+    }
+
 def upsert_trade_excursion(
     *,
     trade_book_id: int,

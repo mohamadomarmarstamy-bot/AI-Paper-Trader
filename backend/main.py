@@ -33,6 +33,7 @@ from adaptive_entry import calculate_adaptive_entry_decision
 from chart_data import get_chart_data
 from database import (
     calculate_adaptive_forward_evaluation,
+    calculate_scanner_forward_research,
     calculate_feature_performance,
     calculate_shadow_entry_evidence,
     calculate_learning_summary,
@@ -15551,6 +15552,36 @@ def auto_trader_adaptive_forward_evaluation(
 
     return calculate_adaptive_forward_evaluation(
         minimum_group_size=minimum_group_size,
+        limit=limit,
+    )
+
+
+
+@app.get("/auto-trader/scanner-forward-research")
+def auto_trader_scanner_forward_research(
+    request: Request,
+    horizon_minutes: int = Query(
+        default=15,
+        ge=1,
+        le=1440,
+    ),
+    limit: int = Query(
+        default=5000,
+        ge=1,
+        le=10000,
+    ),
+) -> dict[str, Any]:
+    """
+    Summarize measured scanner forward outcomes by rank
+    and by whether the candidate resulted in an entry.
+
+    Research-only. This endpoint never submits an order and
+    never changes the trading strategy.
+    """
+    require_app_session(request)
+
+    return calculate_scanner_forward_research(
+        horizon_minutes=horizon_minutes,
         limit=limit,
     )
 
