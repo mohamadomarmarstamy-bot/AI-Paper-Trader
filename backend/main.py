@@ -160,6 +160,24 @@ AUTO_TRADER_SCAN_SECONDS = 15
 # This does not enable scanning or new entries outside regular hours.
 AUTO_TRADER_AFTER_HOURS_MONITOR_SECONDS = 60
 
+# Extended-hours PAPER exit protection.
+# Existing positions may be exited during eligible pre-market/after-hours
+# sessions, but the scanner still does not open new positions there.
+AUTO_TRADER_EXTENDED_HOURS_EXITS_ENABLED = True
+
+# A profitable position becomes eligible for extended-hours trailing
+# protection after reaching this gain.
+AUTO_TRADER_EXTENDED_HOURS_PROFIT_ARM_PERCENT = 0.75
+
+# Exit if the position gives back this much from its extended-hours
+# high-water price after profit protection has armed.
+AUTO_TRADER_EXTENDED_HOURS_TRAIL_PERCENT = 1.0
+
+# Limit SELL price cushion below the observed market price.
+# This improves fill probability while avoiding an unrestricted market order.
+AUTO_TRADER_EXTENDED_HOURS_LIMIT_CUSHION_PERCENT = 0.25
+AUTO_TRADER_EXTENDED_HOURS_MAX_QUOTE_AGE_SECONDS = 60
+
 # Auto-trader health watchdog.
 AUTO_TRADER_HEALTH_STALE_SECONDS = 30 * 60
 AUTO_TRADER_HEALTH_CHECK_SECONDS = 60
@@ -8022,6 +8040,1048 @@ def calculate_position_return_percent(
     ) * 100
 
 
+def submit_alpaca_paper_extended_hours_exit(
+    *,
+    symbol: str,
+    shares: int,
+    reason: str,
+) -> dict[str, Any]:
+    """
+    Submit a whole-share PAPER extended-hours limit SELL.
+
+    This function is exit-only. It never opens a position.
+    Conflicting protective orders must already be cleared by the caller.
+    """
+    normalized_symbol = clean_symbol(symbol)
+
+    if not AUTO_TRADER_EXTENDED_HOURS_EXITS_ENABLED:
+        return {
+            "success": False,
+            "paper": True,
+            "error": "Extended-hours PAPER exits are disabled.",
+        }
+
+    if not normalized_symbol or shares <= 0:
+        return {
+            "success": False,
+            "paper": True,
+            "error": "A valid symbol and positive share quantity are required.",
+        }
+
+    if not is_extended_hours_exit_session():
+        return {
+            "success": False,
+            "paper": True,
+            "error": "The current time is not an eligible extended-hours exit session.",
+        }
+
+    try:
+        # Before restoring an OCO, confirm that the attempted
+        # extended-hours exit did not actually reach Alpaca.
+        # A network error can occur after Alpaca accepts an order.
+        existing_open_orders = (
+            fetch_alpaca_open_orders_for_symbol(
+                normalized_symbol
+            )
+        )
+
+        for open_order in existing_open_orders:
+            if not isinstance(open_order, dict):
+                continue
+
+            orders_to_check = [open_order]
+            legs = open_order.get("legs")
+
+            if isinstance(legs, list):
+                orders_to_check.extend(
+                    leg
+                    for leg in legs
+                    if isinstance(leg, dict)
+                )
+
+            for order_to_check in orders_to_check:
+                client_order_id = str(
+                    order_to_check.get(
+                        "client_order_id",
+                        "",
+                    )
+                ).strip().lower()
+
+                if client_order_id.startswith("auto-ext-"):
+                    return {
+                        "success": True,
+                        "paper": True,
+                        "symbol": normalized_symbol,
+                        "already_pending": True,
+                        "message": (
+                            "The extended-hours PAPER exit reached "
+                            "Alpaca, so duplicate OCO protection "
+                            "was not submitted."
+                        ),
+                        "order": order_to_check,
+                    }
+
+        positions = fetch_alpaca_paper_positions()
+
+        position = get_alpaca_position_for_symbol(
+            normalized_symbol,
+            positions,
+        )
+
+        if position is None:
+            return {
+                "success": False,
+                "paper": True,
+                "error": f"No long PAPER position exists for {normalized_symbol}.",
+            }
+
+        broker_qty = safe_float(
+            position.get("qty")
+        )
+
+        if (
+            broker_qty is None
+            or broker_qty <= 0
+            or not float(broker_qty).is_integer()
+        ):
+            return {
+                "success": False,
+                "paper": True,
+                "error": (
+                    f"{normalized_symbol} does not have a valid "
+                    "whole-share PAPER position."
+                ),
+            }
+
+        broker_shares = int(broker_qty)
+
+        if shares > broker_shares:
+            return {
+                "success": False,
+                "paper": True,
+                "error": (
+                    f"Requested {shares} shares but the PAPER "
+                    f"account holds only {broker_shares}."
+                ),
+            }
+
+        # Exit the broker-verified whole position.
+        shares = broker_shares
+
+        open_orders = fetch_alpaca_open_orders_for_symbol(
+            normalized_symbol
+        )
+
+        if open_orders:
+            return {
+                "success": False,
+                "paper": True,
+                "error": (
+                    f"{normalized_symbol} still has an open PAPER "
+                    "order, so a duplicate SELL was blocked."
+                ),
+            }
+
+        quote = fetch_alpaca_risk_quote(
+            normalized_symbol
+        )
+
+        bid = safe_float(
+            quote.get("bid")
+        )
+        spread_percent = safe_float(
+            quote.get("spread_percent")
+        )
+
+        if bid is None or bid <= 0:
+            return {
+                "success": False,
+                "paper": True,
+                "error": (
+                    f"A valid extended-hours bid is unavailable "
+                    f"for {normalized_symbol}."
+                ),
+            }
+
+        if (
+            spread_percent is None
+            or spread_percent > RISK_MAX_SPREAD_PERCENT
+        ):
+            return {
+                "success": False,
+                "paper": True,
+                "error": (
+                    f"{normalized_symbol}'s spread is too wide "
+                    "for an automatic extended-hours exit."
+                ),
+                "quote": quote,
+            }
+
+        limit_price = round(
+            bid
+            * (
+                1
+                - (
+                    AUTO_TRADER_EXTENDED_HOURS_LIMIT_CUSHION_PERCENT
+                    / 100
+                )
+            ),
+            2,
+        )
+
+        if limit_price <= 0:
+            return {
+                "success": False,
+                "paper": True,
+                "error": "Calculated extended-hours limit price was invalid.",
+            }
+
+        reason_tags = {
+            "extended_hours_profit_trail": "p",
+            "extended_hours_hard_max_loss": "l",
+        }
+
+        reason_tag = reason_tags.get(reason)
+
+        if reason_tag is None:
+            return {
+                "success": False,
+                "paper": True,
+                "error": (
+                    f"Unsupported extended-hours exit reason: {reason}"
+                ),
+            }
+
+        request_body = {
+            "symbol": normalized_symbol,
+            "qty": str(shares),
+            "side": "sell",
+            "type": "limit",
+            "time_in_force": "day",
+            "limit_price": f"{limit_price:.2f}",
+            "extended_hours": True,
+            "client_order_id": (
+                f"auto-ext-{reason_tag}-"
+                f"{normalized_symbol.lower()}-"
+                f"{uuid.uuid4().hex[:12]}"
+            ),
+        }
+
+        payload = alpaca_paper_request(
+            "POST",
+            "/v2/orders",
+            json_body=request_body,
+        )
+
+        if not isinstance(payload, dict):
+            raise RuntimeError(
+                "Alpaca returned an invalid extended-hours order response."
+            )
+
+        latest_order = wait_for_alpaca_paper_order(
+            payload
+        )
+
+        result = normalize_alpaca_paper_order(
+            latest_order,
+            requested_symbol=normalized_symbol,
+            requested_shares=shares,
+            requested_side="sell",
+        )
+
+        result["extended_hours"] = True
+        result["limit_price"] = limit_price
+        result["quote"] = quote
+
+        return result
+
+    except BrokerRateLimited as error:
+        return {
+            "success": False,
+            "paper": True,
+            "deferred": True,
+            "retry_after_seconds": error.retry_after,
+            "error": str(error),
+        }
+
+    except Exception as error:
+        return {
+            "success": False,
+            "paper": True,
+            "error": clean_error_message(error),
+        }
+
+def is_extended_hours_exit_session() -> bool:
+    """
+    Return True only during weekday U.S. equity extended-hours windows.
+
+    Pre-market: 4:00 AM through 9:29 AM Eastern.
+    After-hours: 4:00 PM through 8:00 PM Eastern.
+
+    This helper does not submit orders.
+    """
+    now_eastern = datetime.now(
+        ZoneInfo("America/New_York")
+    )
+
+    # Monday=0 through Friday=4.
+    if now_eastern.weekday() >= 5:
+        return False
+
+    # Alpaca's calendar is the source of truth for holidays
+    # and other dates with no U.S. equity trading session.
+    try:
+        calendar_entry = fetch_alpaca_market_calendar_today()
+    except Exception as error:
+        print(
+            "Could not verify extended-hours market calendar: "
+            f"{clean_error_message(error)}"
+        )
+        return False
+
+    if calendar_entry is None:
+        return False
+
+    minutes = (
+        now_eastern.hour * 60
+        + now_eastern.minute
+    )
+
+    premarket_start = 4 * 60
+    regular_open = 9 * 60 + 30
+    regular_close = 16 * 60
+    after_hours_end = 20 * 60
+
+    return (
+        premarket_start <= minutes < regular_open
+        or regular_close <= minutes < after_hours_end
+    )
+
+def recover_extended_hours_protection_after_exception(
+    *,
+    symbol: str,
+) -> dict[str, Any]:
+    """
+    Best-effort emergency recovery after extended-hours protection
+    was canceled but the replacement exit did not complete safely.
+    """
+    normalized_symbol = clean_symbol(symbol)
+
+    try:
+        # Before restoring OCO protection, make sure an attempted
+        # extended-hours exit did not actually reach Alpaca.
+        # A network/request error can happen after Alpaca accepts
+        # the SELL, so restoring another exit in that situation
+        # could create duplicate SELL exposure.
+        existing_open_orders = (
+            fetch_alpaca_open_orders_for_symbol(
+                normalized_symbol
+            )
+        )
+
+        for open_order in existing_open_orders:
+            if not isinstance(open_order, dict):
+                continue
+
+            orders_to_check = [open_order]
+            legs = open_order.get("legs")
+
+            if isinstance(legs, list):
+                orders_to_check.extend(
+                    leg
+                    for leg in legs
+                    if isinstance(leg, dict)
+                )
+
+            for order_to_check in orders_to_check:
+                client_order_id = str(
+                    order_to_check.get(
+                        "client_order_id",
+                        "",
+                    )
+                ).strip().lower()
+
+                if client_order_id.startswith("auto-ext-"):
+                    return {
+                        "success": True,
+                        "paper": True,
+                        "symbol": normalized_symbol,
+                        "already_pending": True,
+                        "message": (
+                            "The extended-hours PAPER exit reached "
+                            "Alpaca, so duplicate OCO protection "
+                            "was not submitted."
+                        ),
+                        "order": order_to_check,
+                    }
+
+        positions = fetch_alpaca_paper_positions()
+
+        position = get_alpaca_position_for_symbol(
+            normalized_symbol,
+            positions,
+        )
+
+        if position is None:
+            return {
+                "success": True,
+                "paper": True,
+                "symbol": normalized_symbol,
+                "position_closed": True,
+            }
+
+        qty = safe_float(position.get("qty"))
+
+        if qty is None or qty <= 0:
+            return {
+                "success": True,
+                "paper": True,
+                "symbol": normalized_symbol,
+                "position_closed": True,
+            }
+
+        shares = math.floor(qty)
+        current_price = safe_float(
+            position.get("current_price")
+        )
+
+        if shares <= 0:
+            return {
+                "success": False,
+                "paper": True,
+                "symbol": normalized_symbol,
+                "error": (
+                    "Emergency protection recovery could not protect "
+                    "a position below one whole share."
+                ),
+            }
+
+        if current_price is None or current_price <= 0:
+            return {
+                "success": False,
+                "paper": True,
+                "symbol": normalized_symbol,
+                "error": (
+                    "Emergency protection recovery could not obtain "
+                    "a valid current position price."
+                ),
+            }
+
+        return submit_alpaca_recovery_oco(
+            symbol=normalized_symbol,
+            shares=shares,
+            current_price=current_price,
+        )
+
+    except BrokerRateLimited as error:
+        return {
+            "success": False,
+            "paper": True,
+            "symbol": normalized_symbol,
+            "deferred": True,
+            "retry_after_seconds": error.retry_after,
+            "error": str(error),
+        }
+
+    except Exception as error:
+        return {
+            "success": False,
+            "paper": True,
+            "symbol": normalized_symbol,
+            "error": clean_error_message(error),
+        }
+
+
+def safely_submit_extended_hours_exit(
+    *,
+    symbol: str,
+    reason: str,
+) -> dict[str, Any]:
+    """
+    Safely replace existing protective orders with one extended-hours
+    PAPER limit SELL for the broker-verified whole position.
+    """
+    normalized_symbol = clean_symbol(symbol)
+
+    if not normalized_symbol:
+        return {
+            "success": False,
+            "paper": True,
+            "error": "A valid symbol is required.",
+        }
+
+    canceled_orders: list[str] = []
+
+    try:
+        positions = fetch_alpaca_paper_positions()
+
+        position = get_alpaca_position_for_symbol(
+            normalized_symbol,
+            positions,
+        )
+
+        if position is None:
+            return {
+                "success": False,
+                "paper": True,
+                "position_closed": True,
+                "symbol": normalized_symbol,
+                "error": (
+                    f"No open PAPER position exists for "
+                    f"{normalized_symbol}."
+                ),
+            }
+
+        broker_qty = safe_float(position.get("qty"))
+
+        if (
+            broker_qty is None
+            or broker_qty <= 0
+            or not float(broker_qty).is_integer()
+        ):
+            return {
+                "success": False,
+                "paper": True,
+                "symbol": normalized_symbol,
+                "error": (
+                    f"{normalized_symbol} does not have a valid "
+                    "whole-share PAPER position."
+                ),
+            }
+
+        broker_shares = int(broker_qty)
+
+        existing_open_orders = (
+            fetch_alpaca_open_orders_for_symbol(
+                normalized_symbol
+            )
+        )
+
+        # Never duplicate one of our own pending extended-hours exits.
+        pending_extended_hours_exit = None
+
+        for open_order in existing_open_orders:
+            if not isinstance(open_order, dict):
+                continue
+
+            orders_to_check = [open_order]
+            legs = open_order.get("legs")
+
+            if isinstance(legs, list):
+                orders_to_check.extend(
+                    leg
+                    for leg in legs
+                    if isinstance(leg, dict)
+                )
+
+            for order_to_check in orders_to_check:
+                client_order_id = str(
+                    order_to_check.get(
+                        "client_order_id",
+                        "",
+                    )
+                ).strip().lower()
+
+                if client_order_id.startswith("auto-ext-"):
+                    pending_extended_hours_exit = order_to_check
+                    break
+
+            if pending_extended_hours_exit is not None:
+                break
+
+        if pending_extended_hours_exit is not None:
+            return {
+                "success": True,
+                "paper": True,
+                "symbol": normalized_symbol,
+                "already_pending": True,
+                "exit_reason": reason,
+                "message": (
+                    "An extended-hours PAPER exit is already "
+                    "open for this position."
+                ),
+                "order": pending_extended_hours_exit,
+            }
+
+        # Fail closed on order ownership. The cancellation helper
+        # removes every open order for this symbol, so every top-level
+        # order must be proven to belong to this auto-trader before
+        # anything is canceled.
+        allowed_protection_prefixes = (
+            "auto-entry-",
+            "auto-protect-",
+        )
+
+        unrecognized_open_orders = []
+
+        for open_order in existing_open_orders:
+            if not isinstance(open_order, dict):
+                unrecognized_open_orders.append(
+                    {
+                        "reason": "invalid_order_payload",
+                    }
+                )
+                continue
+
+            client_order_id = str(
+                open_order.get(
+                    "client_order_id",
+                    "",
+                )
+            ).strip().lower()
+
+            if not client_order_id.startswith(
+                allowed_protection_prefixes
+            ):
+                unrecognized_open_orders.append(
+                    {
+                        "id": open_order.get("id"),
+                        "side": open_order.get("side"),
+                        "type": open_order.get("type"),
+                        "order_class": open_order.get(
+                            "order_class"
+                        ),
+                        "client_order_id": (
+                            open_order.get(
+                                "client_order_id"
+                            )
+                        ),
+                    }
+                )
+
+        if unrecognized_open_orders:
+            return {
+                "success": False,
+                "paper": True,
+                "symbol": normalized_symbol,
+                "blocked_unrecognized_order": True,
+                "error": (
+                    f"{normalized_symbol} has an open order that "
+                    "was not confirmed as app-owned protection; "
+                    "no orders were canceled."
+                ),
+                "unrecognized_orders": (
+                    unrecognized_open_orders
+                ),
+            }
+
+        # Even app-owned orders must contain a recognizable
+        # full-position protective stop before replacement.
+        if existing_open_orders:
+            protective_stop_order = (
+                get_open_protective_stop_order(
+                    normalized_symbol,
+                    existing_open_orders,
+                )
+            )
+
+            protective_qty = (
+                safe_float(
+                    protective_stop_order.get("qty")
+                )
+                if isinstance(
+                    protective_stop_order,
+                    dict,
+                )
+                else None
+            )
+
+            if (
+                protective_stop_order is None
+                or protective_qty is None
+                or abs(
+                    protective_qty - broker_shares
+                ) >= 0.000001
+            ):
+                return {
+                    "success": False,
+                    "paper": True,
+                    "symbol": normalized_symbol,
+                    "blocked_unrecognized_sell_order": True,
+                    "error": (
+                        f"{normalized_symbol} does not have a "
+                        "confirmed full-position protective stop; "
+                        "no orders were canceled."
+                    ),
+                }
+
+        # Validate the quote BEFORE removing broker-side protection.
+        try:
+            preflight_quote = fetch_alpaca_risk_quote(
+                normalized_symbol
+            )
+        except BrokerRateLimited as error:
+            return {
+                "success": False,
+                "paper": True,
+                "symbol": normalized_symbol,
+                "deferred": True,
+                "retry_after_seconds": error.retry_after,
+                "error": str(error),
+            }
+        except Exception as error:
+            return {
+                "success": False,
+                "paper": True,
+                "symbol": normalized_symbol,
+                "error": clean_error_message(error),
+            }
+
+        preflight_bid = safe_float(
+            preflight_quote.get("bid")
+        )
+        preflight_spread = safe_float(
+            preflight_quote.get("spread_percent")
+        )
+
+        if preflight_bid is None or preflight_bid <= 0:
+            return {
+                "success": False,
+                "paper": True,
+                "symbol": normalized_symbol,
+                "error": (
+                    "Extended-hours protection was left intact "
+                    "because no valid bid was available."
+                ),
+            }
+
+        if (
+            preflight_spread is None
+            or preflight_spread > RISK_MAX_SPREAD_PERCENT
+        ):
+            return {
+                "success": False,
+                "paper": True,
+                "symbol": normalized_symbol,
+                "error": (
+                    "Extended-hours protection was left intact "
+                    "because the spread was too wide."
+                ),
+                "quote": preflight_quote,
+            }
+
+        quote_timestamp = (
+            preflight_quote.get("timestamp")
+            or preflight_quote.get("t")
+        )
+
+        if not quote_timestamp:
+            return {
+                "success": False,
+                "paper": True,
+                "symbol": normalized_symbol,
+                "error": (
+                    "Extended-hours protection was left intact "
+                    "because quote freshness could not be verified."
+                ),
+            }
+
+        try:
+            quote_time = datetime.fromisoformat(
+                str(quote_timestamp).replace(
+                    "Z",
+                    "+00:00",
+                )
+            )
+
+            if quote_time.tzinfo is None:
+                quote_time = quote_time.replace(
+                    tzinfo=timezone.utc
+                )
+
+            quote_age_seconds = (
+                datetime.now(timezone.utc)
+                - quote_time.astimezone(timezone.utc)
+            ).total_seconds()
+        except Exception:
+            return {
+                "success": False,
+                "paper": True,
+                "symbol": normalized_symbol,
+                "error": (
+                    "Extended-hours protection was left intact "
+                    "because quote freshness could not be parsed."
+                ),
+            }
+
+        if (
+            quote_age_seconds
+            > AUTO_TRADER_EXTENDED_HOURS_MAX_QUOTE_AGE_SECONDS
+            or quote_age_seconds < -5
+        ):
+            return {
+                "success": False,
+                "paper": True,
+                "symbol": normalized_symbol,
+                "error": (
+                    "Extended-hours protection was left intact "
+                    "because the quote was stale or invalid."
+                ),
+                "quote_age_seconds": quote_age_seconds,
+            }
+
+        # Only after all preflight checks pass do we remove the
+        # existing protection.
+        if existing_open_orders:
+            canceled_orders = (
+                cancel_alpaca_open_orders_for_symbol(
+                    normalized_symbol
+                )
+            )
+
+            if not canceled_orders:
+                # An empty result does not prove that nothing was
+                # canceled. The shared cancellation helper can return
+                # [] when cancellation succeeded but its confirmation
+                # request failed. Re-read broker state before deciding
+                # whether it is safe to stop here.
+                try:
+                    orders_after_cancel_attempt = (
+                        fetch_alpaca_open_orders_for_symbol(
+                            normalized_symbol
+                        )
+                    )
+                except Exception as verification_error:
+                    protection_recovery = (
+                        recover_extended_hours_protection_after_exception(
+                            symbol=normalized_symbol
+                        )
+                    )
+
+                    if not protection_recovery.get("success"):
+                        add_auto_trader_log(
+                            "extended_hours_protection_recovery_failed",
+                            symbol=normalized_symbol,
+                            details={
+                                "stage": "cancel_verification_error",
+                                "error": clean_error_message(
+                                    verification_error
+                                ),
+                                "protection_recovery": protection_recovery,
+                            },
+                        )
+
+                    return {
+                        "success": False,
+                        "paper": True,
+                        "symbol": normalized_symbol,
+                        "error": (
+                            "Could not verify protection after the "
+                            "cancellation attempt. Recovery protection "
+                            "was checked before stopping."
+                        ),
+                        "protection_recovery": protection_recovery,
+                    }
+
+                if orders_after_cancel_attempt:
+                    return {
+                        "success": False,
+                        "paper": True,
+                        "symbol": normalized_symbol,
+                        "error": (
+                            "Existing PAPER protection remains open, "
+                            "so no extended-hours exit was submitted."
+                        ),
+                        "orders_still_open": True,
+                    }
+
+                # No orders remain even though the cancellation helper
+                # returned []. Treat protection as potentially removed
+                # and continue through the guarded exit path.
+                canceled_orders = [
+                    str(order.get("id", "")).strip()
+                    for order in existing_open_orders
+                    if str(order.get("id", "")).strip()
+                ]
+
+        # Refresh the broker position after cancellation because
+        # the position may have changed while orders were removed.
+        refreshed_positions = fetch_alpaca_paper_positions()
+
+        refreshed_position = get_alpaca_position_for_symbol(
+            normalized_symbol,
+            refreshed_positions,
+        )
+
+        if refreshed_position is None:
+            return {
+                "success": True,
+                "paper": True,
+                "symbol": normalized_symbol,
+                "position_closed": True,
+                "canceled_orders": canceled_orders,
+            }
+
+        refreshed_qty = safe_float(
+            refreshed_position.get("qty")
+        )
+
+        if refreshed_qty is None or refreshed_qty <= 0:
+            return {
+                "success": True,
+                "paper": True,
+                "symbol": normalized_symbol,
+                "position_closed": True,
+                "canceled_orders": canceled_orders,
+            }
+
+        if not float(refreshed_qty).is_integer():
+            recovery_result = (
+                recover_extended_hours_protection_after_exception(
+                    symbol=normalized_symbol,
+                )
+            )
+
+            result = {
+                "success": False,
+                "paper": True,
+                "symbol": normalized_symbol,
+                "fractional_position": True,
+                "error": (
+                    "The PAPER position changed to a fractional "
+                    "quantity after protection was canceled, so "
+                    "the extended-hours exit was not submitted."
+                ),
+                "protection_recovery": recovery_result,
+            }
+
+            if not recovery_result.get("success"):
+                add_auto_trader_log(
+                    "extended_hours_protection_recovery_failed",
+                    symbol=normalized_symbol,
+                    message=(
+                        "Extended-hours processing found a "
+                        "fractional position after cancellation "
+                        "and emergency protection recovery failed."
+                    ),
+                    details={
+                        "exit_reason": reason,
+                        "refreshed_qty": refreshed_qty,
+                        "protection_recovery": recovery_result,
+                    },
+                )
+
+            return result
+
+        refreshed_shares = int(refreshed_qty)
+
+        exit_result = submit_alpaca_paper_extended_hours_exit(
+            symbol=normalized_symbol,
+            shares=refreshed_shares,
+            reason=reason,
+        )
+
+        if exit_result.get("success"):
+            exit_result["canceled_orders"] = canceled_orders
+            return exit_result
+
+        # The protection was removed but the replacement exit did
+        # not complete. Restore broker-side protection immediately.
+        recovery_result = (
+            recover_extended_hours_protection_after_exception(
+                symbol=normalized_symbol,
+            )
+        )
+
+        exit_result["protection_recovery"] = recovery_result
+        exit_result["canceled_orders"] = canceled_orders
+
+        if not recovery_result.get("success"):
+            add_auto_trader_log(
+                "extended_hours_protection_recovery_failed",
+                symbol=normalized_symbol,
+                message=(
+                    "Extended-hours exit failed after protection "
+                    "cancellation, and emergency protection "
+                    "recovery also failed."
+                ),
+                details={
+                    "exit_reason": reason,
+                    "exit_result": exit_result,
+                    "protection_recovery": recovery_result,
+                },
+            )
+
+        return exit_result
+
+    except BrokerRateLimited as error:
+        recovery_result = None
+
+        if canceled_orders:
+            recovery_result = (
+                recover_extended_hours_protection_after_exception(
+                    symbol=normalized_symbol,
+                )
+            )
+
+            if not recovery_result.get("success"):
+                add_auto_trader_log(
+                    "extended_hours_protection_recovery_failed",
+                    symbol=normalized_symbol,
+                    message=(
+                        "Extended-hours processing was rate-limited "
+                        "after protection cancellation, and emergency "
+                        "protection recovery also failed."
+                    ),
+                    details={
+                        "exit_reason": reason,
+                        "original_error": str(error),
+                        "protection_recovery": recovery_result,
+                    },
+                )
+
+        result = {
+            "success": False,
+            "paper": True,
+            "symbol": normalized_symbol,
+            "deferred": True,
+            "retry_after_seconds": error.retry_after,
+            "error": str(error),
+        }
+
+        if recovery_result is not None:
+            result["protection_recovery"] = recovery_result
+
+        return result
+
+    except Exception as error:
+        recovery_result = None
+
+        if canceled_orders:
+            recovery_result = (
+                recover_extended_hours_protection_after_exception(
+                    symbol=normalized_symbol,
+                )
+            )
+
+            if not recovery_result.get("success"):
+                add_auto_trader_log(
+                    "extended_hours_protection_recovery_failed",
+                    symbol=normalized_symbol,
+                    message=(
+                        "Extended-hours processing failed after "
+                        "protection cancellation, and emergency "
+                        "protection recovery also failed."
+                    ),
+                    details={
+                        "exit_reason": reason,
+                        "original_error": clean_error_message(error),
+                        "protection_recovery": recovery_result,
+                    },
+                )
+
+        result = {
+            "success": False,
+            "paper": True,
+            "symbol": normalized_symbol,
+            "error": clean_error_message(error),
+        }
+
+        if recovery_result is not None:
+            result["protection_recovery"] = recovery_result
+
+        return result
+
 def monitor_after_hours_positions() -> dict[str, Any]:
     """
     Observe existing PAPER positions while the regular market is closed.
@@ -8115,6 +9175,77 @@ def monitor_after_hours_positions() -> dict[str, Any]:
             )
         )
 
+        high_water_giveback_percent = (
+            (
+                (high_water - current_price)
+                / high_water
+            )
+            * 100
+            if high_water > 0
+            else 0.0
+        )
+
+        profit_protection_armed = (
+            high_water_return_percent is not None
+            and high_water_return_percent
+            >= AUTO_TRADER_EXTENDED_HOURS_PROFIT_ARM_PERCENT
+        )
+
+        profit_trail_triggered = (
+            profit_protection_armed
+            and high_water_giveback_percent
+            >= AUTO_TRADER_EXTENDED_HOURS_TRAIL_PERCENT
+        )
+
+        hard_loss_triggered = (
+            should_hard_max_loss_exit(
+                entry_price=entry_price,
+                current_price=current_price,
+            )
+        )
+
+        exit_reason = None
+
+        if hard_loss_triggered:
+            exit_reason = "extended_hours_hard_max_loss"
+        elif profit_trail_triggered:
+            exit_reason = "extended_hours_profit_trail"
+
+        exit_result = None
+
+        if (
+            exit_reason is not None
+            and AUTO_TRADER_EXTENDED_HOURS_EXITS_ENABLED
+            and is_extended_hours_exit_session()
+        ):
+            exit_result = safely_submit_extended_hours_exit(
+                symbol=symbol,
+                reason=exit_reason,
+            )
+
+            add_auto_trader_log(
+                "extended_hours_exit",
+                symbol=symbol,
+                message=(
+                    f"Extended-hours PAPER exit triggered "
+                    f"for {symbol}: {exit_reason}."
+                ),
+                details={
+                    "exit_reason": exit_reason,
+                    "entry_price": entry_price,
+                    "current_price": current_price,
+                    "return_percent": return_percent,
+                    "high_water_price": high_water,
+                    "high_water_return_percent": (
+                        high_water_return_percent
+                    ),
+                    "high_water_giveback_percent": (
+                        high_water_giveback_percent
+                    ),
+                    "result": exit_result,
+                },
+            )
+
         observations.append({
             "symbol": symbol,
             "entry_price": entry_price,
@@ -8124,6 +9255,15 @@ def monitor_after_hours_positions() -> dict[str, Any]:
             "high_water_return_percent": (
                 high_water_return_percent
             ),
+            "high_water_giveback_percent": round(
+                high_water_giveback_percent,
+                4,
+            ),
+            "profit_protection_armed": profit_protection_armed,
+            "profit_trail_triggered": profit_trail_triggered,
+            "hard_loss_triggered": hard_loss_triggered,
+            "exit_reason": exit_reason,
+            "exit_result": exit_result,
         })
 
     stale_symbols = (
@@ -8334,9 +9474,20 @@ def detect_new_broker_exit_fills() -> list[dict[str, Any]]:
             )
         )
 
+        client_order_id = str(
+            order.get(
+                "client_order_id",
+                "",
+            )
+        ).strip().lower()
+
         exit_reason = "broker_sell_fill"
 
-        if order_type == "stop":
+        if client_order_id.startswith("auto-ext-p-"):
+            exit_reason = "extended_hours_profit_trail"
+        elif client_order_id.startswith("auto-ext-l-"):
+            exit_reason = "extended_hours_hard_max_loss"
+        elif order_type == "stop":
             exit_reason = "protective_stop_fill"
         elif (
             order_type == "limit"
@@ -8459,6 +9610,16 @@ def log_new_broker_exit_fills() -> list[dict[str, Any]]:
         elif reason == "take_profit_fill":
             message = (
                 "Take-profit order filled and "
+                "closed the PAPER position."
+            )
+        elif reason == "extended_hours_profit_trail":
+            message = (
+                "Extended-hours profit protection filled and "
+                "closed the PAPER position."
+            )
+        elif reason == "extended_hours_hard_max_loss":
+            message = (
+                "Extended-hours hard-loss exit filled and "
                 "closed the PAPER position."
             )
         else:
@@ -8931,6 +10092,39 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             except Exception as error:
                 cycle_result[
                     "after_hours_monitor"
+                ] = {
+                    "success": False,
+                    "paper": True,
+                    "error": clean_error_message(
+                        error
+                    ),
+                }
+
+            # Extended-hours exits can fill while the regular market
+            # is closed. Reconcile those broker SELL fills before
+            # returning so Activity, trade history, journal, and
+            # learning records are updated promptly.
+            try:
+                cycle_result[
+                    "broker_exit_fills"
+                ] = (
+                    log_new_broker_exit_fills()
+                )
+            except BrokerRateLimited as error:
+                cycle_result[
+                    "broker_exit_fills"
+                ] = {
+                    "success": False,
+                    "paper": True,
+                    "deferred": True,
+                    "retry_after_seconds": (
+                        error.retry_after
+                    ),
+                    "error": str(error),
+                }
+            except Exception as error:
+                cycle_result[
+                    "broker_exit_fills"
                 ] = {
                     "success": False,
                     "paper": True,
@@ -20768,3 +21962,10 @@ def jarvis_speech(
                 error
             ),
         ) from error
+
+
+
+
+
+
+
