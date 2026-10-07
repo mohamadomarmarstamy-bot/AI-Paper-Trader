@@ -7,7 +7,7 @@ This module never submits orders or learns parameters from trade outcomes.
 import math
 from typing import Any
 
-ENTRY_POLICY_VERSION = "entry_quality_v2"
+ENTRY_POLICY_VERSION = "entry_quality_v3_chase_guard"
 
 
 def finite_number(value: Any) -> float | None:
@@ -42,6 +42,8 @@ def evaluate_entry_quality(
         rank_value = candidate.get("rank")
     rank = finite_number(rank_value)
     atr = finite_number(candidate.get("atr_percent"))
+    rsi = finite_number(candidate.get("rsi"))
+    one_day_change = finite_number(candidate.get("one_day_change"))
 
     if str(candidate.get("signal", "")).strip().upper() != "BUY":
         failed.append("signal_not_buy")
@@ -63,6 +65,18 @@ def evaluate_entry_quality(
         failed.append("atr_above_maximum")
     if candidate.get("scanner_stale") is not False:
         failed.append("scanner_stale_or_freshness_unknown")
+
+    # Historical PAPER evidence showed poor follow-through when entries were
+    # simultaneously overbought and already extremely extended.
+    # Keep each metric optional: missing diagnostics do not create a new
+    # rejection path beyond the existing required entry-quality fields.
+    if (
+        rsi is not None
+        and one_day_change is not None
+        and rsi >= 70.0
+        and one_day_change >= 20.0
+    ):
+        failed.append("overextended_momentum_chase_risk")
 
     return {
         "policy_version": ENTRY_POLICY_VERSION,

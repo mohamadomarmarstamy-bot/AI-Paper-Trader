@@ -35,6 +35,47 @@ class EntryQualityTests(unittest.TestCase):
         for momentum in (False, True):
             self.assertTrue(evaluate(good_candidate(momentum_30_candidate=momentum))["passed"])
 
+    def test_overextended_overbought_momentum_is_rejected(self):
+        result = evaluate(good_candidate(
+            rsi=72.12,
+            one_day_change=25.67,
+        ))
+        self.assertFalse(result["passed"])
+        self.assertIn(
+            "overextended_momentum_chase_risk",
+            result["failed_requirements"],
+        )
+
+    def test_high_rsi_alone_does_not_trigger_chase_guard(self):
+        result = evaluate(good_candidate(
+            rsi=75,
+            one_day_change=10,
+        ))
+        self.assertTrue(result["passed"])
+        self.assertNotIn(
+            "overextended_momentum_chase_risk",
+            result["failed_requirements"],
+        )
+
+    def test_large_day_move_alone_does_not_trigger_chase_guard(self):
+        result = evaluate(good_candidate(
+            rsi=65,
+            one_day_change=25,
+        ))
+        self.assertTrue(result["passed"])
+        self.assertNotIn(
+            "overextended_momentum_chase_risk",
+            result["failed_requirements"],
+        )
+
+    def test_missing_optional_chase_metrics_do_not_reject_candidate(self):
+        result = evaluate(good_candidate())
+        self.assertTrue(result["passed"])
+        self.assertNotIn(
+            "overextended_momentum_chase_risk",
+            result["failed_requirements"],
+        )
+
     def test_momentum_cannot_bypass_each_requirement(self):
         for change, reason in [
             ({"signal": "SELL"}, "signal_not_buy"),
