@@ -45,6 +45,7 @@ from database import (
     load_jarvis_profile,
     save_jarvis_profile,
     load_due_scanner_forward_observations,
+    load_due_scanner_forward_decisions,
     load_open_trade_book_entry,
     load_trade_book_by_order_link,
     load_all_trade_book_order_links,
@@ -62,8 +63,10 @@ from database import (
     mark_scanner_observation_selected,
     record_trade_book_event,
     record_scanner_observation,
+    record_scanner_decision,
     save_learning_outcome,
     save_scanner_forward_outcome,
+    save_scanner_decision_forward_outcome,
     set_scheduler_state,
     upsert_trade_excursion,
 )
@@ -2447,6 +2450,190 @@ def fetch_forward_research_bar(
         }
 
     return None
+
+
+
+def record_scanner_decision_research(
+    *,
+    symbol: str,
+    observation_id: int | None,
+    reference_price: float | None,
+    decision: str,
+    failed_requirements: list[Any] | None = None,
+    entry_quality: dict[str, Any] | None = None,
+    strategy_version: str | None = None,
+) -> int | None:
+    """Record research-only scanner decision metadata."""
+    if not symbol:
+        return None
+
+    if reference_price is None or reference_price <= 0:
+        return None
+
+    try:
+        return record_scanner_decision(
+            scanner_observation_id=observation_id,
+            symbol=symbol,
+            decided_at=datetime.now(
+                timezone.utc
+            ).isoformat(),
+            reference_price=reference_price,
+            decision=decision,
+            failed_requirements=failed_requirements or [],
+            entry_quality=entry_quality or {},
+            strategy_version=strategy_version,
+        )
+    except Exception as error:
+        print(
+            "Scanner decision research error for "
+            f"{symbol}: {clean_error_message(error)}"
+        )
+        return None
+
+
+def evaluate_scanner_decision_forward_outcomes(
+    *,
+    horizon_minutes: int = 15,
+    limit: int = 25,
+) -> dict[str, Any]:
+    """
+    Evaluate due scanner decisions using historical
+    Alpaca 1-minute bars.
+
+    Research-only: this function does not alter trading
+    decisions or strategy settings.
+    """
+    now = datetime.now(timezone.utc)
+
+    recent_limit = min(15, limit)
+    backlog_limit = max(0, limit - recent_limit)
+
+    recent_decisions = (
+        load_due_scanner_forward_decisions(
+            horizon_minutes=horizon_minutes,
+            due_at=(now - timedelta(minutes=6)).isoformat(),
+            limit=recent_limit,
+            order="newest",
+        )
+    )
+
+    decisions = list(recent_decisions)
+
+    decision_ids = {
+        int(decision["id"])
+        for decision in decisions
+    }
+
+    if backlog_limit > 0:
+        backlog_candidates = (
+            load_due_scanner_forward_decisions(
+                horizon_minutes=horizon_minutes,
+                due_at=(now - timedelta(minutes=6)).isoformat(),
+                limit=backlog_limit + recent_limit,
+                order="oldest",
+            )
+        )
+
+        for decision in backlog_candidates:
+            decision_id = int(decision["id"])
+
+            if decision_id in decision_ids:
+                continue
+
+            decisions.append(decision)
+            decision_ids.add(decision_id)
+
+            if (
+                len(decisions)
+                >= recent_limit + backlog_limit
+            ):
+                break
+
+    result: dict[str, Any] = {
+        "success": True,
+        "horizon_minutes": horizon_minutes,
+        "due": len(decisions),
+        "recent_due": len(recent_decisions),
+        "backlog_due": (
+            len(decisions)
+            - len(recent_decisions)
+        ),
+        "saved": 0,
+        "unavailable": 0,
+        "errors": 0,
+    }
+
+    for decision in decisions:
+        try:
+            decided_at = datetime.fromisoformat(
+                str(
+                    decision["decided_at"]
+                ).replace("Z", "+00:00")
+            )
+
+            if decided_at.tzinfo is None:
+                decided_at = decided_at.replace(
+                    tzinfo=timezone.utc
+                )
+
+            decided_at = decided_at.astimezone(
+                timezone.utc
+            )
+
+            target_at = decided_at + timedelta(
+                minutes=horizon_minutes
+            )
+
+            forward_bar = fetch_forward_research_bar(
+                str(decision["symbol"]),
+                target_at.isoformat(),
+            )
+
+            if forward_bar is None:
+                save_scanner_decision_forward_outcome(
+                    scanner_decision_id=int(
+                        decision["id"]
+                    ),
+                    horizon_minutes=horizon_minutes,
+                    target_at=target_at.isoformat(),
+                    evaluated_at=now.isoformat(),
+                    reference_price=float(
+                        decision["reference_price"]
+                    ),
+                    outcome_price=None,
+                    status="unavailable",
+                )
+                result["unavailable"] += 1
+                continue
+
+            save_scanner_decision_forward_outcome(
+                scanner_decision_id=int(
+                    decision["id"]
+                ),
+                horizon_minutes=horizon_minutes,
+                target_at=target_at.isoformat(),
+                evaluated_at=str(
+                    forward_bar["bar_closed_at"]
+                ),
+                reference_price=float(
+                    decision["reference_price"]
+                ),
+                outcome_price=float(
+                    forward_bar["price"]
+                ),
+            )
+
+            result["saved"] += 1
+
+        except Exception as error:
+            result["errors"] += 1
+            print(
+                "Scanner decision forward outcome error "
+                f"for {decision.get('symbol')}: "
+                f"{clean_error_message(error)}"
+            )
+
+    return result
 
 
 def evaluate_scanner_forward_outcomes(
@@ -10335,6 +10522,32 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 f"{clean_error_message(error)}"
             )
 
+        # -------------------------------------------------
+        # Scanner decision forward-outcome research.
+        # -------------------------------------------------
+        # Evaluate matured selected/rejected scanner
+        # decisions without changing any PAPER-trading
+        # decision.
+        try:
+            cycle_result[
+                "scanner_decision_forward_outcomes"
+            ] = evaluate_scanner_decision_forward_outcomes(
+                horizon_minutes=15,
+                limit=25,
+            )
+        except Exception as error:
+            cycle_result[
+                "scanner_decision_forward_outcomes"
+            ] = {
+                "success": False,
+                "error": clean_error_message(error),
+            }
+            print(
+                "Scanner decision forward-outcome "
+                "evaluator error: "
+                f"{clean_error_message(error)}"
+            )
+
         account = (
             fetch_alpaca_paper_account()
         )
@@ -11805,6 +12018,23 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     ),
                 })
 
+                record_scanner_decision_research(
+                    symbol=symbol,
+                    observation_id=scanner_observation_ids.get(
+                        symbol
+                    ),
+                    reference_price=safe_float(
+                        candidate.get(
+                            "research_reference_price",
+                            candidate.get("price"),
+                        )
+                    ),
+                    decision="rejected",
+                    failed_requirements=failed_requirements,
+                    entry_quality=entry_quality,
+                    strategy_version=selected_strategy_version,
+                )
+
                 continue
 
             # -------------------------------------------------
@@ -11861,6 +12091,34 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     ),
                 })
 
+                record_scanner_decision_research(
+                    symbol=symbol,
+                    observation_id=scanner_observation_ids.get(
+                        symbol
+                    ),
+                    reference_price=safe_float(
+                        candidate.get(
+                            "research_reference_price",
+                            candidate.get("price"),
+                        )
+                    ),
+                    decision="rejected",
+                    failed_requirements=[
+                        "adaptive_entry_analysis_failed"
+                    ],
+                    entry_quality={
+                        **(
+                            entry_quality
+                            if isinstance(entry_quality, dict)
+                            else {}
+                        ),
+                        "adaptive_entry_error": str(
+                            adaptive_error
+                        ),
+                    },
+                    strategy_version=selected_strategy_version,
+                )
+
                 continue
 
             adaptive_decision = str(
@@ -11909,6 +12167,26 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         "position already open"
                     ),
                 })
+
+                record_scanner_decision_research(
+                    symbol=symbol,
+                    observation_id=scanner_observation_ids.get(
+                        symbol
+                    ),
+                    reference_price=safe_float(
+                        candidate.get(
+                            "research_reference_price",
+                            candidate.get("price"),
+                        )
+                    ),
+                    decision="rejected",
+                    failed_requirements=[
+                        "position_already_open"
+                    ],
+                    entry_quality=entry_quality,
+                    strategy_version=selected_strategy_version,
+                )
+
                 continue
 
             (
@@ -11940,6 +12218,36 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         1,
                     ),
                 })
+
+                record_scanner_decision_research(
+                    symbol=symbol,
+                    observation_id=scanner_observation_ids.get(
+                        symbol
+                    ),
+                    reference_price=safe_float(
+                        candidate.get(
+                            "research_reference_price",
+                            candidate.get("price"),
+                        )
+                    ),
+                    decision="rejected",
+                    failed_requirements=[
+                        "symbol_cooldown_active"
+                    ],
+                    entry_quality={
+                        **(
+                            entry_quality
+                            if isinstance(entry_quality, dict)
+                            else {}
+                        ),
+                        "cooldown_type": cooldown_type,
+                        "cooldown_seconds_remaining": round(
+                            cooldown_seconds_remaining,
+                            1,
+                        ),
+                    },
+                    strategy_version=selected_strategy_version,
+                )
 
                 continue
 
@@ -11989,6 +12297,31 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                             AUTO_TRADER_MAX_ENTRY_ATR_PERCENT
                         ),
                     })
+
+                    record_scanner_decision_research(
+                        symbol=symbol,
+                        observation_id=scanner_observation_ids.get(
+                            symbol
+                        ),
+                        reference_price=reference_price,
+                        decision="rejected",
+                        failed_requirements=[
+                            "entry_atr_too_high"
+                        ],
+                        entry_quality={
+                            **(
+                                entry_quality
+                                if isinstance(entry_quality, dict)
+                                else {}
+                            ),
+                            "atr_percent": atr_percent,
+                            "maximum_atr_percent": (
+                                AUTO_TRADER_MAX_ENTRY_ATR_PERCENT
+                            ),
+                        },
+                        strategy_version=selected_strategy_version,
+                    )
+
                     continue
 
                 if (
@@ -12015,6 +12348,31 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                             AUTO_TRADER_MAX_ENTRY_SPREAD_PERCENT
                         ),
                     })
+
+                    record_scanner_decision_research(
+                        symbol=symbol,
+                        observation_id=scanner_observation_ids.get(
+                            symbol
+                        ),
+                        reference_price=reference_price,
+                        decision="rejected",
+                        failed_requirements=[
+                            "entry_spread_too_wide"
+                        ],
+                        entry_quality={
+                            **(
+                                entry_quality
+                                if isinstance(entry_quality, dict)
+                                else {}
+                            ),
+                            "spread_percent": spread_percent,
+                            "maximum_spread_percent": (
+                                AUTO_TRADER_MAX_ENTRY_SPREAD_PERCENT
+                            ),
+                        },
+                        strategy_version=selected_strategy_version,
+                    )
+
                     continue
 
                 if (
@@ -12031,7 +12389,45 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                             "returned zero shares"
                         ),
                     })
+
+                    record_scanner_decision_research(
+                        symbol=symbol,
+                        observation_id=scanner_observation_ids.get(
+                            symbol
+                        ),
+                        reference_price=reference_price,
+                        decision="rejected",
+                        failed_requirements=[
+                            "position_sizing_returned_zero_shares"
+                        ],
+                        entry_quality={
+                            **(
+                                entry_quality
+                                if isinstance(entry_quality, dict)
+                                else {}
+                            ),
+                            "shares": shares,
+                            "reference_price": reference_price,
+                        },
+                        strategy_version=selected_strategy_version,
+                    )
+
                     continue
+
+                # Research-only: this candidate passed every
+                # pre-order entry gate and has a valid position
+                # size. This does not guarantee broker execution.
+                record_scanner_decision_research(
+                    symbol=symbol,
+                    observation_id=scanner_observation_ids.get(
+                        symbol
+                    ),
+                    reference_price=reference_price,
+                    decision="selected",
+                    failed_requirements=[],
+                    entry_quality=entry_quality,
+                    strategy_version=selected_strategy_version,
+                )
 
                 entry_result = (
                     submit_alpaca_auto_bracket_buy(

@@ -568,6 +568,99 @@ def initialize_database() -> None:
 
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS scanner_decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scanner_observation_id INTEGER,
+                symbol TEXT NOT NULL,
+                decided_at TEXT NOT NULL,
+                reference_price REAL NOT NULL,
+                decision TEXT NOT NULL
+                    CHECK(decision IN ('selected', 'rejected')),
+                failed_requirements_json TEXT NOT NULL DEFAULT '[]',
+                entry_quality_json TEXT NOT NULL DEFAULT '{}',
+                strategy_version TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(scanner_observation_id)
+                    REFERENCES scanner_observations(id)
+                    ON DELETE SET NULL
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_scanner_decisions_symbol_decided_at
+            ON scanner_decisions (
+                symbol,
+                decided_at
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_scanner_decisions_decided_at
+            ON scanner_decisions (
+                decided_at
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS
+                scanner_decision_forward_outcomes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scanner_decision_id INTEGER NOT NULL,
+                    horizon_minutes INTEGER NOT NULL,
+                    target_at TEXT NOT NULL,
+                    evaluated_at TEXT NOT NULL,
+                    status TEXT NOT NULL
+                        CHECK(
+                            status IN (
+                                'measured',
+                                'unavailable'
+                            )
+                        ),
+                    reference_price REAL NOT NULL,
+                    outcome_price REAL,
+                    return_percent REAL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(scanner_decision_id)
+                        REFERENCES scanner_decisions(id)
+                        ON DELETE CASCADE,
+                    UNIQUE(
+                        scanner_decision_id,
+                        horizon_minutes
+                    )
+                )
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_scanner_decision_forward_target_at
+            ON scanner_decision_forward_outcomes (
+                target_at
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_scanner_decision_forward_decision
+            ON scanner_decision_forward_outcomes (
+                scanner_decision_id
+            )
+            """
+        )
+
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS broker_fills (
                 order_id TEXT PRIMARY KEY,
                 symbol TEXT NOT NULL,
@@ -2215,6 +2308,196 @@ def mark_scanner_observation_selected(
         )
 
 
+
+def record_scanner_decision(
+    *,
+    scanner_observation_id: int | None,
+    symbol: str,
+    decided_at: str,
+    reference_price: float,
+    decision: str,
+    failed_requirements: list[Any] | None = None,
+    entry_quality: dict[str, Any] | None = None,
+    strategy_version: str | None = None,
+) -> int:
+    """Save one timestamped scanner entry decision for research."""
+    normalized_observation_id: int | None = None
+
+    if scanner_observation_id is not None:
+        normalized_observation_id = _validate_positive_integer(
+            scanner_observation_id,
+            "Scanner observation ID",
+        )
+
+    normalized_symbol = _normalize_symbol(symbol)
+    normalized_decided_at = _validate_timestamp(decided_at)
+
+    normalized_reference_price = _validate_finite_number(
+        reference_price,
+        "Scanner decision reference price",
+        allow_zero=False,
+    )
+
+    normalized_decision = str(decision).strip().lower()
+
+    if normalized_decision not in {"selected", "rejected"}:
+        raise ValueError(
+            "Scanner decision must be selected or rejected."
+        )
+
+    if failed_requirements is None:
+        normalized_failed_requirements: list[Any] = []
+    elif isinstance(failed_requirements, list):
+        normalized_failed_requirements = list(
+            failed_requirements
+        )
+    else:
+        raise ValueError(
+            "Scanner decision failed requirements "
+            "must be a list."
+        )
+
+    normalized_entry_quality = (
+        dict(entry_quality)
+        if isinstance(entry_quality, dict)
+        else {}
+    )
+
+    normalized_strategy_version = _normalize_optional_text(
+        strategy_version,
+        "Scanner decision strategy version",
+    )
+
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    with get_connection() as connection:
+        if normalized_observation_id is not None:
+            observation = connection.execute(
+                """
+                SELECT symbol
+                FROM scanner_observations
+                WHERE id = ?
+                """,
+                (normalized_observation_id,),
+            ).fetchone()
+
+            if observation is None:
+                raise ValueError(
+                    "Scanner observation does not exist."
+                )
+
+            if (
+                _normalize_symbol(observation["symbol"])
+                != normalized_symbol
+            ):
+                raise ValueError(
+                    "Scanner decision symbol does not "
+                    "match scanner observation symbol."
+                )
+
+        cursor = connection.execute(
+            """
+            INSERT INTO scanner_decisions (
+                scanner_observation_id,
+                symbol,
+                decided_at,
+                reference_price,
+                decision,
+                failed_requirements_json,
+                entry_quality_json,
+                strategy_version,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                normalized_observation_id,
+                normalized_symbol,
+                normalized_decided_at,
+                normalized_reference_price,
+                normalized_decision,
+                json.dumps(
+                    normalized_failed_requirements,
+                    separators=(",", ":"),
+                    default=str,
+                ),
+                _serialize_json_object(
+                    normalized_entry_quality
+                ),
+                normalized_strategy_version,
+                created_at,
+            ),
+        )
+
+        decision_id = cursor.lastrowid
+
+    if decision_id is None:
+        raise RuntimeError(
+            "Scanner decision was saved without an ID."
+        )
+
+    return int(decision_id)
+
+
+
+def load_due_scanner_forward_decisions(
+    *,
+    horizon_minutes: int,
+    due_at: str,
+    limit: int = 100,
+    order: str = "oldest",
+) -> list[dict[str, Any]]:
+    """Load scanner decisions due for forward evaluation."""
+    normalized_horizon = _validate_positive_integer(
+        horizon_minutes,
+        "Decision forward horizon minutes",
+    )
+    normalized_due_at = _validate_timestamp(due_at)
+    normalized_limit = _validate_positive_integer(
+        limit,
+        "Decision forward limit",
+    )
+
+    normalized_order = str(order).strip().lower()
+    if normalized_order not in {"oldest", "newest"}:
+        raise ValueError(
+            "Decision forward order must be oldest or newest."
+        )
+
+    order_direction = (
+        "ASC" if normalized_order == "oldest" else "DESC"
+    )
+
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                decisions.*
+            FROM scanner_decisions AS decisions
+            LEFT JOIN scanner_decision_forward_outcomes AS outcomes
+                ON outcomes.scanner_decision_id = decisions.id
+                AND outcomes.horizon_minutes = ?
+            WHERE datetime(
+                decisions.decided_at,
+                '+' || ? || ' minutes'
+            ) <= datetime(?)
+              AND outcomes.id IS NULL
+            ORDER BY decisions.decided_at """
+            + order_direction
+            + """
+            LIMIT ?
+            """,
+            (
+                normalized_horizon,
+                normalized_horizon,
+                normalized_due_at,
+                normalized_limit,
+            ),
+        ).fetchall()
+
+    return [dict(row) for row in rows]
+
+
 def load_due_scanner_forward_observations(
     *,
     horizon_minutes: int,
@@ -2397,6 +2680,152 @@ def save_scanner_forward_outcome(
     if outcome_id is None:
         raise RuntimeError(
             "Scanner forward outcome was saved without an ID."
+        )
+
+    return int(outcome_id)
+
+
+
+def save_scanner_decision_forward_outcome(
+    *,
+    scanner_decision_id: int,
+    horizon_minutes: int,
+    target_at: str,
+    evaluated_at: str,
+    reference_price: float,
+    outcome_price: float | None = None,
+    status: str = "measured",
+) -> int:
+    """Save one scanner-decision forward outcome."""
+    normalized_decision_id = _validate_positive_integer(
+        scanner_decision_id,
+        "Scanner decision ID",
+    )
+    normalized_horizon = _validate_positive_integer(
+        horizon_minutes,
+        "Decision forward horizon minutes",
+    )
+    normalized_target_at = _validate_timestamp(target_at)
+    normalized_evaluated_at = _validate_timestamp(
+        evaluated_at
+    )
+
+    normalized_status = str(status).strip().lower()
+
+    if normalized_status not in {
+        "measured",
+        "unavailable",
+    }:
+        raise ValueError(
+            "Decision forward outcome status must be "
+            "'measured' or 'unavailable'."
+        )
+
+    normalized_reference_price = _validate_finite_number(
+        reference_price,
+        "Decision forward reference price",
+        allow_zero=False,
+    )
+
+    normalized_outcome_price: float | None = None
+    return_percent: float | None = None
+
+    if normalized_status == "measured":
+        if outcome_price is None:
+            raise ValueError(
+                "Measured decision forward outcomes "
+                "require an outcome price."
+            )
+
+        normalized_outcome_price = _validate_finite_number(
+            outcome_price,
+            "Decision forward outcome price",
+            allow_zero=False,
+        )
+
+        return_percent = (
+            (
+                normalized_outcome_price
+                - normalized_reference_price
+            )
+            / normalized_reference_price
+            * 100.0
+        )
+
+    elif outcome_price is not None:
+        raise ValueError(
+            "Unavailable decision forward outcomes "
+            "must not include an outcome price."
+        )
+
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    with get_connection() as connection:
+        decision = connection.execute(
+            """
+            SELECT id
+            FROM scanner_decisions
+            WHERE id = ?
+            """,
+            (normalized_decision_id,),
+        ).fetchone()
+
+        if decision is None:
+            raise ValueError(
+                "Scanner decision does not exist."
+            )
+
+        existing_row = connection.execute(
+            """
+            SELECT id
+            FROM scanner_decision_forward_outcomes
+            WHERE scanner_decision_id = ?
+              AND horizon_minutes = ?
+            LIMIT 1
+            """,
+            (
+                normalized_decision_id,
+                normalized_horizon,
+            ),
+        ).fetchone()
+
+        if existing_row is not None:
+            return int(existing_row["id"])
+
+        cursor = connection.execute(
+            """
+            INSERT INTO scanner_decision_forward_outcomes (
+                scanner_decision_id,
+                horizon_minutes,
+                target_at,
+                evaluated_at,
+                status,
+                reference_price,
+                outcome_price,
+                return_percent,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                normalized_decision_id,
+                normalized_horizon,
+                normalized_target_at,
+                normalized_evaluated_at,
+                normalized_status,
+                normalized_reference_price,
+                normalized_outcome_price,
+                return_percent,
+                created_at,
+            ),
+        )
+
+        outcome_id = cursor.lastrowid
+
+    if outcome_id is None:
+        raise RuntimeError(
+            "Scanner decision forward outcome was "
+            "saved without an ID."
         )
 
     return int(outcome_id)
