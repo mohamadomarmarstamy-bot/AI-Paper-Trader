@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import math
 import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -167,6 +168,27 @@ def _validate_timestamp(timestamp: str) -> str:
         raise ValueError("Timestamp cannot be empty.")
 
     return normalized
+
+
+def _validate_extended_hours_timestamp(timestamp: str) -> str:
+    """Validate and normalize an extended-hours timestamp to UTC."""
+    normalized = _validate_timestamp(timestamp)
+
+    try:
+        parsed = datetime.fromisoformat(
+            normalized.replace("Z", "+00:00")
+        )
+    except ValueError as error:
+        raise ValueError(
+            "Extended-hours timestamp must be valid ISO 8601."
+        ) from error
+
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(
+            "Extended-hours timestamp must include a timezone."
+        )
+
+    return parsed.astimezone(timezone.utc).isoformat()
 
 
 def _normalize_optional_text(
@@ -465,6 +487,60 @@ def initialize_database() -> None:
             )
             """
         )
+
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS extended_hours_high_water (
+                trade_book_id INTEGER PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                high_water_price REAL NOT NULL,
+                first_observed_at TEXT NOT NULL,
+                last_observed_at TEXT NOT NULL,
+                FOREIGN KEY(trade_book_id)
+                    REFERENCES trade_book(id)
+                    ON DELETE CASCADE
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS extended_hours_position_tracking (
+                position_key TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                entry_order_id TEXT,
+                entry_price REAL NOT NULL,
+                shares REAL NOT NULL,
+                high_water_price REAL,
+                reset_generation INTEGER NOT NULL DEFAULT 0
+                    CHECK(reset_generation >= 0),
+                tracking_status TEXT NOT NULL DEFAULT 'ACTIVE'
+                    CHECK(tracking_status IN ('ACTIVE', 'CLOSED')),
+                identity_verified INTEGER NOT NULL DEFAULT 0
+                    CHECK(identity_verified IN (0, 1)),
+                first_observed_at TEXT NOT NULL,
+                last_observed_at TEXT NOT NULL,
+                closed_at TEXT
+            )
+            """
+        )
+
+        tracking_columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(extended_hours_position_tracking)"
+            ).fetchall()
+        }
+
+        if "reset_generation" not in tracking_columns:
+            connection.execute(
+                """
+                ALTER TABLE extended_hours_position_tracking
+                ADD COLUMN reset_generation INTEGER NOT NULL DEFAULT 0
+                CHECK(reset_generation >= 0)
+                """
+            )
 
         connection.execute(
             """
@@ -3166,6 +3242,283 @@ def upsert_trade_excursion(
         "first_observed_at": first_observed_at,
         "last_observed_at": normalized_observed_at,
     }
+
+
+def upsert_extended_hours_high_water(
+    *,
+    trade_book_id: int,
+    symbol: str,
+    entry_price: float,
+    current_price: float,
+    observed_at: str,
+) -> dict[str, Any]:
+    """Persist the highest observed extended-hours price for one trade."""
+    normalized_id = _validate_positive_integer(
+        trade_book_id, "Trade-book ID"
+    )
+    normalized_symbol = _normalize_symbol(symbol)
+    normalized_entry = _validate_finite_number(
+        entry_price, "Entry price", allow_zero=False
+    )
+    normalized_price = _validate_finite_number(
+        current_price, "Current price", allow_zero=False
+    )
+    normalized_time = _validate_timestamp(observed_at)
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO extended_hours_high_water (
+                trade_book_id,
+                symbol,
+                entry_price,
+                high_water_price,
+                first_observed_at,
+                last_observed_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(trade_book_id) DO UPDATE SET
+                high_water_price = MAX(
+                    extended_hours_high_water.high_water_price,
+                    excluded.high_water_price
+                ),
+                last_observed_at = excluded.last_observed_at
+            """,
+            (
+                normalized_id,
+                normalized_symbol,
+                normalized_entry,
+                normalized_price,
+                normalized_time,
+                normalized_time,
+            ),
+        )
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM extended_hours_high_water
+            WHERE trade_book_id = ?
+            """,
+            (normalized_id,),
+        ).fetchone()
+
+    return dict(row)
+
+
+def load_extended_hours_high_water(
+    trade_book_id: int,
+) -> dict[str, Any] | None:
+    """Retrieve the saved extended-hours high-water price."""
+    normalized_id = _validate_positive_integer(
+        trade_book_id, "Trade-book ID"
+    )
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM extended_hours_high_water
+            WHERE trade_book_id = ?
+            """,
+            (normalized_id,),
+        ).fetchone()
+
+    return dict(row) if row is not None else None
+
+
+def create_extended_hours_position_tracking(
+    *,
+    position_key: str,
+    symbol: str,
+    entry_price: float,
+    shares: float,
+    observed_at: str,
+    entry_order_id: str | None = None,
+    identity_verified: bool = False,
+) -> dict[str, Any]:
+    """Create a tracking record without replacing an existing position."""
+    if not isinstance(position_key, str) or not position_key.strip():
+        raise ValueError("Position key cannot be empty.")
+
+    normalized_key = position_key.strip()
+    normalized_symbol = _normalize_symbol(symbol)
+    normalized_entry = _validate_finite_number(
+        entry_price, "Entry price", allow_zero=False
+    )
+    normalized_shares = _validate_finite_number(
+        shares, "Shares", allow_zero=False
+    )
+    normalized_time = _validate_extended_hours_timestamp(observed_at)
+
+    normalized_order_id = (
+        entry_order_id.strip()
+        if isinstance(entry_order_id, str) and entry_order_id.strip()
+        else None
+    )
+
+    with closing(get_connection()) as connection, connection:
+        connection.execute(
+            """
+            INSERT INTO extended_hours_position_tracking (
+                position_key,
+                symbol,
+                entry_order_id,
+                entry_price,
+                shares,
+                high_water_price,
+                tracking_status,
+                identity_verified,
+                first_observed_at,
+                last_observed_at
+            )
+            VALUES (?, ?, ?, ?, ?, NULL, 'ACTIVE', ?, ?, ?)
+            """,
+            (
+                normalized_key,
+                normalized_symbol,
+                normalized_order_id,
+                normalized_entry,
+                normalized_shares,
+                int(identity_verified),
+                normalized_time,
+                normalized_time,
+            ),
+        )
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM extended_hours_position_tracking
+            WHERE position_key = ?
+            """,
+            (normalized_key,),
+        ).fetchone()
+
+    return dict(row)
+
+
+def update_extended_hours_position_high(
+    *,
+    position_key: str,
+    current_price: float,
+    observed_at: str,
+    expected_generation: int,
+) -> dict[str, Any] | None:
+    """Update the high-water price of a verified active position."""
+    if not isinstance(position_key, str) or not position_key.strip():
+        raise ValueError("Position key cannot be empty.")
+
+    normalized_key = position_key.strip()
+    normalized_price = _validate_finite_number(
+        current_price, "Current price", allow_zero=False
+    )
+    normalized_time = _validate_extended_hours_timestamp(observed_at)
+
+    if (
+        isinstance(expected_generation, bool)
+        or not isinstance(expected_generation, int)
+        or expected_generation < 0
+    ):
+        raise ValueError(
+            "Expected generation must be a nonnegative integer."
+        )
+
+    with closing(get_connection()) as connection, connection:
+        connection.execute(
+            """
+            UPDATE extended_hours_position_tracking
+            SET high_water_price = CASE
+                    WHEN high_water_price IS NULL THEN ?
+                    ELSE MAX(high_water_price, ?)
+                END,
+                last_observed_at = ?
+            WHERE position_key = ?
+              AND tracking_status = 'ACTIVE'
+              AND identity_verified = 1
+              AND last_observed_at < ?
+              AND reset_generation = ?
+            """,
+            (
+                normalized_price,
+                normalized_price,
+                normalized_time,
+                normalized_key,
+                normalized_time,
+                expected_generation,
+            ),
+        )
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM extended_hours_position_tracking
+            WHERE position_key = ?
+            """,
+            (normalized_key,),
+        ).fetchone()
+
+    return dict(row) if row is not None else None
+
+
+def reset_extended_hours_position_high(
+    *,
+    position_key: str,
+    observed_at: str,
+) -> dict[str, Any] | None:
+    """Clear the saved high-water price for a verified active position."""
+    if not isinstance(position_key, str) or not position_key.strip():
+        raise ValueError("Position key cannot be empty.")
+
+    normalized_key = position_key.strip()
+    normalized_time = _validate_extended_hours_timestamp(observed_at)
+
+    with closing(get_connection()) as connection, connection:
+        connection.execute(
+            """
+            UPDATE extended_hours_position_tracking
+            SET high_water_price = NULL,
+                reset_generation = reset_generation + 1,
+                last_observed_at = ?
+            WHERE position_key = ?
+              AND tracking_status = 'ACTIVE'
+              AND identity_verified = 1
+              AND last_observed_at < ?
+            """,
+            (normalized_time, normalized_key, normalized_time),
+        )
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM extended_hours_position_tracking
+            WHERE position_key = ?
+            """,
+            (normalized_key,),
+        ).fetchone()
+
+    return dict(row) if row is not None else None
+
+
+def load_extended_hours_position_tracking(
+    position_key: str,
+) -> dict[str, Any] | None:
+    """Load persistent tracking for a specific position."""
+    if not isinstance(position_key, str) or not position_key.strip():
+        raise ValueError("Position key cannot be empty.")
+
+    with closing(get_connection()) as connection, connection:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM extended_hours_position_tracking
+            WHERE position_key = ?
+            """,
+            (position_key.strip(),),
+        ).fetchone()
+
+    return dict(row) if row is not None else None
+
 
 def load_trade_excursions(
     *,

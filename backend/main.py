@@ -69,6 +69,10 @@ from database import (
     save_scanner_decision_forward_outcome,
     set_scheduler_state,
     upsert_trade_excursion,
+    create_extended_hours_position_tracking,
+    update_extended_hours_position_high,
+    reset_extended_hours_position_high,
+    load_extended_hours_position_tracking,
 )
 from indicators import (
     calculate_rsi,
@@ -9270,6 +9274,67 @@ def safely_submit_extended_hours_exit(
 
         return result
 
+
+def get_extended_hours_position_identity(
+    *,
+    symbol: str,
+    broker_position: dict[str, Any],
+) -> dict[str, Any] | None:
+    """
+    Resolve the persistent identity of the currently open PAPER position.
+
+    The trade-book entry order ID is used as the ownership identity so a
+    later position in the same symbol cannot inherit an older high-water
+    record.
+    """
+    normalized_symbol = clean_symbol(symbol)
+
+    if not normalized_symbol:
+        return None
+
+    trade_book_entry = load_open_trade_book_entry(
+        normalized_symbol
+    )
+
+    if not isinstance(trade_book_entry, dict):
+        return None
+
+    entry_order_id = str(
+        trade_book_entry.get("entry_order_id") or ""
+    ).strip()
+
+    if not entry_order_id:
+        return None
+
+    entry_price = safe_float(
+        trade_book_entry.get("entry_price")
+        or broker_position.get("avg_entry_price")
+    )
+
+    shares = safe_float(
+        broker_position.get("qty")
+        or trade_book_entry.get("shares")
+    )
+
+    if (
+        entry_price is None
+        or entry_price <= 0
+        or shares is None
+        or shares <= 0
+    ):
+        return None
+
+    return {
+        "position_key": (
+            f"{normalized_symbol}:{entry_order_id}"
+        ),
+        "symbol": normalized_symbol,
+        "entry_order_id": entry_order_id,
+        "entry_price": entry_price,
+        "shares": shares,
+        "trade_book_id": trade_book_entry.get("id"),
+    }
+
 def monitor_after_hours_positions() -> dict[str, Any]:
     """
     Observe existing PAPER positions while the regular market is closed.
@@ -9314,12 +9379,20 @@ def monitor_after_hours_positions() -> dict[str, Any]:
 
         open_symbols.add(symbol)
 
+        identity = get_extended_hours_position_identity(
+            symbol=symbol,
+            broker_position=position,
+        )
+
         entry_price = safe_float(
             position.get("avg_entry_price")
         )
         current_price = safe_float(
             position.get("current_price")
         )
+
+        if identity is not None:
+            entry_price = identity["entry_price"]
 
         if (
             entry_price is None
@@ -9328,6 +9401,71 @@ def monitor_after_hours_positions() -> dict[str, Any]:
             or current_price <= 0
         ):
             continue
+
+        persistent_tracking = None
+        expected_generation = None
+
+        if identity is not None:
+            position_key = identity["position_key"]
+
+            try:
+                persistent_tracking = (
+                    load_extended_hours_position_tracking(
+                        position_key
+                    )
+                )
+
+                if persistent_tracking is None:
+                    persistent_tracking = (
+                        create_extended_hours_position_tracking(
+                            position_key=position_key,
+                            symbol=identity["symbol"],
+                            entry_price=identity["entry_price"],
+                            shares=identity["shares"],
+                            observed_at=datetime.now(
+                                timezone.utc
+                            ).isoformat(),
+                            entry_order_id=identity["entry_order_id"],
+                            identity_verified=True,
+                        )
+                    )
+
+                expected_generation = int(
+                    persistent_tracking["reset_generation"]
+                )
+
+                database_high = safe_float(
+                    persistent_tracking.get(
+                        "high_water_price"
+                    )
+                )
+
+                if (
+                    database_high is not None
+                    and database_high > 0
+                    and (
+                        symbol not in _auto_trader_after_hours_high_water
+                        or database_high
+                        > _auto_trader_after_hours_high_water[symbol]
+                    )
+                ):
+                    _auto_trader_after_hours_high_water[
+                        symbol
+                    ] = database_high
+
+            except Exception as error:
+                add_auto_trader_log(
+                    "extended_hours_tracking_error",
+                    symbol=symbol,
+                    message=(
+                        "Persistent extended-hours tracking "
+                        "could not be loaded or created."
+                    ),
+                    details={
+                        "position_key": position_key,
+                        "error": clean_error_message(error),
+                    },
+                )
 
         previous_high = (
             _auto_trader_after_hours_high_water.get(
@@ -9348,6 +9486,59 @@ def monitor_after_hours_positions() -> dict[str, Any]:
                 symbol
             ]
         )
+
+        if (
+            identity is not None
+            and expected_generation is not None
+            and current_price >= high_water
+        ):
+            try:
+                updated_tracking = (
+                    update_extended_hours_position_high(
+                        position_key=identity["position_key"],
+                        current_price=current_price,
+                        observed_at=datetime.now(
+                            timezone.utc
+                        ).isoformat(),
+                        expected_generation=expected_generation,
+                    )
+                )
+
+                if updated_tracking is not None:
+                    database_high = safe_float(
+                        updated_tracking.get(
+                            "high_water_price"
+                        )
+                    )
+
+                    if (
+                        database_high is not None
+                        and database_high > 0
+                    ):
+                        _auto_trader_after_hours_high_water[
+                            symbol
+                        ] = database_high
+                        high_water = database_high
+
+            except Exception as error:
+                add_auto_trader_log(
+                    "extended_hours_high_water_persist_error",
+                    symbol=symbol,
+                    message=(
+                        "Extended-hours high-water update "
+                        "could not be persisted."
+                    ),
+                    details={
+                        "position_key": identity[
+                            "position_key"
+                        ],
+                        "expected_generation": (
+                            expected_generation
+                        ),
+                        "current_price": current_price,
+                        "error": clean_error_message(error),
+                    },
+                )
 
         return_percent = (
             calculate_position_return_percent(
