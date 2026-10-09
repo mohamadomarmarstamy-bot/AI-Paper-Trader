@@ -3048,6 +3048,8 @@ def calculate_scanner_forward_research(
         "rejected": [],
     }
 
+    strategy_groups: dict[str, list[dict[str, Any]]] = {}
+
     for record in records:
         bucket = rank_bucket(record.get("scanner_rank"))
         if bucket is not None:
@@ -3057,6 +3059,11 @@ def calculate_scanner_forward_research(
             selected_groups["selected"].append(record)
         else:
             selected_groups["rejected"].append(record)
+
+        strategy = str(
+            record.get("strategy_version") or "unclassified"
+        ).strip() or "unclassified"
+        strategy_groups.setdefault(strategy, []).append(record)
 
     return {
         "paper": True,
@@ -3070,6 +3077,10 @@ def calculate_scanner_forward_research(
         "selection_performance": {
             group: summarize(items)
             for group, items in selected_groups.items()
+        },
+        "strategy_performance": {
+            strategy: summarize(items)
+            for strategy, items in sorted(strategy_groups.items())
         },
     }
 

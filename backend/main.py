@@ -10652,14 +10652,23 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                     selected_for_entry=False,
                     strategy_version=(
                         "momentum_30_v1"
-                        if bool(
-                            candidate.get(
-                                "momentum_30_candidate"
-                            )
+                        if bool(candidate.get("momentum_30_candidate"))
+                        else (
+                            "early_momentum_v1"
+                            if bool(candidate.get("early_momentum_candidate"))
+                            else AUTO_TRADER_STRATEGY_VERSION
                         )
-                        else AUTO_TRADER_STRATEGY_VERSION
                     ),
                     features={
+                        "early_momentum_candidate": bool(
+                            candidate.get("early_momentum_candidate")
+                        ),
+                        "early_momentum_checks": (
+                            candidate.get("early_momentum_checks", {})
+                        ),
+                        "early_momentum_failed_checks": (
+                            candidate.get("early_momentum_failed_checks", [])
+                        ),
                         "momentum_30_checks": (
                             candidate.get(
                                 "momentum_30_checks",
@@ -12055,10 +12064,23 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 )
             )
 
+            early_momentum_candidate = bool(
+                candidate.get(
+                    "early_momentum_candidate"
+                )
+            )
+
+            # Prefer the established fast-momentum strategy.
+            # Otherwise identify qualifying early-momentum
+            # candidates separately from ordinary entries.
             selected_strategy_version = (
                 "momentum_30_v1"
                 if momentum_30_candidate
-                else AUTO_TRADER_STRATEGY_VERSION
+                else (
+                    "early_momentum_v1"
+                    if early_momentum_candidate
+                    else AUTO_TRADER_STRATEGY_VERSION
+                )
             )
 
             entry_quality = evaluate_entry_quality(
@@ -12676,6 +12698,26 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                             "momentum_30_candidate": (
                                 momentum_30_candidate
                             ),
+                            "early_momentum_candidate": (
+                                early_momentum_candidate
+                            ),
+                            "early_momentum_checks": (
+                                candidate.get(
+                                    "early_momentum_checks",
+                                    {},
+                                )
+                            ),
+                            "early_momentum_failed_checks": (
+                                candidate.get(
+                                    "early_momentum_failed_checks",
+                                    [],
+                                )
+                            ),
+                            "early_momentum_strategy_version": (
+                                candidate.get(
+                                    "early_momentum_strategy_version"
+                                )
+                            ),
                             "momentum_30_checks": (
                                 candidate.get(
                                     "momentum_30_checks",
@@ -12890,6 +12932,26 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 ),
                 "momentum_30_candidate": (
                     momentum_30_candidate
+                ),
+                "early_momentum_candidate": (
+                    early_momentum_candidate
+                ),
+                "early_momentum_checks": (
+                    candidate.get(
+                        "early_momentum_checks",
+                        {},
+                    )
+                ),
+                "early_momentum_failed_checks": (
+                    candidate.get(
+                        "early_momentum_failed_checks",
+                        [],
+                    )
+                ),
+                "early_momentum_strategy_version": (
+                    candidate.get(
+                        "early_momentum_strategy_version"
+                    )
                 ),
                 "momentum_move_percent": (
                     safe_float(
@@ -19992,6 +20054,7 @@ def build_profitability_analysis(
     ] = {
         "rank20_v1": [],
         "momentum_30_v1": [],
+        "early_momentum_v1": [],
         "legacy_or_unknown": [],
     }
 
@@ -20139,6 +20202,7 @@ def build_profitability_analysis(
         if strategy not in {
             "rank20_v1",
             "momentum_30_v1",
+            "early_momentum_v1",
         }:
             strategy = "legacy_or_unknown"
 

@@ -724,6 +724,13 @@ MOMENTUM_30_MIN_MOVE_PERCENT = 30.0
 MOMENTUM_30_MIN_VOLUME_RATIO = 1.5
 MOMENTUM_30_STRATEGY_VERSION = "momentum_30_v1"
 
+# Early-momentum research tier. This identifies candidates for
+# additional evaluation; it does not authorize a buy by itself.
+EARLY_MOMENTUM_MIN_MOVE_PERCENT = 5.0
+EARLY_MOMENTUM_MAX_MOVE_PERCENT = 20.0
+EARLY_MOMENTUM_MIN_VOLUME_RATIO = 1.5
+EARLY_MOMENTUM_STRATEGY_VERSION = "early_momentum_v1"
+
 
 def analyze_stock(
     symbol: str,
@@ -901,6 +908,28 @@ def analyze_stock(
         for check_name in momentum_30_required_checks
     )
 
+    # Research-only early-momentum tier. Keep it separate from the
+    # existing 30% strategy and require bullish technical confirmation.
+    early_momentum_checks = {
+        "move_in_range": (
+            EARLY_MOMENTUM_MIN_MOVE_PERCENT
+            <= one_day_change
+            <= EARLY_MOMENTUM_MAX_MOVE_PERCENT
+        ),
+        "bullish_trend": (
+            trend in {"BULLISH", "STRONG BULLISH"}
+        ),
+        "above_ma20": price > sma_20,
+        "bullish_macd": macd > macd_signal,
+        "volume_confirmed": (
+            volume_ratio >= EARLY_MOMENTUM_MIN_VOLUME_RATIO
+        ),
+    }
+
+    early_momentum_candidate = all(
+        early_momentum_checks.values()
+    )
+
     trade_plan = build_trade_plan(price)
 
     return {
@@ -911,6 +940,13 @@ def analyze_stock(
         "five_day_change": round(five_day_change, 2),
         "twenty_day_change": round(twenty_day_change, 2),
         "momentum_30_candidate": momentum_30_candidate,
+        "early_momentum_candidate": early_momentum_candidate,
+        "early_momentum_checks": early_momentum_checks,
+        "early_momentum_strategy_version": (
+            EARLY_MOMENTUM_STRATEGY_VERSION
+            if early_momentum_candidate
+            else None
+        ),
         "momentum_30_checks": (
             momentum_30_checks
         ),
@@ -1023,6 +1059,47 @@ def apply_live_momentum_metadata(
         live_percent_change,
         2,
     )
+    # Re-evaluate early momentum with the live mover price and
+    # percentage change while preserving the other technical checks.
+    early_checks = dict(
+        candidate.get("early_momentum_checks", {})
+    )
+
+    early_checks["move_in_range"] = (
+        EARLY_MOMENTUM_MIN_MOVE_PERCENT
+        <= live_percent_change
+        <= EARLY_MOMENTUM_MAX_MOVE_PERCENT
+    )
+
+    if live_price is not None and ma20 is not None:
+        early_checks["above_ma20"] = live_price > ma20
+
+    candidate["early_momentum_checks"] = early_checks
+    candidate["early_momentum_failed_checks"] = [
+        name
+        for name, passed in early_checks.items()
+        if not passed
+    ]
+
+    candidate["early_momentum_candidate"] = (
+        all(
+            bool(early_checks.get(name, False))
+            for name in (
+                "move_in_range",
+                "bullish_trend",
+                "above_ma20",
+                "bullish_macd",
+                "volume_confirmed",
+            )
+        )
+    )
+
+    candidate["early_momentum_strategy_version"] = (
+        EARLY_MOMENTUM_STRATEGY_VERSION
+        if candidate["early_momentum_candidate"]
+        else None
+    )
+
     candidate["momentum_data_source"] = "alpaca_movers"
     candidate["momentum_live_price"] = live_price
     candidate["momentum_live_change"] = live_change
@@ -1049,9 +1126,13 @@ def _candidate_sort_key(
     volume_ratio = float(stock.get("volume_ratio", 0) or 0)
     five_day_change = float(stock.get("five_day_change", 0) or 0)
     momentum_priority = (
-        1.0
+        2.0
         if bool(stock.get("momentum_30_candidate", False))
-        else 0.0
+        else (
+            1.0
+            if bool(stock.get("early_momentum_candidate", False))
+            else 0.0
+        )
     )
 
     if signal == "SELL":
