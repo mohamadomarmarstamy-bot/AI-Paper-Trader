@@ -1,6 +1,7 @@
 """Offline accounting regressions; no application startup or broker/database writes."""
 import ast
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 import time
 from types import SimpleNamespace
@@ -48,9 +49,12 @@ def actual_functions(**overrides):
         "load_learning_outcomes": lambda **kwargs: [], "load_trade_book_events": lambda **kwargs: [],
         "calculate_learning_summary": lambda: {},
         "fetch_alpaca_paper_positions": lambda: [],
+        "get_auto_trader_daily_pl_baseline": lambda current_date: 110.0,
         "calculate_holding_seconds": lambda *args: None,
         "require_app_session": lambda request: None,
         "timestamp_sort_key": timestamp_sort_key, "time": time,
+        "datetime": datetime, "timezone": timezone,
+        "ZoneInfo": ZoneInfo,
         "summarize_trades": summarize_trades, "daily_realized_summaries": daily_realized_summaries,
         "account_equity_metrics": account_equity_metrics, "annotate_order_history": annotate_order_history,
     }

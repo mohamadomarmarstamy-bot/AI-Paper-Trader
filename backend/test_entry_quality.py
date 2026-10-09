@@ -160,6 +160,8 @@ class ActualEntryFlowTests(unittest.TestCase):
                 "decision": "BUY"
             },
             "add_auto_trader_log": lambda *args, **kwargs: None,
+            "record_scanner_decision_research": lambda *args, **kwargs: None,
+            "scanner_observation_ids": {},
             "safe_float": lambda value: float(value) if value is not None else None,
             "score_symbol_news_context": lambda context: context,
             "AUTO_TRADER_ENTRY_CONFIDENCE_MIN": 70,

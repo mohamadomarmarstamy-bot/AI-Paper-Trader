@@ -61,6 +61,7 @@ from database import (
     get_scheduler_state,
     load_trade_excursions,
     upsert_broker_fill,
+    record_broker_exit_notification,
     mark_scanner_observation_selected,
     record_trade_book_event,
     record_scanner_observation,
@@ -1689,6 +1690,7 @@ async def pro_ticker_scheduler_loop() -> None:
 async def lifespan(app: FastAPI):
     load_auto_trader_log()
     load_auto_trader_journal()
+    restore_broker_exit_notifications_from_log()
     initialize_seen_exit_order_ids()
     restore_persistent_scheduler_state()
 
@@ -5965,7 +5967,7 @@ def auto_trader_control_authorized(
         == configured_token
     )
 
-def save_auto_trader_log() -> None:
+def save_auto_trader_log() -> bool:
     try:
         directory = os.path.dirname(
             AUTO_TRADER_LOG_FILE
@@ -5989,11 +5991,14 @@ def save_auto_trader_log() -> None:
                 file,
             )
 
+        return True
+
     except Exception as error:
         print(
             "Auto-trader log save error: "
             f"{clean_error_message(error)}"
         )
+        return False
 
 def save_auto_trader_journal() -> None:
     try:
@@ -6065,6 +6070,54 @@ def load_auto_trader_log() -> None:
             "Auto-trader log load error: "
             f"{clean_error_message(error)}"
         )
+
+def restore_broker_exit_notifications_from_log() -> None:
+    """Remember broker exits already announced in saved activity logs."""
+    restored = 0
+
+    for entry in _auto_trader_log:
+        if not isinstance(entry, dict):
+            continue
+
+        # Only restore notifications for broker-detected sell fills.
+        if entry.get("event") not in {
+            "protective_stop_fill",
+            "take_profit_fill",
+            "extended_hours_profit_trail",
+            "extended_hours_hard_max_loss",
+            "broker_sell_fill",
+        }:
+            continue
+
+        details = entry.get("details")
+
+        if not isinstance(details, dict):
+            continue
+
+        order_id = str(details.get("order_id") or "").strip()
+        filled_at = str(details.get("filled_at") or "").strip()
+        symbol = str(entry.get("symbol") or "").strip()
+
+        if not order_id or not filled_at or not symbol:
+            continue
+
+        try:
+            if record_broker_exit_notification(
+                order_id=order_id,
+                symbol=symbol,
+                notified_at=datetime.now(timezone.utc).isoformat(),
+            ):
+                restored += 1
+        except Exception as exc:
+            print(
+                "Historical broker notification recovery failed:",
+                repr(exc),
+            )
+
+    print(
+        f"Restored {restored} previously announced broker exit notifications."
+    )
+
 
 def load_auto_trader_journal() -> None:
     if not os.path.exists(
@@ -6218,7 +6271,7 @@ def add_auto_trader_log(
     symbol: str | None = None,
     message: str = "",
     details: dict[str, Any] | None = None,
-) -> None:
+) -> bool:
     entry = {
         "timestamp": time.time(),
         "event": str(event),
@@ -6248,7 +6301,7 @@ def add_auto_trader_log(
         message=str(message),
     )
 
-    save_auto_trader_log()
+    saved = save_auto_trader_log()
 
     if (
         len(_auto_trader_log)
@@ -6257,6 +6310,8 @@ def add_auto_trader_log(
         del _auto_trader_log[
             :-AUTO_TRADER_LOG_LIMIT
         ]
+
+    return saved
 
 def add_auto_trader_journal_entry(
     *,
@@ -9764,6 +9819,16 @@ def detect_new_broker_exit_fills() -> list[dict[str, Any]]:
                 candidate_order
             )
 
+    # Retry missing Activity notifications using the orders
+    # already fetched for this scan. Do not repeat trade accounting.
+    try:
+        initialize_seen_exit_order_ids(orders=orders)
+    except Exception as error:
+        print(
+            "Broker exit notification recovery failed: "
+            f"{clean_error_message(error)}"
+        )
+
     for order in flattened_orders:
         order_id = str(
             order.get(
@@ -10008,26 +10073,55 @@ def log_new_broker_exit_fills() -> list[dict[str, Any]]:
                 "closed the PAPER position."
             )
 
-        add_auto_trader_log(
-            reason,
-            symbol=symbol,
-            message=message,
-            details={
-                "shares": shares,
-                "filled_price": filled_price,
-                "filled_at": filled_at,
-                "order_id": order_id,
-                "order_type": fill.get(
-                    "order_type"
-                ),
-                "stop_price": fill.get(
-                    "stop_price"
-                ),
-                "limit_price": fill.get(
-                    "limit_price"
-                ),
-            },
-        )
+        # Save the activity notification before marking its order ID
+        # as notified. A failed save must not permanently suppress it.
+        should_notify = True
+
+        if order_id:
+            try:
+                from database import get_broker_exit_notification
+
+                existing_notification = get_broker_exit_notification(
+                    order_id=order_id
+                )
+                should_notify = existing_notification is None
+            except Exception as exc:
+                print(
+                    "Broker exit notification lookup failed:",
+                    repr(exc),
+                )
+                # Attempt to save the Activity notification even
+                # when the notification-status lookup temporarily fails.
+                should_notify = True
+
+        if should_notify:
+            notification_saved = add_auto_trader_log(
+                reason,
+                symbol=symbol,
+                message=message,
+                details={
+                    "shares": shares,
+                    "filled_price": filled_price,
+                    "filled_at": filled_at,
+                    "order_id": order_id,
+                    "order_type": fill.get("order_type"),
+                    "stop_price": fill.get("stop_price"),
+                    "limit_price": fill.get("limit_price"),
+                },
+            )
+
+            if notification_saved and order_id:
+                try:
+                    record_broker_exit_notification(
+                        order_id=order_id,
+                        symbol=symbol,
+                        notified_at=datetime.now(timezone.utc).isoformat(),
+                    )
+                except Exception as exc:
+                    print(
+                        "Broker exit notification persistence failed:",
+                        repr(exc),
+                    )
 
         add_auto_trader_journal_entry(
             symbol=symbol,
@@ -10316,55 +10410,184 @@ def log_new_broker_exit_fills() -> list[dict[str, Any]]:
 
     return fills
 
-def initialize_seen_exit_order_ids() -> None:
-    try:
-        orders = fetch_alpaca_paper_orders(
-            limit=100
-        )
-    except Exception as error:
-        print(
-            "Could not initialize broker exit history: "
-            f"{clean_error_message(error)}"
-        )
-        return
+def initialize_seen_exit_order_ids(
+    orders: list[dict[str, Any]] | None = None,
+) -> None:
+    """
+    Restore processed exit tracking and recover missing Activity
+    notifications without repeating accounting or learning updates.
+    """
+    if orders is None:
+        try:
+            orders = fetch_alpaca_paper_orders(limit=100)
+        except Exception as error:
+            print(
+                "Could not initialize broker exit history: "
+                f"{clean_error_message(error)}"
+            )
+            return
 
-    for order in orders:
-        if not isinstance(
-            order,
-            dict,
-        ):
+    flattened_orders = []
+    seen_order_ids: set[str] = set()
+
+    for parent_order in orders:
+        if not isinstance(parent_order, dict):
             continue
 
-        side = str(
-            order.get(
-                "side",
-                "",
-            )
-        ).strip().lower()
+        candidates = [parent_order]
+        legs = parent_order.get("legs")
 
-        status = str(
-            order.get(
-                "status",
-                "",
+        if isinstance(legs, list):
+            candidates.extend(
+                leg for leg in legs if isinstance(leg, dict)
             )
-        ).strip().lower()
 
-        order_id = str(
-            order.get(
-                "id",
-                "",
+        for order in candidates:
+            order_id = str(order.get("id") or "").strip()
+
+            if order_id and order_id in seen_order_ids:
+                continue
+
+            if order_id:
+                seen_order_ids.add(order_id)
+
+            flattened_orders.append(order)
+
+    for order in flattened_orders:
+        if str(order.get("side") or "").strip().lower() != "sell":
+            continue
+
+        if str(order.get("status") or "").strip().lower() != "filled":
+            continue
+
+        order_id = str(order.get("id") or "").strip()
+
+        if not order_id:
+            continue
+
+        try:
+            already_reconciled = has_trade_book_order_link(
+                order_id=order_id,
+                order_role="EXIT",
             )
-        ).strip()
+        except Exception as error:
+            print(
+                "Could not verify existing EXIT link for "
+                f"{order_id}: {clean_error_message(error)}"
+            )
+            continue
+
+        if not already_reconciled:
+            continue
+
+        _auto_trader_seen_exit_order_ids.add(order_id)
+
+        try:
+            from database import get_broker_exit_notification
+
+            existing_notification = get_broker_exit_notification(
+                order_id=order_id
+            )
+        except Exception as error:
+            print(
+                "Could not verify broker exit notification for "
+                f"{order_id}: {clean_error_message(error)}"
+            )
+            continue
+
+        if existing_notification is not None:
+            continue
+
+        symbol = clean_symbol(order.get("symbol"))
+        shares = safe_float(order.get("filled_qty"))
+        filled_price = safe_float(order.get("filled_avg_price"))
+        filled_at = str(order.get("filled_at") or "").strip()
 
         if (
-            side == "sell"
-            and status == "filled"
-            and order_id
+            not symbol
+            or shares is None
+            or shares <= 0
+            or filled_price is None
+            or filled_price <= 0
+            or not filled_at
         ):
-            _auto_trader_seen_exit_order_ids.add(
-                order_id
+            print(
+                "Cannot recover incomplete broker exit notification "
+                f"for {order_id}."
+            )
+            continue
+
+        order_type = str(order.get("type") or "").strip().lower()
+        client_order_id = str(
+            order.get("client_order_id") or ""
+        ).strip().lower()
+
+        if client_order_id.startswith("auto-ext-p-"):
+            reason = "extended_hours_profit_trail"
+            message = (
+                "Extended-hours profit protection filled and "
+                "closed the PAPER position."
+            )
+        elif client_order_id.startswith("auto-ext-l-"):
+            reason = "extended_hours_hard_max_loss"
+            message = (
+                "Extended-hours hard-loss exit filled and "
+                "closed the PAPER position."
+            )
+        elif order_type == "stop":
+            reason = "protective_stop_fill"
+            message = (
+                "Protective stop filled and "
+                "closed the PAPER position."
+            )
+        elif order_type == "limit":
+            reason = "take_profit_fill"
+            message = (
+                "Take-profit order filled and "
+                "closed the PAPER position."
+            )
+        else:
+            reason = "broker_sell_fill"
+            message = (
+                "Broker sell order filled and "
+                "closed the PAPER position."
             )
 
+        notification_saved = add_auto_trader_log(
+            reason,
+            symbol=symbol,
+            message=message,
+            details={
+                "shares": shares,
+                "filled_price": filled_price,
+                "filled_at": filled_at,
+                "order_id": order_id,
+                "order_type": order_type,
+                "stop_price": safe_float(order.get("stop_price")),
+                "limit_price": safe_float(order.get("limit_price")),
+                "recovered_after_restart": True,
+            },
+        )
+
+        if not notification_saved:
+            print(
+                "Activity notification recovery save failed for "
+                f"{order_id}; it will be retried later."
+            )
+            continue
+
+        try:
+            record_broker_exit_notification(
+                order_id=order_id,
+                symbol=symbol,
+                notified_at=datetime.now(timezone.utc).isoformat(),
+            )
+        except Exception as error:
+            print(
+                "Recovered Activity entry, but notification "
+                f"persistence failed for {order_id}: "
+                f"{clean_error_message(error)}"
+            )
 def run_auto_trader_cycle() -> dict[str, Any]:
     """
     Run one automatic PAPER-trading decision cycle.

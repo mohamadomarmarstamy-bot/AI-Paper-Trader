@@ -1038,6 +1038,17 @@ def initialize_database() -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS broker_exit_notifications (
+                order_id TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                notified_at TEXT NOT NULL
+            )
+            """
+        )
+
+
 def load_jarvis_profile() -> dict[str, Any]:
     """Load Jarvis user profile and voice settings."""
     defaults = {
@@ -3636,6 +3647,61 @@ def save_pro_ticker_discovery_cursor(
 
 
 # =========================================================
+def get_broker_exit_notification(
+    *,
+    order_id: str,
+) -> dict[str, Any] | None:
+    """Load an existing broker exit notification by order ID."""
+    normalized_order_id = str(order_id).strip()
+
+    if not normalized_order_id:
+        return None
+
+    with closing(get_connection()) as connection:
+        row = connection.execute(
+            """
+            SELECT order_id, symbol, notified_at
+            FROM broker_exit_notifications
+            WHERE order_id = ?
+            """,
+            (normalized_order_id,),
+        ).fetchone()
+
+    return dict(row) if row is not None else None
+
+
+def record_broker_exit_notification(
+    *,
+    order_id: str,
+    symbol: str,
+    notified_at: str,
+) -> bool:
+    """Atomically claim one broker exit notification by order ID."""
+    normalized_order_id = str(order_id).strip()
+
+    if not normalized_order_id:
+        raise ValueError("Broker order ID cannot be empty.")
+
+    normalized_symbol = _normalize_symbol(symbol)
+    normalized_timestamp = _validate_timestamp(notified_at)
+
+    with closing(get_connection()) as connection:
+        cursor = connection.execute(
+            """
+            INSERT OR IGNORE INTO broker_exit_notifications
+                (order_id, symbol, notified_at)
+            VALUES (?, ?, ?)
+            """,
+            (
+                normalized_order_id,
+                normalized_symbol,
+                normalized_timestamp,
+            ),
+        )
+        connection.commit()
+        return cursor.rowcount == 1
+
+
 # Broker fill ledger
 # =========================================================
 

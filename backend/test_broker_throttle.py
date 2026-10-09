@@ -8,6 +8,9 @@ from pathlib import Path
 import threading
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
+import sys
+import types
 import uuid
 
 from broker_throttle import BrokerRateLimited, BrokerRequestGate, DisplaySnapshotCache, has_matching_stop
@@ -31,7 +34,7 @@ def stop(symbol='TEST', qty=2, **extra):
 
 
 def functions(**overrides):
-    names = {'alpaca_paper_request', 'submit_alpaca_recovery_oco', 'reconcile_unprotected_positions', 'run_auto_trader_cycle', 'get_open_protective_stop_order', 'detect_new_broker_exit_fills'}
+    names = {'alpaca_paper_request', 'submit_alpaca_recovery_oco', 'reconcile_unprotected_positions', 'run_auto_trader_cycle', 'get_open_protective_stop_order', 'detect_new_broker_exit_fills', 'initialize_seen_exit_order_ids'}
     source = ast.parse((Path(__file__).parent / 'main.py').read_text(encoding='utf-8'))
     nodes = [n for n in source.body if isinstance(n, ast.FunctionDef) and n.name in names]
     ns = {'BrokerRateLimited': BrokerRateLimited, 'has_matching_stop': has_matching_stop,
@@ -39,7 +42,7 @@ def functions(**overrides):
           'ALPACA_READ_RETRY_ATTEMPTS': 3, 'ALPACA_READ_RETRY_DELAY_SECONDS': .75,
           'get_alpaca_headers': lambda: {}, 'extract_alpaca_error': lambda p: str(p),
           'clean_symbol': lambda s: str(s or '').strip().upper(), 'safe_float': lambda x: float(x) if x is not None else None,
-          'clean_error_message': str, 'math': math, 'uuid': uuid,
+          'clean_error_message': str, 'math': math, 'uuid': uuid, 'datetime': datetime, 'timezone': timezone,
           'AUTO_TRADER_STOP_LOSS_PERCENT': 2, 'AUTO_TRADER_TAKE_PROFIT_PERCENT': 4,
           'AUTO_TRADER_INACTIVE_PROTECTION_COOLDOWN_SECONDS': 6 * 60 * 60,
           '_auto_trader_inactive_protection_until': {},
@@ -303,6 +306,239 @@ class ProtectionTests(unittest.TestCase):
             ns["_auto_trader_seen_exit_order_ids"],
         )
 
+
+class StartupExitRecoveryTests(unittest.TestCase):
+    ORDER_ID = "recovered-exit-123"
+
+    def make_order(self, **changes):
+        order = {
+            "id": self.ORDER_ID,
+            "symbol": "MU",
+            "side": "sell",
+            "status": "filled",
+            "filled_qty": "5",
+            "filled_avg_price": "105.50",
+            "filled_at": "2026-09-28T14:00:00Z",
+            "type": "stop",
+            "stop_price": "105.50",
+            "limit_price": None,
+            "client_order_id": "auto-stop-test",
+        }
+        order.update(changes)
+        return order
+
+    def run_recovery(
+        self,
+        orders,
+        *,
+        reconciled=True,
+        existing_notification=None,
+        log_saved=True,
+        lookup_error=None,
+    ):
+        activity = []
+        persisted_notifications = []
+        seen_ids = set()
+
+        database_module = types.ModuleType("database")
+        def get_notification(*, order_id):
+            if lookup_error is not None:
+                raise lookup_error
+            return existing_notification
+
+        database_module.get_broker_exit_notification = get_notification
+
+        ns = functions(
+            fetch_alpaca_paper_orders=lambda limit=100: orders,
+            has_trade_book_order_link=lambda **kwargs: (
+                reconciled
+                and kwargs.get("order_id") == self.ORDER_ID
+                and kwargs.get("order_role") == "EXIT"
+            ),
+            _auto_trader_seen_exit_order_ids=seen_ids,
+            add_auto_trader_log=lambda *args, **kwargs: (
+                activity.append((args, kwargs)) or log_saved
+            ),
+            record_broker_exit_notification=lambda **kwargs: (
+                persisted_notifications.append(kwargs) or True
+            ),
+        )
+
+        with patch.dict(sys.modules, {"database": database_module}):
+            ns["initialize_seen_exit_order_ids"]()
+
+        return activity, persisted_notifications, seen_ids
+
+    def test_notification_lookup_failure_is_safe_and_retry_recovers(self):
+        activity, persisted, seen = self.run_recovery(
+            [self.make_order()],
+            lookup_error=RuntimeError("temporary database failure"),
+        )
+
+        self.assertEqual(activity, [])
+        self.assertEqual(persisted, [])
+        self.assertIn(self.ORDER_ID, seen)
+
+        # A subsequent recovery attempt can restore the notification.
+        activity, persisted, seen = self.run_recovery(
+            [self.make_order()],
+        )
+
+        self.assertEqual(len(activity), 1)
+        self.assertEqual(len(persisted), 1)
+        self.assertEqual(persisted[0]["order_id"], self.ORDER_ID)
+        self.assertIn(self.ORDER_ID, seen)
+
+    def test_missing_activity_notification_is_recovered(self):
+        activity, persisted, seen = self.run_recovery(
+            [self.make_order()]
+        )
+
+        self.assertEqual(len(activity), 1)
+        args, kwargs = activity[0]
+
+        self.assertEqual(args[0], "protective_stop_fill")
+        self.assertEqual(kwargs["symbol"], "MU")
+        self.assertEqual(kwargs["details"]["order_id"], self.ORDER_ID)
+        self.assertTrue(kwargs["details"]["recovered_after_restart"])
+
+        self.assertEqual(len(persisted), 1)
+        self.assertEqual(persisted[0]["order_id"], self.ORDER_ID)
+        self.assertIn(self.ORDER_ID, seen)
+
+    def test_existing_notification_does_not_create_duplicate(self):
+        activity, persisted, seen = self.run_recovery(
+            [self.make_order()],
+            existing_notification={
+                "order_id": self.ORDER_ID,
+                "symbol": "MU",
+                "notified_at": "2026-09-28T14:01:00Z",
+            },
+        )
+
+        self.assertEqual(activity, [])
+        self.assertEqual(persisted, [])
+        self.assertIn(self.ORDER_ID, seen)
+
+    def test_unreconciled_exit_is_not_recovered(self):
+        activity, persisted, seen = self.run_recovery(
+            [self.make_order()],
+            reconciled=False,
+        )
+
+        self.assertEqual(activity, [])
+        self.assertEqual(persisted, [])
+        self.assertNotIn(self.ORDER_ID, seen)
+
+    def test_nested_bracket_sell_is_recovered(self):
+        parent = {
+            "id": "parent-order-123",
+            "symbol": "MU",
+            "side": "buy",
+            "status": "filled",
+            "legs": [self.make_order()],
+        }
+
+        activity, persisted, seen = self.run_recovery([parent])
+
+        self.assertEqual(len(activity), 1)
+        self.assertEqual(
+            activity[0][1]["details"]["order_id"],
+            self.ORDER_ID,
+        )
+        self.assertEqual(len(persisted), 1)
+        self.assertIn(self.ORDER_ID, seen)
+
+    def test_failed_activity_save_remains_retryable(self):
+        activity, persisted, seen = self.run_recovery(
+            [self.make_order()],
+            log_saved=False,
+        )
+
+        self.assertEqual(len(activity), 1)
+        self.assertEqual(persisted, [])
+        self.assertIn(self.ORDER_ID, seen)
+
+    def test_extended_hours_profit_exit_gets_correct_reason(self):
+        order = self.make_order(
+            type="market",
+            client_order_id="auto-ext-p-test",
+        )
+
+        activity, persisted, _ = self.run_recovery([order])
+
+        self.assertEqual(len(activity), 1)
+        self.assertEqual(
+            activity[0][0][0],
+            "extended_hours_profit_trail",
+        )
+        self.assertEqual(len(persisted), 1)
+
+
+
+
+class BrokerNotificationRetryTests(unittest.TestCase):
+    def test_failed_notification_recovers_on_next_scan(self):
+        order = {
+            "id": "retry-exit-123",
+            "symbol": "MU",
+            "side": "sell",
+            "status": "filled",
+            "filled_qty": "5",
+            "filled_avg_price": "105.50",
+            "filled_at": "2026-10-08T14:00:00Z",
+            "type": "stop",
+            "stop_price": "105.50",
+        }
+
+        seen = set()
+        notifications = []
+        attempts = []
+        fetch_count = [0]
+
+        database_module = types.ModuleType("database")
+
+        def get_notification(*, order_id):
+            return (
+                {"order_id": order_id}
+                if notifications
+                else None
+            )
+
+        database_module.get_broker_exit_notification = get_notification
+
+        def save_activity(*args, **kwargs):
+            attempts.append(kwargs)
+            return len(attempts) > 1
+
+        def record_notification(**kwargs):
+            notifications.append(kwargs)
+            return True
+
+        def fetch_orders(limit=100):
+            fetch_count[0] += 1
+            return [order]
+
+        ns = functions(
+            fetch_alpaca_paper_orders=fetch_orders,
+            has_trade_book_order_link=lambda **kwargs: True,
+            _auto_trader_seen_exit_order_ids=seen,
+            add_auto_trader_log=save_activity,
+            record_broker_exit_notification=record_notification,
+        )
+
+        with patch.dict(sys.modules, {"database": database_module}):
+            first = ns["detect_new_broker_exit_fills"]()
+            second = ns["detect_new_broker_exit_fills"]()
+            third = ns["detect_new_broker_exit_fills"]()
+
+        self.assertEqual(first, [])
+        self.assertEqual(second, [])
+        self.assertEqual(third, [])
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(len(notifications), 1)
+        self.assertEqual(fetch_count[0], 3)
+        self.assertIn(order["id"], seen)
 
 if __name__ == '__main__':
     unittest.main()
