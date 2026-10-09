@@ -1,4 +1,4 @@
-window.API_URL =
+﻿window.API_URL =
     "https://ai-paper-trader-production-7465.up.railway.app";
     
 async function refreshDashboard() {
@@ -79,7 +79,7 @@ async function loadAutoTraderHealth() {
         ).toLowerCase();
 
         badge.textContent =
-            health.toUpperCase();
+            health.replaceAll("_", " ").toUpperCase();
 
         badge.dataset.health = health;
 
@@ -89,9 +89,13 @@ async function loadAutoTraderHealth() {
                 : "Disabled";
 
         scannerStatus.textContent =
-            status?.last_scan_at
-                ? "Active"
-                : "Not running";
+            health === "market_closed"
+                ? "Market closed"
+                : (
+                    status?.last_scan_at
+                        ? "Last scan recorded"
+                        : "Not running"
+                );
 
         cycleStatus.textContent =
             status?.cycle_running
@@ -111,6 +115,9 @@ async function loadAutoTraderHealth() {
         } else if (health === "stalled") {
             message.textContent =
                 "No successful trading cycle has completed within the watchdog limit.";
+        } else if (health === "market_closed") {
+            message.textContent =
+                "Regular market scanning is paused. After-hours monitoring is handled separately.";
         } else if (health === "waiting") {
             message.textContent =
                 "Waiting for the first successful cycle and scanner update.";

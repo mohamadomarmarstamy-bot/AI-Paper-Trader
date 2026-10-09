@@ -13994,12 +13994,29 @@ def get_auto_trader_status() -> dict[str, Any]:
         and _auto_trader_last_cycle_result.get("success") is False
     )
 
+    cached_market_closed = (
+        isinstance(_auto_trader_last_market_clock, dict)
+        and market_clock_cache_age_seconds is not None
+        and 0 <= market_clock_cache_age_seconds
+        <= AUTO_TRADER_MARKET_CLOCK_CACHE_SECONDS
+        and _auto_trader_last_market_clock.get("is_open") is False
+    )
+
+    after_hours_failed = (
+        isinstance(_auto_trader_last_after_hours_monitor_result, dict)
+        and _auto_trader_last_after_hours_monitor_result.get("success") is False
+    )
+
     if not _auto_trader_enabled:
         health = "disabled"
     elif _auto_trader_health_alert_active:
         health = "stalled"
     elif latest_cycle_failed:
         health = "degraded"
+    elif cached_market_closed and after_hours_failed:
+        health = "degraded"
+    elif cached_market_closed:
+        health = "market_closed"
     elif (
         _auto_trader_last_successful_cycle_at is None
         or _auto_trader_last_scan_at is None
