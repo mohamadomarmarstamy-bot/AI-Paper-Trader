@@ -6728,6 +6728,60 @@ def submit_alpaca_recovery_oco(
             ),
         }
 
+    # Verify broker asset eligibility before changing any open orders.
+    # A failed lookup must not be treated as an inactive asset.
+    try:
+        asset = alpaca_paper_request(
+            "GET",
+            f"/v2/assets/{normalized_symbol}",
+        )
+    except BrokerRateLimited as error:
+        return {
+            "success": False,
+            "paper": True,
+            "symbol": normalized_symbol,
+            "deferred": True,
+            "retry_after_seconds": error.retry_after,
+            "error": str(error),
+        }
+    except Exception as error:
+        return {
+            "success": False,
+            "paper": True,
+            "symbol": normalized_symbol,
+            "deferred": True,
+            "error": (
+                "Asset eligibility could not be verified: "
+                + clean_error_message(error)
+            ),
+        }
+
+    if not isinstance(asset, dict):
+        return {
+            "success": False,
+            "paper": True,
+            "symbol": normalized_symbol,
+            "deferred": True,
+            "error": "Alpaca returned invalid asset eligibility data.",
+        }
+
+    asset_status = str(asset.get("status") or "").lower()
+    asset_tradable = asset.get("tradable")
+
+    if asset_status != "active" or asset_tradable is not True:
+        return {
+            "success": False,
+            "paper": True,
+            "symbol": normalized_symbol,
+            "inactive_asset": True,
+            "requires_attention": True,
+            "error": (
+                "Asset is inactive or not tradable; "
+                "position remains without confirmed recovery protection. "
+                f"status={asset_status}, tradable={asset_tradable}"
+            ),
+        }
+
     try:
         open_orders = (
             fetch_alpaca_open_orders_for_symbol(
@@ -7396,8 +7450,11 @@ def reconcile_unprotected_positions(
                 result.get("error") or ""
             )
             inactive_asset_error = (
-                "asset " in protection_error.lower()
-                and " is not active" in protection_error.lower()
+                result.get("inactive_asset") is True
+                or (
+                    "asset " in protection_error.lower()
+                    and " is not active" in protection_error.lower()
+                )
             )
 
             if inactive_asset_error:
@@ -7407,6 +7464,24 @@ def reconcile_unprotected_positions(
                     time.time()
                     + AUTO_TRADER_INACTIVE_PROTECTION_COOLDOWN_SECONDS
                 )
+                add_auto_trader_log(
+                    "protection_inactive_asset",
+                    symbol=symbol,
+                    message=(
+                        "PAPER position requires attention: "
+                        "Alpaca reports the asset as inactive "
+                        "or not tradable. No recovery order submitted."
+                    ),
+                    details={
+                        "shares": shares,
+                        "inactive_asset": True,
+                        "requires_attention": True,
+                        "protected": False,
+                        "error": result.get("error"),
+                    },
+                )
+                continue
+
             add_auto_trader_log(
                 "protection_restore_failed",
                 symbol=symbol,

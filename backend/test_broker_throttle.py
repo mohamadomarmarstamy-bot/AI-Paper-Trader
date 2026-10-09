@@ -239,18 +239,67 @@ class ProtectionTests(unittest.TestCase):
             ns["_auto_trader_inactive_protection_until"]["DBRG"],
             1000.0,
         )
+    def test_structured_inactive_asset_starts_cooldown(self):
+        clock = SimpleNamespace(time=lambda: 1000.0, sleep=lambda s: None)
+        ns = functions(time=clock)
+        recovery_calls = []
+        logs = []
+
+        ns["alpaca_paper_request"] = lambda *a, **kw: []
+        ns["add_auto_trader_log"] = (
+            lambda event, **kw: logs.append(event)
+        )
+        ns["submit_alpaca_recovery_oco"] = (
+            lambda **kw: recovery_calls.append(kw) or {
+                "success": False,
+                "paper": True,
+                "symbol": "DBRG",
+                "inactive_asset": True,
+                "requires_attention": True,
+                "error": "Asset is inactive or not tradable",
+            }
+        )
+
+        position = {
+            "symbol": "DBRG",
+            "qty": 120,
+            "current_price": 16.00,
+        }
+
+        first = ns["reconcile_unprotected_positions"]([position])
+        second = ns["reconcile_unprotected_positions"]([position])
+
+        self.assertEqual(len(recovery_calls), 1)
+        self.assertFalse(first[0]["result"]["success"])
+        self.assertTrue(second[0]["result"]["deferred"])
+        self.assertTrue(second[0]["result"]["inactive_asset"])
+        self.assertGreater(
+            ns["_auto_trader_inactive_protection_until"]["DBRG"],
+            1000.0,
+        )
+        self.assertIn("protection_inactive_asset", logs)
+        self.assertNotIn("protection_restore_failed", logs)
+
     def test_recovery_still_refreshes_quantity_before_post(self):
         ns = functions(fetch_alpaca_open_orders_for_symbol=lambda s: [],
                        fetch_alpaca_paper_positions=lambda: [{'symbol': 'TEST', 'qty': 44}])
         posts = []
-        ns['alpaca_paper_request'] = lambda *a, **kw: posts.append(kw['json_body']) or {'id': 'new'}
+        ns['alpaca_paper_request'] = lambda method, path, **kw: (
+            {'status': 'active', 'tradable': True}
+            if method == 'GET' and path.startswith('/v2/assets/')
+            else posts.append(kw['json_body']) or {'id': 'new'}
+        )
         result = ns['submit_alpaca_recovery_oco'](symbol='TEST', shares=537, current_price=3)
         self.assertTrue(result['success']); self.assertEqual(posts[0]['qty'], '44')
 
     def test_position_read_rate_limit_defers_without_post(self):
         def limited(): raise BrokerRateLimited(60)
         ns = functions(fetch_alpaca_open_orders_for_symbol=lambda s: [], fetch_alpaca_paper_positions=limited)
-        ns['alpaca_paper_request'] = lambda *a, **kw: self.fail('quantity unknown; must not submit')
+        ns['alpaca_paper_request'] = lambda method, path, **kw: (
+            {'status': 'active', 'tradable': True}
+            if method == 'GET' and path.startswith('/v2/assets/')
+            else self.fail('quantity unknown; must not submit')
+        )
         result = ns['submit_alpaca_recovery_oco'](symbol='TEST', shares=2, current_price=100)
         self.assertTrue(result['deferred']); self.assertEqual(result['retry_after_seconds'], 60)
 
