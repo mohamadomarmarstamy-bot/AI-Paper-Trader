@@ -26,6 +26,7 @@ from broker_throttle import BrokerRequestGate, BrokerRateLimited, DisplaySnapsho
 _broker_request_gate = BrokerRequestGate()
 _dashboard_snapshot_cache = DisplaySnapshotCache(ttl=10.0)
 _history_snapshot_cache = DisplaySnapshotCache(ttl=60.0)
+_portfolio_history_cache = DisplaySnapshotCache(ttl=300.0)
 
 from reporting_metrics import (account_equity_metrics, summarize_trades, daily_realized_summaries, annotate_order_history, timestamp_sort_key)
 from entry_quality import evaluate_entry_quality, tighten_score_minimum
@@ -14669,7 +14670,7 @@ def portfolio_history(
     )
 
     try:
-        return fetch_alpaca_portfolio_history()
+        return _portfolio_history_cache.get(fetch_alpaca_portfolio_history)
 
     except Exception as error:
         print(
