@@ -9764,7 +9764,10 @@ def detect_new_broker_exit_fills() -> list[dict[str, Any]]:
                 ),
             },
         )
-        return results
+        raise RuntimeError(
+            "Broker exit reconciliation failed; "
+            "new PAPER entries must be deferred."
+        ) from error
 
     flattened_orders: list[dict[str, Any]] = []
     seen_order_ids: set[str] = set()
@@ -10738,11 +10741,19 @@ def run_auto_trader_cycle() -> dict[str, Any]:
 
             return cycle_result
 
-        cycle_result[
-            "broker_exit_fills"
-        ] = (
-            log_new_broker_exit_fills()
-        )
+        broker_exit_scan_failed = False
+
+        try:
+            cycle_result[
+                "broker_exit_fills"
+            ] = log_new_broker_exit_fills()
+        except Exception as error:
+            broker_exit_scan_failed = True
+            cycle_result["broker_exit_fills"] = {
+                "success": False,
+                "paper": True,
+                "error": clean_error_message(error),
+            }
 
         market_regime = get_market_regime(
             force_refresh=False
@@ -12089,6 +12100,25 @@ def run_auto_trader_cycle() -> dict[str, Any]:
         )
 
         new_positions = 0
+
+        if broker_exit_scan_failed:
+            cycle_result["success"] = False
+            cycle_result["entries_paused"] = True
+            cycle_result["entries_paused_reason"] = (
+                "Broker exit reconciliation failed. "
+                "New PAPER purchases are paused until "
+                "a successful broker exit scan."
+            )
+
+            add_auto_trader_log(
+                "entries_paused",
+                message=(
+                    "Automatic PAPER purchases paused "
+                    "because broker exit reconciliation failed."
+                ),
+            )
+
+            return cycle_result
 
         for candidate in scanner_results:
 
