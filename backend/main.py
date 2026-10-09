@@ -3360,6 +3360,64 @@ def validate_alpaca_paper_order_risk(
             ),
         }
 
+
+    # Verify asset eligibility before approving a purchase.
+    # Selling existing positions continues through the existing path.
+    if normalized_side == "buy":
+        try:
+            asset = alpaca_paper_request(
+                "GET",
+                f"/v2/assets/{normalized_symbol}",
+            )
+        except BrokerRateLimited as error:
+            return {
+                "approved": False,
+                "deferred": True,
+                "retry_after_seconds": error.retry_after,
+                "error": (
+                    "Purchase deferred because Alpaca "
+                    "rate-limited the asset eligibility check."
+                ),
+            }
+        except Exception as error:
+            return {
+                "approved": False,
+                "asset_eligibility_unverified": True,
+                "error": (
+                    "Purchase blocked because asset eligibility "
+                    "could not be verified: "
+                    + clean_error_message(error)
+                ),
+            }
+
+        if not isinstance(asset, dict):
+            return {
+                "approved": False,
+                "asset_eligibility_unverified": True,
+                "error": (
+                    "Purchase blocked because Alpaca returned "
+                    "invalid asset eligibility data."
+                ),
+            }
+
+        asset_status = str(
+            asset.get("status") or ""
+        ).lower()
+
+        asset_tradable = asset.get("tradable")
+
+        if asset_status != "active" or asset_tradable is not True:
+            return {
+                "approved": False,
+                "inactive_asset": True,
+                "requires_attention": True,
+                "error": (
+                    f"Purchase blocked: {normalized_symbol} "
+                    "is inactive or not tradable. "
+                    f"status={asset_status}, "
+                    f"tradable={asset_tradable}"
+                ),
+            }
     account = fetch_alpaca_paper_account()
     positions = fetch_alpaca_paper_positions()
 
