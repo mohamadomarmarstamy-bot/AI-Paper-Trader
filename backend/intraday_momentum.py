@@ -166,7 +166,7 @@ def fetch_intraday_momentum(
 
     result = calculate_intraday_momentum(bars)
 
-    if result.get("available"):
+    if result.get("available") or result.get("reason") == "missing_timeframe_candles":
         try:
             latest_bar = datetime.fromisoformat(
                 str(bars[-1]["t"]).replace("Z", "+00:00")

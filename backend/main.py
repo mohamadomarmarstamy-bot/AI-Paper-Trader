@@ -15977,6 +15977,40 @@ def auto_trader_intraday_momentum_research(
         alpaca_market_data_request,
     )
 
+@app.get("/auto-trader/automated-momentum-research")
+def auto_trader_automated_momentum_research(
+    request: Request,
+    limit: int = Query(default=10, ge=1, le=30),
+) -> dict[str, Any]:
+    """Evaluate fresh scanner candidates without placing orders."""
+    require_app_session(request)
+
+    from automated_momentum_research import evaluate_momentum_candidates
+    from scanner import get_fresh_scanner_candidates
+
+    candidates = get_fresh_scanner_candidates()
+
+    if not candidates:
+        return {
+            "research_only": True,
+            "available": False,
+            "reason": "no_fresh_scanner_candidates",
+            "evaluated_count": 0,
+            "results": [],
+        }
+
+    result = evaluate_momentum_candidates(
+        candidates,
+        alpaca_market_data_request,
+        limit=limit,
+    )
+
+    result["available"] = True
+    result["candidate_source"] = "fresh_scanner_cache"
+
+    return result
+
+
 @app.get("/auto-trader/pro-ticker-research")
 def auto_trader_pro_ticker_research(
     request: Request,

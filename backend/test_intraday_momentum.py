@@ -166,6 +166,32 @@ class TestIntradayFreshness(unittest.TestCase):
             "stale_or_incomplete_minute_bars",
         )
 
+    def test_stale_partial_bars_rejected(self):
+        from intraday_momentum import fetch_intraday_momentum
+
+        # Five consecutive candles cannot provide all 15-minute
+        # measurements, and these candles are also outdated.
+        bars = make_bars([10.0] * 5)
+
+        def fake_request(method, path, *, params):
+            return {"bars": bars}
+
+        result = fetch_intraday_momentum(
+            "TEST",
+            fake_request,
+            now=datetime(
+                2026, 10, 12, 15, 30,
+                tzinfo=timezone.utc,
+            ),
+        )
+
+        self.assertFalse(result["available"])
+        self.assertEqual(
+            result["reason"],
+            "stale_or_incomplete_minute_bars",
+        )
+        self.assertTrue(result["research_only"])
+
     def test_incomplete_bar_rejected(self):
         from intraday_momentum import fetch_intraday_momentum
 

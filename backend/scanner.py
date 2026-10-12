@@ -1403,6 +1403,17 @@ def scan_market(
         return _copy_results(final_results)
 
 
+def get_fresh_scanner_candidates() -> list[dict[str, Any]]:
+    """
+    Return fresh cached scanner candidates without running a scan.
+
+    Returns an empty list when the cache is empty or expired.
+    This function never downloads market data.
+    """
+    results = _get_cached_results(allow_stale=False)
+    return results if results is not None else []
+
+
 def clear_scanner_cache() -> None:
     """Clear scanner results manually."""
     with _cache_lock:
