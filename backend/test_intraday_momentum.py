@@ -141,6 +141,43 @@ class TestIntradayMomentum(unittest.TestCase):
         )
 
 
+
+class TestIntradayCandleDiagnostics(unittest.TestCase):
+
+    def test_complete_candles_have_no_gaps(self):
+        bars = make_bars([10.0] * 16)
+
+        result = calculate_intraday_momentum(bars)
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["missing_reference_minutes"], [])
+        self.assertEqual(result["missing_candle_count"], 0)
+
+    def test_missing_five_minute_reference(self):
+        bars = make_bars([10.0] * 16)
+        del bars[-6]
+
+        result = calculate_intraday_momentum(bars)
+
+        self.assertFalse(result["available"])
+        self.assertEqual(
+            result["missing_reference_minutes"],
+            [5],
+        )
+        self.assertEqual(result["missing_candle_count"], 1)
+        self.assertIsNone(result["change_5m_percent"])
+
+    def test_unrelated_missing_candle(self):
+        bars = make_bars([10.0] * 16)
+        del bars[7]
+
+        result = calculate_intraday_momentum(bars)
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["missing_reference_minutes"], [])
+        self.assertEqual(result["missing_candle_count"], 1)
+
+
 class TestIntradayFreshness(unittest.TestCase):
 
     def test_stale_bars_rejected(self):
@@ -226,6 +263,94 @@ class TestIntradayFreshness(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestIntradayFreshnessDiagnostics(unittest.TestCase):
+
+    def test_fresh_candle_diagnostics(self):
+        from intraday_momentum import fetch_intraday_momentum
+
+        bars = make_bars([10.0] * 16)
+
+        def fake_request(method, path, *, params):
+            return {"bars": bars}
+
+        result = fetch_intraday_momentum(
+            "TEST",
+            fake_request,
+            now=datetime(
+                2026, 10, 12, 14, 46, 30,
+                tzinfo=timezone.utc,
+            ),
+        )
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["data_freshness"], "fresh")
+        self.assertEqual(result["latest_bar_age_seconds"], 90.0)
+        self.assertEqual(
+            result["latest_bar_timestamp"],
+            "2026-10-12T14:45:00+00:00",
+        )
+
+    def test_stale_candles_preserve_diagnostics(self):
+        from intraday_momentum import fetch_intraday_momentum
+
+        bars = make_bars([10.0] * 16)
+        del bars[-6]
+
+        def fake_request(method, path, *, params):
+            return {"bars": bars}
+
+        result = fetch_intraday_momentum(
+            "TEST",
+            fake_request,
+            now=datetime(
+                2026, 10, 12, 15, 30,
+                tzinfo=timezone.utc,
+            ),
+        )
+
+        self.assertFalse(result["available"])
+        self.assertEqual(
+            result["reason"],
+            "stale_or_incomplete_minute_bars",
+        )
+        self.assertEqual(result["data_freshness"], "stale")
+        self.assertEqual(result["missing_reference_minutes"], [5])
+        self.assertEqual(result["missing_candle_count"], 1)
+        self.assertEqual(result["latest_bar_age_seconds"], 2700.0)
+
+    def test_incomplete_candle_diagnostics(self):
+        from intraday_momentum import fetch_intraday_momentum
+
+        bars = make_bars([10.0] * 16)
+
+        for bar in bars:
+            timestamp = datetime.fromisoformat(bar["t"])
+            bar["t"] = (
+                timestamp + timedelta(minutes=1)
+            ).isoformat()
+
+        def fake_request(method, path, *, params):
+            return {"bars": bars}
+
+        result = fetch_intraday_momentum(
+            "TEST",
+            fake_request,
+            now=datetime(
+                2026, 10, 12, 14, 46, 30,
+                tzinfo=timezone.utc,
+            ),
+        )
+
+        self.assertFalse(result["available"])
+        self.assertEqual(
+            result["reason"],
+            "stale_or_incomplete_minute_bars",
+        )
+        self.assertEqual(result["data_freshness"], "incomplete")
+        self.assertEqual(result["latest_bar_age_seconds"], 30.0)
+
 
 class TestAlpacaIntradayFetcher(unittest.TestCase):
 

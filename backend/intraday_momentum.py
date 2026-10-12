@@ -56,6 +56,22 @@ def calculate_intraday_momentum(
     latest_timestamp, current_price = valid_bars[-1]
     prices_by_time = dict(valid_bars)
 
+    missing_reference_minutes = [
+        minutes
+        for minutes in (1, 5, 15)
+        if latest_timestamp - timedelta(minutes=minutes)
+        not in prices_by_time
+    ]
+
+    first_timestamp = valid_bars[0][0]
+    expected_candle_count = int(
+        (latest_timestamp - first_timestamp).total_seconds() / 60
+    ) + 1
+
+    missing_candle_count = (
+        expected_candle_count - len(valid_bars)
+    )
+
     changes = {}
 
     for minutes in (1, 5, 15):
@@ -81,6 +97,8 @@ def calculate_intraday_momentum(
         "available": available,
         "reason": None if available else "missing_timeframe_candles",
         "bars_available": len(valid_bars),
+        "missing_reference_minutes": missing_reference_minutes,
+        "missing_candle_count": missing_candle_count,
         "current_price": round(current_price, 4),
         "change_1m_percent": change_1m,
         "change_5m_percent": change_5m,
@@ -166,25 +184,43 @@ def fetch_intraday_momentum(
 
     result = calculate_intraday_momentum(bars)
 
-    if result.get("available") or result.get("reason") == "missing_timeframe_candles":
+    latest_bar = None
+
+    if bars:
         try:
             latest_bar = datetime.fromisoformat(
                 str(bars[-1]["t"]).replace("Z", "+00:00")
-            ).astimezone(timezone.utc)
-        except (KeyError, TypeError, ValueError):
+            )
+            if latest_bar.tzinfo is None:
+                latest_bar = None
+            else:
+                latest_bar = latest_bar.astimezone(timezone.utc)
+        except (KeyError, TypeError, ValueError, OverflowError):
             latest_bar = None
 
-        # Alpaca timestamps identify the START of each minute.
-        # A bar is complete one minute after its timestamp.
-        if (
-            latest_bar is None
-            or latest_bar > completed_minute - timedelta(minutes=1)
-            or latest_bar < completed_minute - timedelta(minutes=3)
-        ):
-            result = {
-                "available": False,
-                "reason": "stale_or_incomplete_minute_bars",
-            }
+    result["latest_bar_timestamp"] = (
+        latest_bar.isoformat() if latest_bar is not None else None
+    )
+    result["latest_bar_age_seconds"] = (
+        round((current_time - latest_bar).total_seconds(), 3)
+        if latest_bar is not None else None
+    )
+
+    if latest_bar is None:
+        result["data_freshness"] = "unknown"
+    elif latest_bar > completed_minute - timedelta(minutes=1):
+        result["data_freshness"] = "incomplete"
+    elif latest_bar < completed_minute - timedelta(minutes=3):
+        result["data_freshness"] = "stale"
+    else:
+        result["data_freshness"] = "fresh"
+
+    if (
+        result.get("available")
+        or result.get("reason") == "missing_timeframe_candles"
+    ) and result["data_freshness"] != "fresh":
+        result["available"] = False
+        result["reason"] = "stale_or_incomplete_minute_bars"
 
     result["symbol"] = normalized_symbol
     result["data_source"] = "alpaca_iex"
