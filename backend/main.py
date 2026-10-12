@@ -12310,7 +12310,7 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 continue
 
             if symbol in pending_entry_symbols:
-                skipped_candidates.append({
+                cycle_result["skipped_candidates"].append({
                     "symbol": symbol,
                     "reason": (
                         "PAPER entry order is already "
