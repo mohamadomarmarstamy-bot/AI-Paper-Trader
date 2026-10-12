@@ -15960,6 +15960,23 @@ def auto_trader_pro_ticker_learning(
     )
 
 
+
+
+@app.get("/auto-trader/intraday-momentum-research")
+def auto_trader_intraday_momentum_research(
+    request: Request,
+    symbol: str = Query(..., min_length=1, max_length=10),
+) -> dict[str, Any]:
+    """Read-only intraday momentum research. Never places orders."""
+    require_app_session(request)
+
+    from intraday_momentum import fetch_intraday_momentum
+
+    return fetch_intraday_momentum(
+        symbol,
+        alpaca_market_data_request,
+    )
+
 @app.get("/auto-trader/pro-ticker-research")
 def auto_trader_pro_ticker_research(
     request: Request,
