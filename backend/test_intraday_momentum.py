@@ -42,8 +42,11 @@ class TestIntradayMomentum(unittest.TestCase):
 
         self.assertFalse(result["available"])
         self.assertEqual(
-            result["reason"], "insufficient_minute_bars"
+            result["reason"], "missing_timeframe_candles"
         )
+        self.assertEqual(result["change_1m_percent"], 0.0)
+        self.assertIsNone(result["change_5m_percent"])
+        self.assertIsNone(result["change_15m_percent"])
 
     def test_invalid_data(self):
         bars = make_bars([10.0] * 16)
@@ -73,6 +76,62 @@ class TestIntradayMomentum(unittest.TestCase):
     def test_out_of_order_bars(self):
         bars = make_bars([10.0] * 16)
         bars[7], bars[8] = bars[8], bars[7]
+
+        result = calculate_intraday_momentum(bars)
+
+        self.assertFalse(result["available"])
+        self.assertEqual(
+            result["reason"], "nonconsecutive_minute_bars"
+        )
+
+
+    def test_missing_unrelated_minute(self):
+        bars = make_bars([10 + i * 0.1 for i in range(16)])
+        del bars[7]
+
+        result = calculate_intraday_momentum(bars)
+
+        self.assertTrue(result["available"])
+        self.assertIsNotNone(result["change_1m_percent"])
+        self.assertIsNotNone(result["change_5m_percent"])
+        self.assertIsNotNone(result["change_15m_percent"])
+
+    def test_missing_one_minute_reference(self):
+        bars = make_bars([10 + i * 0.1 for i in range(16)])
+        del bars[-2]
+
+        result = calculate_intraday_momentum(bars)
+
+        self.assertFalse(result["available"])
+        self.assertIsNone(result["change_1m_percent"])
+        self.assertIsNotNone(result["change_5m_percent"])
+        self.assertIsNotNone(result["change_15m_percent"])
+
+    def test_missing_five_minute_reference(self):
+        bars = make_bars([10 + i * 0.1 for i in range(16)])
+        del bars[-6]
+
+        result = calculate_intraday_momentum(bars)
+
+        self.assertFalse(result["available"])
+        self.assertIsNotNone(result["change_1m_percent"])
+        self.assertIsNone(result["change_5m_percent"])
+        self.assertIsNotNone(result["change_15m_percent"])
+
+    def test_missing_fifteen_minute_reference(self):
+        bars = make_bars([10 + i * 0.1 for i in range(16)])
+        del bars[0]
+
+        result = calculate_intraday_momentum(bars)
+
+        self.assertFalse(result["available"])
+        self.assertIsNotNone(result["change_1m_percent"])
+        self.assertIsNotNone(result["change_5m_percent"])
+        self.assertIsNone(result["change_15m_percent"])
+
+    def test_duplicate_timestamp_rejected(self):
+        bars = make_bars([10.0] * 16)
+        bars[8]["t"] = bars[7]["t"]
 
         result = calculate_intraday_momentum(bars)
 

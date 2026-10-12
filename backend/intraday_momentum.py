@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
 def calculate_intraday_momentum(
     bars: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Calculate momentum from 16 consecutive one-minute bars.
+    """Calculate timestamp-based intraday momentum.
 
+    Missing candles are never replaced with invented prices.
     Research-only. Does not authorize trades.
     """
     valid_bars = []
@@ -32,18 +33,17 @@ def calculate_intraday_momentum(
 
         valid_bars.append((timestamp, price))
 
-    if len(valid_bars) < 16:
+    if len(valid_bars) < 2:
         return {
             "available": False,
             "reason": "insufficient_minute_bars",
             "bars_available": len(valid_bars),
         }
 
-    recent = valid_bars[-16:]
-
-    for previous, current in zip(recent, recent[1:]):
+    for previous, current in zip(valid_bars, valid_bars[1:]):
         seconds = (current[0] - previous[0]).total_seconds()
-        if seconds != 60:
+
+        if seconds <= 0 or seconds % 60 != 0:
             return {
                 "available": False,
                 "reason": "nonconsecutive_minute_bars",
@@ -53,29 +53,46 @@ def calculate_intraday_momentum(
                 "bars_available": len(valid_bars),
             }
 
-    closes = [price for _, price in recent]
-    current_price = closes[-1]
+    latest_timestamp, current_price = valid_bars[-1]
+    prices_by_time = dict(valid_bars)
 
-    def change(minutes: int) -> float:
-        previous = closes[-(minutes + 1)]
-        return (current_price / previous - 1.0) * 100.0
+    changes = {}
 
-    change_1m = change(1)
-    change_5m = change(5)
-    change_15m = change(15)
+    for minutes in (1, 5, 15):
+        target = latest_timestamp - timedelta(minutes=minutes)
+        previous_price = prices_by_time.get(target)
+
+        changes[minutes] = (
+            round((current_price / previous_price - 1.0) * 100.0, 3)
+            if previous_price is not None
+            else None
+        )
+
+    change_1m = changes[1]
+    change_5m = changes[5]
+    change_15m = changes[15]
+
+    available = all(
+        change is not None
+        for change in (change_1m, change_5m, change_15m)
+    )
 
     return {
-        "available": True,
+        "available": available,
+        "reason": None if available else "missing_timeframe_candles",
         "bars_available": len(valid_bars),
         "current_price": round(current_price, 4),
-        "change_1m_percent": round(change_1m, 3),
-        "change_5m_percent": round(change_5m, 3),
-        "change_15m_percent": round(change_15m, 3),
-        "acceleration_5m": round(
-            change_5m - change_15m / 3.0, 3
+        "change_1m_percent": change_1m,
+        "change_5m_percent": change_5m,
+        "change_15m_percent": change_15m,
+        "acceleration_5m": (
+            round(change_5m - change_15m / 3.0, 3)
+            if change_5m is not None and change_15m is not None
+            else None
         ),
         "research_only": True,
     }
+
 
 def fetch_intraday_momentum(
     symbol: str,
