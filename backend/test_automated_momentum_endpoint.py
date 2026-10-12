@@ -80,6 +80,77 @@ class AutomatedMomentumEndpointTests(unittest.TestCase):
         self.assertEqual(result["evaluated_count"], 0)
         evaluate.assert_not_called()
 
+    def test_market_session_is_included(self):
+        endpoint = load_endpoint()
+
+        candidates = [{"symbol": "AAPL", "scanner_rank": 1}]
+        research = {
+            "research_only": True,
+            "observed_at": "2026-10-12T14:00:00+00:00",
+            "evaluated_count": 1,
+            "results": [{"symbol": "AAPL", "momentum": 1.5}],
+        }
+
+        calendar = {
+            "date": "2026-10-12",
+            "open": "09:30",
+            "close": "16:00",
+        }
+
+        endpoint.__globals__["fetch_alpaca_market_calendar_today"] = (
+            Mock(return_value=calendar)
+        )
+
+        with patch(
+            "scanner.get_fresh_scanner_candidates",
+            return_value=candidates,
+        ), patch(
+            "automated_momentum_research.evaluate_momentum_candidates",
+            return_value=research,
+        ):
+            result = endpoint(request=object(), limit=10)
+
+        self.assertEqual(result["market_session"], "regular_session")
+        self.assertTrue(result["regular_market_open"])
+        self.assertTrue(result["market_calendar_verified"])
+        self.assertTrue(result["research_only"])
+        self.assertEqual(
+            result["results"],
+            [{"symbol": "AAPL", "momentum": 1.5}],
+        )
+
+        endpoint.__globals__[
+            "fetch_alpaca_market_calendar_today"
+        ].assert_called_once()
+
+    def test_calendar_failure_returns_unknown(self):
+        endpoint = load_endpoint()
+
+        endpoint.__globals__["fetch_alpaca_market_calendar_today"] = (
+            Mock(side_effect=RuntimeError("Calendar unavailable"))
+        )
+
+        research = {
+            "research_only": True,
+            "observed_at": "2026-10-12T14:00:00+00:00",
+            "evaluated_count": 1,
+            "results": [{"symbol": "AAPL"}],
+        }
+
+        with patch(
+            "scanner.get_fresh_scanner_candidates",
+            return_value=[{"symbol": "AAPL"}],
+        ), patch(
+            "automated_momentum_research.evaluate_momentum_candidates",
+            return_value=research,
+        ):
+            result = endpoint(request=object(), limit=10)
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["market_session"], "unknown")
+        self.assertFalse(result["market_calendar_verified"])
+        self.assertEqual(result["results"], [{"symbol": "AAPL"}])
+
     def test_fresh_candidates_are_evaluated(self):
         endpoint = load_endpoint()
 

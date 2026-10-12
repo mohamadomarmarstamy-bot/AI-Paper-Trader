@@ -16005,6 +16005,30 @@ def auto_trader_automated_momentum_research(
         limit=limit,
     )
 
+    from datetime import datetime, timezone
+    from market_session_research import classify_market_session
+
+    observed_at_value = result.get("observed_at")
+
+    if observed_at_value:
+        observed_at = datetime.fromisoformat(observed_at_value)
+    else:
+        observed_at = datetime.now(timezone.utc)
+
+    try:
+        calendar_entry = fetch_alpaca_market_calendar_today()
+        session_info = classify_market_session(
+            observed_at,
+            calendar_entry,
+        )
+    except Exception:
+        session_info = classify_market_session(
+            observed_at,
+            None,
+            calendar_verified=False,
+        )
+
+    result.update(session_info)
     result["available"] = True
     result["candidate_source"] = "fresh_scanner_cache"
 
