@@ -47,6 +47,10 @@ def calculate_intraday_momentum(
             return {
                 "available": False,
                 "reason": "nonconsecutive_minute_bars",
+                "previous_timestamp": previous[0].isoformat(),
+                "current_timestamp": current[0].isoformat(),
+                "gap_seconds": seconds,
+                "bars_available": len(valid_bars),
             }
 
     closes = [price for _, price in recent]
