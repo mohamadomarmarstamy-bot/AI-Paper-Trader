@@ -85,77 +85,6 @@
         }
     }
 
-    function requestControlToken() {
-        return new Promise((resolve) => {
-            const dialog = document.getElementById(
-                "settings-control-token-dialog"
-            );
-            const form = document.getElementById(
-                "settings-control-token-form"
-            );
-            const input = document.getElementById(
-                "settings-control-token-input"
-            );
-            const cancel = document.getElementById(
-                "settings-control-token-cancel"
-            );
-
-            if (
-                !dialog ||
-                !form ||
-                !input ||
-                !cancel ||
-                typeof dialog.showModal !== "function"
-            ) {
-                resolve(null);
-                return;
-            }
-
-            let submitted = false;
-
-            function cleanup() {
-                dialog.removeEventListener("close", onClose);
-                form.removeEventListener("submit", onSubmit);
-                cancel.removeEventListener("click", onCancel);
-                input.value = "";
-            }
-
-            function onClose() {
-                if (!submitted) {
-                    cleanup();
-                    resolve(null);
-                }
-            }
-
-            function onCancel() {
-                dialog.close();
-            }
-
-            function onSubmit(event) {
-                event.preventDefault();
-
-                const token = input.value;
-
-                if (!token.trim()) {
-                    return;
-                }
-
-                submitted = true;
-                cleanup();
-                dialog.close();
-                resolve(token);
-            }
-
-            dialog.addEventListener("close", onClose);
-            form.addEventListener("submit", onSubmit);
-            cancel.addEventListener("click", onCancel);
-
-            input.value = "";
-            dialog.showModal();
-            input.focus();
-        });
-    }
-
     async function savePauseSetting(event) {
         const { toggle, description } = elements();
 
@@ -168,15 +97,6 @@
 
         toggle.disabled = true;
 
-        const token = await requestControlToken();
-
-        if (token === null || token.trim() === "") {
-            toggle.checked = previousValue;
-            toggle.disabled = false;
-            showStatus("Setting change canceled.");
-            return;
-        }
-
         showStatus("Saving setting...");
 
         try {
@@ -188,7 +108,6 @@
                     headers: {
                         "Content-Type": "application/json",
                         Accept: "application/json",
-                        "X-Auto-Trader-Token": token,
                     },
                     body: JSON.stringify({
                         pause_new_entries: requestedValue,

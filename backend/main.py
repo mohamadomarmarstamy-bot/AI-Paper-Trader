@@ -21975,25 +21975,34 @@ def get_auto_trader_settings(
 def update_auto_trader_settings(
     request: Request,
     body: dict[str, Any],
-    x_auto_trader_token: str | None = Header(
-        default=None
-    ),
 ) -> dict[str, Any]:
     """
     Update supported PAPER auto-trader settings.
 
-    Requires application-session and trading-control authorization.
+    Requires an authenticated session and same-origin request.
     """
     require_app_session(request)
 
-    if not auto_trader_control_authorized(
-        x_auto_trader_token
-    ):
-        return {
-            "success": False,
-            "paper": True,
-            "error": "Auto-trader control authorization failed.",
-        }
+    origin = request.headers.get("origin")
+    host = request.headers.get("host", "")
+
+    if not origin or not host:
+        raise HTTPException(
+            status_code=403,
+            detail="Same-origin request required.",
+        )
+
+    expected_origin = (
+        f"https://{host}"
+        if host.endswith(".railway.app")
+        else f"{request.url.scheme}://{host}"
+    )
+
+    if origin.rstrip("/") != expected_origin:
+        raise HTTPException(
+            status_code=403,
+            detail="Same-origin request required.",
+        )
 
     if (
         not isinstance(body, dict)
