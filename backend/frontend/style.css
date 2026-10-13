@@ -4552,3 +4552,204 @@ body.jarvis-drawer-open {
         height: 58px;
     }
 }
+
+
+/* SETTINGS CONTROL CENTER V1 */
+
+#settings-section {
+    width: 100%;
+    max-width: 1500px;
+    margin-inline: auto;
+}
+
+#settings-section > .section-heading {
+    margin-bottom: 24px;
+}
+
+#settings-section > .section-heading h1 {
+    font-size: clamp(1.65rem, 2.4vw, 2.2rem);
+    letter-spacing: -0.035em;
+    margin-bottom: 8px;
+}
+
+#settings-section > p[role="status"] {
+    padding: 13px 16px;
+    margin: 0 0 22px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-medium);
+    background: var(--color-primary-soft);
+    color: var(--color-text-soft);
+    font-size: 0.875rem;
+}
+
+/* Two-column category layout */
+
+#settings-section {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: start;
+    align-items: start;
+    gap: 20px;
+}
+
+#settings-section[hidden],
+#settings-section.hidden {
+    display: none !important;
+}
+
+#settings-section > .section-heading,
+#settings-section > p[role="status"] {
+    grid-column: 1 / -1;
+}
+
+#settings-section > article.panel {
+    min-width: 0;
+    margin: 0;
+    padding: 24px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-large);
+    background: var(--color-surface);
+    box-shadow: var(--shadow-small);
+}
+
+#settings-section > article.panel > h2 {
+    margin: 0 0 6px;
+    color: var(--color-text);
+    font-size: 1.12rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+
+#settings-section > article.panel > p:not([role="status"]) {
+    margin: 0 0 20px;
+    color: var(--color-muted);
+    font-size: 0.875rem;
+}
+
+/* Compact setting rows */
+
+#settings-section .profile-toggle {
+    display: flex;
+    flex-direction: row-reverse;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    width: 100%;
+    min-height: 66px;
+    margin: 0;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--color-border);
+    cursor: pointer;
+}
+
+#settings-section .profile-toggle:last-child {
+    border-bottom: 0;
+}
+
+#settings-section .profile-toggle > span {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+#settings-section .profile-toggle strong {
+    display: block;
+    color: var(--color-text-soft);
+    font-size: 0.91rem;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+#settings-section .profile-toggle small {
+    display: block;
+    color: var(--color-muted);
+    font-size: 0.78rem;
+    line-height: 1.45;
+}
+
+/* Modern toggle switches */
+
+#settings-section .profile-toggle input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
+    position: relative;
+    display: block;
+    flex: 0 0 42px;
+    width: 42px;
+    height: 24px;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 999px;
+    background: var(--color-surface-active);
+    cursor: pointer;
+    transition: background var(--transition-fast);
+}
+
+#settings-section .profile-toggle input[type="checkbox"]::before {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--color-muted);
+    transition: transform var(--transition-fast);
+}
+
+#settings-section .profile-toggle input[type="checkbox"]:checked {
+    background: var(--color-primary);
+    border-color: var(--color-primary);
+}
+
+#settings-section .profile-toggle input[type="checkbox"]:checked::before {
+    transform: translateX(18px);
+    background: #fff;
+}
+
+#settings-section .profile-toggle input[type="checkbox"]:disabled {
+    opacity: 0.42;
+    cursor: not-allowed;
+}
+
+#settings-section .profile-toggle:has(input:disabled) {
+    cursor: not-allowed;
+}
+
+#settings-section .profile-toggle input[type="checkbox"]:focus-visible {
+    outline: 3px solid var(--color-primary);
+    outline-offset: 3px;
+}
+
+/* Connected control feedback */
+
+#settings-pause-new-entries-status {
+    margin: 4px 0 12px;
+    color: var(--color-muted);
+    font-size: 0.8rem;
+}
+
+/* Responsive layout */
+
+@media (max-width: 1050px) {
+    #settings-section {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+@media (max-width: 600px) {
+    #settings-section {
+        gap: 14px;
+    }
+
+    #settings-section > article.panel {
+        padding: 18px;
+    }
+
+    #settings-section .profile-toggle {
+        gap: 12px;
+    }
+}
