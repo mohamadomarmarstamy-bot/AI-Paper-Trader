@@ -5902,6 +5902,7 @@ def calculate_adaptive_forward_evaluation(
             "v5_historical_samples": v5_decision.get(
                 "historical_samples"
             ),
+            "v5_diagnostics": v5_decision.get("diagnostics", {}),
             "v4_decision": v4_decision.get("decision"),
             "v4_evidence_score": v4_decision.get(
                 "evidence_score"

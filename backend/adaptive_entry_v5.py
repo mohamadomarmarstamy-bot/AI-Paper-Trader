@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import math
 from typing import Any
@@ -62,6 +62,12 @@ def calculate_adaptive_entry_decision_v5(
     matched = []
     seen = set()
 
+    feature_match_counts = {
+        feature: 0 for feature in FEATURES
+    }
+    match_strength = {}
+    match_returns = {}
+
     for trade in historical_trades:
         trade_id = trade.get("trade_book_id")
 
@@ -75,11 +81,13 @@ def calculate_adaptive_entry_decision_v5(
 
         historical = labels(entry)
 
-        matching = sum(
-            1
+        matching_features = [
+            feature
             for feature, label in target.items()
             if historical.get(feature) == label
-        )
+        ]
+
+        matching = len(matching_features)
 
         # Require at least three matching indicators.
         if matching < 3:
@@ -94,6 +102,17 @@ def calculate_adaptive_entry_decision_v5(
 
         seen.add(trade_id)
         matched.append(realized_return)
+
+        for feature in matching_features:
+            feature_match_counts[feature] += 1
+
+        match_strength[matching] = (
+            match_strength.get(matching, 0) + 1
+        )
+
+        match_returns.setdefault(
+            matching, []
+        ).append(realized_return)
 
     samples = len(matched)
 
@@ -139,6 +158,16 @@ def calculate_adaptive_entry_decision_v5(
             average_return, 4
         ),
         "confidence": confidence,
+        "diagnostics": {
+            "feature_match_counts": feature_match_counts,
+            "match_strength_counts": match_strength,
+            "match_strength_average_returns": {
+                strength: round(
+                    sum(returns) / len(returns), 4
+                )
+                for strength, returns in match_returns.items()
+            },
+        },
         "paper": True,
         "read_only": True,
         "automatic_strategy_changes": False,
