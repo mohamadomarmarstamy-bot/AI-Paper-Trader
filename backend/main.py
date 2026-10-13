@@ -23469,3 +23469,12 @@ def jarvis_speech(
 
 
 
+
+# Research-only endpoint registration.
+# Requires the existing authenticated application session.
+from adaptive_research_routes import register_adaptive_research_routes
+
+register_adaptive_research_routes(
+    app,
+    require_app_session,
+)
