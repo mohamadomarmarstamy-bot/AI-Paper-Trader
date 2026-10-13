@@ -5400,6 +5400,9 @@ def calculate_adaptive_forward_evaluation(
     from adaptive_entry_v4 import (
         calculate_adaptive_entry_decision_v4,
     )
+    from adaptive_entry_v5 import (
+        calculate_adaptive_entry_decision_v5,
+    )
 
     safe_minimum = max(
         1,
@@ -5843,6 +5846,24 @@ def calculate_adaptive_forward_evaluation(
             evidence,
         )
 
+        v5_history = [
+            {
+                "trade_book_id": previous_outcome.get(
+                    "trade_book_id"
+                ),
+                "entry": candidate_from_entry(previous_entry),
+                "realized_return_percent": previous_outcome.get(
+                    "realized_return_percent"
+                ),
+            }
+            for previous_outcome, previous_entry in prior_rows
+        ]
+
+        v5_decision = calculate_adaptive_entry_decision_v5(
+            candidate,
+            v5_history,
+        )
+
         realized_return = finite_number(
             outcome.get("realized_return_percent")
         )
@@ -5873,6 +5894,13 @@ def calculate_adaptive_forward_evaluation(
             "realized_return_percent": realized_return,
             "adaptive_decision": decision.get(
                 "decision"
+            ),
+            "v5_decision": v5_decision.get("decision"),
+            "v5_evidence_score": v5_decision.get(
+                "evidence_score"
+            ),
+            "v5_historical_samples": v5_decision.get(
+                "historical_samples"
             ),
             "v4_decision": v4_decision.get("decision"),
             "v4_evidence_score": v4_decision.get(
@@ -6016,6 +6044,17 @@ def calculate_adaptive_forward_evaluation(
         "joined_entry_outcomes": len(joined),
         "evaluated_trades": len(evaluated),
         "decision_performance": decision_groups,
+        "v5_decision_performance": {
+            name: summarize_evaluated([
+                row for row in evaluated
+                if row.get("v5_decision") == name
+            ])
+            for name in (
+                "BUY",
+                "SKIP",
+                "INSUFFICIENT_EVIDENCE",
+            )
+        },
         "v4_decision_performance": {
             name: summarize_evaluated([
                 row for row in evaluated
