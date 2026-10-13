@@ -42,6 +42,8 @@ from database import (
     create_trade_book_entry,
     create_trade_book_order_link,
     initialize_database,
+    get_app_setting,
+    set_app_setting,
     has_trade_book_order_link,
     load_jarvis_profile,
     save_jarvis_profile,
@@ -7614,6 +7616,38 @@ def calculate_auto_entry_shares(
     return shares, quote
 
 
+def automatic_entries_paused() -> bool:
+    """
+    Check whether new automatic PAPER entries are paused.
+
+    Fail closed if the saved setting is invalid or unreadable.
+    An unset setting preserves existing trading behavior.
+    """
+    try:
+        value = get_app_setting("pause_new_entries")
+    except Exception as error:
+        print(
+            "Automatic entries paused: settings lookup failed:",
+            repr(error),
+        )
+        return True
+
+    if value is None:
+        return False
+
+    if value == "false":
+        return False
+
+    if value == "true":
+        return True
+
+    print(
+        "Automatic entries paused: invalid saved setting:",
+        repr(value),
+    )
+    return True
+
+
 def submit_alpaca_auto_bracket_buy(
     *,
     symbol: str,
@@ -7715,6 +7749,17 @@ def submit_alpaca_auto_bracket_buy(
             f"{uuid.uuid4().hex[:12]}"
         ),
     }
+
+    # Emergency control: block new automatic PAPER entries.
+    # Existing SELL and position-protection paths are unaffected.
+    if automatic_entries_paused():
+        return {
+            "success": False,
+            "paper": True,
+            "automatic": True,
+            "entries_paused": True,
+            "error": "New automatic paper entries are paused.",
+        }
 
     try:
         payload = alpaca_paper_request(
@@ -21903,6 +21948,93 @@ def auto_trader_reconcile_protection(
         ),
         "results": results,
     }
+
+@app.get("/auto-trader/settings")
+def get_auto_trader_settings(
+    request: Request,
+) -> dict[str, Any]:
+    """
+    Return effective PAPER auto-trader settings.
+
+    Requires an authenticated application session.
+    """
+    require_app_session(request)
+
+    paused = automatic_entries_paused()
+
+    return {
+        "success": True,
+        "paper": True,
+        "settings": {
+            "pause_new_entries": paused,
+        },
+    }
+
+
+@app.post("/auto-trader/settings")
+def update_auto_trader_settings(
+    request: Request,
+    body: dict[str, Any],
+    x_auto_trader_token: str | None = Header(
+        default=None
+    ),
+) -> dict[str, Any]:
+    """
+    Update supported PAPER auto-trader settings.
+
+    Requires application-session and trading-control authorization.
+    """
+    require_app_session(request)
+
+    if not auto_trader_control_authorized(
+        x_auto_trader_token
+    ):
+        return {
+            "success": False,
+            "paper": True,
+            "error": "Auto-trader control authorization failed.",
+        }
+
+    if (
+        not isinstance(body, dict)
+        or set(body) != {"pause_new_entries"}
+        or type(body["pause_new_entries"]) is not bool
+    ):
+        return {
+            "success": False,
+            "paper": True,
+            "error": (
+                "Provide only pause_new_entries "
+                "as a JSON Boolean."
+            ),
+        }
+
+    paused = body["pause_new_entries"]
+
+    try:
+        set_app_setting(
+            "pause_new_entries",
+            "true" if paused else "false",
+        )
+    except Exception as error:
+        print(
+            "Failed to save auto-trader setting:",
+            repr(error),
+        )
+        return {
+            "success": False,
+            "paper": True,
+            "error": "Unable to save auto-trader setting.",
+        }
+
+    return {
+        "success": True,
+        "paper": True,
+        "settings": {
+            "pause_new_entries": paused,
+        },
+    }
+
 
 @app.post("/auto-trader/enable")
 def auto_trader_enable(

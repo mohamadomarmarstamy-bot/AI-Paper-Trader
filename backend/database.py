@@ -340,10 +340,21 @@ def initialize_database() -> None:
     """Create all required database tables and indexes."""
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    with get_connection() as connection:
+    with closing(get_connection()) as connection, connection:
         # WAL mode improves reliability when multiple API requests access
         # SQLite around the same time.
         connection.execute("PRAGMA journal_mode = WAL")
+
+        # Persistent application settings.
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
 
         # Research-only observations of large stock movements.
         connection.execute(
@@ -7515,3 +7526,74 @@ def set_learning_recommendation_active(
         )
         if cursor.rowcount == 0:
             raise ValueError("Learning recommendation was not found.")
+
+
+# Settings that the application explicitly supports.
+SUPPORTED_APP_SETTINGS = frozenset({
+    "pause_new_entries",
+})
+
+
+def get_app_setting(key: str) -> str | None:
+    """
+    Read a persistent application setting.
+
+    None means the setting has not been saved.
+    Database errors propagate to the caller.
+    """
+    if key not in SUPPORTED_APP_SETTINGS:
+        raise ValueError(
+            f"Unsupported application setting: {key}"
+        )
+
+    with closing(get_connection()) as connection:
+        row = connection.execute(
+            """
+            SELECT value
+            FROM app_settings
+            WHERE key = ?
+            """,
+            (key,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return str(row["value"])
+
+
+
+def set_app_setting(key: str, value: str) -> None:
+    """
+    Save a validated application setting.
+
+    Raises an error if validation or persistence fails.
+    """
+    if key not in SUPPORTED_APP_SETTINGS:
+        raise ValueError(
+            f"Unsupported application setting: {key}"
+        )
+
+    if type(value) is not str or value not in {"true", "false"}:
+        raise ValueError(
+            "Application setting value must be 'true' or 'false'."
+        )
+
+    updated_at = datetime.now(timezone.utc).isoformat()
+
+    with closing(get_connection()) as connection:
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO app_settings (
+                    key,
+                    value,
+                    updated_at
+                )
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (key, value, updated_at),
+            )

@@ -104,6 +104,7 @@
                 <button type="button" class="nav-button" data-section="profile-section" aria-controls="profile-section"><span aria-hidden="true">&#128100;</span><span>Profile</span></button>
                 <button type="button" class="nav-button" data-section="trade-journal-section" aria-controls="trade-journal-section"><span aria-hidden="true">&#128211;</span><span>Trade Journal</span></button>
                 <button type="button" class="nav-button" data-section="taxes-section" aria-controls="taxes-section"><span aria-hidden="true">&#129534;</span><span>Taxes</span></button>
+                <button type="button" class="nav-button" data-section="settings-section" aria-controls="settings-section"><span aria-hidden="true">&#9881;</span><span>Settings</span></button>
             </nav>
 
             <div class="sidebar-footer">
@@ -1635,6 +1636,260 @@
                     </article>
                 </section>
 
+                <dialog id="settings-control-token-dialog" aria-labelledby="settings-control-token-title">
+                    <form method="dialog" id="settings-control-token-form">
+                        <h2 id="settings-control-token-title">Authorize Setting Change</h2>
+                        <p>Enter your auto-trader control token to update this paper-trading setting.</p>
+                        <label for="settings-control-token-input">Control token</label>
+                        <input
+                            type="password"
+                            id="settings-control-token-input"
+                            autocomplete="off"
+                            spellcheck="false"
+                            required
+                        >
+                        <div class="modal-actions">
+                            <button type="button" id="settings-control-token-cancel">Cancel</button>
+                            <button type="submit" id="settings-control-token-confirm">Confirm</button>
+                        </div>
+                    </form>
+                </dialog>
+                <section id="settings-section" class="app-section hidden" hidden aria-labelledby="settings-title">
+                    <div class="section-heading">
+                        <div>
+                            <h1 id="settings-title">Settings &amp; AI Control Center</h1>
+                            <p>Manage your paper-trading research environment.</p>
+                        </div>
+                    </div>
+                    <p role="status">Pause New Entries is connected to the backend. Other settings are previews and remain disabled.</p>
+                    <article class="panel">
+                        <h2>AI Autonomy</h2>
+                        <p>Control automated research and learning.</p>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Autonomous Research</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>AI Learning</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Automatic Research Score Adjustments</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>AI Strategy Experiments</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Automatic Backtesting</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Automatic Research Model Promotion</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                    </article>
+                    <article class="panel">
+                        <h2>Paper Trading</h2>
+                        <p>Manage simulated trading operations.</p>
+                        <label class="profile-toggle">
+                            <input
+                                type="checkbox"
+                                id="settings-pause-new-entries"
+                                disabled
+                            >
+                            <span>
+                                <strong>Pause New Entries</strong>
+                                <small id="settings-pause-new-entries-description">
+                                    Loading saved setting...
+                                </small>
+                            </span>
+                        </label>
+                        <p
+                            id="settings-pause-new-entries-status"
+                            role="status"
+                            aria-live="polite"
+                        ></p>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Automatic Paper Trading</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Momentum Scanner</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Explosive Momentum Research</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Paper Buy Orders</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Paper Sell Orders</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Extended-Hours Monitoring</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                    </article>
+                    <article class="panel">
+                        <h2>Risk Management</h2>
+                        <p>Configure paper-trading risk protections.</p>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Stop-Loss Protection</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Take-Profit Protection</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Trailing Protection</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Daily Loss Protection</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Maximum Position Limits</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                    </article>
+                    <article class="panel">
+                        <h2>Notifications</h2>
+                        <p>Choose which events generate alerts.</p>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Trade Notifications</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Protection Failure Alerts</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Scanner Health Alerts</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Explosive Momentum Alerts</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>AI Experiment Reports</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                    </article>
+                    <article class="panel">
+                        <h2>System</h2>
+                        <p>Manage research and application services.</p>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Scanner Health Monitoring</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Research Data Collection</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Automatic Research Reports</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                        <label class="profile-toggle">
+                            <input type="checkbox" disabled>
+                            <span>
+                                <strong>Error Logging</strong>
+                                <small>Not connected yet</small>
+                            </span>
+                        </label>
+                    </article>
+                    <article class="panel">
+                        <h2>Emergency Controls</h2>
+                        <p>Quick access to research and paper-trading controls.</p>
+                        <button type="button" disabled>Pause New Paper Entries</button>
+                        <button type="button" disabled>Stop AI Experiments</button>
+                        <button type="button" disabled>Restore Default Settings</button>
+                    </article>
+                </section>
                             </aside>
             </main>
         </div>
@@ -1658,6 +1913,7 @@
     <script src="js/strategy.js"></script>
     <script src="js/jarvis.js"></script>
     <script src="js/profile.js"></script>
+    <script src="js/settings.js"></script>
 
     <!-- =====================================
          Button bindings
