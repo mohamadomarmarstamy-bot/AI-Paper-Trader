@@ -5397,6 +5397,9 @@ def calculate_adaptive_forward_evaluation(
     from adaptive_entry import (
         calculate_adaptive_entry_decision,
     )
+    from adaptive_entry_v4 import (
+        calculate_adaptive_entry_decision_v4,
+    )
 
     safe_minimum = max(
         1,
@@ -5835,6 +5838,11 @@ def calculate_adaptive_forward_evaluation(
             evidence,
         )
 
+        v4_decision = calculate_adaptive_entry_decision_v4(
+            candidate,
+            evidence,
+        )
+
         realized_return = finite_number(
             outcome.get("realized_return_percent")
         )
@@ -5865,6 +5873,13 @@ def calculate_adaptive_forward_evaluation(
             "realized_return_percent": realized_return,
             "adaptive_decision": decision.get(
                 "decision"
+            ),
+            "v4_decision": v4_decision.get("decision"),
+            "v4_evidence_score": v4_decision.get(
+                "evidence_score"
+            ),
+            "v4_historical_samples": v4_decision.get(
+                "historical_samples"
             ),
             "evidence_score": decision.get(
                 "evidence_score"
@@ -6001,6 +6016,17 @@ def calculate_adaptive_forward_evaluation(
         "joined_entry_outcomes": len(joined),
         "evaluated_trades": len(evaluated),
         "decision_performance": decision_groups,
+        "v4_decision_performance": {
+            name: summarize_evaluated([
+                row for row in evaluated
+                if row.get("v4_decision") == name
+            ])
+            for name in (
+                "BUY",
+                "SKIP",
+                "INSUFFICIENT_EVIDENCE",
+            )
+        },
         "score_performance": score_groups,
         "evaluations": evaluated,
         "warning": (
