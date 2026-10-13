@@ -24,6 +24,61 @@ _hot_universe_cache: dict[str, Any] = {
 }
 
 
+
+def record_explosive_movers_for_research(
+    movers_payload: dict[str, Any],
+    allowed_symbols: set[str],
+) -> int:
+    """Record Alpaca gainers of 25%+ without affecting scanning."""
+
+    from datetime import datetime, timezone
+    import math
+
+    recorded_count = 0
+
+    gainers = movers_payload.get("gainers", [])
+
+    if not isinstance(gainers, list):
+        return 0
+
+    for item in gainers:
+        if not isinstance(item, dict):
+            continue
+
+        try:
+            symbol = str(item.get("symbol", "")).strip().upper()
+            price = float(item.get("price"))
+            percent_change = float(item.get("percent_change"))
+
+            if (
+                not symbol
+                or not math.isfinite(price)
+                or not math.isfinite(percent_change)
+                or price <= 0
+                or percent_change < 25.0
+            ):
+                continue
+
+            from database import record_explosive_momentum_observation
+
+            record_explosive_momentum_observation(
+                symbol=symbol,
+                observed_at=datetime.now(timezone.utc).isoformat(),
+                reference_price=price,
+                percent_change=percent_change,
+                scanner_eligible=symbol in allowed_symbols,
+            )
+
+            recorded_count += 1
+
+        except Exception as error:
+            print(
+                "Explosive momentum research recording failed: "
+                f"{error}"
+            )
+
+    return recorded_count
+
 def _load_allowed_symbols(
     *,
     request_func: Callable[..., Any],
@@ -302,6 +357,17 @@ def load_momentum_universe(
                 movers_payload,
                 dict,
             ):
+                try:
+                    record_explosive_movers_for_research(
+                        movers_payload,
+                        allowed_symbols,
+                    )
+                except Exception as error:
+                    print(
+                        "Explosive momentum research failed: "
+                        f"{error}"
+                    )
+
                 for group_name in (
                     "gainers",
                     "losers",
@@ -366,11 +432,12 @@ def load_momentum_universe(
         )
         hot_symbols = allowed_symbols_list
 
-    if mover_metadata:
-        _hot_universe_cache["movers"] = {
-            symbol: data.copy()
-            for symbol, data in mover_metadata.items()
-        }
+    # Replace previous mover metadata on every completed refresh.
+    # An empty result clears old momentum readings.
+    _hot_universe_cache["movers"] = {
+        symbol: data.copy()
+        for symbol, data in mover_metadata.items()
+    }
 
 
     _hot_universe_cache[

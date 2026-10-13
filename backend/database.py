@@ -345,6 +345,44 @@ def initialize_database() -> None:
         # SQLite around the same time.
         connection.execute("PRAGMA journal_mode = WAL")
 
+        # Research-only observations of large stock movements.
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS explosive_momentum_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                reference_price REAL NOT NULL
+                    CHECK(reference_price > 0),
+                percent_change REAL NOT NULL,
+                source TEXT NOT NULL DEFAULT 'alpaca_movers',
+                scanner_eligible INTEGER
+                    CHECK(scanner_eligible IN (0, 1)),
+                scanner_detected INTEGER
+                    CHECK(scanner_detected IN (0, 1)),
+                rejection_reason TEXT,
+                scanner_observation_id INTEGER,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(scanner_observation_id)
+                    REFERENCES scanner_observations(id)
+                    ON DELETE SET NULL
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_explosive_momentum_symbol_time
+            ON explosive_momentum_observations (
+                symbol,
+                observed_at
+            )
+            """
+        )
+
+
+
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS trades (
@@ -2145,6 +2183,99 @@ def record_trade_book_event(
         raise RuntimeError("The trade-book event was saved without an ID.")
     return int(event_id)
 
+
+
+def record_explosive_momentum_observation(
+    *,
+    symbol: str,
+    observed_at: str,
+    reference_price: float,
+    percent_change: float,
+    scanner_eligible: bool | None = None,
+) -> int:
+    """Save a research-only observation of a stock gaining 25%+."""
+
+    normalized_symbol = _normalize_symbol(symbol)
+    normalized_observed_at = _validate_timestamp(observed_at)
+
+    normalized_price = _validate_finite_number(
+        reference_price,
+        "Explosive momentum reference price",
+        allow_zero=False,
+    )
+
+    normalized_change = _validate_finite_number(
+        percent_change,
+        "Explosive momentum percentage",
+    )
+
+    if normalized_change < 25.0:
+        raise ValueError(
+            "Explosive momentum observations require a gain of at least 25%."
+        )
+
+    normalized_eligible = (
+        None
+        if scanner_eligible is None
+        else int(bool(scanner_eligible))
+    )
+
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    with get_connection() as connection:
+        # Serialize the duplicate check and insert across writers.
+        connection.execute("BEGIN IMMEDIATE")
+
+        existing = connection.execute(
+            """
+            SELECT id
+            FROM explosive_momentum_observations
+            WHERE symbol = ?
+              AND julianday(observed_at) >= julianday(?) - (60.0 / 86400.0)
+              AND julianday(observed_at) <= julianday(?)
+            ORDER BY observed_at DESC
+            LIMIT 1
+            """,
+            (
+                normalized_symbol,
+                normalized_observed_at,
+                normalized_observed_at,
+            ),
+        ).fetchone()
+
+        if existing is not None:
+            return int(existing["id"])
+
+        cursor = connection.execute(
+            """
+            INSERT INTO explosive_momentum_observations (
+                symbol,
+                observed_at,
+                reference_price,
+                percent_change,
+                scanner_eligible,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                normalized_symbol,
+                normalized_observed_at,
+                normalized_price,
+                normalized_change,
+                normalized_eligible,
+                created_at,
+            ),
+        )
+
+        observation_id = cursor.lastrowid
+
+    if observation_id is None:
+        raise RuntimeError(
+            "Explosive momentum observation was not saved."
+        )
+
+    return int(observation_id)
 
 def record_scanner_observation(
     *,
