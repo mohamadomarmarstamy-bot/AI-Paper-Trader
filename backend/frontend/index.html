@@ -1645,7 +1645,7 @@
                             <p>Manage your paper-trading research environment.</p>
                         </div>
                     </div>
-                    <p role="status">Pause New Entries is connected to the backend. Other settings are previews and remain disabled.</p>
+                    <p role="status">Configure persistent PAPER-trading risk limits below. Unconnected research controls remain disabled.</p>
                     <article class="panel">
                         <h2>AI Autonomy</h2>
                         <p>Control automated research and learning.</p>
@@ -1758,42 +1758,59 @@
                     </article>
                     <article class="panel">
                         <h2>Risk Management</h2>
-                        <p>Configure paper-trading risk protections.</p>
-                        <label class="profile-toggle">
-                            <input type="checkbox" disabled>
-                            <span>
-                                <strong>Stop-Loss Protection</strong>
-                                <small>Not connected yet</small>
-                            </span>
-                        </label>
-                        <label class="profile-toggle">
-                            <input type="checkbox" disabled>
-                            <span>
-                                <strong>Take-Profit Protection</strong>
-                                <small>Not connected yet</small>
-                            </span>
-                        </label>
-                        <label class="profile-toggle">
-                            <input type="checkbox" disabled>
-                            <span>
-                                <strong>Trailing Protection</strong>
-                                <small>Not connected yet</small>
-                            </span>
-                        </label>
-                        <label class="profile-toggle">
-                            <input type="checkbox" disabled>
-                            <span>
-                                <strong>Daily Loss Protection</strong>
-                                <small>Not connected yet</small>
-                            </span>
-                        </label>
-                        <label class="profile-toggle">
-                            <input type="checkbox" disabled>
-                            <span>
-                                <strong>Maximum Position Limits</strong>
-                                <small>Not connected yet</small>
-                            </span>
-                        </label>
+                        <p>These values are saved to the backend and applied to subsequent PAPER-trading decisions. Existing protective orders are not automatically canceled when you change a value.</p>
+                        <form id="auto-trader-settings-form">
+                            <div class="settings-number-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem;">
+                                <label class="settings-number-field" style="display:flex;flex-direction:column;gap:0.4rem;" for="setting-position-size-percent">
+                                    Position size (% of equity)
+                                    <input id="setting-position-size-percent" name="position_size_percent" type="number" min="0.1" max="100" step="0.1" required>
+                                </label>
+                                <label class="settings-number-field" style="display:flex;flex-direction:column;gap:0.4rem;" for="setting-max-order-size-percent">
+                                    Maximum order size (% of equity)
+                                    <input id="setting-max-order-size-percent" name="max_order_size_percent" type="number" min="0.1" max="100" step="0.1" required>
+                                </label>
+                                <label class="settings-number-field" style="display:flex;flex-direction:column;gap:0.4rem;" for="setting-max-position-size-percent">
+                                    Maximum position size (% of equity)
+                                    <input id="setting-max-position-size-percent" name="max_position_size_percent" type="number" min="0.1" max="100" step="0.1" required>
+                                </label>
+                                <label class="settings-number-field" style="display:flex;flex-direction:column;gap:0.4rem;" for="setting-max-open-positions">
+                                    Maximum open positions
+                                    <input id="setting-max-open-positions" name="max_open_positions" type="number" min="1" max="500" step="1" required>
+                                </label>
+                                <label class="settings-number-field" style="display:flex;flex-direction:column;gap:0.4rem;" for="setting-stop-loss-percent">
+                                    Stop loss (%)
+                                    <input id="setting-stop-loss-percent" name="stop_loss_percent" type="number" min="0.1" max="25" step="0.1" required>
+                                </label>
+                                <label class="settings-number-field" style="display:flex;flex-direction:column;gap:0.4rem;" for="setting-take-profit-percent">
+                                    Take profit (%)
+                                    <input id="setting-take-profit-percent" name="take_profit_percent" type="number" min="0.1" max="100" step="0.1" required>
+                                </label>
+                                <label class="settings-number-field" style="display:flex;flex-direction:column;gap:0.4rem;" for="setting-profit-lock-trigger-percent">
+                                    Profit-lock trigger (%)
+                                    <input id="setting-profit-lock-trigger-percent" name="profit_lock_trigger_percent" type="number" min="0.1" max="100" step="0.05" required>
+                                </label>
+                                <label class="settings-number-field" style="display:flex;flex-direction:column;gap:0.4rem;" for="setting-profit-lock-percent">
+                                    Minimum locked profit (%)
+                                    <input id="setting-profit-lock-percent" name="profit_lock_percent" type="number" min="0.01" max="50" step="0.01" required>
+                                </label>
+                                <label class="settings-number-field" style="display:flex;flex-direction:column;gap:0.4rem;" for="setting-trailing-stop-percent">
+                                    Trailing stop distance (%)
+                                    <input id="setting-trailing-stop-percent" name="trailing_stop_percent" type="number" min="0.1" max="50" step="0.1" required>
+                                </label>
+                                <label class="settings-number-field" style="display:flex;flex-direction:column;gap:0.4rem;" for="setting-daily-profit-target-percent">
+                                    Daily profit target (% of starting equity)
+                                    <input id="setting-daily-profit-target-percent" name="daily_profit_target_percent" type="number" min="0.1" max="100" step="0.1" required>
+                                </label>
+                                <label class="settings-number-field" style="display:flex;flex-direction:column;gap:0.4rem;" for="setting-daily-loss-limit-percent">
+                                    Daily loss limit (% of starting equity)
+                                    <input id="setting-daily-loss-limit-percent" name="daily_loss_limit_percent" type="number" min="0.1" max="100" step="0.1" required>
+                                </label>
+                            </div>
+                            <div class="settings-form-actions">
+                                <button type="submit" id="settings-save-button">Save Trading Settings</button>
+                                <span id="settings-save-status" role="status" aria-live="polite"></span>
+                            </div>
+                        </form>
                     </article>
                     <article class="panel">
                         <h2>Notifications</h2>

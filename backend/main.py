@@ -44,6 +44,7 @@ from database import (
     initialize_database,
     get_app_setting,
     set_app_setting,
+    set_app_settings,
     has_trade_book_order_link,
     load_jarvis_profile,
     save_jarvis_profile,
@@ -234,6 +235,115 @@ AUTO_TRADER_DAILY_PROFIT_GIVEBACK_PERCENT = 40.0
 # stop opening NEW positions for the rest of that daily session.
 # Existing positions can still be managed/exited.
 AUTO_TRADER_DAILY_LOSS_LIMIT_DOLLARS = 1000.0
+
+# Persistent, user-configurable PAPER-trading settings. These defaults preserve
+# the existing hardcoded configuration until a user saves a custom value.
+AUTO_TRADER_SETTINGS_DEFAULTS: dict[str, float | int] = {
+    "position_size_percent": 2.0,
+    "max_order_size_percent": 2.5,
+    "max_position_size_percent": 5.0,
+    "max_open_positions": 50,
+    "stop_loss_percent": 2.0,
+    "take_profit_percent": 4.0,
+    "profit_lock_trigger_percent": 0.75,
+    "profit_lock_percent": 0.25,
+    "trailing_stop_percent": 1.0,
+    "daily_profit_target_percent": 5.0,
+    "daily_loss_limit_percent": 1.0,
+}
+AUTO_TRADER_SETTINGS_RANGES: dict[str, tuple[float, float]] = {
+    "position_size_percent": (0.1, 100.0),
+    "max_order_size_percent": (0.1, 100.0),
+    "max_position_size_percent": (0.1, 100.0),
+    "max_open_positions": (1.0, 500.0),
+    "stop_loss_percent": (0.1, 25.0),
+    "take_profit_percent": (0.1, 100.0),
+    "profit_lock_trigger_percent": (0.1, 100.0),
+    "profit_lock_percent": (0.01, 50.0),
+    "trailing_stop_percent": (0.1, 50.0),
+    "daily_profit_target_percent": (0.1, 100.0),
+    "daily_loss_limit_percent": (0.1, 100.0),
+}
+_AUTO_TRADER_SETTINGS_CACHE: dict[str, float | int] | None = None
+_AUTO_TRADER_SETTINGS_CACHE_AT = 0.0
+_AUTO_TRADER_SETTINGS_CACHE_TTL_SECONDS = 3.0
+_AUTO_TRADER_SETTINGS_CACHE_LOCK = threading.Lock()
+
+
+def _invalidate_auto_trader_settings_cache() -> None:
+    global _AUTO_TRADER_SETTINGS_CACHE
+    global _AUTO_TRADER_SETTINGS_CACHE_AT
+    with _AUTO_TRADER_SETTINGS_CACHE_LOCK:
+        _AUTO_TRADER_SETTINGS_CACHE = None
+        _AUTO_TRADER_SETTINGS_CACHE_AT = 0.0
+
+
+def get_auto_trader_settings_snapshot(
+    *,
+    force_refresh: bool = False,
+) -> dict[str, float | int]:
+    """Return validated persisted settings, falling back to safe defaults."""
+    global _AUTO_TRADER_SETTINGS_CACHE
+    global _AUTO_TRADER_SETTINGS_CACHE_AT
+
+    now = time.monotonic()
+    with _AUTO_TRADER_SETTINGS_CACHE_LOCK:
+        if (
+            not force_refresh
+            and _AUTO_TRADER_SETTINGS_CACHE is not None
+            and now - _AUTO_TRADER_SETTINGS_CACHE_AT
+            < _AUTO_TRADER_SETTINGS_CACHE_TTL_SECONDS
+        ):
+            return dict(_AUTO_TRADER_SETTINGS_CACHE)
+
+    settings: dict[str, float | int] = dict(
+        AUTO_TRADER_SETTINGS_DEFAULTS
+    )
+    try:
+        for key in AUTO_TRADER_SETTINGS_DEFAULTS:
+            raw_value = get_app_setting(key)
+            if raw_value is None:
+                continue
+            number = float(raw_value)
+            if not math.isfinite(number):
+                raise ValueError(f"Saved setting {key} is not finite.")
+            minimum, maximum = AUTO_TRADER_SETTINGS_RANGES[key]
+            if not minimum <= number <= maximum:
+                raise ValueError(f"Saved setting {key} is outside its allowed range.")
+            if key == "max_open_positions":
+                if not number.is_integer():
+                    raise ValueError(
+                        "Saved max_open_positions must be a whole number."
+                    )
+                settings[key] = int(number)
+            else:
+                settings[key] = number
+    except Exception as error:
+        # Keep deterministic defaults if the store is unavailable or corrupt.
+        # Automatic entries independently fail closed if pause lookup fails.
+        print(
+            "Auto-trader settings load failed; using defaults:",
+            repr(error),
+        )
+        settings = dict(AUTO_TRADER_SETTINGS_DEFAULTS)
+
+    with _AUTO_TRADER_SETTINGS_CACHE_LOCK:
+        _AUTO_TRADER_SETTINGS_CACHE = dict(settings)
+        _AUTO_TRADER_SETTINGS_CACHE_AT = time.monotonic()
+
+    return dict(settings)
+
+
+def get_auto_trader_setting(key: str) -> float | int:
+    """Read one effective setting from the short-lived validated snapshot."""
+    if key not in AUTO_TRADER_SETTINGS_DEFAULTS:
+        raise ValueError(f"Unsupported auto-trader setting: {key}")
+    return get_auto_trader_settings_snapshot().get(
+        key,
+        AUTO_TRADER_SETTINGS_DEFAULTS[key],
+    )
+
+
 
 
 # ============================================================
@@ -3542,7 +3652,7 @@ def validate_alpaca_paper_order_risk(
     max_order_notional = (
         equity
         * (
-            RISK_MAX_ORDER_EQUITY_PERCENT
+            get_auto_trader_setting("max_order_size_percent")
             / 100
         )
     )
@@ -3573,7 +3683,7 @@ def validate_alpaca_paper_order_risk(
     max_position_notional = (
         equity
         * (
-            RISK_MAX_POSITION_EQUITY_PERCENT
+            get_auto_trader_setting("max_position_size_percent")
             / 100
         )
     )
@@ -3596,7 +3706,7 @@ def validate_alpaca_paper_order_risk(
                 "error": (
                     f"Order size is about "
                     f"${estimated_notional:,.2f}, above the "
-                    f"{RISK_MAX_ORDER_EQUITY_PERCENT:.1f}% "
+                    f"{get_auto_trader_setting("max_order_size_percent"):.1f}% "
                     f"per-order risk limit."
                 ),
                 "max_allowed_shares": max_allowed_shares,
@@ -3634,7 +3744,7 @@ def validate_alpaca_paper_order_risk(
                 "error": (
                     f"This order would make the "
                     f"{normalized_symbol} position larger "
-                    f"than {RISK_MAX_POSITION_EQUITY_PERCENT:.1f}% "
+                    f"than {get_auto_trader_setting("max_position_size_percent"):.1f}% "
                     f"of account equity."
                 ),
                 "max_allowed_shares": max_allowed_shares,
@@ -3643,14 +3753,14 @@ def validate_alpaca_paper_order_risk(
         if (
             current_position is None
             and len(positions) >=
-                RISK_MAX_OPEN_POSITIONS
+                get_auto_trader_setting("max_open_positions")
         ):
             return {
                 "approved": False,
                 "error": (
                     f"The account already has "
                     f"{len(positions)} open positions, which "
-                    f"meets the {RISK_MAX_OPEN_POSITIONS}-position "
+                    f"meets the {get_auto_trader_setting("max_open_positions")}-position "
                     f"safety limit."
                 ),
             }
@@ -3733,11 +3843,11 @@ def validate_alpaca_paper_order_risk(
         "quote": quote,
         "limits": {
             "max_order_equity_percent":
-                RISK_MAX_ORDER_EQUITY_PERCENT,
+                get_auto_trader_setting("max_order_size_percent"),
             "max_position_equity_percent":
-                RISK_MAX_POSITION_EQUITY_PERCENT,
+                get_auto_trader_setting("max_position_size_percent"),
             "max_open_positions":
-                RISK_MAX_OPEN_POSITIONS,
+                get_auto_trader_setting("max_open_positions"),
             "max_spread_percent":
                 RISK_MAX_SPREAD_PERCENT,
             "buying_power_buffer_dollars":
@@ -7185,7 +7295,7 @@ def submit_alpaca_recovery_oco(
         * (
             1
             - (
-                AUTO_TRADER_STOP_LOSS_PERCENT
+                get_auto_trader_setting("stop_loss_percent")
                 / 100
             )
         ),
@@ -7197,7 +7307,7 @@ def submit_alpaca_recovery_oco(
         * (
             1
             + (
-                AUTO_TRADER_TAKE_PROFIT_PERCENT
+                get_auto_trader_setting("take_profit_percent")
                 / 100
             )
         ),
@@ -7600,7 +7710,7 @@ def calculate_auto_entry_shares(
     budget = (
         equity
         * (
-            AUTO_TRADER_ENTRY_EQUITY_PERCENT
+            get_auto_trader_setting("position_size_percent")
             / 100
         )
     )
@@ -7695,7 +7805,7 @@ def submit_alpaca_auto_bracket_buy(
         * (
             1
             - (
-                AUTO_TRADER_STOP_LOSS_PERCENT
+                get_auto_trader_setting("stop_loss_percent")
                 / 100
             )
         ),
@@ -7707,7 +7817,7 @@ def submit_alpaca_auto_bracket_buy(
         * (
             1
             + (
-                AUTO_TRADER_TAKE_PROFIT_PERCENT
+                get_auto_trader_setting("take_profit_percent")
                 / 100
             )
         ),
@@ -7812,10 +7922,10 @@ def submit_alpaca_auto_bracket_buy(
         }
         result["bracket"] = {
             "stop_loss_percent": (
-                AUTO_TRADER_STOP_LOSS_PERCENT
+                get_auto_trader_setting("stop_loss_percent")
             ),
             "take_profit_percent": (
-                AUTO_TRADER_TAKE_PROFIT_PERCENT
+                get_auto_trader_setting("take_profit_percent")
             ),
             "stop_price": stop_price,
             "take_profit_price": (
@@ -7967,10 +8077,10 @@ def submit_alpaca_auto_bracket_buy(
                             )
                         ),
                         "stop_loss_percent": (
-                            AUTO_TRADER_STOP_LOSS_PERCENT
+                            get_auto_trader_setting("stop_loss_percent")
                         ),
                         "take_profit_percent": (
-                            AUTO_TRADER_TAKE_PROFIT_PERCENT
+                            get_auto_trader_setting("take_profit_percent")
                         ),
                         "stop_price": stop_price,
                         "take_profit_price": (
@@ -8284,7 +8394,7 @@ def calculate_profit_lock_stop(
 
     if (
         gain_percent
-        < AUTO_TRADER_PROFIT_LOCK_TRIGGER_PERCENT
+        < get_auto_trader_setting("profit_lock_trigger_percent")
     ):
         return None
 
@@ -8293,7 +8403,7 @@ def calculate_profit_lock_stop(
         * (
             1
             + (
-                AUTO_TRADER_PROFIT_LOCK_PERCENT
+                get_auto_trader_setting("profit_lock_percent")
                 / 100
             )
         )
@@ -8304,7 +8414,7 @@ def calculate_profit_lock_stop(
         * (
             1
             - (
-                AUTO_TRADER_PROFIT_TRAIL_PERCENT
+                get_auto_trader_setting("trailing_stop_percent")
                 / 100
             )
         )
@@ -12246,14 +12356,26 @@ def run_auto_trader_cycle() -> dict[str, Any]:
         # All exit management above this section still runs,
         # including protective stops, profit locks, scanner exits,
         # defensive exits, and the hard maximum-loss protection.
+        # Percentage thresholds use the verified prior-session equity baseline.
+        daily_loss_limit_dollars = (
+            daily_pl_baseline
+            * get_auto_trader_setting("daily_loss_limit_percent")
+            / 100.0
+        )
+        daily_profit_ceiling_dollars = (
+            daily_pl_baseline
+            * get_auto_trader_setting("daily_profit_target_percent")
+            / 100.0
+        )
+
         daily_loss_limit_hit = (
             current_daily_pl
-            <= -AUTO_TRADER_DAILY_LOSS_LIMIT_DOLLARS
+            <= -daily_loss_limit_dollars
         )
 
         daily_profit_ceiling_hit = (
             current_daily_pl
-            >= AUTO_TRADER_DAILY_PROFIT_CEILING_DOLLARS
+            >= daily_profit_ceiling_dollars
         )
 
         cycle_result["daily_pl"] = round(
@@ -12261,16 +12383,24 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             2,
         )
 
-        cycle_result["daily_loss_limit"] = (
-            AUTO_TRADER_DAILY_LOSS_LIMIT_DOLLARS
+        cycle_result["daily_loss_limit"] = round(
+            daily_loss_limit_dollars,
+            2,
+        )
+        cycle_result["daily_loss_limit_percent"] = (
+            get_auto_trader_setting("daily_loss_limit_percent")
         )
 
         cycle_result["daily_loss_limit_hit"] = (
             daily_loss_limit_hit
         )
 
-        cycle_result["daily_profit_ceiling"] = (
-            AUTO_TRADER_DAILY_PROFIT_CEILING_DOLLARS
+        cycle_result["daily_profit_ceiling"] = round(
+            daily_profit_ceiling_dollars,
+            2,
+        )
+        cycle_result["daily_profit_target_percent"] = (
+            get_auto_trader_setting("daily_profit_target_percent")
         )
 
         cycle_result["daily_profit_ceiling_hit"] = (
@@ -13600,10 +13730,10 @@ def run_auto_trader_cycle() -> dict[str, Any]:
 
                         # Trade protection.
                         "stop_loss_percent": (
-                            AUTO_TRADER_STOP_LOSS_PERCENT
+                            get_auto_trader_setting("stop_loss_percent")
                         ),
                         "take_profit_percent": (
-                            AUTO_TRADER_TAKE_PROFIT_PERCENT
+                            get_auto_trader_setting("take_profit_percent")
                         ),
 
                         # Portfolio state at entry.
@@ -14545,13 +14675,13 @@ def get_auto_trader_status() -> dict[str, Any]:
                 AUTO_TRADER_EXIT_CONFIDENCE_MIN
             ),
             "entry_equity_percent": (
-                AUTO_TRADER_ENTRY_EQUITY_PERCENT
+                get_auto_trader_setting("position_size_percent")
             ),
             "stop_loss_percent": (
-                AUTO_TRADER_STOP_LOSS_PERCENT
+                get_auto_trader_setting("stop_loss_percent")
             ),
             "take_profit_percent": (
-                AUTO_TRADER_TAKE_PROFIT_PERCENT
+                get_auto_trader_setting("take_profit_percent")
             ),
             "symbol_cooldown_seconds": (
                 AUTO_TRADER_SYMBOL_COOLDOWN_SECONDS
@@ -21953,21 +22083,18 @@ def auto_trader_reconcile_protection(
 def get_auto_trader_settings(
     request: Request,
 ) -> dict[str, Any]:
-    """
-    Return effective PAPER auto-trader settings.
-
-    Requires an authenticated application session.
-    """
+    """Return the effective persistent PAPER-trading configuration."""
     require_app_session(request)
 
-    paused = automatic_entries_paused()
+    settings: dict[str, Any] = get_auto_trader_settings_snapshot(
+        force_refresh=True
+    )
+    settings["pause_new_entries"] = automatic_entries_paused()
 
     return {
         "success": True,
         "paper": True,
-        "settings": {
-            "pause_new_entries": paused,
-        },
+        "settings": settings,
     }
 
 
@@ -21976,11 +22103,7 @@ def update_auto_trader_settings(
     request: Request,
     body: dict[str, Any],
 ) -> dict[str, Any]:
-    """
-    Update supported PAPER auto-trader settings.
-
-    Requires an authenticated session and same-origin request.
-    """
+    """Validate and atomically persist supported PAPER-trading settings."""
     require_app_session(request)
 
     origin = request.headers.get("origin")
@@ -22004,44 +22127,119 @@ def update_auto_trader_settings(
             detail="Same-origin request required.",
         )
 
+    if not isinstance(body, dict) or not body:
+        return {
+            "success": False,
+            "paper": True,
+            "error": "Provide at least one supported setting.",
+        }
+
+    allowed_keys = set(AUTO_TRADER_SETTINGS_DEFAULTS) | {
+        "pause_new_entries"
+    }
+    unknown_keys = set(body) - allowed_keys
+    if unknown_keys:
+        return {
+            "success": False,
+            "paper": True,
+            "error": (
+                "Unsupported setting(s): "
+                + ", ".join(sorted(str(key) for key in unknown_keys))
+            ),
+        }
+
+    values_to_save: dict[str, str] = {}
+    for key, value in body.items():
+        if key == "pause_new_entries":
+            if type(value) is not bool:
+                return {
+                    "success": False,
+                    "paper": True,
+                    "error": "pause_new_entries must be a JSON Boolean.",
+                }
+            values_to_save[key] = "true" if value else "false"
+            continue
+
+        if type(value) not in (int, float) or not math.isfinite(float(value)):
+            return {
+                "success": False,
+                "paper": True,
+                "error": f"{key} must be a finite JSON number.",
+            }
+
+        if key == "max_open_positions" and not float(value).is_integer():
+            return {
+                "success": False,
+                "paper": True,
+                "error": "max_open_positions must be a whole number.",
+            }
+
+        values_to_save[key] = format(float(value), ".12g")
+
+    proposed_settings = get_auto_trader_settings_snapshot(
+        force_refresh=True
+    )
+    for key, value in values_to_save.items():
+        if key in AUTO_TRADER_SETTINGS_DEFAULTS:
+            proposed_settings[key] = (
+                int(float(value))
+                if key == "max_open_positions"
+                else float(value)
+            )
+
+    related_size_keys = {
+        "position_size_percent",
+        "max_order_size_percent",
+        "max_position_size_percent",
+    }
     if (
-        not isinstance(body, dict)
-        or set(body) != {"pause_new_entries"}
-        or type(body["pause_new_entries"]) is not bool
+        set(values_to_save) & related_size_keys
+        and (
+            proposed_settings["position_size_percent"]
+            > proposed_settings["max_order_size_percent"]
+            or proposed_settings["position_size_percent"]
+            > proposed_settings["max_position_size_percent"]
+        )
     ):
         return {
             "success": False,
             "paper": True,
             "error": (
-                "Provide only pause_new_entries "
-                "as a JSON Boolean."
+                "Position size cannot exceed either the maximum order "
+                "size or the maximum position size. Update these values "
+                "together if needed."
             ),
         }
 
-    paused = body["pause_new_entries"]
-
     try:
-        set_app_setting(
-            "pause_new_entries",
-            "true" if paused else "false",
-        )
+        set_app_settings(values_to_save)
+    except (TypeError, ValueError) as error:
+        return {
+            "success": False,
+            "paper": True,
+            "error": str(error),
+        }
     except Exception as error:
         print(
-            "Failed to save auto-trader setting:",
+            "Failed to save auto-trader settings:",
             repr(error),
         )
         return {
             "success": False,
             "paper": True,
-            "error": "Unable to save auto-trader setting.",
+            "error": "Unable to save settings. No changes were confirmed.",
         }
+
+    _invalidate_auto_trader_settings_cache()
+    saved_settings: dict[str, Any] = get_auto_trader_settings_snapshot(
+        force_refresh=True
+    )
+    saved_settings["pause_new_entries"] = automatic_entries_paused()
 
     return {
         "success": True,
         "paper": True,
-        "settings": {
-            "pause_new_entries": paused,
-        },
+        "settings": saved_settings,
     }
 
 

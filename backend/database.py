@@ -7531,20 +7531,39 @@ def set_learning_recommendation_active(
 # Settings that the application explicitly supports.
 SUPPORTED_APP_SETTINGS = frozenset({
     "pause_new_entries",
+    "position_size_percent",
+    "max_order_size_percent",
+    "max_position_size_percent",
+    "max_open_positions",
+    "stop_loss_percent",
+    "take_profit_percent",
+    "profit_lock_trigger_percent",
+    "profit_lock_percent",
+    "trailing_stop_percent",
+    "daily_profit_target_percent",
+    "daily_loss_limit_percent",
 })
+
+# Inclusive validation bounds for numerical settings.
+NUMERIC_APP_SETTING_RANGES = {
+    "position_size_percent": (0.1, 100.0),
+    "max_order_size_percent": (0.1, 100.0),
+    "max_position_size_percent": (0.1, 100.0),
+    "max_open_positions": (1.0, 500.0),
+    "stop_loss_percent": (0.1, 25.0),
+    "take_profit_percent": (0.1, 100.0),
+    "profit_lock_trigger_percent": (0.1, 100.0),
+    "profit_lock_percent": (0.01, 50.0),
+    "trailing_stop_percent": (0.1, 50.0),
+    "daily_profit_target_percent": (0.1, 100.0),
+    "daily_loss_limit_percent": (0.1, 100.0),
+}
 
 
 def get_app_setting(key: str) -> str | None:
-    """
-    Read a persistent application setting.
-
-    None means the setting has not been saved.
-    Database errors propagate to the caller.
-    """
+    """Read a persistent application setting."""
     if key not in SUPPORTED_APP_SETTINGS:
-        raise ValueError(
-            f"Unsupported application setting: {key}"
-        )
+        raise ValueError(f"Unsupported application setting: {key}")
 
     with closing(get_connection()) as connection:
         row = connection.execute(
@@ -7562,38 +7581,69 @@ def get_app_setting(key: str) -> str | None:
     return str(row["value"])
 
 
-
-def set_app_setting(key: str, value: str) -> None:
-    """
-    Save a validated application setting.
-
-    Raises an error if validation or persistence fails.
-    """
+def _normalize_app_setting_value(key: str, value: str) -> str:
+    """Validate and normalize a supported application setting."""
     if key not in SUPPORTED_APP_SETTINGS:
+        raise ValueError(f"Unsupported application setting: {key}")
+
+    if type(value) is not str:
+        raise ValueError("Application setting value must be a string.")
+
+    if key == "pause_new_entries":
+        if value not in {"true", "false"}:
+            raise ValueError(
+                "pause_new_entries must be 'true' or 'false'."
+            )
+        return value
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{key} must be a valid number.") from None
+
+    if not math.isfinite(number):
+        raise ValueError(f"{key} must be finite.")
+
+    minimum, maximum = NUMERIC_APP_SETTING_RANGES[key]
+    if not minimum <= number <= maximum:
         raise ValueError(
-            f"Unsupported application setting: {key}"
+            f"{key} must be between {minimum} and {maximum}."
         )
 
-    if type(value) is not str or value not in {"true", "false"}:
-        raise ValueError(
-            "Application setting value must be 'true' or 'false'."
-        )
+    if key == "max_open_positions" and not number.is_integer():
+        raise ValueError("max_open_positions must be a whole number.")
 
+    return format(number, ".12g")
+
+
+def set_app_settings(values: dict[str, str]) -> None:
+    """Validate all values, then persist them atomically in one transaction."""
+    if not isinstance(values, dict) or not values:
+        raise ValueError("At least one application setting is required.")
+
+    normalized = {
+        key: _normalize_app_setting_value(key, value)
+        for key, value in values.items()
+    }
     updated_at = datetime.now(timezone.utc).isoformat()
 
     with closing(get_connection()) as connection:
         with connection:
-            connection.execute(
+            connection.executemany(
                 """
-                INSERT INTO app_settings (
-                    key,
-                    value,
-                    updated_at
-                )
+                INSERT INTO app_settings (key, value, updated_at)
                 VALUES (?, ?, ?)
                 ON CONFLICT(key) DO UPDATE SET
                     value = excluded.value,
                     updated_at = excluded.updated_at
                 """,
-                (key, value, updated_at),
+                [
+                    (key, value, updated_at)
+                    for key, value in normalized.items()
+                ],
             )
+
+
+def set_app_setting(key: str, value: str) -> None:
+    """Validate and persist one supported application setting."""
+    set_app_settings({key: value})
