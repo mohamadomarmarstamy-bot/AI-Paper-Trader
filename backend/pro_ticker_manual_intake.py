@@ -72,3 +72,37 @@ def save_manual_observations(raw: str) -> dict[str, Any]:
         "symbols": symbols,
         "count": len(symbols),
     }
+
+
+def list_manual_observations(limit: int = 100) -> dict[str, Any]:
+    """Return the latest saved manual research observations, newest first."""
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+        raise ValueError("Limit must be between 1 and 500.")
+    with get_connection() as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pro_ticker_manual_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'manual_pro_ticker',
+                observed_at TEXT NOT NULL,
+                indicator_snapshot_json TEXT,
+                order_status TEXT NOT NULL DEFAULT 'research_only',
+                CHECK (source = 'manual_pro_ticker')
+            )
+            """
+        )
+        rows = connection.execute(
+            """
+            SELECT id, symbol, source, observed_at, order_status
+            FROM pro_ticker_manual_observations
+            ORDER BY id DESC LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return {
+        "paper": True,
+        "research_only": True,
+        "count": len(rows),
+        "observations": [dict(row) for row in rows],
+    }
