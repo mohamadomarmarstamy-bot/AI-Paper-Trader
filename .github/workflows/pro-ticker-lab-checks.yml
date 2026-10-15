@@ -7,6 +7,8 @@ on:
   pull_request:
     paths:
       - 'backend/pro_ticker_manual_intake.py'
+      - 'backend/pro_ticker_paper_policy.py'
+      - 'backend/test_pro_ticker_paper_policy.py'
       - 'backend/test_pro_ticker_manual_intake.py'
       - 'backend/frontend/js/pro-ticker-manual.js'
       - 'backend/frontend/index.html'
@@ -22,8 +24,10 @@ jobs:
         with:
           python-version: '3.12'
       - name: Python syntax check
-        run: python -m py_compile backend/pro_ticker_manual_intake.py backend/main.py backend/test_pro_ticker_manual_intake.py
+        run: python -m py_compile backend/pro_ticker_manual_intake.py backend/pro_ticker_paper_policy.py backend/main.py backend/test_pro_ticker_manual_intake.py
       - name: Manual research intake unit tests
         run: python -m unittest discover -s backend -p test_pro_ticker_manual_intake.py -v
+      - name: PAPER order admission policy unit tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_paper_policy.py -v
       - name: Frontend JavaScript syntax check
         run: node --check backend/frontend/js/pro-ticker-manual.js
