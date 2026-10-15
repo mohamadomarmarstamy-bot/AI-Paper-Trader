@@ -166,6 +166,35 @@ def record_verified_paper_order_state(
     return {"paper": True, "reservation_id": reservation_id, "status": new_status}
 
 
+
+def set_paper_reservation_expected_shares(
+    reservation_id: str, expected_shares: int,
+) -> dict[str, Any]:
+    """Bind an immutable whole-share order quantity BEFORE PAPER submission."""
+    if isinstance(expected_shares, bool) or not isinstance(expected_shares, int) or not 1 <= expected_shares <= 1_000_000:
+        raise ValueError("Expected whole shares must be between 1 and 1000000.")
+    with get_connection() as conn:
+        _init(conn)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(pro_ticker_paper_reservations)")}
+        if "expected_shares" not in columns:
+            conn.execute("ALTER TABLE pro_ticker_paper_reservations ADD COLUMN expected_shares INTEGER")
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT status, broker_order_id, expected_shares "
+            "FROM pro_ticker_paper_reservations WHERE id = ?", (reservation_id,),
+        ).fetchone()
+        if row is None or row["status"] != "reserved" or row["broker_order_id"]:
+            raise ValueError("Only an unlinked reserved PAPER allocation may set order quantity.")
+        if row["expected_shares"] is not None and row["expected_shares"] != expected_shares:
+            raise ValueError("Expected PAPER order shares are immutable.")
+        conn.execute(
+            "UPDATE pro_ticker_paper_reservations SET expected_shares = ?, updated_at = ? "
+            "WHERE id = ?",
+            (expected_shares, datetime.now(timezone.utc).isoformat(), reservation_id),
+        )
+    return {"paper": True, "reservation_id": reservation_id, "expected_shares": expected_shares, "order_submitted": False}
+
+
 def link_verified_paper_entry_order(
     reservation_id: str,
     broker_order: dict[str, Any],
@@ -189,6 +218,19 @@ def link_verified_paper_entry_order(
         if row is None:
             raise ValueError("PAPER reservation not found.")
         reservation = dict(row)
+        expected_row = conn.execute(
+            "SELECT expected_shares FROM pro_ticker_paper_reservations WHERE id = ?",
+            (reservation_id,),
+        ).fetchone()
+        expected_shares = expected_row["expected_shares"] if expected_row else None
+        if not isinstance(expected_shares, int) or expected_shares <= 0:
+            raise ValueError("Expected PAPER shares must be bound before order linking.")
+        try:
+            broker_shares = float(broker_order["qty"])
+        except (TypeError, ValueError, KeyError, OverflowError) as error:
+            raise ValueError("Invalid PAPER broker order quantity.") from error
+        if not math.isfinite(broker_shares) or broker_shares != expected_shares:
+            raise ValueError("PAPER order quantity differs from immutable reservation.")
         if reservation["broker_order_id"]:
             # Repeated broker snapshots are idempotent ONLY when every
             # identity field still matches the same reservation.
