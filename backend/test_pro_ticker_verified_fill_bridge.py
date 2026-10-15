@@ -10,7 +10,7 @@ class VerifiedFillBridgeTests(unittest.TestCase):
         self.reservation_id = "12345678-1234-1234-1234-123456789abc"
         self.reservation = {
             "id": self.reservation_id, "symbol": "AAPL", "status": "submitted",
-            "broker_order_id": "paper-order-1",
+            "broker_order_id": "paper-order-1", "expected_shares": 10,
         }
         self.order = {
             "id": "paper-order-1",
@@ -69,6 +69,19 @@ class VerifiedFillBridgeTests(unittest.TestCase):
             bridge.account_linked_paper_entry_snapshot(
                 self.reservation_id, {**self.order, "qty": "nan"},
             )
+
+    def test_broker_qty_mismatch_with_reservation_does_not_post(self):
+        with patch.object(bridge, "post_verified_cumulative_paper_fill") as post:
+            with self.assertRaises(ValueError):
+                bridge.account_linked_paper_entry_snapshot(
+                    self.reservation_id, {**self.order, "qty": "11"},
+                )
+            post.assert_not_called()
+
+    def test_unbound_expected_shares_do_not_post(self):
+        self.reservation["expected_shares"] = None
+        with self.assertRaises(ValueError):
+            bridge.account_linked_paper_entry_snapshot(self.reservation_id, self.order)
 
     def test_missing_reservation_does_not_post(self):
         with self.assertRaises(ValueError):
