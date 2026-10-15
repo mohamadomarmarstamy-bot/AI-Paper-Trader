@@ -16113,6 +16113,16 @@ def build_pro_ticker_learning_analysis(
     }
 
 
+@app.get("/auto-trader/pro-ticker-manual-submissions")
+def list_auto_trader_pro_ticker_manual_submissions(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    require_app_session(request)
+    from pro_ticker_manual_intake import list_manual_observations
+    return list_manual_observations(limit=limit)
+
+
 @app.post("/auto-trader/pro-ticker-manual-submissions")
 async def auto_trader_pro_ticker_manual_submissions(
     request: Request,
