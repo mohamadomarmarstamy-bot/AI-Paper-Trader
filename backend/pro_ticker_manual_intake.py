@@ -6,8 +6,9 @@ Capture timestamps now; obtain market indicators separately at observation time.
 from __future__ import annotations
 
 import re
+import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from database import get_connection
 
@@ -34,7 +35,10 @@ def parse_manual_symbols(raw: str) -> list[str]:
     return symbols
 
 
-def save_manual_observations(raw: str) -> dict[str, Any]:
+def save_manual_observations(
+    raw: str,
+    quote_fetcher: Callable[[str], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Persist manually discovered tickers with their actual observation time.
 
     This is research-only. No order placement, simulated fills, or claim that
@@ -42,6 +46,28 @@ def save_manual_observations(raw: str) -> dict[str, Any]:
     """
     symbols = parse_manual_symbols(raw)
     observed_at = datetime.now(timezone.utc).isoformat()
+    snapshots: dict[str, dict[str, Any]] = {}
+    if quote_fetcher is not None:
+        for symbol in symbols:
+            try:
+                quote = quote_fetcher(symbol)
+                if not isinstance(quote, dict):
+                    raise ValueError("Invalid market-data response")
+                snapshots[symbol] = {
+                    "source": "alpaca_latest_trade",
+                    "captured_at": datetime.now(timezone.utc).isoformat(),
+                    "market_timestamp": quote.get("t"),
+                    "price": quote.get("p"),
+                    "size": quote.get("s"),
+                    "conditions": quote.get("c"),
+                    "status": "captured" if quote.get("p") is not None and quote.get("t") else "unavailable",
+                }
+            except Exception:
+                snapshots[symbol] = {
+                    "source": "alpaca_latest_trade",
+                    "captured_at": datetime.now(timezone.utc).isoformat(),
+                    "status": "unavailable",
+                }
     with get_connection() as connection:
         connection.execute(
             """
@@ -59,10 +85,10 @@ def save_manual_observations(raw: str) -> dict[str, Any]:
         connection.executemany(
             """
             INSERT INTO pro_ticker_manual_observations
-                (symbol, observed_at)
-            VALUES (?, ?)
+                (symbol, observed_at, indicator_snapshot_json)
+            VALUES (?, ?, ?)
             """,
-            [(symbol, observed_at) for symbol in symbols],
+            [(symbol, observed_at, json.dumps(snapshots[symbol]) if symbol in snapshots else None) for symbol in symbols],
         )
     return {
         "paper": True,
@@ -71,6 +97,7 @@ def save_manual_observations(raw: str) -> dict[str, Any]:
         "observed_at": observed_at,
         "symbols": symbols,
         "count": len(symbols),
+        "market_snapshots_captured": sum(1 for v in snapshots.values() if v["status"] == "captured"),
     }
 
 
@@ -94,7 +121,7 @@ def list_manual_observations(limit: int = 100) -> dict[str, Any]:
         )
         rows = connection.execute(
             """
-            SELECT id, symbol, source, observed_at, order_status
+            SELECT id, symbol, source, observed_at, order_status, indicator_snapshot_json
             FROM pro_ticker_manual_observations
             ORDER BY id DESC LIMIT ?
             """,
@@ -104,5 +131,8 @@ def list_manual_observations(limit: int = 100) -> dict[str, Any]:
         "paper": True,
         "research_only": True,
         "count": len(rows),
-        "observations": [dict(row) for row in rows],
+        "observations": [
+            {**dict(row), "market_snapshot": json.loads(row["indicator_snapshot_json"]) if row["indicator_snapshot_json"] else None}
+            for row in rows
+        ],
     }
