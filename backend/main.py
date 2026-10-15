@@ -16131,6 +16131,68 @@ def pro_ticker_paper_budget(request: Request) -> dict[str, Any]:
     return get_pro_ticker_budget()
 
 
+@app.get("/auto-trader/pro-ticker-paper-reconciliation-preview")
+def pro_ticker_paper_reconciliation_preview(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=100),
+) -> dict[str, Any]:
+    """Compare PAPER reservations to broker state without modifying anything."""
+    require_app_session(request)
+    from pro_ticker_budget_ledger import list_pro_ticker_reservations
+    from pro_ticker_reconciliation_review import assess_reservation_state
+
+    reservations = list_pro_ticker_reservations(limit)["reservations"]
+    try:
+        # These are PAPER-only broker endpoints. Failure is never interpreted
+        # as proof that an order or position is absent.
+        positions = fetch_alpaca_paper_positions()
+        orders = fetch_alpaca_paper_orders(limit=500)
+        by_id = {
+            str(order.get("id")): order for order in orders
+            if isinstance(order, dict) and order.get("id")
+        }
+        position_symbols = {
+            str(position.get("symbol") or "").upper()
+            for position in positions if isinstance(position, dict)
+        }
+    except Exception:
+        return {
+            "paper": True, "preview_only": True, "broker_snapshot_available": False,
+            "order_submitted": False, "database_updated": False,
+            "count": len(reservations),
+            "results": [
+                {
+                    "reservation_id": row["id"], "symbol": row["symbol"],
+                    "suggested_status": row["status"], "safe_to_release": False,
+                    "reason": "broker_snapshot_unavailable",
+                } for row in reservations
+            ],
+        }
+
+    results = []
+    for row in reservations:
+        broker_id = str(row.get("broker_order_id") or "")
+        if not broker_id:
+            review = {
+                "suggested_status": row["status"], "safe_to_release": False,
+                "reason": "reservation_not_linked_to_broker_order",
+            }
+        else:
+            review = assess_reservation_state(
+                row, by_id.get(broker_id),
+                position_exists=row["symbol"].upper() in position_symbols,
+            )
+        results.append({
+            "reservation_id": row["id"], "symbol": row["symbol"],
+            "current_status": row["status"], **review,
+        })
+    return {
+        "paper": True, "preview_only": True, "broker_snapshot_available": True,
+        "order_submitted": False, "database_updated": False,
+        "count": len(results), "results": results,
+    }
+
+
 @app.post("/auto-trader/pro-ticker-paper-preview")
 async def pro_ticker_paper_preview(request: Request) -> dict[str, Any]:
     """Evaluate one PAPER order intent. Preview only: no broker writes."""
