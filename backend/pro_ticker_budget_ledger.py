@@ -111,3 +111,54 @@ def list_pro_ticker_reservations(limit: int = 100) -> dict[str, Any]:
         {**dict(row), "notional": row["notional_cents"] / 100}
         for row in rows
     ]}
+
+
+def record_verified_paper_order_state(
+    reservation_id: str,
+    order_id: str,
+    status: str,
+    *,
+    filled_quantity: float,
+) -> dict[str, Any]:
+    """Persist a confirmed PAPER order state without releasing allocations.
+
+    Caller must fetch the order from the PAPER broker and verify ownership.
+    Terminal fills remain committed until an independently matched exit.
+    """
+    if not reservation_id or not order_id:
+        raise ValueError("Reservation and PAPER order IDs are required.")
+    if isinstance(filled_quantity, bool) or not isinstance(filled_quantity, (float, int)):
+        raise ValueError("Invalid filled quantity.")
+    if not math.isfinite(filled_quantity) or filled_quantity < 0:
+        raise ValueError("Invalid filled quantity.")
+    normalized = str(status).lower()
+    if filled_quantity > 0:
+        new_status = "filled"
+    elif normalized in {"canceled", "expired", "rejected"}:
+        new_status = "failed"
+    elif normalized in {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}:
+        new_status = "submitted"
+    else:
+        raise ValueError("Unverified order state.")
+    with get_connection() as conn:
+        _init(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT status, broker_order_id FROM pro_ticker_paper_reservations WHERE id = ?",
+            (reservation_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Unknown reservation.")
+        if row["broker_order_id"] and row["broker_order_id"] != order_id:
+            raise ValueError("Conflicting PAPER order ID.")
+        if row["status"] in {"released", "failed"}:
+            raise ValueError("Terminal reservation cannot be reopened.")
+        if row["status"] == "filled" and new_status != "filled":
+            raise ValueError("Filled reservation cannot be downgraded.")
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "UPDATE pro_ticker_paper_reservations SET status = ?, broker_order_id = ?, "
+            "updated_at = ? WHERE id = ?",
+            (new_status, order_id, now, reservation_id),
+        )
+    return {"paper": True, "reservation_id": reservation_id, "status": new_status}
