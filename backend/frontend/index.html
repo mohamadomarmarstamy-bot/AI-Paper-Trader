@@ -99,6 +99,7 @@
                     <span id="notification-badge" class="notification-badge hidden" aria-label="Unread notifications">0</span>
                 </button>
                 <button type="button" class="nav-button" data-section="scanner-section" aria-controls="scanner-section"><span aria-hidden="true">🔎</span><span>Scanner</span></button>
+                <button type="button" class="nav-button" data-section="pro-ticker-manual-section" aria-controls="pro-ticker-manual-section"><span aria-hidden="true">🧪</span><span>Pro Ticker Lab</span></button>
                 <button type="button" class="nav-button" data-section="strategy-section" aria-controls="strategy-section"><span aria-hidden="true">🤖</span><span>Research Lab</span></button>
                 <button type="button" class="nav-button" data-section="jarvis-section" aria-controls="jarvis-section"><span aria-hidden="true">&#129302;</span><span>Jarvis</span></button>
                 <button type="button" class="nav-button" data-section="profile-section" aria-controls="profile-section"><span aria-hidden="true">&#128100;</span><span>Profile</span></button>
@@ -1185,7 +1186,27 @@
                 </section>
 
 
-<section
+<section id="pro-ticker-manual-section" class="app-section hidden" aria-labelledby="pro-ticker-manual-title" hidden>
+                    <div class="section-heading">
+                        <p class="panel-kicker">Research only</p>
+                        <h2 id="pro-ticker-manual-title">Pro Ticker Lab</h2>
+                        <p>Record stocks you discovered manually. No orders are placed from this page.</p>
+                    </div>
+                    <div class="panel" style="padding:1.5rem">
+                        <form id="pro-ticker-manual-form">
+                            <label for="pro-ticker-manual-symbols">Stock symbols (comma, space, or newline separated)</label>
+                            <textarea id="pro-ticker-manual-symbols" rows="4" maxlength="1200" required placeholder="AAPL, MSFT, NVDA" style="display:block;width:100%;margin:0.75rem 0;padding:0.75rem"></textarea>
+                            <button type="submit" class="primary-button">Save Research Symbols</button>
+                        </form>
+                        <p id="pro-ticker-manual-status" role="status" aria-live="polite">Research only — no automatic PAPER orders.</p>
+                        <h3>Recent manual observations</h3>
+                        <div style="overflow-x:auto">
+                            <table><thead><tr><th>Symbol</th><th>Observed at</th><th>Status</th></tr></thead>
+                            <tbody id="pro-ticker-manual-history"></tbody></table>
+                        </div>
+                    </div>
+                </section>
+                <section
                     id="strategy-section"
                     class="strategy-section app-section hidden"
                     aria-labelledby="strategy-title"
@@ -1910,6 +1931,7 @@
     <script src="js/search.js"></script>
     <script src="js/watchlist.js"></script>
     <script src="js/portfolio.js"></script>
+    <script src="js/pro-ticker-manual.js"></script>
     <script src="js/strategy.js"></script>
     <script src="js/jarvis.js"></script>
     <script src="js/profile.js"></script>
@@ -2014,6 +2036,10 @@ document.addEventListener(
 
                 if (sectionId === "performance-section") {
                     window.setTimeout(() => window.loadPortfolioChart?.(), 80);
+                }
+
+                if (sectionId === "pro-ticker-manual-section") {
+                    window.setTimeout(() => window.loadProTickerManualLab?.(), 80);
                 }
 
                 if (sectionId === "scanner-section") {
