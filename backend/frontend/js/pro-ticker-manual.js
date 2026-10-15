@@ -24,6 +24,8 @@
                 const tr = document.createElement("tr");
                 for (const value of [
                     record.symbol,
+                    record.market_snapshot?.status === "captured" ? String(record.market_snapshot.price) : "Unavailable",
+                    record.market_snapshot?.market_timestamp || "—",
                     record.observed_at ? new Date(record.observed_at).toLocaleString() : "—",
                     record.order_status || "research_only"
                 ]) {
