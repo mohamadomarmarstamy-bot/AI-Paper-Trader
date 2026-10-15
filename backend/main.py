@@ -16113,6 +16113,28 @@ def build_pro_ticker_learning_analysis(
     }
 
 
+@app.post("/auto-trader/pro-ticker-manual-submissions")
+async def auto_trader_pro_ticker_manual_submissions(
+    request: Request,
+) -> dict[str, Any]:
+    """Store manually discovered symbols for research; NEVER submit orders."""
+    require_app_session(request)
+    try:
+        payload = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Expected JSON body.")
+    if not isinstance(payload, dict) or not isinstance(payload.get("symbols"), str):
+        raise HTTPException(
+            status_code=422,
+            detail="Provide a 'symbols' string with comma-separated tickers.",
+        )
+    from pro_ticker_manual_intake import save_manual_observations
+    try:
+        return save_manual_observations(payload["symbols"])
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
 @app.get(
     "/auto-trader/pro-ticker-learning"
 )
