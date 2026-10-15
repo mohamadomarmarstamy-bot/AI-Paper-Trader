@@ -16239,6 +16239,24 @@ def auto_trader_pro_ticker_research(
     }
 
 
+
+@app.get("/auto-trader/pro-ticker-shadow-candidates")
+def auto_trader_pro_ticker_shadow_candidates(
+    request: Request,
+    limit: int = Query(default=500, ge=1, le=500),
+    max_age_days: int = Query(default=1, ge=0, le=7),
+) -> dict[str, Any]:
+    """Read-only Pro Ticker candidates for PAPER shadow research."""
+    require_app_session(request)
+
+    from pro_ticker_shadow import get_pro_ticker_shadow_candidates
+
+    return get_pro_ticker_shadow_candidates(
+        limit=limit,
+        max_age_days=max_age_days,
+    )
+
+
 def build_pro_ticker_scan_email(
     result: dict[str, Any],
     *,
