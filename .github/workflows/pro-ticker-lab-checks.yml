@@ -12,6 +12,8 @@ on:
       - 'backend/pro_ticker_reconciliation_review.py'
       - 'backend/pro_ticker_order_ownership.py'
       - 'backend/pro_ticker_execution_plan.py'
+      - 'backend/pro_ticker_exit_plan.py'
+      - 'backend/test_pro_ticker_exit_plan.py'
       - 'backend/test_pro_ticker_execution_plan.py'
       - 'backend/test_pro_ticker_order_ownership.py'
       - 'backend/test_pro_ticker_reconciliation_review.py'
@@ -32,7 +34,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Python syntax check
-        run: python -m py_compile backend/pro_ticker_manual_intake.py backend/pro_ticker_paper_policy.py backend/pro_ticker_budget_ledger.py backend/pro_ticker_reconciliation_review.py backend/pro_ticker_order_ownership.py backend/pro_ticker_execution_plan.py backend/main.py backend/test_pro_ticker_manual_intake.py backend/test_pro_ticker_budget_ledger.py backend/test_pro_ticker_paper_policy.py backend/test_pro_ticker_reconciliation_review.py
+        run: python -m py_compile backend/pro_ticker_manual_intake.py backend/pro_ticker_paper_policy.py backend/pro_ticker_budget_ledger.py backend/pro_ticker_reconciliation_review.py backend/pro_ticker_order_ownership.py backend/pro_ticker_execution_plan.py backend/pro_ticker_exit_plan.py backend/main.py backend/test_pro_ticker_manual_intake.py backend/test_pro_ticker_budget_ledger.py backend/test_pro_ticker_paper_policy.py backend/test_pro_ticker_reconciliation_review.py
       - name: Manual research intake unit tests
         run: python -m unittest discover -s backend -p test_pro_ticker_manual_intake.py -v
       - name: PAPER order admission policy unit tests
@@ -45,5 +47,7 @@ jobs:
         run: python -m unittest discover -s backend -p test_pro_ticker_order_ownership.py -v
       - name: PAPER entry planning unit tests
         run: python -m unittest discover -s backend -p test_pro_ticker_execution_plan.py -v
+      - name: PAPER exit planning unit tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_exit_plan.py -v
       - name: Frontend JavaScript syntax check
         run: node --check backend/frontend/js/pro-ticker-manual.js
