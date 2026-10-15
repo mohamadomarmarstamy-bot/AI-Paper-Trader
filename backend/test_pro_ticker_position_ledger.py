@@ -74,5 +74,52 @@ class PaperPositionLedgerTests(unittest.TestCase):
         self.assertEqual(ledger.list_pro_ticker_strategy_positions()["positions"][0]["shares"], 4)
 
 
+    def cumulative(self, quantity, **updates):
+        values = dict(
+            broker_order_id="paper-order-cumulative", symbol="AAPL",
+            side="buy", cumulative_filled_shares=quantity,
+            ownership_verified=True, fill_verified=True,
+        )
+        values.update(updates)
+        return ledger.post_verified_cumulative_paper_fill(**values)
+
+    def test_cumulative_partial_fill_increments_once(self):
+        self.assertEqual(self.cumulative(2)["delta_shares"], 2)
+        self.assertEqual(self.cumulative(5)["delta_shares"], 3)
+        self.assertEqual(self.cumulative(5)["delta_shares"], 0)
+        self.assertEqual(
+            ledger.list_pro_ticker_strategy_positions()["positions"][0]["shares"], 5,
+        )
+
+    def test_stale_cumulative_snapshot_does_not_reverse_shares(self):
+        self.cumulative(5)
+        result = self.cumulative(2)
+        self.assertTrue(result["stale_snapshot"])
+        self.assertEqual(result["delta_shares"], 0)
+
+    def test_cumulative_order_identity_cannot_change(self):
+        self.cumulative(2)
+        with self.assertRaises(ValueError):
+            self.cumulative(3, symbol="MSFT")
+        with self.assertRaises(ValueError):
+            self.cumulative(3, side="sell")
+
+    def test_cumulative_sell_cannot_oversell(self):
+        self.cumulative(3)
+        with self.assertRaises(ValueError):
+            self.cumulative(
+                4, broker_order_id="paper-sell-cumulative", side="sell",
+            )
+        self.assertEqual(
+            ledger.list_pro_ticker_strategy_positions()["positions"][0]["shares"], 3,
+        )
+
+    def test_unverified_cumulative_snapshot_cannot_post(self):
+        with self.assertRaises(ValueError):
+            self.cumulative(2, fill_verified=False)
+        self.assertEqual(ledger.list_pro_ticker_strategy_positions()["positions"], [])
+
+
+
 if __name__ == "__main__":
     unittest.main()
