@@ -25,10 +25,11 @@ class PaperOrderLinkingTests(unittest.TestCase):
         self.addCleanup(p.stop)
         self.reservation = ledger.reserve_pro_ticker_budget("AAPL", 100.00)
         self.reservation_id = self.reservation["reservation_id"]
+        ledger.set_paper_reservation_expected_shares(self.reservation_id, 10)
         self.order = {
             "id": "paper-order-1",
             "client_order_id": pro_ticker_client_order_id(self.reservation_id),
-            "symbol": "AAPL", "side": "buy", "status": "new",
+            "symbol": "AAPL", "side": "buy", "status": "new", "qty": "10",
         }
 
     def test_verified_link_is_persisted(self):
@@ -75,6 +76,23 @@ class PaperOrderLinkingTests(unittest.TestCase):
             ledger.link_verified_paper_entry_order(
                 self.reservation_id, {**self.order, "id": "other"}
             )
+
+    def test_broker_order_quantity_mismatch_fails_closed(self):
+        with self.assertRaises(ValueError):
+            ledger.link_verified_paper_entry_order(
+                self.reservation_id, {**self.order, "qty": "11"},
+            )
+
+    def test_bound_quantity_is_immutable(self):
+        with self.assertRaises(ValueError):
+            ledger.set_paper_reservation_expected_shares(self.reservation_id, 11)
+
+    def test_link_without_bound_quantity_is_rejected(self):
+        second = ledger.reserve_pro_ticker_budget("MSFT", 100.00)
+        order = {**self.order, "symbol": "MSFT", "id": "paper-order-2",
+                 "client_order_id": pro_ticker_client_order_id(second["reservation_id"])}
+        with self.assertRaises(ValueError):
+            ledger.link_verified_paper_entry_order(second["reservation_id"], order)
 
     def test_invalid_reservation_id_rejected(self):
         with self.assertRaises(ValueError):
