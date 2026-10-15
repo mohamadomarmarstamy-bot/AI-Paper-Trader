@@ -16131,6 +16131,45 @@ def pro_ticker_paper_budget(request: Request) -> dict[str, Any]:
     return get_pro_ticker_budget()
 
 
+@app.post("/auto-trader/pro-ticker-paper-entry-fill-reconcile")
+def pro_ticker_paper_entry_fill_reconcile(
+    request: Request,
+    reservation_id: str = Query(..., min_length=36, max_length=36),
+) -> dict[str, Any]:
+    """Reconcile one linked PAPER entry order; never submit or cancel orders."""
+    require_app_session(request)
+    from pro_ticker_budget_ledger import list_pro_ticker_reservations
+    from pro_ticker_verified_fill_bridge import account_linked_paper_entry_snapshot
+
+    try:
+        reservations = list_pro_ticker_reservations(limit=500)["reservations"]
+        matches = [row for row in reservations if row["id"] == reservation_id]
+        if len(matches) != 1 or not matches[0].get("broker_order_id"):
+            raise ValueError("A uniquely linked PAPER reservation is required.")
+        order_id = str(matches[0]["broker_order_id"])
+        # Fetch this exact order directly from the hard-coded PAPER broker.
+        # Never accept a client-supplied order payload as evidence of a fill.
+        broker_order = alpaca_paper_request(
+            "GET", "/v2/orders/" + order_id, timeout=10.0,
+        )
+        if not isinstance(broker_order, dict):
+            raise ValueError("PAPER broker order unavailable.")
+        result = account_linked_paper_entry_snapshot(
+            reservation_id, broker_order,
+        )
+        return {
+            "paper": True, "order_submitted": False,
+            "reservation_id": reservation_id, **result,
+        }
+    except Exception:
+        return {
+            "paper": True, "order_submitted": False,
+            "posted": False, "reconciled": False,
+            "reservation_id": reservation_id,
+            "reason": "verified_paper_entry_reconciliation_unavailable",
+        }
+
+
 @app.get("/auto-trader/pro-ticker-paper-fill-posting-preview")
 def pro_ticker_paper_fill_posting_preview(
     request: Request,
