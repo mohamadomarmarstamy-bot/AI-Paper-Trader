@@ -36,8 +36,11 @@ def assess_reservation_state(
         return {"suggested_status": current, "safe_to_release": False, "reason": "invalid_filled_quantity"}
     status = str(broker_order.get("status") or "").lower()
     if filled > 0:
+        # Position absence alone is not proof of a matched strategy exit.
+        # Another strategy, an external manual close, or stale position data
+        # could explain the absence. Require linked exit fills separately.
         if status == "filled" and position_exists is False:
-            return {"suggested_status": "released", "safe_to_release": True, "reason": "filled_and_position_absent"}
+            return {"suggested_status": "filled", "safe_to_release": False, "reason": "matched_exit_fill_required"}
         return {"suggested_status": "filled", "safe_to_release": False, "reason": "shares_filled_or_close_unverified"}
     if status in {"canceled", "expired", "rejected"} and position_exists is False:
         return {"suggested_status": "failed", "safe_to_release": True, "reason": "no_fill_and_no_position"}
