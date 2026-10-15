@@ -38,6 +38,23 @@ class ManualProTickerIntakeTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     list_manual_observations(limit=0)
 
+    def test_snapshot_capture_and_failure_are_recorded(self):
+        import database
+        from pro_ticker_manual_intake import list_manual_observations
+        def quote(symbol):
+            if symbol == "BAD":
+                raise RuntimeError("Market data unavailable")
+            return {"p": 123.45, "s": 100, "t": "2026-10-15T15:00:00Z"}
+        with tempfile.TemporaryDirectory() as folder:
+            with patch.object(database, "DATABASE_PATH", Path(folder) / "test.db"):
+                result = save_manual_observations("AAPL BAD", quote_fetcher=quote)
+                self.assertEqual(result["market_snapshots_captured"], 1)
+                history = list_manual_observations()
+                by_symbol = {row["symbol"]: row for row in history["observations"]}
+                self.assertEqual(by_symbol["AAPL"]["market_snapshot"]["price"], 123.45)
+                self.assertEqual(by_symbol["BAD"]["market_snapshot"]["status"], "unavailable")
+                self.assertEqual(by_symbol["AAPL"]["order_status"], "research_only")
+
     def test_saves_research_only_without_orders(self):
         with tempfile.TemporaryDirectory() as folder:
             import database
