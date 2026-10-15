@@ -16123,6 +16123,14 @@ def list_auto_trader_pro_ticker_manual_submissions(
     return list_manual_observations(limit=limit)
 
 
+@app.get("/auto-trader/pro-ticker-paper-budget")
+def pro_ticker_paper_budget(request: Request) -> dict[str, Any]:
+    """Read the durable virtual PAPER budget; execution remains disabled."""
+    require_app_session(request)
+    from pro_ticker_budget_ledger import get_pro_ticker_budget
+    return get_pro_ticker_budget()
+
+
 @app.post("/auto-trader/pro-ticker-paper-preview")
 async def pro_ticker_paper_preview(request: Request) -> dict[str, Any]:
     """Evaluate one PAPER order intent. Preview only: no broker writes."""
@@ -16169,7 +16177,8 @@ async def pro_ticker_paper_preview(request: Request) -> dict[str, Any]:
         result = check_pro_ticker_paper_entry(
             symbol=symbol[0],
             proposed_notional=proposed_notional,
-            # Fail closed until a durable, reconciled allocation ledger exists.
+            # Ledger exists, but broker reconciliation is not yet wired.
+            # Force a blocked preview until that reconciliation is verified.
             pro_ticker_committed=50_000.0,
             broker_buying_power=float(account.get("buying_power", 0)),
             open_position_symbols={p.get("symbol", "") for p in positions},
