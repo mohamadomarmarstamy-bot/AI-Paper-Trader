@@ -16123,6 +16123,76 @@ def list_auto_trader_pro_ticker_manual_submissions(
     return list_manual_observations(limit=limit)
 
 
+@app.post("/auto-trader/pro-ticker-paper-preview")
+async def pro_ticker_paper_preview(request: Request) -> dict[str, Any]:
+    """Evaluate one PAPER order intent. Preview only: no broker writes."""
+    require_app_session(request)
+    from pro_ticker_paper_policy import check_pro_ticker_paper_entry
+    from pro_ticker_manual_intake import parse_manual_symbols
+
+    try:
+        payload = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Expected JSON body.")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Expected JSON object.")
+    try:
+        symbol = parse_manual_symbols(payload.get("symbol", ""))
+        if len(symbol) != 1:
+            raise ValueError("Provide exactly one symbol.")
+        proposed_notional = float(payload.get("proposed_notional"))
+    except (ValueError, TypeError) as error:
+        raise HTTPException(status_code=422, detail="Invalid symbol or proposed notional.") from error
+
+    # Conservative until durable strategy ledger and broker/order locking exist:
+    # no submitted trades, even if all preview checks pass.
+    try:
+        positions = fetch_alpaca_paper_positions()
+        orders = alpaca_paper_request(
+            "GET", "/v2/orders",
+            params={"status": "open", "limit": 500, "nested": "true"},
+        )
+        clock = fetch_alpaca_market_clock()
+        account = alpaca_paper_request("GET", "/v2/account")
+        quote = alpaca_market_data_request(
+            "GET", f"/v2/stocks/{symbol[0]}/trades/latest", timeout=3.0,
+        )
+        if not isinstance(orders, list) or not isinstance(account, dict):
+            raise ValueError("Broker snapshot incomplete")
+        if not isinstance(quote, dict) or not isinstance(quote.get("trade"), dict):
+            raise ValueError("Latest trade missing")
+        from datetime import datetime, timezone
+        trade_time = datetime.fromisoformat(
+            str(quote["trade"].get("t", "")).replace("Z", "+00:00")
+        )
+        data_age_seconds = (datetime.now(timezone.utc) - trade_time).total_seconds()
+        result = check_pro_ticker_paper_entry(
+            symbol=symbol[0],
+            proposed_notional=proposed_notional,
+            # Fail closed until a durable, reconciled allocation ledger exists.
+            pro_ticker_committed=50_000.0,
+            broker_buying_power=float(account.get("buying_power", 0)),
+            open_position_symbols={p.get("symbol", "") for p in positions},
+            open_order_symbols={o.get("symbol", "") for o in orders},
+            market_open=clock.get("is_open") is True,
+            broker_paper=True,
+            data_age_seconds=data_age_seconds,
+        )
+        return {
+            "paper": True, "preview_only": True, "order_submitted": False,
+            "symbol": symbol[0], "allowed": result.allowed,
+            "reason": result.reason, "data_age_seconds": data_age_seconds,
+            "virtual_budget_reconciliation_ready": False,
+        }
+    except Exception:
+        return {
+            "paper": True, "preview_only": True, "order_submitted": False,
+            "symbol": symbol[0], "allowed": False,
+            "reason": "broker_or_market_snapshot_unavailable",
+            "virtual_budget_reconciliation_ready": False,
+        }
+
+
 @app.post("/auto-trader/pro-ticker-manual-submissions")
 async def auto_trader_pro_ticker_manual_submissions(
     request: Request,
