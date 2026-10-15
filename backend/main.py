@@ -16208,6 +16208,7 @@ async def pro_ticker_paper_preview(request: Request) -> dict[str, Any]:
     require_app_session(request)
     from pro_ticker_paper_policy import check_pro_ticker_paper_entry
     from pro_ticker_manual_intake import parse_manual_symbols
+    from pro_ticker_budget_ledger import get_pro_ticker_budget
 
     try:
         payload = await request.json()
@@ -16236,7 +16237,7 @@ async def pro_ticker_paper_preview(request: Request) -> dict[str, Any]:
         quote = alpaca_market_data_request(
             "GET", f"/v2/stocks/{symbol[0]}/trades/latest", timeout=3.0,
         )
-        if not isinstance(orders, list) or not isinstance(account, dict):
+        if not isinstance(positions, list) or not isinstance(orders, list) or not isinstance(account, dict) or not isinstance(clock, dict):
             raise ValueError("Broker snapshot incomplete")
         if not isinstance(quote, dict) or not isinstance(quote.get("trade"), dict):
             raise ValueError("Latest trade missing")
@@ -16245,12 +16246,13 @@ async def pro_ticker_paper_preview(request: Request) -> dict[str, Any]:
             str(quote["trade"].get("t", "")).replace("Z", "+00:00")
         )
         data_age_seconds = (datetime.now(timezone.utc) - trade_time).total_seconds()
+        budget = get_pro_ticker_budget()
         result = check_pro_ticker_paper_entry(
             symbol=symbol[0],
             proposed_notional=proposed_notional,
             # Ledger exists, but broker reconciliation is not yet wired.
             # Force a blocked preview until that reconciliation is verified.
-            pro_ticker_committed=50_000.0,
+            pro_ticker_committed=budget["committed"],
             broker_buying_power=float(account.get("buying_power", 0)),
             open_position_symbols={p.get("symbol", "") for p in positions},
             open_order_symbols={o.get("symbol", "") for o in orders},
@@ -16260,8 +16262,12 @@ async def pro_ticker_paper_preview(request: Request) -> dict[str, Any]:
         )
         return {
             "paper": True, "preview_only": True, "order_submitted": False,
-            "symbol": symbol[0], "allowed": result.allowed,
-            "reason": result.reason, "data_age_seconds": data_age_seconds,
+            "symbol": symbol[0], "allowed": False,
+            "preflight_eligible": result.allowed,
+            "reason": "execution_disabled_pending_reconciliation" if result.allowed else result.reason,
+            "preflight_reason": result.reason,
+            "data_age_seconds": data_age_seconds,
+            "virtual_budget": budget,
             "virtual_budget_reconciliation_ready": False,
         }
     except Exception:
