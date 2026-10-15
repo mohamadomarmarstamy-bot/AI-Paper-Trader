@@ -50,11 +50,19 @@ def account_linked_paper_entry_snapshot(
         raise ValueError("Invalid PAPER order quantity.") from error
     if not math.isfinite(quantity) or quantity <= 0 or not quantity.is_integer():
         raise ValueError("Whole-share PAPER order quantity required.")
+    expected_shares = reservation.get("expected_shares")
+    if (
+        isinstance(expected_shares, bool)
+        or not isinstance(expected_shares, int)
+        or expected_shares <= 0
+        or quantity != expected_shares
+    ):
+        raise ValueError("PAPER broker quantity does not match bound reservation shares.")
     verification = assess_paper_order_fill(
         expected_order_id=linked_id,
         expected_symbol=symbol,
         expected_side="buy",
-        expected_shares=int(quantity),
+        expected_shares=expected_shares,
         broker_order=broker_order,
     )
     if not verification["verified"]:
