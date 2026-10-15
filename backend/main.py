@@ -16147,6 +16147,10 @@ def pro_ticker_paper_entry_fill_reconcile(
         if len(matches) != 1 or not matches[0].get("broker_order_id"):
             raise ValueError("A uniquely linked PAPER reservation is required.")
         order_id = str(matches[0]["broker_order_id"])
+        # Broker-generated Alpaca order IDs are UUIDs; reject unsafe paths.
+        import uuid as _pro_ticker_uuid
+        if str(_pro_ticker_uuid.UUID(order_id)) != order_id.lower():
+            raise ValueError("Invalid PAPER broker order ID.")
         # Fetch this exact order directly from the hard-coded PAPER broker.
         # Never accept a client-supplied order payload as evidence of a fill.
         broker_order = alpaca_paper_request(
