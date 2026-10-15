@@ -32,6 +32,11 @@ class BudgetLedgerTests(unittest.TestCase):
             with patch.object(database, "DATABASE_PATH", Path(directory) / "ledger.db"):
                 reservation = reserve_pro_ticker_budget("AAPL", 1000)
                 reservation_id = reservation["reservation_id"]
+                with database.get_connection() as conn:
+                    conn.execute(
+                        "UPDATE pro_ticker_paper_reservations SET broker_order_id = ? WHERE id = ?",
+                        ("paper-001", reservation_id),
+                    )
                 state = record_verified_paper_order_state(
                     reservation_id, "paper-001", "canceled", filled_quantity=2,
                 )
@@ -50,6 +55,11 @@ class BudgetLedgerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(database, "DATABASE_PATH", Path(directory) / "ledger.db"):
                 reservation = reserve_pro_ticker_budget("MSFT", 250)
+                with database.get_connection() as conn:
+                    conn.execute(
+                        "UPDATE pro_ticker_paper_reservations SET broker_order_id = ? WHERE id = ?",
+                        ("paper-003", reservation["reservation_id"]),
+                    )
                 record_verified_paper_order_state(
                     reservation["reservation_id"], "paper-003", "rejected",
                     filled_quantity=0,
