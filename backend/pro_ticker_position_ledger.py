@@ -126,3 +126,90 @@ def list_pro_ticker_strategy_positions() -> dict[str, Any]:
         "paper": True, "broker_reconciled": False,
         "positions": [dict(row) for row in rows],
     }
+
+
+def post_verified_cumulative_paper_fill(
+    *,
+    broker_order_id: str,
+    symbol: str,
+    side: str,
+    cumulative_filled_shares: int,
+    ownership_verified: bool,
+    fill_verified: bool,
+) -> dict[str, Any]:
+    """Atomically account only NEW shares in a verified broker order snapshot.
+
+    Repeated or stale cumulative snapshots cannot double-count shares. Caller
+    MUST independently verify PAPER order identity, quantity and ownership.
+    This does not place orders or authorize any budget release.
+    """
+    if not isinstance(broker_order_id, str) or not broker_order_id.strip():
+        raise ValueError("Verified PAPER broker order ID required.")
+    if not isinstance(symbol, str) or not symbol.strip():
+        raise ValueError("Valid symbol required.")
+    if side not in {"buy", "sell"}:
+        raise ValueError("Invalid PAPER order side.")
+    if (
+        isinstance(cumulative_filled_shares, bool)
+        or not isinstance(cumulative_filled_shares, int)
+        or cumulative_filled_shares < 0
+    ):
+        raise ValueError("Invalid cumulative fill quantity.")
+    if ownership_verified is not True or fill_verified is not True:
+        raise ValueError("PAPER order ownership and fill must be verified.")
+    normalized_symbol = symbol.strip().upper()
+    now = datetime.now(timezone.utc).isoformat()
+    with get_connection() as conn:
+        _initialize(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT symbol, side, shares FROM pro_ticker_strategy_fill_events "
+            "WHERE broker_order_id = ?",
+            (broker_order_id,),
+        ).fetchall()
+        if any(row["symbol"] != normalized_symbol or row["side"] != side for row in existing):
+            raise ValueError("Broker order already attributed to another symbol or side.")
+        accounted = sum(int(row["shares"]) for row in existing)
+        if cumulative_filled_shares < accounted:
+            return {
+                "paper": True, "posted": False, "stale_snapshot": True,
+                "delta_shares": 0, "accounted_shares": accounted,
+            }
+        delta = cumulative_filled_shares - accounted
+        if delta == 0:
+            return {
+                "paper": True, "posted": False, "stale_snapshot": False,
+                "delta_shares": 0, "accounted_shares": accounted,
+            }
+        position = conn.execute(
+            "SELECT shares FROM pro_ticker_strategy_positions WHERE symbol = ?",
+            (normalized_symbol,),
+        ).fetchone()
+        current = int(position["shares"]) if position else 0
+        decision = apply_verified_paper_fill(
+            symbol=normalized_symbol, current_shares=current,
+            filled_shares=delta, side=side,
+            ownership_verified=True, fill_verified=True, already_accounted=False,
+        )
+        if not decision["accepted"]:
+            raise ValueError("PAPER fill accounting blocked: " + decision["reason"])
+        # The event ID is deterministic per broker order and cumulative fill
+        # level; a replay of the same snapshot is idempotent.
+        event_id = f"cumulative:{broker_order_id}:{cumulative_filled_shares}"
+        conn.execute(
+            "INSERT INTO pro_ticker_strategy_fill_events "
+            "(event_id, broker_order_id, symbol, side, shares, recorded_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (event_id, broker_order_id, normalized_symbol, side, delta, now),
+        )
+        conn.execute(
+            "INSERT INTO pro_ticker_strategy_positions(symbol, shares, updated_at) "
+            "VALUES (?, ?, ?) ON CONFLICT(symbol) DO UPDATE SET "
+            "shares = excluded.shares, updated_at = excluded.updated_at",
+            (normalized_symbol, decision["next_shares"], now),
+        )
+    return {
+        "paper": True, "posted": True, "stale_snapshot": False,
+        "delta_shares": delta, "accounted_shares": cumulative_filled_shares,
+        "current_shares": decision["next_shares"],
+    }
