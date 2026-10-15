@@ -16139,8 +16139,7 @@ def pro_ticker_paper_reconciliation_preview(
     """Compare PAPER reservations to broker state without modifying anything."""
     require_app_session(request)
     from pro_ticker_budget_ledger import list_pro_ticker_reservations
-    from pro_ticker_reconciliation_review import assess_reservation_state
-    from pro_ticker_order_ownership import verify_paper_order_link
+    from pro_ticker_snapshot_review import review_paper_reservation
 
     reservations = list_pro_ticker_reservations(limit)["reservations"]
     try:
@@ -16170,31 +16169,14 @@ def pro_ticker_paper_reconciliation_preview(
             ],
         }
 
-    results = []
-    for row in reservations:
-        broker_id = str(row.get("broker_order_id") or "")
-        if not broker_id:
-            review = {
-                "suggested_status": row["status"], "safe_to_release": False,
-                "reason": "reservation_not_linked_to_broker_order",
-            }
-        else:
-            order = by_id.get(broker_id)
-            ownership = verify_paper_order_link(row, order)
-            if not ownership["verified"]:
-                review = {
-                    "suggested_status": row["status"], "safe_to_release": False,
-                    "reason": ownership["reason"],
-                }
-            else:
-                review = assess_reservation_state(
-                    row, order,
-                    position_exists=row["symbol"].upper() in position_symbols,
-                )
-        results.append({
-            "reservation_id": row["id"], "symbol": row["symbol"],
-            "current_status": row["status"], **review,
-        })
+    results = [
+        review_paper_reservation(
+            row,
+            by_id.get(str(row.get("broker_order_id") or "")),
+            position_exists=row["symbol"].upper() in position_symbols,
+        )
+        for row in reservations
+    ]
     return {
         "paper": True, "preview_only": True, "broker_snapshot_available": True,
         "order_submitted": False, "database_updated": False,
