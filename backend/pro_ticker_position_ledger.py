@@ -213,3 +213,17 @@ def post_verified_cumulative_paper_fill(
         "delta_shares": delta, "accounted_shares": cumulative_filled_shares,
         "current_shares": decision["next_shares"],
     }
+
+
+def get_accounted_paper_order_shares(broker_order_id: str) -> int:
+    """Read total recorded incremental fills for one linked PAPER broker order."""
+    if not isinstance(broker_order_id, str) or not broker_order_id.strip():
+        raise ValueError("A PAPER broker order ID is required.")
+    with get_connection() as conn:
+        _initialize(conn)
+        row = conn.execute(
+            "SELECT COALESCE(SUM(shares), 0) FROM pro_ticker_strategy_fill_events "
+            "WHERE broker_order_id = ?",
+            (broker_order_id,),
+        ).fetchone()
+    return int(row[0])
