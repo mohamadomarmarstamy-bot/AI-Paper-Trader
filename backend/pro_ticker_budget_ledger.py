@@ -164,3 +164,70 @@ def record_verified_paper_order_state(
             (new_status, order_id, now, reservation_id),
         )
     return {"paper": True, "reservation_id": reservation_id, "status": new_status}
+
+
+def link_verified_paper_entry_order(
+    reservation_id: str,
+    broker_order: dict[str, Any],
+) -> dict[str, Any]:
+    """Atomically link a broker-returned PAPER order to its unique reservation.
+
+    The broker order MUST carry the deterministic reservation-specific client
+    order ID. The caller must independently fetch it from the PAPER broker.
+    This function never submits orders, books fills, or releases a budget.
+    """
+    from pro_ticker_order_linking import verify_paper_entry_for_link
+
+    with get_connection() as conn:
+        _init(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT id, symbol, status, broker_order_id "
+            "FROM pro_ticker_paper_reservations WHERE id = ?",
+            (reservation_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("PAPER reservation not found.")
+        reservation = dict(row)
+        if reservation["broker_order_id"]:
+            # Repeated broker snapshots are idempotent ONLY when every
+            # identity field still matches the same reservation.
+            expected_client_id = None
+            from pro_ticker_order_linking import pro_ticker_client_order_id
+            expected_client_id = pro_ticker_client_order_id(reservation_id)
+            if (
+                reservation["broker_order_id"] == broker_order.get("id")
+                and broker_order.get("client_order_id") == expected_client_id
+                and str(broker_order.get("symbol") or "").upper() == reservation["symbol"]
+                and str(broker_order.get("side") or "").lower() == "buy"
+            ):
+                return {
+                    "paper": True, "linked": True, "duplicate": True,
+                    "reservation_id": reservation_id,
+                    "broker_order_id": reservation["broker_order_id"],
+                    "order_submitted": False,
+                }
+            raise ValueError("Reservation is already linked to a different order.")
+        verification = verify_paper_entry_for_link(reservation, broker_order)
+        if not verification["verified"]:
+            raise ValueError("PAPER order attribution blocked: " + verification["reason"])
+        broker_id = verification["broker_order_id"]
+        duplicate = conn.execute(
+            "SELECT id FROM pro_ticker_paper_reservations "
+            "WHERE broker_order_id = ? AND id != ?",
+            (broker_id, reservation_id),
+        ).fetchone()
+        if duplicate is not None:
+            raise ValueError("PAPER broker order already belongs to another reservation.")
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "UPDATE pro_ticker_paper_reservations "
+            "SET broker_order_id = ?, status = 'submitted', updated_at = ? "
+            "WHERE id = ? AND broker_order_id IS NULL AND status = 'reserved'",
+            (broker_id, now, reservation_id),
+        )
+    return {
+        "paper": True, "linked": True, "duplicate": False,
+        "reservation_id": reservation_id, "broker_order_id": broker_id,
+        "order_submitted": False,
+    }
