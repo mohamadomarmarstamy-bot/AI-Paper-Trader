@@ -16,7 +16,7 @@ class ManualProTickerIntakeTests(unittest.TestCase):
         self.assertEqual(parse_manual_symbols("aapl, MSFT aapl\nBRK.B"), ["AAPL", "MSFT", "BRK.B"])
 
     def test_rejects_invalid_and_empty(self):
-        for raw in ("", "AAPL;DROP TABLE", "$BAD", "AAPL/" ):
+        for raw in ("", "AAPL! DROP", "$BAD", "AAPL/" ):
             with self.subTest(raw=raw):
                 with self.assertRaises(ValueError):
                     parse_manual_symbols(raw)
