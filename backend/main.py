@@ -16131,6 +16131,31 @@ def pro_ticker_paper_budget(request: Request) -> dict[str, Any]:
     return get_pro_ticker_budget()
 
 
+@app.get("/auto-trader/pro-ticker-paper-position-audit")
+def pro_ticker_paper_position_audit(request: Request) -> dict[str, Any]:
+    """Read-only comparison of attributed strategy shares to shared PAPER broker."""
+    require_app_session(request)
+    from pro_ticker_position_ledger import list_pro_ticker_strategy_positions
+    from pro_ticker_position_audit import audit_strategy_paper_positions
+
+    try:
+        strategy = list_pro_ticker_strategy_positions()["positions"]
+        broker = fetch_alpaca_paper_positions()
+        return {
+            **audit_strategy_paper_positions(strategy, broker),
+            "order_submitted": False,
+            "database_updated": False,
+        }
+    except Exception:
+        return {
+            "paper": True, "preview_only": True, "reconciled": False,
+            "broker_snapshot_consistent": False,
+            "reason": "broker_or_database_snapshot_unavailable",
+            "findings": [], "order_submitted": False,
+            "database_updated": False,
+        }
+
+
 @app.get("/auto-trader/pro-ticker-paper-reconciliation-preview")
 def pro_ticker_paper_reconciliation_preview(
     request: Request,
