@@ -16257,6 +16257,24 @@ def auto_trader_pro_ticker_shadow_candidates(
     )
 
 
+
+@app.get("/auto-trader/pro-ticker-scanner-comparison")
+def auto_trader_pro_ticker_scanner_comparison(
+    request: Request,
+    limit: int = Query(default=500, ge=1, le=500),
+    max_age_days: int = Query(default=1, ge=0, le=7),
+) -> dict[str, Any]:
+    """Compare Pro Ticker research with cached PAPER scanner results."""
+    require_app_session(request)
+
+    from pro_ticker_scanner_comparison import compare_pro_ticker_with_scanner
+
+    return compare_pro_ticker_with_scanner(
+        limit=limit,
+        max_age_days=max_age_days,
+    )
+
+
 def build_pro_ticker_scan_email(
     result: dict[str, Any],
     *,
