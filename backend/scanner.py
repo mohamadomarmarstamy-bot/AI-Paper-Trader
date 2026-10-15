@@ -1278,6 +1278,23 @@ def scan_market(
 
             return []
 
+        # Optional Pro Ticker research candidates for PAPER scanner testing.
+        # Existing scanner analysis and filters remain unchanged.
+        from pro_ticker_candidate_source import (
+            load_pro_ticker_scanner_symbols,
+        )
+
+        try:
+            pro_ticker_symbols = load_pro_ticker_scanner_symbols()
+        except Exception:
+            logger.exception(
+                "Pro Ticker candidate loading failed; "
+                "continuing with the regular market universe."
+            )
+            pro_ticker_symbols = []
+
+        raw_symbols = list(raw_symbols or []) + pro_ticker_symbols
+
         symbols: list[str] = []
         seen_symbols: set[str] = set()
 
