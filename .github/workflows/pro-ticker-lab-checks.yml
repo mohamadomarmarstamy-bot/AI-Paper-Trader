@@ -21,6 +21,8 @@ on:
       - 'backend/pro_ticker_position_audit.py'
       - 'backend/pro_ticker_fill_posting_preview.py'
       - 'backend/pro_ticker_order_linking.py'
+      - 'backend/pro_ticker_verified_fill_bridge.py'
+      - 'backend/test_pro_ticker_verified_fill_bridge.py'
       - 'backend/test_pro_ticker_order_linking.py'
       - 'backend/test_pro_ticker_fill_posting_preview.py'
       - 'backend/test_pro_ticker_position_audit.py'
@@ -50,7 +52,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Python syntax check
-        run: python -m py_compile backend/pro_ticker_manual_intake.py backend/pro_ticker_paper_policy.py backend/pro_ticker_budget_ledger.py backend/pro_ticker_reconciliation_review.py backend/pro_ticker_order_ownership.py backend/pro_ticker_execution_plan.py backend/pro_ticker_exit_plan.py backend/pro_ticker_fill_verification.py backend/pro_ticker_snapshot_review.py backend/pro_ticker_exit_attribution.py backend/pro_ticker_position_accounting.py backend/pro_ticker_position_ledger.py backend/pro_ticker_position_audit.py backend/pro_ticker_fill_posting_preview.py backend/pro_ticker_order_linking.py backend/main.py backend/test_pro_ticker_manual_intake.py backend/test_pro_ticker_budget_ledger.py backend/test_pro_ticker_paper_policy.py backend/test_pro_ticker_reconciliation_review.py
+        run: python -m py_compile backend/pro_ticker_manual_intake.py backend/pro_ticker_paper_policy.py backend/pro_ticker_budget_ledger.py backend/pro_ticker_reconciliation_review.py backend/pro_ticker_order_ownership.py backend/pro_ticker_execution_plan.py backend/pro_ticker_exit_plan.py backend/pro_ticker_fill_verification.py backend/pro_ticker_snapshot_review.py backend/pro_ticker_exit_attribution.py backend/pro_ticker_position_accounting.py backend/pro_ticker_position_ledger.py backend/pro_ticker_position_audit.py backend/pro_ticker_fill_posting_preview.py backend/pro_ticker_order_linking.py backend/pro_ticker_verified_fill_bridge.py backend/main.py backend/test_pro_ticker_manual_intake.py backend/test_pro_ticker_budget_ledger.py backend/test_pro_ticker_paper_policy.py backend/test_pro_ticker_reconciliation_review.py
       - name: Manual research intake unit tests
         run: python -m unittest discover -s backend -p test_pro_ticker_manual_intake.py -v
       - name: PAPER order admission policy unit tests
@@ -81,5 +83,7 @@ jobs:
         run: python -m unittest discover -s backend -p test_pro_ticker_fill_posting_preview.py -v
       - name: PAPER reservation order linking tests
         run: python -m unittest discover -s backend -p test_pro_ticker_order_linking.py -v
+      - name: Verified PAPER entry fill bridge tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_verified_fill_bridge.py -v
       - name: Frontend JavaScript syntax check
         run: node --check backend/frontend/js/pro-ticker-manual.js
