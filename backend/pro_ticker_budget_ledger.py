@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS pro_ticker_paper_reservations (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     broker_order_id TEXT,
-    note TEXT
+    note TEXT,
+    expected_shares INTEGER CHECK(expected_shares IS NULL OR expected_shares > 0)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS pro_ticker_one_active_reservation_per_symbol
 ON pro_ticker_paper_reservations(symbol)
@@ -33,6 +34,10 @@ WHERE status IN ('reserved', 'submitted', 'filled');
 
 def _init(connection: sqlite3.Connection) -> None:
     connection.executescript(_SCHEMA)
+    # Existing Railway databases may predate expected_shares.
+    columns = {row['name'] for row in connection.execute('PRAGMA table_info(pro_ticker_paper_reservations)')}
+    if 'expected_shares' not in columns:
+        connection.execute('ALTER TABLE pro_ticker_paper_reservations ADD COLUMN expected_shares INTEGER')
 
 
 def _cents(amount: float) -> int:
@@ -104,7 +109,7 @@ def list_pro_ticker_reservations(limit: int = 100) -> dict[str, Any]:
         _init(conn)
         rows = conn.execute(
             "SELECT id, symbol, notional_cents, status, created_at, updated_at, "
-            "broker_order_id, note FROM pro_ticker_paper_reservations "
+            "broker_order_id, note, expected_shares FROM pro_ticker_paper_reservations "
             "ORDER BY created_at DESC, id DESC LIMIT ?", (limit,)
         ).fetchall()
     return {"paper": True, "reservations": [
@@ -175,9 +180,6 @@ def set_paper_reservation_expected_shares(
         raise ValueError("Expected whole shares must be between 1 and 1000000.")
     with get_connection() as conn:
         _init(conn)
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(pro_ticker_paper_reservations)")}
-        if "expected_shares" not in columns:
-            conn.execute("ALTER TABLE pro_ticker_paper_reservations ADD COLUMN expected_shares INTEGER")
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             "SELECT status, broker_order_id, expected_shares "
