@@ -16131,6 +16131,53 @@ def pro_ticker_paper_budget(request: Request) -> dict[str, Any]:
     return get_pro_ticker_budget()
 
 
+@app.get("/auto-trader/pro-ticker-paper-fill-posting-preview")
+def pro_ticker_paper_fill_posting_preview(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=100),
+) -> dict[str, Any]:
+    """Inspect linked PAPER entry fills without posting them to the ledger."""
+    require_app_session(request)
+    from pro_ticker_budget_ledger import list_pro_ticker_reservations
+    from pro_ticker_position_ledger import get_accounted_paper_order_shares
+    from pro_ticker_fill_posting_preview import preview_entry_fill_delta
+
+    try:
+        reservations = list_pro_ticker_reservations(limit)["reservations"]
+        orders = fetch_alpaca_paper_orders(limit=500)
+        if not isinstance(orders, list):
+            raise ValueError("Broker order snapshot missing.")
+        by_id = {
+            str(order["id"]): order for order in orders
+            if isinstance(order, dict) and order.get("id")
+        }
+        results = []
+        for reservation in reservations:
+            broker_id = str(reservation.get("broker_order_id") or "")
+            accounted = get_accounted_paper_order_shares(broker_id) if broker_id else 0
+            review = preview_entry_fill_delta(
+                reservation, by_id.get(broker_id), accounted,
+            )
+            results.append({
+                "reservation_id": reservation["id"],
+                "symbol": reservation["symbol"], **review,
+            })
+        return {
+            "paper": True, "preview_only": True,
+            "order_submitted": False, "database_updated": False,
+            "broker_snapshot_available": True,
+            "count": len(results), "results": results,
+        }
+    except Exception:
+        return {
+            "paper": True, "preview_only": True,
+            "order_submitted": False, "database_updated": False,
+            "broker_snapshot_available": False,
+            "count": 0, "results": [],
+            "reason": "broker_or_ledger_snapshot_unavailable",
+        }
+
+
 @app.get("/auto-trader/pro-ticker-paper-position-audit")
 def pro_ticker_paper_position_audit(request: Request) -> dict[str, Any]:
     """Read-only comparison of attributed strategy shares to shared PAPER broker."""
