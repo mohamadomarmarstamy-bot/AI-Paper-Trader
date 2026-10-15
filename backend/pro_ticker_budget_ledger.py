@@ -127,6 +127,8 @@ def record_verified_paper_order_state(
     """
     if not reservation_id or not order_id:
         raise ValueError("Reservation and PAPER order IDs are required.")
+    if not str(order_id).startswith("paper-"):
+        raise ValueError("Only tagged PAPER strategy orders may update this ledger.")
     if isinstance(filled_quantity, bool) or not isinstance(filled_quantity, (float, int)):
         raise ValueError("Invalid filled quantity.")
     if not math.isfinite(filled_quantity) or filled_quantity < 0:
@@ -149,7 +151,9 @@ def record_verified_paper_order_state(
         ).fetchone()
         if row is None:
             raise ValueError("Unknown reservation.")
-        if row["broker_order_id"] and row["broker_order_id"] != order_id:
+        if not row["broker_order_id"]:
+            raise ValueError("Reservation must already be linked to a verified PAPER order.")
+        if row["broker_order_id"] != order_id:
             raise ValueError("Conflicting PAPER order ID.")
         if row["status"] in {"released", "failed"}:
             raise ValueError("Terminal reservation cannot be reopened.")
