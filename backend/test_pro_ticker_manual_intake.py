@@ -21,6 +21,23 @@ class ManualProTickerIntakeTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     parse_manual_symbols(raw)
 
+    def test_history_is_read_only_and_newest_first(self):
+        import database
+        from pro_ticker_manual_intake import list_manual_observations
+        with tempfile.TemporaryDirectory() as folder:
+            with patch.object(database, "DATABASE_PATH", Path(folder) / "test.db"):
+                save_manual_observations("AAPL")
+                save_manual_observations("MSFT")
+                history = list_manual_observations()
+                self.assertEqual(history["count"], 2)
+                self.assertEqual(
+                    [row["symbol"] for row in history["observations"]],
+                    ["MSFT", "AAPL"],
+                )
+                self.assertTrue(history["research_only"])
+                with self.assertRaises(ValueError):
+                    list_manual_observations(limit=0)
+
     def test_saves_research_only_without_orders(self):
         with tempfile.TemporaryDirectory() as folder:
             import database
