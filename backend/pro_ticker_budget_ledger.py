@@ -127,8 +127,6 @@ def record_verified_paper_order_state(
     """
     if not reservation_id or not order_id:
         raise ValueError("Reservation and PAPER order IDs are required.")
-    if not str(order_id).startswith("paper-"):
-        raise ValueError("Only tagged PAPER strategy orders may update this ledger.")
     if isinstance(filled_quantity, bool) or not isinstance(filled_quantity, (float, int)):
         raise ValueError("Invalid filled quantity.")
     if not math.isfinite(filled_quantity) or filled_quantity < 0:
