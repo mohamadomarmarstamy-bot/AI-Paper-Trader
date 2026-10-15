@@ -21,9 +21,10 @@ class ReconciliationReviewTests(unittest.TestCase):
         result = assess_reservation_state(self.reservation, self.order, position_exists=True)
         self.assertFalse(result["safe_to_release"])
 
-    def test_verified_close_recommends_release(self):
+    def test_position_absence_alone_does_not_release(self):
         result = assess_reservation_state(self.reservation, self.order, position_exists=False)
-        self.assertTrue(result["safe_to_release"])
+        self.assertFalse(result["safe_to_release"])
+        self.assertEqual(result["reason"], "matched_exit_fill_required")
 
     def test_canceled_unfilled_and_no_position(self):
         result = assess_reservation_state(self.reservation, {**self.order, "status": "canceled", "filled_qty": "0"}, position_exists=False)
