@@ -16139,8 +16139,19 @@ async def auto_trader_pro_ticker_manual_submissions(
             detail="Provide a 'symbols' string with comma-separated tickers.",
         )
     from pro_ticker_manual_intake import save_manual_observations
+
+    def fetch_latest_trade(symbol: str) -> dict[str, Any]:
+        data = alpaca_market_data_request(
+            "GET",
+            f"/v2/stocks/{symbol}/trades/latest",
+            timeout=3.0,
+        )
+        if not isinstance(data, dict) or not isinstance(data.get("trade"), dict):
+            raise ValueError("No latest trade available")
+        return data["trade"]
+
     try:
-        return save_manual_observations(payload["symbols"])
+        return save_manual_observations(payload["symbols"], quote_fetcher=fetch_latest_trade)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
