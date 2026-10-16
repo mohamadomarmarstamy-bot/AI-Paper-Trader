@@ -140,6 +140,31 @@ class VerifiedExitBridgeTests(unittest.TestCase):
             )
         self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 3)
 
+    def test_malformed_exit_fill_quantities_never_mutate_position(self):
+        for value in ("NaN", "Infinity", "-1", "6", "1.5", None, True):
+            with self.subTest(filled_qty=value), self.assertRaises(ValueError):
+                account_linked_paper_exit_snapshot(
+                    EXIT_ORDER_ID, {**self.order, "filled_qty": value},
+                )
+            self.assertEqual(
+                list_pro_ticker_strategy_positions()["positions"][0]["shares"], 5,
+            )
+        self.assertEqual(
+            account_linked_paper_exit_snapshot(EXIT_ORDER_ID, self.order)["delta_shares"], 2,
+        )
+
+    def test_inconsistent_filled_exit_status_cannot_close_position(self):
+        with self.assertRaises(ValueError):
+            account_linked_paper_exit_snapshot(
+                EXIT_ORDER_ID, {**self.order, "status": "filled", "filled_qty": "4"},
+            )
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 5)
+        completed = account_linked_paper_exit_snapshot(
+            EXIT_ORDER_ID, {**self.order, "status": "filled", "filled_qty": "5"},
+        )
+        self.assertEqual(completed["delta_shares"], 5)
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"], [])
+
     def test_wrong_client_order_rejected_without_post(self):
         with self.assertRaisesRegex(ValueError, "client_order_id_mismatch"):
             account_linked_paper_exit_snapshot(
