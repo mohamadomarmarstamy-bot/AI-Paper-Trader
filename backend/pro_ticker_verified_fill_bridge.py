@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from pro_ticker_budget_ledger import list_pro_ticker_reservations
+from pro_ticker_budget_ledger import get_pro_ticker_reservation
 from pro_ticker_fill_verification import assess_paper_order_fill
 from pro_ticker_order_linking import pro_ticker_client_order_id
 from pro_ticker_position_ledger import post_verified_cumulative_paper_fill
@@ -27,11 +27,9 @@ def account_linked_paper_entry_snapshot(
         raise ValueError("Reservation ID required.")
     if not isinstance(broker_order, dict):
         raise ValueError("Fresh PAPER broker order snapshot required.")
-    reservations = list_pro_ticker_reservations(limit=500)["reservations"]
-    matches = [row for row in reservations if row["id"] == reservation_id]
-    if len(matches) != 1:
-        raise ValueError("Unique reservation not found in ledger snapshot.")
-    reservation = matches[0]
+    reservation = get_pro_ticker_reservation(reservation_id)
+    if reservation is None:
+        raise ValueError("Reservation not found in PAPER ledger.")
     if reservation["status"] not in {"submitted", "filled"}:
         raise ValueError("Reservation not linked to a submitted PAPER order.")
     linked_id = str(reservation.get("broker_order_id") or "").strip()
