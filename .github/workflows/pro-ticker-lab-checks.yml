@@ -88,5 +88,6 @@ jobs:
           python -m unittest discover -s backend -p 'test_broker_throttle.py' -v
           python -m unittest discover -s backend -p 'test_entry_cooldown.py' -v
           python -m unittest discover -s backend -p 'test_entry_quality.py' -v
+          python -m unittest discover -s backend -p 'test_reporting_metrics.py' -v
       - name: Frontend JavaScript syntax check
         run: node --check backend/frontend/js/pro-ticker-manual.js
