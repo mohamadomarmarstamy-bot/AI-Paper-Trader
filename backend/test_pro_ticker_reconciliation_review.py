@@ -30,6 +30,15 @@ class ReconciliationReviewTests(unittest.TestCase):
         result = assess_reservation_state(self.reservation, {**self.order, "status": "canceled", "filled_qty": "0"}, position_exists=False)
         self.assertEqual(result["suggested_status"], "failed")
 
+    def test_unlinked_reservation_never_releases(self):
+        for order_id in (None, "", "   "):
+            with self.subTest(order_id=order_id):
+                reservation = {**self.reservation, "broker_order_id": order_id}
+                order = {**self.order, "status": "canceled", "filled_qty": "0"}
+                result = assess_reservation_state(reservation, order, position_exists=False)
+                self.assertFalse(result["safe_to_release"])
+                self.assertEqual(result["reason"], "reservation_order_unlinked")
+
     def test_mismatched_order_never_releases(self):
         result = assess_reservation_state(self.reservation, {**self.order, "id": "other"}, position_exists=False)
         self.assertFalse(result["safe_to_release"])
