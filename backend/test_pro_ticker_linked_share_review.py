@@ -44,39 +44,17 @@ class LinkedReservationShareReviewTests(unittest.TestCase):
         )
         return reservation_id
 
-    def test_same_symbol_reservations_remain_separately_accounted(self):
+    def test_duplicate_active_symbol_cannot_change_existing_attribution(self):
         first = self.entry("AAPL", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", 4)
-        second = self.entry("AAPL", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", 3)
-        exit_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-        exit_order_id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
-        with patch("pro_ticker_exit_links.get_pro_ticker_reservation", return_value={
-            "id": first, "symbol": "AAPL", "status": "filled",
-            "broker_order_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        }):
-            link_verified_paper_exit(
-                reservation_id=first, symbol="AAPL", expected_shares=4,
-                exit_id=exit_id, broker_order={
-                    "id": exit_order_id, "client_order_id": "ptx-" + exit_id,
-                    "symbol": "AAPL", "side": "sell", "qty": "4",
-                    "status": "filled",
-                },
-            )
-        post_verified_cumulative_paper_fill(
-            broker_order_id=exit_order_id, symbol="AAPL", side="sell",
-            cumulative_filled_shares=4,
-            ownership_verified=True, fill_verified=True,
-        )
-        first_result = review_linked_reservation_paper_shares(first)
-        second_result = review_linked_reservation_paper_shares(second)
-        self.assertEqual(first_result["remaining_attributed_shares"], 0)
-        self.assertEqual(second_result["remaining_attributed_shares"], 3)
-        self.assertFalse(first_result["release_authorized"])
-        self.assertFalse(first_result["broker_reconciled"])
-        self.assertFalse(second_result["budget_released"])
-        self.assertEqual(first_result["exit_shares"], 4)
-        self.assertEqual(second_result["exit_shares"], 0)
-        self.assertFalse(first_result["verified"])
-        self.assertFalse(second_result["verified"])
+        before = review_linked_reservation_paper_shares(first)
+        with self.assertRaisesRegex(ValueError, "active reservation already exists"):
+            self.entry("AAPL", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", 3)
+        after = review_linked_reservation_paper_shares(first)
+        self.assertEqual(after["entry_shares"], before["entry_shares"])
+        self.assertEqual(after["remaining_attributed_shares"], 4)
+        self.assertEqual(after["exit_shares"], 0)
+        self.assertFalse(after["release_authorized"])
+        self.assertFalse(after["budget_released"])
 
     def test_missing_reservation_fails_closed(self):
         result = review_linked_reservation_paper_shares(
