@@ -25,6 +25,7 @@ class ProTickerResearchHTTPTests(unittest.TestCase):
         self.fake = ModuleType("pro_ticker_manual_intake")
         self.fake.list_manual_observations = self.history
         self.fake.save_manual_observations = self.save
+        self.fake.parse_manual_symbols = lambda raw: [raw]
         self.app = FastAPI()
 
         @self.app.get("/auto-trader/pro-ticker-manual-submissions")
