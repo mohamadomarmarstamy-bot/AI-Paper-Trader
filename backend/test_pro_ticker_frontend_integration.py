@@ -151,6 +151,11 @@ class ProTickerFrontendIntegrationTests(unittest.TestCase):
             self.js.index("rows.replaceChildren()"),
         )
 
+    def test_research_history_symbols_have_safe_format(self):
+        self.assertIn("record.symbol)", self.js)
+        self.assertIn("A-Z0-9", self.js)
+        self.assertIn('throw new Error("Invalid research observation")', self.js)
+
     def test_frontend_exposes_no_order_submission_controls(self):
         self.assertIn("Research only", self.html)
         self.assertIn("no PAPER orders placed", self.js)
