@@ -82,6 +82,21 @@ def audit_linked_paper_broker_snapshots(
             return {**base, "reason": reviewed["reason"]}
         if not reviewed["terminal"]:
             return {**base, "reason": "exit_broker_order_not_terminal"}
+        # Total shares alone cannot detect a corrupted fill record posted
+        # under the wrong symbol or side. Verify the event attribution too.
+        with get_connection() as conn:
+            fill_groups = conn.execute(
+                "SELECT symbol, side, SUM(shares) AS shares "
+                "FROM pro_ticker_strategy_fill_events WHERE broker_order_id = ? "
+                "GROUP BY symbol, side",
+                (order_id,),
+            ).fetchall()
+        if fill_groups and (
+            len(fill_groups) != 1
+            or fill_groups[0]["symbol"] != reservation["symbol"]
+            or fill_groups[0]["side"] != "sell"
+        ):
+            return {**base, "reason": "exit_fill_attribution_mismatch"}
         if get_accounted_paper_order_shares(order_id) != reviewed["filled_shares"]:
             return {**base, "reason": "exit_accounting_mismatch"}
         total_exits += reviewed["filled_shares"]
