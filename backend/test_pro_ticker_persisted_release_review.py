@@ -63,6 +63,7 @@ class PersistedPaperReleaseReviewTests(unittest.TestCase):
         self.assertFalse(result["budget_released"])
         self.assertEqual(result["persisted_entry_shares"], 5)
         self.assertEqual(result["persisted_exit_orders"], 0)
+        self.assertEqual(result["reason"], "persisted_strategy_position_still_open")
         self.assertEqual(get_pro_ticker_budget()["committed"], 1000)
 
     def test_partial_exit_is_read_only(self):
@@ -73,6 +74,9 @@ class PersistedPaperReleaseReviewTests(unittest.TestCase):
         )
         result = review_persisted_paper_release(self.reservation_id)
         self.assertEqual(result["persisted_exit_orders"], 1)
+        self.assertEqual(result["persisted_exit_shares"], 2)
+        self.assertEqual(result["persisted_remaining_shares"], 3)
+        self.assertEqual(result["reason"], "persisted_strategy_position_still_open")
         self.assertFalse(result["release_authorized"])
         self.assertEqual(get_pro_ticker_budget()["committed"], 1000)
 
