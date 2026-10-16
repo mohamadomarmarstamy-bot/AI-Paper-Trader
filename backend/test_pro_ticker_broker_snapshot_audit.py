@@ -559,6 +559,30 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(after_rows, before_rows)
 
+    def test_consistent_audit_does_not_authenticate_evidence_for_release(self):
+        from pro_ticker_release_eligibility import review_paper_release_eligibility
+        from pro_ticker_budget_ledger import get_pro_ticker_reservation
+        audit = self.audit()
+        self.assertTrue(audit["verified"], audit)
+        self.assertFalse(audit["broker_origin_authenticated"])
+        reservation = get_pro_ticker_reservation(self.reservation_id)
+        exit_fills = [{
+            "broker_order_id": EXIT_ID, "symbol": "AAPL", "side": "sell",
+            "accounted_shares": audit["exit_shares"],
+            "ownership_verified": True, "fill_verified": True,
+        }]
+        release_review = review_paper_release_eligibility(
+            reservation=reservation, entry_order_id=ENTRY_ID,
+            entry_filled_shares=audit["entry_shares"],
+            exit_fills=exit_fills, remaining_strategy_shares=0,
+            broker_evidence_verified=audit["broker_origin_authenticated"],
+        )
+        self.assertEqual(release_review["reason"], "broker_evidence_unverified")
+        self.assertFalse(release_review["eligible_for_independent_review"])
+        self.assertFalse(release_review["release_authorized"])
+        self.assertFalse(release_review["budget_released"])
+        self.assertFalse(release_review["database_updated"])
+
     def test_complete_linked_broker_snapshots_match(self):
         result = self.audit()
         self.assertTrue(result["verified"])
