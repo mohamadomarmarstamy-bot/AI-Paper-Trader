@@ -45,7 +45,7 @@ class AlpacaPaperReaderTests(unittest.TestCase):
             self.reader("abc")
 
     def test_invalid_order_id_never_reaches_network(self):
-        for invalid in ("", "../orders", "abc?x=1", " abc", "abc\\n", "abc\\t"):
+        for invalid in ("", "../orders", "abc?x=1", " abc", "abc\n", "abc\t"):
             with self.subTest(invalid=invalid):
                 with self.assertRaises(ValueError):
                     self.reader(invalid)
@@ -81,9 +81,9 @@ class AlpacaPaperReaderTests(unittest.TestCase):
 
     def test_order_id_control_and_path_characters_rejected_before_network(self):
         for invalid in (
-            "abc/def", "abc#fragment", "abc?query", "abc\\r",
-            "abc\\x00", "abc\\x7f", "abc\\n", "abc\\t",
-            "abc ", " abc", "abc\\u001f",
+            "abc/def", "abc#fragment", "abc?query", "abc\r",
+            "abc\x00", "abc\x7f", "abc\n", "abc\t",
+            "abc ", " abc", "abc\u001f",
         ):
             with self.subTest(invalid=repr(invalid)):
                 with self.assertRaises(ValueError):
