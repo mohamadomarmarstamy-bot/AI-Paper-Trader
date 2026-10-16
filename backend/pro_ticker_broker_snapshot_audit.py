@@ -84,6 +84,8 @@ def audit_linked_paper_broker_snapshots(
         return {**base, "reason": "exit_snapshots_incomplete_or_mismatched"}
     if linked["remaining_attributed_shares"] != 0:
         return {**base, "reason": "reservation_shares_still_open"}
+    # This flag attests only to consistency of caller-provided snapshots,
+    # not that this module independently fetched them from Alpaca PAPER.
     return {
         **base, "verified": True,
         "reason": "broker_snapshots_match_persisted_accounting_review_only",
