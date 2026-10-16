@@ -58,6 +58,8 @@
         const button = form.querySelector('button[type="submit"]');
         if (button) button.disabled = true;
         setStatus("Saving research observations...");
+        // Any refresh started before this submission is no longer authoritative.
+        refreshVersion += 1;
         try {
             const result = await request(endpoint, {
                 method: "POST",
