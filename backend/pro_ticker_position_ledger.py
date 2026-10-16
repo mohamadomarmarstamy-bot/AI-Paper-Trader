@@ -246,6 +246,10 @@ def review_reservation_attributed_shares(
         for value in exit_order_ids
     ):
         raise ValueError("Exit broker order IDs must be nonempty strings.")
+    if entry_order_id != entry_order_id.strip() or reservation_id != reservation_id.strip() or any(
+        value != value.strip() for value in exit_order_ids
+    ):
+        raise ValueError("Canonical reservation and broker order IDs required.")
     if len(exit_order_ids) != len(set(exit_order_ids)) or entry_order_id in exit_order_ids:
         raise ValueError("Duplicate or overlapping broker order attribution.")
     with get_connection() as conn:
