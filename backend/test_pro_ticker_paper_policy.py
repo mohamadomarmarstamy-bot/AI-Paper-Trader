@@ -53,6 +53,16 @@ class PaperAdmissionTests(unittest.TestCase):
     def test_broker_buying_power_rejected(self):
         self.assertFalse(self.eligible(broker_buying_power=50).allowed)
 
+    def test_malformed_symbols_fail_closed(self):
+        for symbol in ("", " ", "AAPL!", "AA PL", ".", "..", "AAPL/US"):
+            with self.subTest(symbol=symbol):
+                decision = self.eligible(symbol=symbol)
+                self.assertFalse(decision.allowed)
+                self.assertEqual(decision.reason, "invalid_symbol")
+
+    def test_valid_dotted_ticker_is_accepted(self):
+        self.assertTrue(self.eligible(symbol="BRK.B").allowed)
+
     def test_nan_rejected(self):
         self.assertFalse(self.eligible(proposed_notional=float("nan")).allowed)
 
