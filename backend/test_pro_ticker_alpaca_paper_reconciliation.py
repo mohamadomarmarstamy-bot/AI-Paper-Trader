@@ -58,6 +58,7 @@ class AlpacaPaperReconciliationTests(unittest.TestCase):
 
     def test_partial_fill_from_paper_endpoint_fails_closed(self):
         response = Mock()
+        response.status_code = 200
         response.json.return_value = {
             "id": "abc", "client_order_id": "pt-reservation",
             "symbol": "AAPL", "side": "buy", "qty": "5",
