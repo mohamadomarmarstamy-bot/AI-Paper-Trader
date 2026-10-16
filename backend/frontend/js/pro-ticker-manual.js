@@ -35,7 +35,7 @@
                     (typeof record.market_snapshot !== "object" ||
                      Array.isArray(record.market_snapshot))) ||
                 (record.order_status != null &&
-                    typeof record.order_status !== "string")
+                    record.order_status !== "research_only")
             )) {
                 throw new Error("Invalid research observation");
             }
