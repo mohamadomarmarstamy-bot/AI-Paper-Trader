@@ -43,7 +43,7 @@ def assess_paper_order_fill(
     try:
         order_qty = float(broker_order["qty"])
         filled_qty = float(broker_order["filled_qty"])
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, OverflowError):
         return {**base, "reason": "invalid_broker_quantities"}
     if (
         not isfinite(order_qty) or not isfinite(filled_qty)
