@@ -213,5 +213,46 @@ class ProTickerRouteBoundaryTests(unittest.TestCase):
         self.assertTrue(result["preview_only"])
 
 
+    def test_eligible_preview_remains_non_executing(self):
+        import sys
+        from datetime import datetime, timezone
+        from types import ModuleType, SimpleNamespace
+        routes = isolated_routes()
+        routes["require_app_session"] = lambda request: None
+        calls = []
+        routes["fetch_alpaca_paper_positions"] = lambda: []
+        routes["fetch_alpaca_market_clock"] = lambda: {"is_open": True}
+        def paper_request(method, path, **kwargs):
+            calls.append((method, path))
+            if method != "GET":
+                raise AssertionError("Preview must never write broker orders")
+            return [] if path == "/v2/orders" else {"buying_power": "100000"}
+        routes["alpaca_paper_request"] = paper_request
+        routes["alpaca_market_data_request"] = lambda method, path, **kwargs: (
+            calls.append((method, path)) or {"trade": {"t": datetime.now(timezone.utc).isoformat(), "p": 100}}
+        )
+        fake_policy = ModuleType("pro_ticker_paper_policy")
+        fake_policy.check_pro_ticker_paper_entry = lambda **kwargs: SimpleNamespace(allowed=True, reason="eligible")
+        fake_intake = ModuleType("pro_ticker_manual_intake")
+        fake_intake.parse_manual_symbols = lambda raw: [raw]
+        fake_budget = ModuleType("pro_ticker_budget_ledger")
+        fake_budget.get_pro_ticker_budget = lambda: {"committed": 0}
+        with patch.dict(sys.modules, {
+            "pro_ticker_paper_policy": fake_policy,
+            "pro_ticker_manual_intake": fake_intake,
+            "pro_ticker_budget_ledger": fake_budget,
+        }):
+            result = asyncio.run(routes["pro_ticker_paper_preview"](
+                FakeRequest({"symbol": "AAPL", "proposed_notional": 10})
+            ))
+        self.assertTrue(result["preflight_eligible"])
+        self.assertFalse(result["allowed"])
+        self.assertFalse(result["order_submitted"])
+        self.assertFalse(result["virtual_budget_reconciliation_ready"])
+        self.assertEqual(result["reason"], "execution_disabled_pending_reconciliation")
+        self.assertTrue(calls)
+        self.assertTrue(all(method == "GET" for method, _ in calls))
+
+
 if __name__ == "__main__":
     unittest.main()
