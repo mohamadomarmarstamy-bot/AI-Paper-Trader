@@ -47,6 +47,19 @@ class ReconciliationReviewTests(unittest.TestCase):
                 self.assertFalse(result["safe_to_release"])
                 self.assertEqual(result["reason"], "entry_order_side_unverified")
 
+    def test_missing_or_invalid_fill_quantity_cannot_release(self):
+        for quantity in (None, True, False, "NaN", -1, 10 ** 1000):
+            with self.subTest(quantity=quantity):
+                order = {**self.order, "status": "canceled", "filled_qty": quantity}
+                result = assess_reservation_state(self.reservation, order, position_exists=False)
+                self.assertFalse(result["safe_to_release"])
+                self.assertEqual(result["reason"], "invalid_filled_quantity")
+        order = {key: value for key, value in self.order.items() if key != "filled_qty"}
+        order["status"] = "canceled"
+        result = assess_reservation_state(self.reservation, order, position_exists=False)
+        self.assertFalse(result["safe_to_release"])
+        self.assertEqual(result["reason"], "invalid_filled_quantity")
+
     def test_mismatched_order_never_releases(self):
         result = assess_reservation_state(self.reservation, {**self.order, "id": "other"}, position_exists=False)
         self.assertFalse(result["safe_to_release"])
