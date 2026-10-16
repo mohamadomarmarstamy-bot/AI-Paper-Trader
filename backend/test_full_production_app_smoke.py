@@ -130,5 +130,52 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
 
 
+    def test_real_app_authenticated_research_save_persists_offline_observation(self):
+        import asyncio
+        import httpx
+        from unittest.mock import patch
+
+        trade = {"p": 125.5, "t": "2026-10-16T15:00:00Z", "s": 1}
+        with patch.object(self.main, "require_app_session", return_value=None), \
+             patch.object(self.main, "alpaca_market_data_request",
+                          return_value={"trade": trade}) as market:
+            async def run():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=self.main.app),
+                    base_url="http://testserver",
+                ) as client:
+                    return await client.post(
+                        "/auto-trader/pro-ticker-manual-submissions",
+                        json={"symbols": "AAPL"},
+                    )
+            response = asyncio.run(run())
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["research_only"])
+        self.assertEqual(response.json()["orders_submitted"], 0)
+        market.assert_called_once_with(
+            "GET", "/v2/stocks/AAPL/trades/latest", timeout=3.0
+        )
+
+    def test_real_app_research_save_rejects_invalid_symbol_without_market_io(self):
+        import asyncio
+        import httpx
+        from unittest.mock import patch
+
+        with patch.object(self.main, "require_app_session", return_value=None), \
+             patch.object(self.main, "alpaca_market_data_request",
+                          side_effect=AssertionError("No market data for invalid symbol")):
+            async def run():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=self.main.app),
+                    base_url="http://testserver",
+                ) as client:
+                    return await client.post(
+                        "/auto-trader/pro-ticker-manual-submissions",
+                        json={"symbols": "INVALID!!"},
+                    )
+            response = asyncio.run(run())
+        self.assertEqual(response.status_code, 422)
+
+
 if __name__ == "__main__":
     unittest.main()
