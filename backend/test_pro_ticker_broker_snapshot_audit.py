@@ -437,6 +437,19 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertEqual(get_pro_ticker_budget(), before_budget)
         self.assertTrue(self.audit()["verified"])
 
+    def test_paper_entry_snapshot_cannot_claim_more_than_linked_order(self):
+        from pro_ticker_verified_fill_bridge import account_linked_paper_entry_snapshot
+        from pro_ticker_position_ledger import get_accounted_paper_order_shares
+        from pro_ticker_budget_ledger import get_pro_ticker_budget
+        before = get_pro_ticker_budget()
+        forged = {**self.entry_order, "qty": "6", "filled_qty": "6"}
+        with self.assertRaises(ValueError):
+            account_linked_paper_entry_snapshot(self.reservation_id, forged)
+        self.assertEqual(get_accounted_paper_order_shares(ENTRY_ID), 5)
+        self.assertEqual(get_pro_ticker_budget(), before)
+        self.assertFalse(self.audit(entry_order=forged)["verified"])
+        self.assertTrue(self.audit()["verified"])
+
     def test_full_alpaca_paper_get_rejects_wrong_exit_snapshot(self):
         orders = {
             ENTRY_ID: self.entry_order,
