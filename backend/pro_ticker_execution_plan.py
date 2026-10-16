@@ -55,9 +55,11 @@ def plan_paper_entry(
             estimated_notional = round(raw_notional, 2)
             if estimated_notional <= 0:
                 blocked.append("invalid_estimated_notional")
-        if estimated_notional is not None and estimated_notional > available_budget:
+        # Compare unrounded cost: rounding to cents must not turn a
+        # budget-overrun into an apparently affordable PAPER preview.
+        if estimated_notional is not None and raw_notional > available_budget:
             blocked.append("virtual_budget_exceeded")
-        if estimated_notional is not None and estimated_notional > broker_buying_power:
+        if estimated_notional is not None and raw_notional > broker_buying_power:
             blocked.append("broker_buying_power_exceeded")
     return {
         "paper": True,
