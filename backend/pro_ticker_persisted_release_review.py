@@ -27,6 +27,16 @@ def review_persisted_paper_release(reservation_id: str) -> dict[str, Any]:
         return {**base, "reason": "entry_order_unlinked"}
     with get_connection() as conn:
         # Read only; never infer a completed exit from absent broker positions.
+        # SQLite symbol-wide share balances cannot establish reservation-level
+        # ownership when there are multiple historical entry reservations.
+        # Fail closed even if older reservations have been marked released.
+        all_reservations = conn.execute(
+            "SELECT COUNT(*) FROM pro_ticker_paper_reservations "
+            "WHERE symbol = ? AND id != ?",
+            (symbol, reservation_id),
+        ).fetchone()[0]
+        if all_reservations:
+            return {**base, "reason": "other_reservations_share_symbol"}
         entry = conn.execute(
             "SELECT side, symbol, COALESCE(SUM(shares), 0) AS shares "
             "FROM pro_ticker_strategy_fill_events WHERE broker_order_id = ? "
