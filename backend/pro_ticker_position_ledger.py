@@ -58,6 +58,8 @@ def post_verified_paper_fill(
     if not isinstance(symbol, str) or not symbol.strip():
         raise ValueError("A valid symbol is required.")
     normalized_symbol = symbol.strip().upper()
+    if event_id != event_id.strip() or broker_order_id != broker_order_id.strip():
+        raise ValueError("Canonical PAPER event and broker order IDs required.")
     if side not in {"buy", "sell"} or isinstance(filled_shares, bool) or not isinstance(filled_shares, int) or filled_shares <= 0:
         raise ValueError("Valid whole-share PAPER fill increment and side required.")
     if ownership_verified is not True or fill_verified is not True:
@@ -156,6 +158,8 @@ def post_verified_cumulative_paper_fill(
         raise ValueError("Verified PAPER broker order ID required.")
     if not isinstance(symbol, str) or not symbol.strip():
         raise ValueError("Valid symbol required.")
+    if broker_order_id != broker_order_id.strip():
+        raise ValueError("Canonical PAPER broker order ID required.")
     if side not in {"buy", "sell"}:
         raise ValueError("Invalid PAPER order side.")
     if (
