@@ -46,6 +46,18 @@ class PaperPositionLedgerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.post(filled_shares=5)
 
+    def test_duplicate_event_rejects_bool_share_quantity(self):
+        self.post(filled_shares=1)
+        with self.assertRaises(ValueError):
+            self.post(filled_shares=True)
+        self.assertEqual(ledger.list_pro_ticker_strategy_positions()["positions"][0]["shares"], 1)
+
+    def test_duplicate_event_rejects_invalid_side_and_quantity(self):
+        self.post(filled_shares=2)
+        for updates in ({"filled_shares": 0}, {"filled_shares": 2.0}, {"side": None}):
+            with self.subTest(updates=updates), self.assertRaises(ValueError):
+                self.post(**updates)
+
     def test_sell_reduces_strategy_position(self):
         self.post()
         result = self.post(
