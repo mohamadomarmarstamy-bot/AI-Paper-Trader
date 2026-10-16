@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from typing import Any, Callable
 from urllib.parse import quote
-import uuid
 
 PAPER_BASE_URL = "https://paper-api.alpaca.markets"
 HttpGet = Callable[..., Any]
@@ -29,11 +28,8 @@ def make_alpaca_paper_order_reader(
     def fetch_paper_order(order_id: str) -> dict[str, Any]:
         if not isinstance(order_id, str) or not order_id.strip() or order_id != order_id.strip() or "/" in order_id or "?" in order_id or "#" in order_id:
             raise ValueError("Invalid PAPER order ID.")
-        try:
-            if str(uuid.UUID(order_id)) != order_id:
-                raise ValueError("Noncanonical PAPER order ID.")
-        except (ValueError, AttributeError) as error:
-            raise ValueError("PAPER order ID must be a canonical UUID.") from error
+        if any(ord(char) < 33 or ord(char) == 127 for char in order_id):
+            raise ValueError("PAPER order ID contains control characters.")
         # The request must remain pinned to the PAPER hostname even if the
         # injected HTTP client would otherwise follow external redirects.
         response = http_get(
