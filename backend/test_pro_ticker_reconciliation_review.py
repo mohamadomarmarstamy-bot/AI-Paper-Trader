@@ -29,6 +29,8 @@ class ReconciliationReviewTests(unittest.TestCase):
     def test_canceled_unfilled_and_no_position(self):
         result = assess_reservation_state(self.reservation, {**self.order, "status": "canceled", "filled_qty": "0"}, position_exists=False)
         self.assertEqual(result["suggested_status"], "failed")
+        self.assertFalse(result["safe_to_release"])
+        self.assertEqual(result["reason"], "zero_fill_exit_proof_and_release_authorization_required")
 
     def test_unlinked_reservation_never_releases(self):
         for order_id in (None, "", "   "):
