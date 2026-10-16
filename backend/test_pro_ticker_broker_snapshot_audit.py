@@ -129,6 +129,35 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertFalse(result["budget_released"])
         self.assertFalse(result["database_updated"])
 
+    def test_full_alpaca_paper_get_recovers_after_transient_fetch_failure(self):
+        orders = {ENTRY_ID: self.entry_order, EXIT_ID: self.exit_order}
+        attempts = []
+        def http_get(url, **kwargs):
+            order_id = url.rsplit("/", 1)[-1]
+            attempts.append(order_id)
+            if len(attempts) == 1:
+                raise TimeoutError("simulated transient PAPER broker timeout")
+            response = Mock()
+            response.status_code = 200
+            response.json.return_value = orders[order_id]
+            return response
+        params = dict(
+            paper_key_id="test-paper-key",
+            paper_secret_key="test-paper-secret", http_get=http_get,
+        )
+        first = audit_alpaca_paper_reservation(self.reservation_id, **params)
+        self.assertFalse(first["verified"])
+        self.assertEqual(first["reason"], "paper_order_fetch_failed")
+        self.assertFalse(first["database_updated"])
+        self.assertFalse(first["budget_released"])
+        second = audit_alpaca_paper_reservation(self.reservation_id, **params)
+        self.assertTrue(second["verified"], second)
+        self.assertEqual(attempts, [ENTRY_ID, ENTRY_ID, EXIT_ID])
+        self.assertFalse(second["broker_origin_authenticated"])
+        self.assertFalse(second["release_authorized"])
+        self.assertFalse(second["budget_released"])
+        self.assertFalse(second["database_updated"])
+
     def test_full_alpaca_paper_get_rejects_wrong_exit_snapshot(self):
         orders = {
             ENTRY_ID: self.entry_order,
