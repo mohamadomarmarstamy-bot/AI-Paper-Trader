@@ -102,6 +102,26 @@ class AlpacaPaperReaderTests(unittest.TestCase):
             self.reader("abc")
         self.http_get.assert_called_once()
 
+    def test_http_authentication_failure_does_not_retry(self):
+        self.response.status_code = 401
+        self.response.raise_for_status.side_effect = PermissionError(
+            "unauthorized PAPER credentials"
+        )
+        with self.assertRaises(PermissionError):
+            self.reader("abc")
+        self.http_get.assert_called_once()
+        self.response.json.assert_not_called()
+
+    def test_http_rate_limit_failure_does_not_retry(self):
+        self.response.status_code = 429
+        self.response.raise_for_status.side_effect = RuntimeError(
+            "PAPER rate limit"
+        )
+        with self.assertRaises(RuntimeError):
+            self.reader("abc")
+        self.http_get.assert_called_once()
+        self.response.json.assert_not_called()
+
     def test_missing_credentials_rejected(self):
         with self.assertRaises(ValueError):
             make_alpaca_paper_order_reader(
