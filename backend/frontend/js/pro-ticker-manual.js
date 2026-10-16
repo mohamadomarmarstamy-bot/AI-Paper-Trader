@@ -33,7 +33,9 @@
                 !/^[A-Z][A-Z0-9.\-]{0,14}$/.test(record.symbol) ||
                 (record.market_snapshot != null &&
                     (typeof record.market_snapshot !== "object" ||
-                     Array.isArray(record.market_snapshot)))
+                     Array.isArray(record.market_snapshot))) ||
+                (record.order_status != null &&
+                    typeof record.order_status !== "string")
             )) {
                 throw new Error("Invalid research observation");
             }
