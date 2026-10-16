@@ -158,11 +158,15 @@ class ProTickerFrontendIntegrationTests(unittest.TestCase):
 
     def test_nonstring_research_order_status_is_rejected(self):
         self.assertIn("record.order_status != null", self.js)
-        self.assertIn('typeof record.order_status !== "string"', self.js)
+        self.assertIn('record.order_status !== "research_only"', self.js)
         self.assertLess(
             self.js.index("record.order_status != null"),
             self.js.index("rows.replaceChildren()"),
         )
+
+    def test_history_rejects_unexpected_execution_status(self):
+        self.assertIn('record.order_status !== "research_only"', self.js)
+        self.assertIn('throw new Error("Invalid research observation")', self.js)
 
     def test_frontend_exposes_no_order_submission_controls(self):
         self.assertIn("Research only", self.html)
