@@ -35,10 +35,31 @@ class CombinedPaperAuditTests(unittest.TestCase):
         self.assertFalse(result["budget_released"])
         self.assertFalse(result["reconciled"])
 
+    def test_broker_shortfall_is_promoted_to_top_level(self):
+        result = self.review(broker=[{"symbol": "AAPL", "qty": "2"}])
+        self.assertEqual(result["reason"], "broker_position_shortfall")
+        self.assertFalse(result["broker_snapshot_consistent"])
+        self.assertFalse(result["reconciled"])
+
+    def test_matching_broker_is_still_not_reconciled(self):
+        result = self.review()
+        self.assertEqual(
+            result["reason"],
+            "broker_review_requires_verified_strategy_order_ownership",
+        )
+        self.assertTrue(result["broker_snapshot_consistent"])
+        self.assertFalse(result["reconciled"])
+
+    def test_malformed_broker_quantity_is_flagged(self):
+        result = self.review(broker=[{"symbol": "AAPL", "qty": "NaN"}])
+        self.assertEqual(result["reason"], "broker_snapshot_invalid")
+        self.assertFalse(result["broker_snapshot_consistent"])
+
     def test_invalid_broker_snapshot_does_not_reconcile(self):
         result = self.review(broker=None)
         self.assertFalse(result["reconciled"])
         self.assertFalse(result["budget_released"])
+        self.assertEqual(result["reason"], "broker_snapshot_invalid")
 
 
 if __name__ == "__main__":
