@@ -50,5 +50,43 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
         self.assertTrue(Path(database.DATABASE_PATH).is_file())
 
 
+    def test_real_production_app_research_routes_reject_anonymous_http(self):
+        import asyncio
+        import httpx
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=self.main.app),
+                base_url="http://testserver",
+            ) as client:
+                return [
+                    await client.get("/auto-trader/pro-ticker-manual-submissions"),
+                    await client.post("/auto-trader/pro-ticker-manual-submissions",
+                                      json={"symbols": "AAPL"}),
+                    await client.post("/auto-trader/pro-ticker-paper-preview",
+                                      json={"symbol": "AAPL", "proposed_notional": 100}),
+                ]
+
+        responses = asyncio.run(run())
+        self.assertEqual([response.status_code for response in responses],
+                         [401, 401, 401])
+
+    def test_real_production_app_preview_rejects_malformed_anonymous_request(self):
+        import asyncio
+        import httpx
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=self.main.app),
+                base_url="http://testserver",
+            ) as client:
+                return await client.post("/auto-trader/pro-ticker-paper-preview",
+                                         content=b"not-json",
+                                         headers={"content-type": "application/json"})
+
+        response = asyncio.run(run())
+        self.assertEqual(response.status_code, 401)
+
+
 if __name__ == "__main__":
     unittest.main()
