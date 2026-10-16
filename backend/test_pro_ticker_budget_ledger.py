@@ -103,6 +103,42 @@ class BudgetLedgerTests(unittest.TestCase):
                         )
                     self.assertEqual(get_pro_ticker_budget()["committed"], 0)
 
+    def test_order_state_rejects_boolean_and_nonfinite_fill_quantities(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with tracked_test_connections():
+                with patch.object(database, "DATABASE_PATH", Path(directory) / "ledger.db"):
+                    reservation = reserve_pro_ticker_budget("AAPL", 1000)
+                    reservation_id = reservation["reservation_id"]
+                    with database.get_connection() as conn:
+                        conn.execute(
+                            "UPDATE pro_ticker_paper_reservations SET broker_order_id = ? WHERE id = ?",
+                            ("paper-validation", reservation_id),
+                        )
+                    for quantity in (True, False, float("nan"), float("inf"), -1):
+                        with self.subTest(quantity=quantity), self.assertRaisesRegex(ValueError, "Invalid filled quantity"):
+                            record_verified_paper_order_state(
+                                reservation_id, "paper-validation", "filled",
+                                filled_quantity=quantity,
+                            )
+                    self.assertEqual(get_pro_ticker_budget()["committed"], 1000)
+
+    def test_unknown_broker_order_state_does_not_mutate_reservation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with tracked_test_connections():
+                with patch.object(database, "DATABASE_PATH", Path(directory) / "ledger.db"):
+                    reservation = reserve_pro_ticker_budget("MSFT", 125)
+                    reservation_id = reservation["reservation_id"]
+                    with database.get_connection() as conn:
+                        conn.execute(
+                            "UPDATE pro_ticker_paper_reservations SET broker_order_id = ? WHERE id = ?",
+                            ("paper-unknown", reservation_id),
+                        )
+                    with self.assertRaisesRegex(ValueError, "Unverified order state"):
+                        record_verified_paper_order_state(
+                            reservation_id, "paper-unknown", "mystery", filled_quantity=0,
+                        )
+                    self.assertEqual(get_pro_ticker_budget()["committed"], 125)
+
     def test_rejects_invalid_amount(self):
         for amount in (0, -1, float("nan"), float("inf"), 0.001):
             with self.subTest(amount=amount):
