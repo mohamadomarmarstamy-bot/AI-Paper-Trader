@@ -254,5 +254,38 @@ class ProTickerRouteBoundaryTests(unittest.TestCase):
         self.assertTrue(all(method == "GET" for method, _ in calls))
 
 
+    def test_preview_rejects_missing_market_trade_without_order(self):
+        import sys
+        from types import ModuleType
+        routes = isolated_routes()
+        routes["require_app_session"] = lambda request: None
+        calls = []
+        routes["fetch_alpaca_paper_positions"] = lambda: []
+        routes["fetch_alpaca_market_clock"] = lambda: {"is_open": True}
+        def paper_request(method, path, **kwargs):
+            calls.append((method, path))
+            return [] if path == "/v2/orders" else {"buying_power": "100000"}
+        routes["alpaca_paper_request"] = paper_request
+        routes["alpaca_market_data_request"] = lambda method, path, **kwargs: {"trade": None}
+        fake_policy = ModuleType("pro_ticker_paper_policy")
+        fake_policy.check_pro_ticker_paper_entry = lambda **kwargs: (_ for _ in ()).throw(AssertionError("No eligibility check with missing trade"))
+        fake_intake = ModuleType("pro_ticker_manual_intake")
+        fake_intake.parse_manual_symbols = lambda raw: [raw]
+        fake_budget = ModuleType("pro_ticker_budget_ledger")
+        fake_budget.get_pro_ticker_budget = lambda: {"committed": 0}
+        with patch.dict(sys.modules, {
+            "pro_ticker_paper_policy": fake_policy,
+            "pro_ticker_manual_intake": fake_intake,
+            "pro_ticker_budget_ledger": fake_budget,
+        }):
+            result = asyncio.run(routes["pro_ticker_paper_preview"](
+                FakeRequest({"symbol": "AAPL", "proposed_notional": 10})
+            ))
+        self.assertFalse(result["allowed"])
+        self.assertFalse(result["order_submitted"])
+        self.assertTrue(result["preview_only"])
+        self.assertTrue(all(method == "GET" for method, _ in calls))
+
+
 if __name__ == "__main__":
     unittest.main()
