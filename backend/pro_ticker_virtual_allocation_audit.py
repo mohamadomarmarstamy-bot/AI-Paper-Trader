@@ -17,17 +17,20 @@ def audit_virtual_allocations(reservations: list[dict[str, Any]], positions: lis
         if not isinstance(row, dict):
             return {**result, "reason": "invalid_position"}
         symbol, shares = row.get("symbol"), row.get("shares")
-        if not isinstance(symbol, str) or not symbol or symbol in held or isinstance(shares, bool) or not isinstance(shares, int) or shares < 0:
+        if not isinstance(symbol, str) or not symbol or symbol != symbol.upper() or symbol in held or isinstance(shares, bool) or not isinstance(shares, int) or shares < 0:
             return {**result, "reason": "invalid_position"}
         held[symbol] = shares
     active = {}
     for row in reservations:
         if not isinstance(row, dict):
             return {**result, "reason": "invalid_reservation"}
-        if row.get("status") not in {"reserved", "submitted", "filled"}:
+        status = row.get("status")
+        if status not in {"reserved", "submitted", "filled"}:
+            if status not in {"released", "failed"}:
+                return {**result, "reason": "invalid_reservation_status"}
             continue
         symbol = row.get("symbol")
-        if not isinstance(symbol, str) or not symbol:
+        if not isinstance(symbol, str) or not symbol or symbol != symbol.upper():
             return {**result, "reason": "invalid_reservation"}
         if symbol in active:
             result["issues"].append({"symbol": symbol, "reason": "duplicate_active_allocation"})
