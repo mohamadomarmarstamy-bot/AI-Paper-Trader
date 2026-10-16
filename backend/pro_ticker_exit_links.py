@@ -5,6 +5,7 @@ No broker submissions, share postings, or budget releases occur here.
 """
 from __future__ import annotations
 import sqlite3
+import math
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -68,7 +69,7 @@ def link_verified_paper_exit(
         quantity = float(broker_order["qty"])
     except (KeyError, ValueError, TypeError, OverflowError) as error:
         raise ValueError("Invalid PAPER exit quantity.") from error
-    if not quantity.is_integer() or quantity != expected_shares:
+    if not math.isfinite(quantity) or not quantity.is_integer() or quantity != expected_shares:
         raise ValueError("PAPER exit quantity mismatch.")
     if str(broker_order.get("status") or "").lower() not in {
         "new", "accepted", "pending_new", "partially_filled", "filled",
