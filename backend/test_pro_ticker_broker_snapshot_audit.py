@@ -283,6 +283,22 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertFalse(first["release_authorized"])
         self.assertFalse(first["budget_released"])
 
+    def test_exit_fill_wrong_symbol_fails_closed_even_when_share_total_matches(self):
+        # A corrupted persisted event must not be accepted just because
+        # its share count matches the PAPER broker snapshot.
+        from database import get_connection
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE pro_ticker_strategy_fill_events SET symbol = ? "
+                "WHERE broker_order_id = ?",
+                ("MSFT", EXIT_ID),
+            )
+        result = self.audit()
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["reason"], "exit_fill_attribution_mismatch")
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+
     def test_two_linked_exit_orders_do_not_double_count(self):
         # A second linked exit was canceled without a fill. It must not
         # inflate the five shares already sold by the first exit.
