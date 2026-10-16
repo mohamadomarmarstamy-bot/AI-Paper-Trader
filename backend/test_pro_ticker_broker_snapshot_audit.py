@@ -327,6 +327,36 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertFalse(result["release_authorized"])
         self.assertFalse(result["budget_released"])
 
+    def test_exit_fill_wrong_side_fails_closed_even_when_total_matches(self):
+        from database import get_connection
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE pro_ticker_strategy_fill_events SET side = ? "
+                "WHERE broker_order_id = ?",
+                ("buy", EXIT_ID),
+            )
+        result = self.audit()
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["reason"], "exit_fill_attribution_mismatch")
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+        self.assertFalse(result["database_updated"])
+
+    def test_entry_fill_quantity_corruption_fails_closed(self):
+        from database import get_connection
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE pro_ticker_strategy_fill_events SET shares = ? "
+                "WHERE broker_order_id = ?",
+                (4, ENTRY_ID),
+            )
+        result = self.audit()
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["reason"], "entry_accounting_mismatch")
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+        self.assertFalse(result["database_updated"])
+
     def test_two_linked_exit_orders_do_not_double_count(self):
         # A second linked exit was canceled without a fill. It must not
         # inflate the five shares already sold by the first exit.
