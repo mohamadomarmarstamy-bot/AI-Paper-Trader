@@ -9,6 +9,7 @@ from typing import Any
 
 from database import get_connection
 from pro_ticker_budget_ledger import get_pro_ticker_reservation
+from pro_ticker_broker_audit_inputs import validate_paper_snapshot_inputs
 from pro_ticker_exit_links import get_pro_ticker_exit_link
 from pro_ticker_fill_verification import assess_paper_order_fill
 from pro_ticker_linked_share_review import review_linked_reservation_paper_shares
@@ -28,8 +29,9 @@ def audit_linked_paper_broker_snapshots(
     }
     if not isinstance(reservation_id, str) or not reservation_id.strip() or reservation_id != reservation_id.strip():
         return {**base, "reason": "invalid_reservation_id"}
-    if not isinstance(exit_orders, dict):
-        return {**base, "reason": "invalid_exit_snapshot_mapping"}
+    input_failure = validate_paper_snapshot_inputs(entry_order, exit_orders)
+    if input_failure:
+        return {**base, "reason": input_failure}
     reservation = get_pro_ticker_reservation(reservation_id)
     if not reservation or reservation.get("status") != "filled":
         return {**base, "reason": "reservation_missing_or_not_filled"}
