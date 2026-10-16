@@ -75,6 +75,34 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         values.update(updates)
         return audit_linked_paper_broker_snapshots(**values)
 
+    def test_entry_fill_wrong_symbol_fails_closed_even_if_share_count_matches(self):
+        from database import get_connection
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE pro_ticker_strategy_fill_events SET symbol = ? "
+                "WHERE broker_order_id = ?",
+                ("MSFT", ENTRY_ID),
+            )
+        result = self.audit()
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["reason"], "entry_fill_attribution_mismatch")
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+
+    def test_entry_fill_wrong_side_fails_closed_even_if_share_count_matches(self):
+        from database import get_connection
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE pro_ticker_strategy_fill_events SET side = ? "
+                "WHERE broker_order_id = ?",
+                ("sell", ENTRY_ID),
+            )
+        result = self.audit()
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["reason"], "entry_fill_attribution_mismatch")
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+
     def test_full_alpaca_paper_get_to_sqlite_audit_read_only(self):
         orders = {ENTRY_ID: self.entry_order, EXIT_ID: self.exit_order}
         requested = []
