@@ -56,6 +56,34 @@ class AlpacaPaperReconciliationTests(unittest.TestCase):
         self.assertFalse(result["broker_origin_authenticated"])
         self.assertFalse(result["release_authorized"])
 
+    def test_partial_fill_from_paper_endpoint_fails_closed(self):
+        response = Mock()
+        response.json.return_value = {
+            "id": "abc", "client_order_id": "pt-reservation",
+            "symbol": "AAPL", "side": "buy", "qty": "5",
+            "filled_qty": "2", "status": "partially_filled",
+        }
+        http_get = Mock(return_value=response)
+        with patch(
+            "pro_ticker_paper_broker_fetch_audit.get_pro_ticker_reservation",
+            return_value={"broker_order_id": "abc"},
+        ), patch(
+            "pro_ticker_paper_broker_fetch_audit.get_connection",
+        ) as connection, patch(
+            "pro_ticker_broker_snapshot_audit.get_pro_ticker_reservation",
+            return_value={"broker_order_id": "abc", "status": "filled",
+                          "symbol": "AAPL", "expected_shares": 5},
+        ):
+            connection.return_value.__enter__.return_value.execute.return_value.fetchall.return_value = []
+            result = audit_alpaca_paper_reservation(
+                "reservation", paper_key_id="paper-key",
+                paper_secret_key="paper-secret", http_get=http_get,
+            )
+        self.assertEqual(result["reason"], "entry_broker_snapshot_not_fully_filled")
+        self.assertFalse(result["verified"])
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+
     def test_valid_config_passes_reader_to_audit_without_release(self):
         http_get = Mock()
         with patch(
