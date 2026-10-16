@@ -122,6 +122,24 @@ class VerifiedExitBridgeTests(unittest.TestCase):
         self.assertTrue(stale["stale_snapshot"])
         self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 3)
 
+    def test_conflicting_exit_side_rejected_after_partial_fill(self):
+        first = account_linked_paper_exit_snapshot(EXIT_ORDER_ID, self.order)
+        self.assertEqual(first["delta_shares"], 2)
+        with self.assertRaises(ValueError):
+            account_linked_paper_exit_snapshot(
+                EXIT_ORDER_ID, {**self.order, "side": "buy", "filled_qty": "5"},
+            )
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 3)
+
+    def test_conflicting_exit_quantity_rejected_after_partial_fill(self):
+        first = account_linked_paper_exit_snapshot(EXIT_ORDER_ID, self.order)
+        self.assertEqual(first["delta_shares"], 2)
+        with self.assertRaises(ValueError):
+            account_linked_paper_exit_snapshot(
+                EXIT_ORDER_ID, {**self.order, "qty": "6", "filled_qty": "5"},
+            )
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 3)
+
     def test_wrong_client_order_rejected_without_post(self):
         with self.assertRaisesRegex(ValueError, "client_order_id_mismatch"):
             account_linked_paper_exit_snapshot(
