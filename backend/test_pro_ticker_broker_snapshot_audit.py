@@ -81,6 +81,22 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertFalse(result["release_authorized"])
         self.assertFalse(result["budget_released"])
 
+    def test_exit_snapshot_identity_mismatch_fails_closed(self):
+        incorrect = {**self.exit_order, "id": ENTRY_ID}
+        result = self.audit(exit_orders={EXIT_ID: incorrect})
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["reason"], "exit_snapshot_order_id_mismatch")
+
+    def test_exit_snapshot_non_dict_fails_closed(self):
+        result = self.audit(exit_orders={EXIT_ID: None})
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["reason"], "invalid_exit_broker_snapshot")
+
+    def test_missing_entry_snapshot_fails_closed(self):
+        result = self.audit(entry_order=None)
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["reason"], "entry_broker_snapshot_missing")
+
     def test_missing_exit_snapshot_fails_closed(self):
         result = self.audit(exit_orders={})
         self.assertFalse(result["verified"])
