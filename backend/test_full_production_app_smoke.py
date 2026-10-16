@@ -499,5 +499,50 @@ print("RESTART_RESULT:" + json.dumps(asyncio.run(check())))
         self.assertEqual(response.status_code, 401)
 
 
+    def test_research_quote_failure_is_stored_as_unavailable_without_orders(self):
+        import asyncio
+        import httpx
+        from unittest.mock import patch
+
+        with patch.object(self.main, "APP_SESSION_SECRET", "isolated-ci-session-key"), \
+             patch.object(self.main, "alpaca_market_data_request",
+                          side_effect=RuntimeError("offline market feed")) as market, \
+             patch.object(self.main, "alpaca_paper_request",
+                          side_effect=AssertionError("No broker order access")):
+            token = self.main.create_app_session_token()
+
+            async def run():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=self.main.app),
+                    base_url="http://testserver",
+                    cookies={self.main.APP_SESSION_COOKIE: token},
+                ) as client:
+                    saved = await client.post(
+                        "/auto-trader/pro-ticker-manual-submissions",
+                        json={"symbols": "OFFLN"},
+                    )
+                    history = await client.get(
+                        "/auto-trader/pro-ticker-manual-submissions?limit=500"
+                    )
+                    return saved, history
+
+            saved, history = asyncio.run(run())
+        self.assertEqual(saved.status_code, 200)
+        self.assertTrue(saved.json()["research_only"])
+        self.assertEqual(saved.json()["orders_submitted"], 0)
+        self.assertEqual(saved.json()["market_snapshots_captured"], 0)
+        self.assertEqual(history.status_code, 200)
+        matching = [
+            row for row in history.json()["observations"]
+            if row.get("symbol") == "OFFLN"
+        ]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(matching[0]["order_status"], "research_only")
+        self.assertEqual(matching[0]["market_snapshot"]["status"], "unavailable")
+        market.assert_called_once_with(
+            "GET", "/v2/stocks/OFFLN/trades/latest", timeout=3.0
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
