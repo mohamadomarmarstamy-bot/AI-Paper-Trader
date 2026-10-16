@@ -5,6 +5,9 @@ No database mutation, broker order, or allocation release occurs here.
 from __future__ import annotations
 
 from typing import Any
+import math
+
+from pro_ticker_order_linking import pro_ticker_client_order_id
 
 from pro_ticker_fill_verification import assess_paper_order_fill
 from pro_ticker_order_ownership import verify_paper_order_link
@@ -34,11 +37,24 @@ def preview_entry_fill_delta(
         return {**base, "reason": "invalid_broker_quantity"}
     if not raw_qty.is_integer() or raw_qty < 1 or raw_qty > 1_000_000:
         return {**base, "reason": "invalid_broker_quantity"}
+    expected_shares = reservation.get("expected_shares")
+    if isinstance(expected_shares, bool) or not isinstance(expected_shares, int) or expected_shares <= 0:
+        return {**base, "reason": "reservation_expected_shares_missing"}
+    if not math.isfinite(raw_qty) or raw_qty != expected_shares:
+        return {**base, "reason": "reservation_quantity_mismatch"}
+    try:
+        client_id = pro_ticker_client_order_id(reservation["id"])
+    except (KeyError, ValueError, TypeError):
+        return {**base, "reason": "invalid_reservation_id"}
+    if str(broker_order.get("client_order_id") or "") != client_id:
+        return {**base, "reason": "client_order_id_mismatch"}
+    if reservation.get("status") not in {"submitted", "filled"}:
+        return {**base, "reason": "reservation_not_submitted"}
     verification = assess_paper_order_fill(
         expected_order_id=str(reservation["broker_order_id"]),
         expected_symbol=str(reservation["symbol"]),
         expected_side="buy",
-        expected_shares=int(raw_qty),
+        expected_shares=expected_shares,
         broker_order=broker_order,
     )
     if not verification["verified"]:
