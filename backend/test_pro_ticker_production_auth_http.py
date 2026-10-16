@@ -136,5 +136,16 @@ class ProductionAuthenticationHTTPTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
 
+    def test_production_auth_rejects_far_future_signed_cookie(self):
+        cookies = self.signed_cookie(int(time.time()) + 3600)
+        response = self.request("GET", cookies=cookies)
+        self.assertEqual(response.status_code, 401)
+
+    def test_production_auth_accepts_minor_clock_skew(self):
+        cookies = self.signed_cookie(int(time.time()) + 30)
+        response = self.request("GET", cookies=cookies)
+        self.assertEqual(response.status_code, 200)
+
+
 if __name__ == "__main__":
     unittest.main()
