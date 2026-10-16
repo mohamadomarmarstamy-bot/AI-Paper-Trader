@@ -55,6 +55,36 @@ class ReleaseEligibilityTests(unittest.TestCase):
         second = {**self.exits[0], "accounted_shares": 3}
         self.assertEqual(self.review(exit_fills=[first, second])["reason"], "invalid_exit_evidence")
 
+    def test_zero_fill_canceled_exit_never_qualifies_as_closed(self):
+        zero_fill = {**self.exits[0], "accounted_shares": 0}
+        result = self.review(exit_fills=[zero_fill], remaining_strategy_shares=5)
+        self.assertFalse(result["eligible_for_independent_review"])
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+        self.assertFalse(result["database_updated"])
+        self.assertEqual(result["reason"], "invalid_exit_evidence")
+
+    def test_zero_fill_exit_cannot_pad_otherwise_complete_exits(self):
+        canceled = {
+            "broker_order_id": "exit-canceled", "symbol": "AAPL",
+            "side": "sell", "accounted_shares": 0,
+            "ownership_verified": True, "fill_verified": True,
+        }
+        result = self.review(exit_fills=[self.exits[0], canceled])
+        self.assertEqual(result["reason"], "invalid_exit_evidence")
+        self.assertFalse(result["eligible_for_independent_review"])
+        self.assertFalse(result["budget_released"])
+
+    def test_zero_fill_exit_with_no_other_exit_cannot_qualify(self):
+        result = self.review(exit_fills=[{
+            "broker_order_id": "exit-canceled", "symbol": "AAPL",
+            "side": "sell", "accounted_shares": 0,
+            "ownership_verified": True, "fill_verified": True,
+        }], remaining_strategy_shares=0)
+        self.assertEqual(result["reason"], "invalid_exit_evidence")
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+
     def test_invalid_share_counts_do_not_qualify(self):
         for value in (True, 0, -1, 2.5):
             with self.subTest(value=value):
