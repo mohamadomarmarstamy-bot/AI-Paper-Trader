@@ -607,5 +607,33 @@ print("RESTART_RESULT:" + json.dumps(asyncio.run(check())))
         ))
 
 
+    def test_signed_session_malformed_research_json_never_contacts_market(self):
+        import asyncio
+        import httpx
+        from unittest.mock import patch
+
+        with patch.object(self.main, "APP_SESSION_SECRET", "isolated-ci-session-key"), \
+             patch.object(self.main, "alpaca_market_data_request",
+                          side_effect=AssertionError("No market IO for bad JSON")), \
+             patch.object(self.main, "alpaca_paper_request",
+                          side_effect=AssertionError("No broker IO for bad JSON")):
+            token = self.main.create_app_session_token()
+
+            async def run():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=self.main.app),
+                    base_url="http://testserver",
+                    cookies={self.main.APP_SESSION_COOKIE: token},
+                ) as client:
+                    return await client.post(
+                        "/auto-trader/pro-ticker-manual-submissions",
+                        content=b"{broken-json",
+                        headers={"content-type": "application/json"},
+                    )
+
+            response = asyncio.run(run())
+        self.assertEqual(response.status_code, 400)
+
+
 if __name__ == "__main__":
     unittest.main()
