@@ -57,6 +57,9 @@
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ symbols: input.value })
             });
+            if (!Number.isSafeInteger(result.count) || result.count < 0) {
+                throw new Error("Unexpected save response");
+            }
             setStatus("Saved " + result.count + " symbol(s). Research only; no PAPER orders placed.");
             input.value = "";
             const historyLoaded = await refresh();
