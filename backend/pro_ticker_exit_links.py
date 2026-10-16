@@ -96,3 +96,23 @@ def link_verified_paper_exit(
         )
     return {"paper": True, "linked": True, "duplicate": False,
             "broker_order_id": order_id, "order_submitted": False}
+
+
+def get_pro_ticker_exit_link(broker_order_id: str) -> dict[str, Any] | None:
+    """Retrieve one persisted PAPER exit link; never infer ownership by symbol."""
+    if not isinstance(broker_order_id, str):
+        raise ValueError("PAPER broker order ID required.")
+    try:
+        canonical_id = str(uuid.UUID(broker_order_id))
+    except (TypeError, ValueError, AttributeError) as error:
+        raise ValueError("Valid PAPER broker order UUID required.") from error
+    if canonical_id != broker_order_id:
+        raise ValueError("Canonical PAPER broker order UUID required.")
+    with get_connection() as conn:
+        conn.executescript(_SCHEMA)
+        row = conn.execute(
+            "SELECT reservation_id, broker_order_id, client_order_id, symbol, "
+            "expected_shares, linked_at FROM pro_ticker_paper_exit_links "
+            "WHERE broker_order_id = ?", (broker_order_id,),
+        ).fetchone()
+    return dict(row) if row is not None else None
