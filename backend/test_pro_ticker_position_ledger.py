@@ -92,6 +92,16 @@ class PaperPositionLedgerTests(unittest.TestCase):
         self.assertFalse(result["release_authorized"])
         self.assertFalse(result["verified"])
 
+    def test_reservation_attribution_missing_exit_fill_fails_closed(self):
+        self.post(filled_shares=4)
+        result = ledger.review_reservation_attributed_shares(
+            reservation_id="reservation-1", entry_order_id="paper-order-1",
+            exit_order_ids=["missing-exit"],
+        )
+        self.assertFalse(result["verified"])
+        self.assertFalse(result["release_authorized"])
+        self.assertEqual(result["reason"], "exit_fills_missing_or_conflicting")
+
     def test_reservation_attribution_rejects_noncanonical_identifiers(self):
         for values in (
             {"reservation_id": " reservation-1", "entry_order_id": "entry", "exit_order_ids": []},
