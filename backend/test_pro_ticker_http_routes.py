@@ -285,5 +285,45 @@ class ProTickerResearchHTTPTests(unittest.TestCase):
         self.assertEqual(result["reason"], "broker_or_market_snapshot_unavailable")
 
 
+    def test_http_research_save_quote_callback_uses_get_only(self):
+        quote_calls = []
+        def market_data(method, path, **kwargs):
+            quote_calls.append((method, path))
+            if method != "GET":
+                raise AssertionError("Research route attempted market-data write")
+            return {"trade": {"p": 100, "t": datetime.now(timezone.utc).isoformat()}}
+        self.routes["alpaca_market_data_request"] = market_data
+        def save_with_quote(symbols, quote_fetcher=None):
+            self.assertEqual(symbols, "AAPL")
+            self.assertIsNotNone(quote_fetcher)
+            quote = quote_fetcher("AAPL")
+            self.assertEqual(quote["p"], 100)
+            return {"paper": True, "research_only": True, "orders_submitted": 0}
+        self.fake.save_manual_observations = save_with_quote
+        response = self.request(
+            "POST", "/auto-trader/pro-ticker-manual-submissions",
+            json={"symbols": "AAPL"}, cookies={"test_session": "authorized"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["research_only"])
+        self.assertEqual(response.json()["orders_submitted"], 0)
+        self.assertEqual(quote_calls, [("GET", "/v2/stocks/AAPL/trades/latest")])
+
+    def test_http_research_save_missing_quote_returns_422(self):
+        self.routes["alpaca_market_data_request"] = lambda method, path, **kwargs: {
+            "trade": None
+        }
+        def save_with_quote(symbols, quote_fetcher=None):
+            quote_fetcher("AAPL")
+            raise AssertionError("Missing quote should raise ValueError")
+        self.fake.save_manual_observations = save_with_quote
+        response = self.request(
+            "POST", "/auto-trader/pro-ticker-manual-submissions",
+            json={"symbols": "AAPL"}, cookies={"test_session": "authorized"},
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()
