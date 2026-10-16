@@ -28,6 +28,8 @@ def make_alpaca_paper_order_reader(
     def fetch_paper_order(order_id: str) -> dict[str, Any]:
         if not isinstance(order_id, str) or not order_id.strip() or order_id != order_id.strip() or "/" in order_id or "?" in order_id or "#" in order_id:
             raise ValueError("Invalid PAPER order ID.")
+        # The request must remain pinned to the PAPER hostname even if the
+        # injected HTTP client would otherwise follow external redirects.
         response = http_get(
             PAPER_BASE_URL + "/v2/orders/" + quote(order_id, safe=""),
             headers={
@@ -35,7 +37,10 @@ def make_alpaca_paper_order_reader(
                 "APCA-API-SECRET-KEY": secret_key,
             },
             timeout=timeout_seconds,
+            allow_redirects=False,
         )
+        if 300 <= response.status_code < 400:
+            raise ValueError("PAPER broker redirect refused.")
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict) or payload.get("id") != order_id:
