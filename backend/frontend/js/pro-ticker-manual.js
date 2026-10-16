@@ -16,9 +16,12 @@
         }
         return data;
     }
+    let refreshVersion = 0;
     async function refresh() {
+        const version = ++refreshVersion;
         try {
             const data = await request(endpoint + "?limit=100");
+            if (version !== refreshVersion) return false;
             if (!Array.isArray(data.observations)) {
                 throw new Error("Unexpected research response");
             }
@@ -41,6 +44,7 @@
             if (!data.count) setStatus("No manual research submissions yet.");
             return true;
         } catch (error) {
+            if (version !== refreshVersion) return false;
             rows.replaceChildren();
             setStatus("Unable to load submissions: " + error.message);
             return false;
