@@ -17,8 +17,8 @@ def account_linked_paper_exit_snapshot(
     broker_order_id: str, broker_order: dict[str, Any],
 ) -> dict[str, Any]:
     """Reconcile a persisted exit link with a verified cumulative broker fill."""
-    if not isinstance(broker_order_id, str) or not broker_order_id.strip():
-        raise ValueError("PAPER exit broker order ID required.")
+    if not isinstance(broker_order_id, str) or not broker_order_id.strip() or broker_order_id != broker_order_id.strip():
+        raise ValueError("Canonical PAPER exit broker order ID required.")
     if not isinstance(broker_order, dict):
         raise ValueError("Fresh PAPER exit broker order snapshot required.")
     link = get_pro_ticker_exit_link(broker_order_id)
