@@ -450,6 +450,48 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertFalse(self.audit(entry_order=forged)["verified"])
         self.assertTrue(self.audit()["verified"])
 
+    def test_paper_reservation_entry_exit_lifecycle_without_broker_submission(self):
+        from pro_ticker_verified_fill_bridge import account_linked_paper_entry_snapshot
+        from pro_ticker_verified_exit_fill_bridge import account_linked_paper_exit_snapshot
+        from pro_ticker_budget_ledger import get_pro_ticker_budget, get_pro_ticker_reservation
+        from pro_ticker_position_ledger import get_accounted_paper_order_shares
+        new_id = reserve_pro_ticker_budget("MSFT", 75)["reservation_id"]
+        self.assertEqual(get_pro_ticker_reservation(new_id)["status"], "reserved")
+        set_paper_reservation_expected_shares(new_id, 3)
+        entry_id = "33333333-3333-4333-8333-333333333333"
+        exit_id = "44444444-4444-4444-8444-444444444444"
+        exit_attempt_id = "55555555-5555-4555-8555-555555555555"
+        entry = {"id": entry_id, "client_order_id": "pt-" + new_id,
+                 "symbol": "MSFT", "side": "buy", "qty": "3",
+                 "filled_qty": "1", "status": "partially_filled"}
+        link_verified_paper_entry_order(new_id, entry)
+        record_verified_paper_order_state(new_id, entry_id, "partially_filled", filled_quantity=1)
+        self.assertEqual(account_linked_paper_entry_snapshot(new_id, entry)["delta_shares"], 1)
+        full_entry = {**entry, "filled_qty": "3", "status": "filled"}
+        record_verified_paper_order_state(new_id, entry_id, "filled", filled_quantity=3)
+        self.assertEqual(account_linked_paper_entry_snapshot(new_id, full_entry)["delta_shares"], 2)
+        exit_order = {"id": exit_id, "client_order_id": "ptx-" + exit_attempt_id,
+                      "symbol": "MSFT", "side": "sell", "qty": "3",
+                      "filled_qty": "1", "status": "partially_filled"}
+        link_verified_paper_exit(
+            reservation_id=new_id, symbol="MSFT", expected_shares=3,
+            broker_order=exit_order, exit_id=exit_attempt_id,
+        )
+        self.assertEqual(account_linked_paper_exit_snapshot(exit_id, exit_order)["delta_shares"], 1)
+        full_exit = {**exit_order, "filled_qty": "3", "status": "filled"}
+        self.assertEqual(account_linked_paper_exit_snapshot(exit_id, full_exit)["delta_shares"], 2)
+        self.assertEqual(get_accounted_paper_order_shares(entry_id), 3)
+        self.assertEqual(get_accounted_paper_order_shares(exit_id), 3)
+        result = audit_linked_paper_broker_snapshots(
+            reservation_id=new_id, entry_order=full_entry,
+            exit_orders={exit_id: full_exit},
+        )
+        self.assertTrue(result["verified"], result)
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+        self.assertEqual(get_pro_ticker_reservation(new_id)["status"], "filled")
+        self.assertGreaterEqual(get_pro_ticker_budget()["committed"], 75)
+
     def test_full_alpaca_paper_get_rejects_wrong_exit_snapshot(self):
         orders = {
             ENTRY_ID: self.entry_order,
