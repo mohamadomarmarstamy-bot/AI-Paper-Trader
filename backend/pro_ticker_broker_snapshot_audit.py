@@ -25,7 +25,7 @@ def audit_linked_paper_broker_snapshots(
     base = {
         "paper": True, "preview_only": True, "verified": False,
         "release_authorized": False, "budget_released": False,
-        "database_updated": False,
+        "database_updated": False, "broker_origin_authenticated": False,
     }
     if not isinstance(reservation_id, str) or not reservation_id.strip() or reservation_id != reservation_id.strip():
         return {**base, "reason": "invalid_reservation_id"}
