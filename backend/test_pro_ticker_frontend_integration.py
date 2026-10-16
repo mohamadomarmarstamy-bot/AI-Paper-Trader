@@ -66,6 +66,14 @@ class ProTickerFrontendIntegrationTests(unittest.TestCase):
         self.assertIn("rows.replaceChildren()", self.js)
         self.assertIn('setStatus("Unable to load submissions: "', self.js)
 
+    def test_failed_refresh_clears_stale_research_rows(self):
+        catch_start = self.js.index('setStatus("Unable to load submissions: "')
+        self.assertIn("rows.replaceChildren()", self.js[max(0, catch_start - 100):catch_start])
+        self.assertLess(
+            self.js.index("if (!Array.isArray(data.observations))"),
+            self.js.index("rows.replaceChildren()"),
+        )
+
     def test_frontend_exposes_no_order_submission_controls(self):
         self.assertIn("Research only", self.html)
         self.assertIn("no PAPER orders placed", self.js)
