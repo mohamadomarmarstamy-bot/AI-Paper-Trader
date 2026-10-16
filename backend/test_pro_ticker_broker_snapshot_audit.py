@@ -180,6 +180,63 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertFalse(result["release_authorized"])
         self.assertFalse(result["budget_released"])
 
+    def test_two_exit_orders_with_partial_terminal_fill_reconcile(self):
+        # Set up a fresh, independent reservation to avoid rewriting
+        # existing fill history. Five entry shares close as 3 + 2.
+        reservation_id = reserve_pro_ticker_budget("MSFT", 100)["reservation_id"]
+        entry_id = "11111111-1111-4111-8111-111111111111"
+        set_paper_reservation_expected_shares(reservation_id, 5)
+        entry = {
+            "id": entry_id, "client_order_id": "pt-" + reservation_id,
+            "symbol": "MSFT", "side": "buy", "qty": "5",
+            "filled_qty": "5", "status": "filled",
+        }
+        link_verified_paper_entry_order(reservation_id, entry)
+        record_verified_paper_order_state(
+            reservation_id, entry_id, "filled", filled_quantity=5,
+        )
+        post_verified_cumulative_paper_fill(
+            broker_order_id=entry_id, symbol="MSFT", side="buy",
+            cumulative_filled_shares=5, ownership_verified=True,
+            fill_verified=True,
+        )
+        exit_orders = {}
+        for index, (shares, ordered, status) in enumerate([
+            (3, 5, "canceled"), (2, 2, "filled"),
+        ]):
+            exit_id = ("22222222-2222-4222-8222-22222222222" + str(index))
+            client_id = ("33333333-3333-4333-8333-33333333333" + str(index))
+            snapshot = {
+                "id": exit_id, "client_order_id": "ptx-" + client_id,
+                "symbol": "MSFT", "side": "sell", "qty": str(ordered),
+                "filled_qty": str(shares), "status": status,
+            }
+            with patch("pro_ticker_exit_links.get_pro_ticker_reservation", return_value={
+                "id": reservation_id, "symbol": "MSFT", "status": "filled",
+                "broker_order_id": entry_id,
+            }):
+                link_verified_paper_exit(
+                    reservation_id=reservation_id, symbol="MSFT",
+                    expected_shares=ordered, exit_id=client_id,
+                    broker_order=snapshot,
+                )
+            post_verified_cumulative_paper_fill(
+                broker_order_id=exit_id, symbol="MSFT", side="sell",
+                cumulative_filled_shares=shares,
+                ownership_verified=True, fill_verified=True,
+            )
+            exit_orders[exit_id] = snapshot
+        result = self.audit(
+            reservation_id=reservation_id, entry_order=entry,
+            exit_orders=exit_orders,
+        )
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["entry_shares"], 5)
+        self.assertEqual(result["exit_shares"], 5)
+        self.assertFalse(result["broker_origin_authenticated"])
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+
     def test_complete_linked_broker_snapshots_match(self):
         result = self.audit()
         self.assertTrue(result["verified"])
