@@ -48,7 +48,7 @@ def check_pro_ticker_paper_entry(
     if data_age_seconds < 0 or max_data_age_seconds <= 0 or data_age_seconds > max_data_age_seconds:
         return PaperAdmission(False, "stale_market_data")
     normalized = symbol.strip().upper() if isinstance(symbol, str) else ""
-    if not normalized:
+    if not normalized or not normalized.replace(".", "").isalnum():
         return PaperAdmission(False, "invalid_symbol")
     if normalized in {str(s).upper() for s in open_position_symbols}:
         return PaperAdmission(False, "existing_position")
