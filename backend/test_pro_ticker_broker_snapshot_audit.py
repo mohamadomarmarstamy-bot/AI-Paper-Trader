@@ -151,6 +151,35 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertEqual(result["exit_shares"], 5)
         self.assertFalse(result["release_authorized"])
 
+    def test_partially_filled_terminal_exit_and_second_exit_reconcile(self):
+        # Start with a three-share first exit and a two-share second exit.
+        # This test uses a separate ledger for each test run, with the
+        # existing five-share exit replaced by a three-share fill.
+        second_exit_id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+        second_client_id = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+        second_exit = {
+            "id": second_exit_id, "client_order_id": "ptx-" + second_client_id,
+            "symbol": "AAPL", "side": "sell", "qty": "2",
+            "filled_qty": "2", "status": "filled",
+        }
+        with patch("pro_ticker_exit_links.get_pro_ticker_reservation", return_value={
+            "id": self.reservation_id, "symbol": "AAPL", "status": "filled",
+            "broker_order_id": ENTRY_ID,
+        }):
+            link_verified_paper_exit(
+                reservation_id=self.reservation_id, symbol="AAPL",
+                expected_shares=2, exit_id=second_client_id,
+                broker_order=second_exit,
+            )
+        # The first exit already accounts for five shares; a second
+        # two-share fill must be rejected rather than over-counted.
+        result = self.audit(exit_orders={
+            EXIT_ID: self.exit_order, second_exit_id: second_exit,
+        })
+        self.assertFalse(result["verified"])
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+
     def test_complete_linked_broker_snapshots_match(self):
         result = self.audit()
         self.assertTrue(result["verified"])
