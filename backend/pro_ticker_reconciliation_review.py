@@ -31,9 +31,12 @@ def assess_reservation_state(
         return {"suggested_status": current, "safe_to_release": False, "reason": "missing_order_id"}
     if str(broker_order.get("side") or "").strip().lower() != "buy":
         return {"suggested_status": current, "safe_to_release": False, "reason": "entry_order_side_unverified"}
+    raw_filled = broker_order.get("filled_qty")
+    if raw_filled is None or isinstance(raw_filled, bool):
+        return {"suggested_status": current, "safe_to_release": False, "reason": "invalid_filled_quantity"}
     try:
-        filled = float(broker_order.get("filled_qty", 0))
-    except (ValueError, TypeError):
+        filled = float(raw_filled)
+    except (ValueError, TypeError, OverflowError):
         return {"suggested_status": current, "safe_to_release": False, "reason": "invalid_filled_quantity"}
     from math import isfinite
     if not isfinite(filled) or filled < 0:
