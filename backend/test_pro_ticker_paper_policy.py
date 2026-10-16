@@ -33,6 +33,13 @@ class PaperAdmissionTests(unittest.TestCase):
     def test_closed_market_rejected(self):
         self.assertFalse(self.eligible(market_open=False).allowed)
 
+    def test_market_open_requires_explicit_true(self):
+        for value in (None, 0, 1, "true", "open", [], {}):
+            with self.subTest(value=value):
+                decision = self.eligible(market_open=value)
+                self.assertFalse(decision.allowed)
+                self.assertEqual(decision.reason, "regular_market_closed")
+
     def test_stale_data_rejected(self):
         self.assertEqual(self.eligible(data_age_seconds=300).reason, "stale_market_data")
 
