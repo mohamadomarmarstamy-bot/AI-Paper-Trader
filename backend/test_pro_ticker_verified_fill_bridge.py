@@ -19,8 +19,8 @@ class VerifiedFillBridgeTests(unittest.TestCase):
             "filled_qty": "4", "status": "partially_filled",
         }
         p = patch.object(
-            bridge, "list_pro_ticker_reservations",
-            return_value={"reservations": [self.reservation]},
+            bridge, "get_pro_ticker_reservation",
+            return_value=self.reservation,
         )
         p.start()
         self.addCleanup(p.stop)
