@@ -56,6 +56,29 @@ class AlpacaPaperReaderTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.reader("abc")
 
+    def test_missing_secret_rejected_before_network(self):
+        with self.assertRaises(ValueError):
+            make_alpaca_paper_order_reader(
+                key_id="test-key", secret_key=" ", http_get=self.http_get,
+            )
+        self.http_get.assert_not_called()
+
+    def test_non_callable_transport_rejected(self):
+        with self.assertRaises(ValueError):
+            make_alpaca_paper_order_reader(
+                key_id="test-key", secret_key="test-secret", http_get=None,
+            )
+
+    def test_invalid_timeout_rejected_before_network(self):
+        for timeout in (0, -1, 31, True, "10"):
+            with self.subTest(timeout=timeout):
+                with self.assertRaises(ValueError):
+                    make_alpaca_paper_order_reader(
+                        key_id="test-key", secret_key="test-secret",
+                        http_get=self.http_get, timeout_seconds=timeout,
+                    )
+        self.http_get.assert_not_called()
+
     def test_missing_credentials_rejected(self):
         with self.assertRaises(ValueError):
             make_alpaca_paper_order_reader(
