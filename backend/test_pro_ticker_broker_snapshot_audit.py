@@ -222,6 +222,24 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
             self.assertFalse(result["database_updated"])
         self.assertEqual(get_pro_ticker_budget(), before)
 
+    def test_audit_rejects_missing_persisted_exit_fill_after_reopening_database(self):
+        from database import get_connection
+        from pro_ticker_budget_ledger import get_pro_ticker_budget
+        before_budget = get_pro_ticker_budget()
+        with get_connection() as conn:
+            conn.execute(
+                "DELETE FROM pro_ticker_strategy_fill_events WHERE broker_order_id = ?",
+                (EXIT_ID,),
+            )
+        # A later audit uses new SQLite connections, not an in-memory cache.
+        result = self.audit()
+        self.assertFalse(result["verified"], result)
+        self.assertEqual(result["reason"], "exit_accounting_mismatch")
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+        self.assertFalse(result["database_updated"])
+        self.assertEqual(get_pro_ticker_budget(), before_budget)
+
     def test_full_alpaca_paper_get_rejects_wrong_exit_snapshot(self):
         orders = {
             ENTRY_ID: self.entry_order,
