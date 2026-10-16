@@ -16221,6 +16221,34 @@ def pro_ticker_paper_fill_posting_preview(
         }
 
 
+@app.get("/auto-trader/pro-ticker-paper-allocation-audit")
+def pro_ticker_paper_allocation_audit(request: Request) -> dict[str, Any]:
+    """Read-only consistency audit of PAPER reservations and strategy shares."""
+    require_app_session(request)
+    from pro_ticker_budget_ledger import list_pro_ticker_reservations
+    from pro_ticker_position_ledger import list_pro_ticker_strategy_positions
+    from pro_ticker_virtual_allocation_audit import audit_virtual_allocations
+
+    try:
+        # Refuse to claim completeness if the ledger exceeds this bounded
+        # snapshot. The audit cannot reconcile omitted reservations.
+        reservations = list_pro_ticker_reservations(limit=500)["reservations"]
+        if len(reservations) >= 500:
+            raise ValueError("Reservation audit snapshot could be truncated.")
+        positions = list_pro_ticker_strategy_positions()["positions"]
+        return {
+            **audit_virtual_allocations(reservations, positions),
+            "order_submitted": False,
+        }
+    except Exception:
+        return {
+            "paper": True, "preview_only": True, "reconciled": False,
+            "ledger_consistent": False, "database_updated": False,
+            "budget_released": False, "order_submitted": False,
+            "reason": "allocation_audit_snapshot_unavailable", "issues": [],
+        }
+
+
 @app.get("/auto-trader/pro-ticker-paper-position-audit")
 def pro_ticker_paper_position_audit(request: Request) -> dict[str, Any]:
     """Read-only comparison of attributed strategy shares to shared PAPER broker."""
