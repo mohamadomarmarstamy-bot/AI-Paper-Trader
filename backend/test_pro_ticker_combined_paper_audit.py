@@ -56,7 +56,9 @@ class CombinedPaperAuditTests(unittest.TestCase):
         self.assertFalse(result["broker_snapshot_consistent"])
 
     def test_invalid_broker_snapshot_does_not_reconcile(self):
-        result = self.review(broker=None)
+        result = review_paper_allocation_and_broker(
+            self.reservations, self.strategy, None,
+        )
         self.assertFalse(result["reconciled"])
         self.assertFalse(result["budget_released"])
         self.assertEqual(result["reason"], "broker_snapshot_invalid")
