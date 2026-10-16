@@ -67,6 +67,15 @@ class FillVerificationTests(unittest.TestCase):
                     self.assertFalse(result["verified"])
                     self.assertEqual(result["reason"], "invalid_broker_quantities")
 
+    def test_extremely_large_integer_broker_quantities_rejected(self):
+        huge = 10 ** 1000
+        for field in ("qty", "filled_qty"):
+            with self.subTest(field=field):
+                order = {**self.base["broker_order"], field: huge}
+                result = self.check(broker_order=order)
+                self.assertFalse(result["verified"])
+                self.assertEqual(result["reason"], "invalid_broker_quantities")
+
     def test_missing_snapshot_rejected(self):
         self.assertFalse(self.check(broker_order=None)["verified"])
 
