@@ -137,6 +137,13 @@ class ProTickerFrontendIntegrationTests(unittest.TestCase):
             self.js.index("rows.replaceChildren()"),
         )
 
+    def test_history_status_distinguishes_empty_and_populated_results(self):
+        self.assertIn("if (!data.observations.length)", self.js)
+        self.assertIn('data.count === 0', self.js)
+        self.assertIn("No research observations returned for this page.", self.js)
+        self.assertIn("Loaded ", self.js)
+        self.assertIn("research observation(s).", self.js)
+
     def test_frontend_exposes_no_order_submission_controls(self):
         self.assertIn("Research only", self.html)
         self.assertIn("no PAPER orders placed", self.js)
