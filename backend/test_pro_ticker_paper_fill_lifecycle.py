@@ -23,6 +23,7 @@ class PaperFillLifecycleIntegrationTests(unittest.TestCase):
         def connect():
             conn = sqlite3.connect(path, timeout=30)
             conn.row_factory = sqlite3.Row
+            self.addCleanup(conn.close)
             return conn
 
         for module in (budget, positions):

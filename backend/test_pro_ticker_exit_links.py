@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from pro_ticker_test_db_helper import tracked_test_connections
 import database
 import pro_ticker_exit_links as exits
 
@@ -18,6 +19,9 @@ class PaperExitLinkTests(unittest.TestCase):
         }
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        tracker = tracked_test_connections()
+        tracker.__enter__()
+        self.addCleanup(tracker.__exit__, None, None, None)
         db_patch = patch.object(database, "DATABASE_PATH", Path(self.temp.name) / "test.db")
         db_patch.start()
         self.addCleanup(db_patch.stop)

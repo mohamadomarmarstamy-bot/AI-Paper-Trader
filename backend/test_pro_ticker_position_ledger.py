@@ -16,6 +16,7 @@ class PaperPositionLedgerTests(unittest.TestCase):
         def connection():
             conn = sqlite3.connect(self.path, timeout=30)
             conn.row_factory = sqlite3.Row
+            self.addCleanup(conn.close)
             return conn
         self.patch = patch.object(ledger, "get_connection", side_effect=connection)
         self.patch.start()

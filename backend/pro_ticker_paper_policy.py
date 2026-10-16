@@ -33,7 +33,7 @@ def check_pro_ticker_paper_entry(
     max_data_age_seconds: float = 90.0,
 ) -> PaperAdmission:
     """Fail closed if budget, broker mode, freshness or collision checks fail."""
-    if not broker_paper:
+    if broker_paper is not True:
         return PaperAdmission(False, "paper_account_required")
     if not market_open:
         return PaperAdmission(False, "regular_market_closed")

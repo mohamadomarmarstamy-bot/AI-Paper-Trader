@@ -21,6 +21,15 @@ class PaperAdmissionTests(unittest.TestCase):
     def test_live_broker_rejected(self):
         self.assertEqual(self.eligible(broker_paper=False).reason, "paper_account_required")
 
+    def test_missing_broker_mode_rejected(self):
+        self.assertFalse(self.eligible(broker_paper=None).allowed)
+
+    def test_unknown_broker_mode_rejected(self):
+        self.assertFalse(self.eligible(broker_paper="paper").allowed)
+
+    def test_numeric_broker_mode_rejected(self):
+        self.assertFalse(self.eligible(broker_paper=1).allowed)
+
     def test_closed_market_rejected(self):
         self.assertFalse(self.eligible(market_open=False).allowed)
 

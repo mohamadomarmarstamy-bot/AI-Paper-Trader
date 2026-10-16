@@ -61,8 +61,29 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Python syntax check
-        run: python -m py_compile backend/pro_ticker_manual_intake.py backend/pro_ticker_paper_policy.py backend/pro_ticker_budget_ledger.py backend/pro_ticker_reconciliation_review.py backend/pro_ticker_order_ownership.py backend/pro_ticker_execution_plan.py backend/pro_ticker_exit_plan.py backend/pro_ticker_fill_verification.py backend/pro_ticker_snapshot_review.py backend/pro_ticker_exit_attribution.py backend/pro_ticker_position_accounting.py backend/pro_ticker_position_ledger.py backend/pro_ticker_position_audit.py backend/pro_ticker_fill_posting_preview.py backend/pro_ticker_order_linking.py backend/pro_ticker_verified_fill_bridge.py backend/main.py backend/test_pro_ticker_manual_intake.py backend/test_pro_ticker_budget_ledger.py backend/test_pro_ticker_paper_policy.py backend/test_pro_ticker_reconciliation_review.py
+      - name: Python syntax check (all Pro Ticker modules and tests)
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          files = (
+              sorted(Path("backend").glob("pro_ticker_*.py"))
+              + sorted(Path("backend").glob("test_pro_ticker_*.py"))
+              + [Path("backend/main.py")]
+          )
+
+          if not files:
+              raise SystemExit("No Python files found")
+
+          for file in files:
+              ast.parse(
+                  file.read_text(encoding="utf-8-sig"),
+                  filename=str(file),
+              )
+
+          print(f"Successfully checked {len(files)} Python files")
+          PY
       - name: Manual research intake unit tests
         run: python -m unittest discover -s backend -p test_pro_ticker_manual_intake.py -v
       - name: PAPER order admission policy unit tests

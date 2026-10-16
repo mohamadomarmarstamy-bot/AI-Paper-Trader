@@ -18,6 +18,7 @@ class PaperOrderLinkingTests(unittest.TestCase):
         def connection():
             conn = sqlite3.connect(path)
             conn.row_factory = sqlite3.Row
+            self.addCleanup(conn.close)
             return conn
 
         p = patch.object(ledger, "get_connection", side_effect=connection)
