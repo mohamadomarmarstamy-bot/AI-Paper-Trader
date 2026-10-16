@@ -58,6 +58,15 @@ class FillVerificationTests(unittest.TestCase):
             **self.base["broker_order"], "status": "filled",
         })["verified"])
 
+    def test_boolean_broker_quantities_rejected(self):
+        for field in ("qty", "filled_qty"):
+            for value in (True, False):
+                with self.subTest(field=field, value=value):
+                    order = {**self.base["broker_order"], field: value}
+                    result = self.check(broker_order=order)
+                    self.assertFalse(result["verified"])
+                    self.assertEqual(result["reason"], "invalid_broker_quantities")
+
     def test_missing_snapshot_rejected(self):
         self.assertFalse(self.check(broker_order=None)["verified"])
 
