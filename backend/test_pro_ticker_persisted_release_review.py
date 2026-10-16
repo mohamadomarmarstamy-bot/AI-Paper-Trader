@@ -96,6 +96,18 @@ class PersistedPaperReleaseReviewTests(unittest.TestCase):
         self.assertEqual(positions.list_pro_ticker_strategy_positions()["positions"], [])
         self.assertEqual(get_pro_ticker_budget()["committed"], 1000)
 
+    def test_unattributed_buy_blocks_release_review(self):
+        positions.post_verified_cumulative_paper_fill(
+            broker_order_id="ffffffff-ffff-4fff-8fff-ffffffffffff",
+            symbol="AAPL", side="buy", cumulative_filled_shares=2,
+            ownership_verified=True, fill_verified=True,
+        )
+        result = review_persisted_paper_release(self.reservation_id)
+        self.assertEqual(result["reason"], "unattributed_strategy_buy_fills")
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+        self.assertEqual(get_pro_ticker_budget()["committed"], 1000)
+
     def test_unattributed_sell_blocks_release_review(self):
         exit_order_id = self.link_exit()
         positions.post_verified_cumulative_paper_fill(
