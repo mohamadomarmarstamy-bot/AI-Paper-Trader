@@ -27,6 +27,17 @@ class PaperEntryPlanTests(unittest.TestCase):
     def test_blocks_broker_power_overrun(self):
         self.assertIn("broker_buying_power_exceeded", self.plan(broker_buying_power=199)["block_reasons"])
 
+    def test_unrounded_notional_cannot_exceed_budget_by_fraction_of_cent(self):
+        result = self.plan(
+            reference_price=100.002, requested_shares=2,
+            available_budget=200.0, broker_buying_power=200.0,
+        )
+        self.assertEqual(result["estimated_notional"], 200.0)
+        self.assertFalse(result["allowed_for_further_review"])
+        self.assertIn("virtual_budget_exceeded", result["block_reasons"])
+        self.assertIn("broker_buying_power_exceeded", result["block_reasons"])
+        self.assertFalse(result["order_submitted"])
+
     def test_blocks_stale_quote(self):
         self.assertIn("stale_quote", self.plan(quote_age_seconds=31)["block_reasons"])
 
