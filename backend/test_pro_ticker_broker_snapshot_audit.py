@@ -76,6 +76,7 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
     def test_complete_linked_broker_snapshots_match(self):
         result = self.audit()
         self.assertTrue(result["verified"])
+        self.assertFalse(result["broker_origin_authenticated"])
         self.assertEqual(result["entry_shares"], 5)
         self.assertEqual(result["exit_shares"], 5)
         self.assertFalse(result["release_authorized"])
