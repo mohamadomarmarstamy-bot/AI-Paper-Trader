@@ -89,6 +89,39 @@ class VerifiedExitBridgeTests(unittest.TestCase):
             )
         self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 5)
 
+    def test_delayed_exit_snapshots_converge_to_full_close(self):
+        first = account_linked_paper_exit_snapshot(
+            EXIT_ORDER_ID, {**self.order, "filled_qty": "4"},
+        )
+        self.assertEqual(first["delta_shares"], 4)
+        stale = account_linked_paper_exit_snapshot(
+            EXIT_ORDER_ID, {**self.order, "filled_qty": "1"},
+        )
+        self.assertTrue(stale["stale_snapshot"])
+        self.assertEqual(stale["delta_shares"], 0)
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 1)
+        complete = account_linked_paper_exit_snapshot(
+            EXIT_ORDER_ID, {**self.order, "filled_qty": "5", "status": "filled"},
+        )
+        self.assertEqual(complete["delta_shares"], 1)
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"], [])
+        replay = account_linked_paper_exit_snapshot(
+            EXIT_ORDER_ID, {**self.order, "filled_qty": "5", "status": "filled"},
+        )
+        self.assertFalse(replay["posted"])
+
+    def test_canceled_partial_exit_preserves_filled_shares(self):
+        canceled = {**self.order, "filled_qty": "2", "status": "canceled"}
+        first = account_linked_paper_exit_snapshot(EXIT_ORDER_ID, canceled)
+        self.assertEqual(first["delta_shares"], 2)
+        replay = account_linked_paper_exit_snapshot(EXIT_ORDER_ID, canceled)
+        self.assertFalse(replay["posted"])
+        stale = account_linked_paper_exit_snapshot(
+            EXIT_ORDER_ID, {**self.order, "filled_qty": "0", "status": "new"},
+        )
+        self.assertTrue(stale["stale_snapshot"])
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 3)
+
     def test_wrong_client_order_rejected_without_post(self):
         with self.assertRaisesRegex(ValueError, "client_order_id_mismatch"):
             account_linked_paper_exit_snapshot(
