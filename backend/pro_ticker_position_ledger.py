@@ -273,6 +273,12 @@ def review_reservation_attributed_shares(
                 "WHERE broker_order_id = ? GROUP BY symbol, side",
                 (order_id,),
             ).fetchall()
+            # A canceled or rejected exit with zero fills legitimately has
+            # no fill-event rows. Count zero here; the broker snapshot audit
+            # independently verifies that the linked order is terminal and
+            # that its cumulative filled quantity is also zero.
+            if not exits:
+                continue
             if len(exits) != 1 or exits[0]["symbol"] != symbol or exits[0]["side"] != "sell":
                 return {"paper": True, "preview_only": True, "verified": False,
                         "release_authorized": False, "budget_released": False,
