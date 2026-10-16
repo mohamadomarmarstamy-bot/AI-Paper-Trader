@@ -19,10 +19,10 @@
     async function refresh() {
         try {
             const data = await request(endpoint + "?limit=100");
-            rows.replaceChildren();
             if (!Array.isArray(data.observations)) {
                 throw new Error("Unexpected research response");
             }
+            rows.replaceChildren();
             for (const record of data.observations) {
                 const tr = document.createElement("tr");
                 for (const value of [
@@ -40,6 +40,7 @@
             }
             if (!data.count) setStatus("No manual research submissions yet.");
         } catch (error) {
+            rows.replaceChildren();
             setStatus("Unable to load submissions: " + error.message);
         }
     }
