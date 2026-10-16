@@ -114,6 +114,22 @@ class PaperFillLifecycleIntegrationTests(unittest.TestCase):
             positions.list_pro_ticker_strategy_positions()["positions"][0]["shares"], 10,
         )
 
+    def test_malformed_entry_fill_quantities_never_mutate_ledger(self):
+        for value in ("NaN", "Infinity", "-1", "11", "1.5", None, True):
+            with self.subTest(filled_qty=value), self.assertRaises(ValueError):
+                self.snapshot(4, filled_qty=value)
+            self.assertEqual(
+                positions.get_accounted_paper_order_shares(self.order["id"]), 0,
+            )
+            self.assertEqual(positions.list_pro_ticker_strategy_positions()["positions"], [])
+        self.assertEqual(self.snapshot(2)["delta_shares"], 2)
+
+    def test_inconsistent_filled_entry_status_never_mutates_ledger(self):
+        with self.assertRaises(ValueError):
+            self.snapshot(9, status="filled")
+        self.assertEqual(positions.list_pro_ticker_strategy_positions()["positions"], [])
+        self.assertEqual(self.snapshot(10, status="filled")["delta_shares"], 10)
+
     def test_wrong_client_id_cannot_mutate_ledger(self):
         with self.assertRaises(ValueError):
             self.snapshot(4, client_order_id="other")
