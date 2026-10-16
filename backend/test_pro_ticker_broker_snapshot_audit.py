@@ -337,6 +337,29 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertFalse(audit["budget_released"])
         self.assertEqual(get_pro_ticker_budget(), budget_before)
 
+    def test_paper_entry_stale_snapshot_then_recovery_preserves_fills(self):
+        from pro_ticker_verified_fill_bridge import account_linked_paper_entry_snapshot
+        from pro_ticker_position_ledger import get_accounted_paper_order_shares
+        from pro_ticker_budget_ledger import get_pro_ticker_budget
+        budget_before = get_pro_ticker_budget()
+        stale = {**self.entry_order, "status": "canceled", "filled_qty": "3"}
+        first = account_linked_paper_entry_snapshot(self.reservation_id, stale)
+        self.assertFalse(first["posted"])
+        self.assertTrue(first["stale_snapshot"])
+        self.assertFalse(self.audit(entry_order=stale)["verified"])
+        restored = account_linked_paper_entry_snapshot(
+            self.reservation_id, self.entry_order,
+        )
+        self.assertFalse(restored["posted"])
+        self.assertFalse(restored["stale_snapshot"])
+        self.assertEqual(get_accounted_paper_order_shares(ENTRY_ID), 5)
+        audit = self.audit()
+        self.assertTrue(audit["verified"], audit)
+        self.assertFalse(audit["broker_origin_authenticated"])
+        self.assertFalse(audit["release_authorized"])
+        self.assertFalse(audit["budget_released"])
+        self.assertEqual(get_pro_ticker_budget(), budget_before)
+
     def test_full_alpaca_paper_get_rejects_wrong_exit_snapshot(self):
         orders = {
             ENTRY_ID: self.entry_order,
