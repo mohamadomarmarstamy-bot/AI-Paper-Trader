@@ -74,6 +74,8 @@ def audit_linked_paper_broker_snapshots(
         if get_accounted_paper_order_shares(order_id) != reviewed["filled_shares"]:
             return {**base, "reason": "exit_accounting_mismatch"}
         total_exits += reviewed["filled_shares"]
+    if total_exits > entry["filled_shares"]:
+        return {**base, "reason": "broker_exit_shares_exceed_entry"}
     if total_exits != linked["exit_shares"]:
         return {**base, "reason": "exit_snapshots_incomplete_or_mismatched"}
     if linked["remaining_attributed_shares"] != 0:
