@@ -35,12 +35,12 @@ class AlpacaPaperReaderTests(unittest.TestCase):
         self.assertFalse(self.http_get.call_args.kwargs["allow_redirects"])
 
     def test_unsuccessful_status_fails_closed_even_with_permissive_transport(self):
-        for status in (100, 2040, 400, 401, 429, 500):
+        for status in (100, 201, 204, 400, 401, 429, 500):
             with self.subTest(status=status):
                 self.response.status_code = status
                 self.response.raise_for_status.reset_mock()
                 self.response.json.reset_mock()
-                with self.assertRaisesRegex(ValueError, "unsuccessful HTTP status"):
+                with self.assertRaisesRegex(ValueError, "unexpected HTTP status"):
                     self.reader("abc")
                 self.response.json.assert_not_called()
 
