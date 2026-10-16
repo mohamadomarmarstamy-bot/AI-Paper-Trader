@@ -41,6 +41,8 @@ def review_linked_reservation_paper_shares(reservation_id: str) -> dict[str, Any
     )
     if result.get("symbol") is not None and result["symbol"] != reservation["symbol"]:
         return {**base, "reason": "entry_fill_symbol_mismatch"}
+    # This report is persisted-record evidence only. Even a balanced ledger
+    # cannot attest that fresh broker snapshots match its cumulative fills.
     if result.get("remaining_attributed_shares") is not None and result["remaining_attributed_shares"] < 0:
         return {
             **result, **base, "reason": "negative_reservation_share_balance",
