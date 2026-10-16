@@ -29,6 +29,8 @@ def assess_reservation_state(
         return {"suggested_status": current, "safe_to_release": False, "reason": "order_id_mismatch"}
     if not broker_order.get("id"):
         return {"suggested_status": current, "safe_to_release": False, "reason": "missing_order_id"}
+    if str(broker_order.get("side") or "").strip().lower() != "buy":
+        return {"suggested_status": current, "safe_to_release": False, "reason": "entry_order_side_unverified"}
     try:
         filled = float(broker_order.get("filled_qty", 0))
     except (ValueError, TypeError):
