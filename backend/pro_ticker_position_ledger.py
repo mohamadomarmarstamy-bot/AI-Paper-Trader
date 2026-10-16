@@ -261,6 +261,7 @@ def review_reservation_attributed_shares(
         ).fetchall()
         if len(rows) != 1 or rows[0]["side"] != "buy":
             return {"paper": True, "preview_only": True, "verified": False,
+                    "release_authorized": False, "budget_released": False,
                     "reason": "entry_fills_missing_or_conflicting"}
         symbol = rows[0]["symbol"]
         entry_shares = int(rows[0]["shares"])
@@ -274,10 +275,12 @@ def review_reservation_attributed_shares(
             ).fetchall()
             if len(exits) != 1 or exits[0]["symbol"] != symbol or exits[0]["side"] != "sell":
                 return {"paper": True, "preview_only": True, "verified": False,
+                    "release_authorized": False, "budget_released": False,
                         "reason": "exit_fills_missing_or_conflicting"}
             exit_shares += int(exits[0]["shares"])
     return {
         "paper": True, "preview_only": True, "verified": False,
+                    "release_authorized": False, "budget_released": False,
         "reservation_id": reservation_id, "symbol": symbol,
         "entry_shares": entry_shares, "exit_shares": exit_shares,
         "remaining_attributed_shares": entry_shares - exit_shares,
