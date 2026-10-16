@@ -178,3 +178,9 @@ test("network rejection clears previous history and reports failure", async () =
     assert.equal(app.elements.get("pro-ticker-manual-history").children.length, 0);
     assert.match(app.elements.get("pro-ticker-manual-status").textContent, /Network offline/);
 });
+
+test("long symbols are rejected in research history", async () => {
+    const app = setup(async () => reply({ count: 1, observations: [{ symbol: "ABCDEFGHIJK" }] }));
+    assert.equal(await app.refresh(), false);
+    assert.equal(app.elements.get("pro-ticker-manual-history").children.length, 0);
+});
