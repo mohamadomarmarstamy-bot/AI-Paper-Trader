@@ -27,14 +27,8 @@ def make_alpaca_paper_order_reader(
         raise ValueError("PAPER request timeout must be between 0 and 30 seconds.")
 
     def fetch_paper_order(order_id: str) -> dict[str, Any]:
-        import uuid
-        if not isinstance(order_id, str):
+        if not isinstance(order_id, str) or not order_id.strip() or order_id != order_id.strip() or "/" in order_id or "?" in order_id or "#" in order_id:
             raise ValueError("Invalid PAPER order ID.")
-        try:
-            if str(uuid.UUID(order_id)) != order_id:
-                raise ValueError("Invalid PAPER order ID.")
-        except (ValueError, AttributeError, TypeError) as error:
-            raise ValueError("Invalid PAPER order ID.") from error
         if any(ord(char) < 33 or ord(char) == 127 for char in order_id):
             raise ValueError("PAPER order ID contains control characters.")
         # The request must remain pinned to the PAPER hostname even if the
