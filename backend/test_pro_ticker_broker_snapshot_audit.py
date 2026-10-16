@@ -13,6 +13,7 @@ from pro_ticker_budget_ledger import (
 from pro_ticker_exit_links import link_verified_paper_exit
 from pro_ticker_position_ledger import post_verified_cumulative_paper_fill
 from pro_ticker_broker_snapshot_audit import audit_linked_paper_broker_snapshots
+from pro_ticker_paper_broker_fetch_audit import audit_fetched_paper_reservation
 
 
 ENTRY_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -72,6 +73,28 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         )
         values.update(updates)
         return audit_linked_paper_broker_snapshots(**values)
+
+    def test_fetched_broker_audit_uses_exact_linked_order_ids(self):
+        requested = []
+        orders = {ENTRY_ID: self.entry_order, EXIT_ID: self.exit_order}
+        def read_order(order_id):
+            requested.append(order_id)
+            return orders[order_id]
+        result = audit_fetched_paper_reservation(
+            self.reservation_id, fetch_paper_order=read_order,
+        )
+        self.assertEqual(set(requested), {ENTRY_ID, EXIT_ID})
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["broker_origin_authenticated"])
+        self.assertFalse(result["release_authorized"])
+
+    def test_fetched_broker_audit_fails_closed_on_missing_order(self):
+        result = audit_fetched_paper_reservation(
+            self.reservation_id, fetch_paper_order=lambda order_id: None,
+        )
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["reason"], "paper_order_fetch_incomplete")
+        self.assertFalse(result["budget_released"])
 
     def test_complete_linked_broker_snapshots_match(self):
         result = self.audit()
