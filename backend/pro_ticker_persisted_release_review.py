@@ -52,6 +52,23 @@ def review_persisted_paper_release(reservation_id: str) -> dict[str, Any]:
                 "side": "sell", "accounted_shares": int(fills[0]["shares"]),
                 "ownership_verified": True, "fill_verified": True,
             })
+        # Strategy positions are aggregated by symbol, not reservation.
+        # Never mistake other reservations' fills for this reservation's exit.
+        other_reservations = conn.execute(
+            "SELECT COUNT(*) FROM pro_ticker_paper_reservations "
+            "WHERE symbol = ? AND id != ? AND status IN ('reserved','submitted','filled')",
+            (symbol, reservation_id),
+        ).fetchone()[0]
+        if other_reservations:
+            return {**base, "reason": "other_active_reservations_share_symbol"}
+        unlinked_sells = conn.execute(
+            "SELECT COUNT(*) FROM pro_ticker_strategy_fill_events "
+            "WHERE symbol = ? AND side = 'sell' AND broker_order_id NOT IN "
+            "(SELECT broker_order_id FROM pro_ticker_paper_exit_links WHERE reservation_id = ?)",
+            (symbol, reservation_id),
+        ).fetchone()[0]
+        if unlinked_sells:
+            return {**base, "reason": "unattributed_strategy_sell_fills"}
         position = conn.execute(
             "SELECT shares FROM pro_ticker_strategy_positions WHERE symbol = ?",
             (symbol,),
