@@ -64,7 +64,7 @@ def link_verified_paper_exit(
         raise ValueError("Canonical PAPER broker order UUID required.") from error
     if broker_order.get("client_order_id") != client_id:
         raise ValueError("PAPER exit client order ID mismatch.")
-    if str(broker_order.get("symbol") or "") != symbol or str(broker_order.get("side") or "").lower() != "sell":
+    if broker_order.get("symbol") != symbol or broker_order.get("side") != "sell":
         raise ValueError("PAPER exit symbol or side mismatch.")
     try:
         quantity = float(broker_order["qty"])
