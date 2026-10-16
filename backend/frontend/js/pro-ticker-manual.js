@@ -39,9 +39,11 @@
                 rows.appendChild(tr);
             }
             if (!data.count) setStatus("No manual research submissions yet.");
+            return true;
         } catch (error) {
             rows.replaceChildren();
             setStatus("Unable to load submissions: " + error.message);
+            return false;
         }
     }
     form.addEventListener("submit", async (event) => {
@@ -57,8 +59,12 @@
             });
             setStatus("Saved " + result.count + " symbol(s). Research only; no PAPER orders placed.");
             input.value = "";
-            await refresh();
-            setStatus("Saved " + result.count + " symbol(s). Research only; no PAPER orders placed.");
+            const historyLoaded = await refresh();
+            if (historyLoaded) {
+                setStatus("Saved " + result.count + " symbol(s). Research only; no PAPER orders placed.");
+            } else {
+                setStatus("Saved " + result.count + " symbol(s), but history could not be refreshed.");
+            }
         } catch (error) {
             setStatus("Could not save: " + error.message);
         } finally {
