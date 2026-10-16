@@ -315,5 +315,64 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
 
+    def test_real_signed_session_submits_research_without_broker_orders(self):
+        import asyncio
+        import httpx
+        from unittest.mock import patch
+
+        with patch.object(self.main, "APP_SESSION_SECRET", "isolated-ci-session-key"), \
+             patch.object(self.main, "alpaca_market_data_request",
+                          return_value={"trade": {
+                              "p": 42.5, "t": "2026-10-16T15:00:00Z", "s": 1,
+                          }}) as market, \
+             patch.object(self.main, "alpaca_paper_request",
+                          side_effect=AssertionError("No broker order access")):
+            token = self.main.create_app_session_token()
+
+            async def run():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=self.main.app),
+                    base_url="http://testserver",
+                    cookies={self.main.APP_SESSION_COOKIE: token},
+                ) as client:
+                    return await client.post(
+                        "/auto-trader/pro-ticker-manual-submissions",
+                        json={"symbols": "AMD"},
+                    )
+
+            response = asyncio.run(run())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["symbols"], ["AMD"])
+        self.assertTrue(response.json()["research_only"])
+        self.assertEqual(response.json()["orders_submitted"], 0)
+        market.assert_called_once_with(
+            "GET", "/v2/stocks/AMD/trades/latest", timeout=3.0
+        )
+
+    def test_real_signed_session_rejects_invalid_research_body_before_market_io(self):
+        import asyncio
+        import httpx
+        from unittest.mock import patch
+
+        with patch.object(self.main, "APP_SESSION_SECRET", "isolated-ci-session-key"), \
+             patch.object(self.main, "alpaca_market_data_request",
+                          side_effect=AssertionError("No market request expected")):
+            token = self.main.create_app_session_token()
+
+            async def run():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=self.main.app),
+                    base_url="http://testserver",
+                    cookies={self.main.APP_SESSION_COOKIE: token},
+                ) as client:
+                    return await client.post(
+                        "/auto-trader/pro-ticker-manual-submissions",
+                        json={"symbols": ["AMD"]},
+                    )
+
+            response = asyncio.run(run())
+        self.assertEqual(response.status_code, 422)
+
+
 if __name__ == "__main__":
     unittest.main()
