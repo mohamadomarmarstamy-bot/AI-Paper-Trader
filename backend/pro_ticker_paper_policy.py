@@ -35,7 +35,7 @@ def check_pro_ticker_paper_entry(
     """Fail closed if budget, broker mode, freshness or collision checks fail."""
     if broker_paper is not True:
         return PaperAdmission(False, "paper_account_required")
-    if not market_open:
+    if market_open is not True:
         return PaperAdmission(False, "regular_market_closed")
     values = (
         proposed_notional, pro_ticker_committed, broker_buying_power,
