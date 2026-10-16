@@ -373,6 +373,38 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertTrue(self.audit()["verified"])
         self.assertFalse(self.audit(exit_orders={EXIT_ID: corrupted})["verified"])
 
+    def test_incremental_paper_partial_fills_account_only_new_shares(self):
+        from pro_ticker_position_ledger import (
+            get_accounted_paper_order_shares, list_pro_ticker_strategy_positions,
+        )
+        from pro_ticker_budget_ledger import get_pro_ticker_budget
+        budget_before = get_pro_ticker_budget()
+        buy_id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+        sell_id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+        def post(order_id, side, cumulative):
+            return post_verified_cumulative_paper_fill(
+                broker_order_id=order_id, symbol="MSFT", side=side,
+                cumulative_filled_shares=cumulative,
+                ownership_verified=True, fill_verified=True,
+            )
+        self.assertEqual(post(buy_id, "buy", 2)["delta_shares"], 2)
+        self.assertEqual(post(buy_id, "buy", 5)["delta_shares"], 3)
+        self.assertFalse(post(buy_id, "buy", 5)["posted"])
+        self.assertTrue(post(buy_id, "buy", 2)["stale_snapshot"])
+        self.assertEqual(get_accounted_paper_order_shares(buy_id), 5)
+        self.assertEqual(post(sell_id, "sell", 1)["delta_shares"], 1)
+        self.assertEqual(post(sell_id, "sell", 4)["delta_shares"], 3)
+        self.assertEqual(post(sell_id, "sell", 5)["delta_shares"], 1)
+        self.assertFalse(post(sell_id, "sell", 5)["posted"])
+        self.assertTrue(post(sell_id, "sell", 1)["stale_snapshot"])
+        self.assertEqual(get_accounted_paper_order_shares(sell_id), 5)
+        self.assertFalse(any(
+            position["symbol"] == "MSFT"
+            for position in list_pro_ticker_strategy_positions()["positions"]
+        ))
+        self.assertEqual(get_pro_ticker_budget(), budget_before)
+        self.assertTrue(self.audit()["verified"])
+
     def test_full_alpaca_paper_get_rejects_wrong_exit_snapshot(self):
         orders = {
             ENTRY_ID: self.entry_order,
