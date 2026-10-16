@@ -448,5 +448,56 @@ print("RESTART_RESULT:" + json.dumps(asyncio.run(check())))
         self.assertTrue(result["found"])
 
 
+    def test_invalid_history_limit_is_rejected_before_database_read(self):
+        import asyncio
+        import httpx
+        from unittest.mock import patch
+
+        with patch.object(self.main, "APP_SESSION_SECRET", "isolated-ci-session-key"):
+            token = self.main.create_app_session_token()
+
+            async def run():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=self.main.app),
+                    base_url="http://testserver",
+                    cookies={self.main.APP_SESSION_COOKIE: token},
+                ) as client:
+                    return [
+                        await client.get(
+                            "/auto-trader/pro-ticker-manual-submissions?limit=0"
+                        ),
+                        await client.get(
+                            "/auto-trader/pro-ticker-manual-submissions?limit=501"
+                        ),
+                        await client.get(
+                            "/auto-trader/pro-ticker-manual-submissions?limit=invalid"
+                        ),
+                    ]
+
+            responses = asyncio.run(run())
+        self.assertEqual([response.status_code for response in responses],
+                         [422, 422, 422])
+
+    def test_missing_session_rejects_research_submission_before_market_io(self):
+        import asyncio
+        import httpx
+        from unittest.mock import patch
+
+        with patch.object(self.main, "alpaca_market_data_request",
+                          side_effect=AssertionError("No market request expected")):
+            async def run():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=self.main.app),
+                    base_url="http://testserver",
+                ) as client:
+                    return await client.post(
+                        "/auto-trader/pro-ticker-manual-submissions",
+                        json={"symbols": "TSLA"},
+                    )
+
+            response = asyncio.run(run())
+        self.assertEqual(response.status_code, 401)
+
+
 if __name__ == "__main__":
     unittest.main()
