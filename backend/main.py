@@ -2038,9 +2038,12 @@ def verify_app_session_token(
     except (ValueError, TypeError):
         return False
 
+    # Reject tokens dated in the future as well as expired sessions.
+    # A small allowance avoids invalidating sessions during minor clock skew.
+    token_age_seconds = time.time() - timestamp
     if (
-        time.time() - timestamp
-        > APP_SESSION_MAX_AGE_SECONDS
+        token_age_seconds < -60
+        or token_age_seconds > APP_SESSION_MAX_AGE_SECONDS
     ):
         return False
 
