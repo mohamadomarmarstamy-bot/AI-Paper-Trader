@@ -184,3 +184,28 @@ test("long symbols are rejected in research history", async () => {
     assert.equal(await app.refresh(), false);
     assert.equal(app.elements.get("pro-ticker-manual-history").children.length, 0);
 });
+
+test("invalid save acknowledgement never clears submitted symbols", async () => {
+    const app = setup(async () => reply({ count: "1" }));
+    app.elements.get("pro-ticker-manual-symbols").value = "AAPL";
+    await app.submit();
+    assert.equal(app.elements.get("pro-ticker-manual-symbols").value, "AAPL");
+    assert.equal(app.elements.get("button").disabled, false);
+    assert.match(app.elements.get("pro-ticker-manual-status").textContent, /Unexpected save response/);
+    assert.equal(app.calls.length, 1);
+});
+test("outdated refresh error cannot clear newer successful rows", async () => {
+    let rejectOld;
+    let requests = 0;
+    const app = setup(() => {
+        requests++;
+        if (requests === 1) return new Promise((resolve, reject) => { rejectOld = reject; });
+        return Promise.resolve(reply({ count: 1, observations: [{ symbol: "MSFT" }] }));
+    });
+    const stale = app.refresh();
+    assert.equal(await app.refresh(), true);
+    rejectOld(new Error("Old network error"));
+    assert.equal(await stale, false);
+    assert.equal(app.elements.get("pro-ticker-manual-history").children[0].children[0].textContent, "MSFT");
+    assert.doesNotMatch(app.elements.get("pro-ticker-manual-status").textContent, /Old network error/);
+});
