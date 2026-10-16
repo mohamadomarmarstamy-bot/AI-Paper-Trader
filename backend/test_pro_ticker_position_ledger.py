@@ -92,6 +92,15 @@ class PaperPositionLedgerTests(unittest.TestCase):
         self.assertFalse(result["release_authorized"])
         self.assertFalse(result["verified"])
 
+    def test_reservation_attribution_rejects_noncanonical_identifiers(self):
+        for values in (
+            {"reservation_id": " reservation-1", "entry_order_id": "entry", "exit_order_ids": []},
+            {"reservation_id": "reservation-1", "entry_order_id": "entry ", "exit_order_ids": []},
+            {"reservation_id": "reservation-1", "entry_order_id": "entry", "exit_order_ids": [" exit"]},
+        ):
+            with self.subTest(values=values), self.assertRaisesRegex(ValueError, "Canonical"):
+                ledger.review_reservation_attributed_shares(**values)
+
     def test_reservation_attribution_rejects_duplicate_exit_ids(self):
         with self.assertRaisesRegex(ValueError, "Duplicate"):
             ledger.review_reservation_attributed_shares(
