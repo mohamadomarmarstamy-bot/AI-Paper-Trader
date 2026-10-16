@@ -26,6 +26,8 @@ def audit_linked_paper_broker_snapshots(
         "release_authorized": False, "budget_released": False,
         "database_updated": False,
     }
+    if not isinstance(reservation_id, str) or not reservation_id.strip() or reservation_id != reservation_id.strip():
+        return {**base, "reason": "invalid_reservation_id"}
     if not isinstance(exit_orders, dict):
         return {**base, "reason": "invalid_exit_snapshot_mapping"}
     reservation = get_pro_ticker_reservation(reservation_id)
