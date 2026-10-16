@@ -23,7 +23,9 @@ def assess_reservation_state(
     if str(broker_order.get("symbol") or "").upper() != symbol:
         return {"suggested_status": current, "safe_to_release": False, "reason": "symbol_mismatch"}
     expected_order_id = str(reservation.get("broker_order_id") or "")
-    if expected_order_id and expected_order_id != str(broker_order.get("id") or ""):
+    if not expected_order_id:
+        return {"suggested_status": current, "safe_to_release": False, "reason": "reservation_order_unlinked"}
+    if expected_order_id != str(broker_order.get("id") or ""):
         return {"suggested_status": current, "safe_to_release": False, "reason": "order_id_mismatch"}
     if not broker_order.get("id"):
         return {"suggested_status": current, "safe_to_release": False, "reason": "missing_order_id"}
