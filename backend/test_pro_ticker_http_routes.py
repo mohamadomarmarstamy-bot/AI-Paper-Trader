@@ -325,5 +325,38 @@ class ProTickerResearchHTTPTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
 
+    def test_http_research_save_rejects_invalid_symbols_from_intake(self):
+        def reject_symbols(symbols, quote_fetcher=None):
+            raise ValueError("Invalid research symbol")
+        self.fake.save_manual_observations = reject_symbols
+        response = self.request(
+            "POST", "/auto-trader/pro-ticker-manual-submissions",
+            json={"symbols": "BAD!!"}, cookies={"test_session": "authorized"},
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("Invalid research symbol", response.json()["detail"])
+
+    def test_http_research_history_rejects_unauthorized_before_database_read(self):
+        self.fake.list_manual_observations = lambda limit: (
+            _ for _ in ()
+        ).throw(AssertionError("Unauthenticated history read"))
+        response = self.request(
+            "GET", "/auto-trader/pro-ticker-manual-submissions?limit=25",
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(self.calls, [])
+
+    def test_http_research_save_rejects_unauthorized_before_quote_fetch(self):
+        self.fake.save_manual_observations = lambda symbols, quote_fetcher=None: (
+            _ for _ in ()
+        ).throw(AssertionError("Unauthenticated research save"))
+        response = self.request(
+            "POST", "/auto-trader/pro-ticker-manual-submissions",
+            json={"symbols": "AAPL"},
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(self.calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()
