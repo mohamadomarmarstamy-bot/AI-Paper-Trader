@@ -70,7 +70,7 @@ class AlpacaPaperReaderTests(unittest.TestCase):
             )
 
     def test_invalid_timeout_rejected_before_network(self):
-        for timeout in (0, -1, 31, True, "10"):
+        for timeout in (0, -1, 31, True, "10", float("nan"), float("inf"), float("-inf")):
             with self.subTest(timeout=timeout):
                 with self.assertRaises(ValueError):
                     make_alpaca_paper_order_reader(
