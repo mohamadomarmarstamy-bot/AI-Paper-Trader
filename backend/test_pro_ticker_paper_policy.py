@@ -60,6 +60,19 @@ class PaperAdmissionTests(unittest.TestCase):
                 self.assertFalse(decision.allowed)
                 self.assertEqual(decision.reason, "invalid_symbol")
 
+    def test_missing_or_malformed_broker_collision_snapshots_fail_closed(self):
+        for value in (None, [], {}, "AAPL", {None}, {""}):
+            for field in ("open_position_symbols", "open_order_symbols"):
+                with self.subTest(value=value, field=field):
+                    decision = self.eligible(**{field: value})
+                    self.assertFalse(decision.allowed)
+                    self.assertEqual(decision.reason, "invalid_broker_collision_snapshot")
+
+    def test_non_ascii_symbol_is_rejected(self):
+        decision = self.eligible(symbol="AÁPL")
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "invalid_symbol")
+
     def test_valid_dotted_ticker_is_accepted(self):
         self.assertTrue(self.eligible(symbol="BRK.B").allowed)
 
