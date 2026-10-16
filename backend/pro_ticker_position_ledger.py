@@ -58,6 +58,8 @@ def post_verified_paper_fill(
     if not isinstance(symbol, str) or not symbol.strip():
         raise ValueError("A valid symbol is required.")
     normalized_symbol = symbol.strip().upper()
+    if side not in {"buy", "sell"} or isinstance(filled_shares, bool) or not isinstance(filled_shares, int) or filled_shares <= 0:
+        raise ValueError("Valid whole-share PAPER fill increment and side required.")
     if ownership_verified is not True or fill_verified is not True:
         raise ValueError("PAPER fill and strategy ownership must be verified.")
     now = datetime.now(timezone.utc).isoformat()
