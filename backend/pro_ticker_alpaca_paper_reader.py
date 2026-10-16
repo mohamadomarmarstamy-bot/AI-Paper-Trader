@@ -5,6 +5,7 @@ Credentials and HTTP transport are supplied by the caller. Never log secrets.
 from __future__ import annotations
 
 from typing import Any, Callable
+from math import isfinite
 from urllib.parse import quote
 
 PAPER_BASE_URL = "https://paper-api.alpaca.markets"
@@ -22,7 +23,7 @@ def make_alpaca_paper_order_reader(
         raise ValueError("PAPER API secret required.")
     if not callable(http_get):
         raise ValueError("HTTP GET transport required.")
-    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)) or not 0 < timeout_seconds <= 30:
+    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)) or not isfinite(timeout_seconds) or not 0 < timeout_seconds <= 30:
         raise ValueError("PAPER request timeout must be between 0 and 30 seconds.")
 
     def fetch_paper_order(order_id: str) -> dict[str, Any]:
