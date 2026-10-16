@@ -39,6 +39,11 @@ def review_linked_reservation_paper_shares(reservation_id: str) -> dict[str, Any
         reservation_id=reservation_id, entry_order_id=entry_id,
         exit_order_ids=[link["broker_order_id"] for link in links],
     )
+    if result.get("remaining_attributed_shares") is not None and result["remaining_attributed_shares"] > 0:
+        return {
+            **result, **base, "reason": "reservation_shares_still_open",
+            "verified": False,
+        }
     if result.get("symbol") is not None and result["symbol"] != reservation["symbol"]:
         return {**base, "reason": "entry_fill_symbol_mismatch"}
     # This report is persisted-record evidence only. Even a balanced ledger
