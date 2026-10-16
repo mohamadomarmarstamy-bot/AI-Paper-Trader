@@ -22,6 +22,17 @@ class ManualProTickerIntakeTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     parse_manual_symbols(raw)
 
+    def test_rejects_more_than_one_hundred_symbols(self):
+        symbols = " ".join(f"T{i}" for i in range(101))
+        with self.assertRaisesRegex(ValueError, "more than 100"):
+            parse_manual_symbols(symbols)
+
+    def test_rejects_nonstring_payloads(self):
+        for raw in (None, 123, ["AAPL"], {"symbols": "AAPL"}):
+            with self.subTest(raw=raw):
+                with self.assertRaises(ValueError):
+                    parse_manual_symbols(raw)
+
     def test_history_is_read_only_and_newest_first(self):
         import database
         from pro_ticker_manual_intake import list_manual_observations
