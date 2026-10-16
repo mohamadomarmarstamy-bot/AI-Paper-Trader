@@ -198,6 +198,30 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertFalse(second["release_authorized"])
         self.assertFalse(second["budget_released"])
 
+    def test_reopened_sqlite_connections_preserve_paper_audit_evidence(self):
+        from database import get_connection
+        from pro_ticker_budget_ledger import get_pro_ticker_budget
+        from pro_ticker_position_ledger import get_accounted_paper_order_shares
+        before = get_pro_ticker_budget()
+        for _ in range(3):
+            # Each accessor opens a fresh connection to the same durable
+            # temporary SQLite file, emulating recovery after a restart.
+            with get_connection() as conn:
+                persisted = conn.execute(
+                    "SELECT status, broker_order_id, expected_shares "
+                    "FROM pro_ticker_paper_reservations WHERE id = ?",
+                    (self.reservation_id,),
+                ).fetchone()
+                self.assertEqual(tuple(persisted), ("filled", ENTRY_ID, 5))
+            self.assertEqual(get_accounted_paper_order_shares(ENTRY_ID), 5)
+            self.assertEqual(get_accounted_paper_order_shares(EXIT_ID), 5)
+            result = self.audit()
+            self.assertTrue(result["verified"], result)
+            self.assertFalse(result["broker_origin_authenticated"])
+            self.assertFalse(result["budget_released"])
+            self.assertFalse(result["database_updated"])
+        self.assertEqual(get_pro_ticker_budget(), before)
+
     def test_full_alpaca_paper_get_rejects_wrong_exit_snapshot(self):
         orders = {
             ENTRY_ID: self.entry_order,
