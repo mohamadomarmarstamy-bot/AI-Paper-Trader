@@ -47,6 +47,19 @@ class ProTickerFrontendIntegrationTests(unittest.TestCase):
         self.assertIn("require_app_session(request)", backend[start:end])
         self.assertIn("save_manual_observations", backend[start:end])
 
+    def test_paper_preview_route_is_authenticated_and_non_executing(self):
+        backend = (FRONTEND.parent / "main.py").read_text(encoding="utf-8-sig")
+        start = backend.index('@app.post("/auto-trader/pro-ticker-paper-preview")')
+        end = backend.index('@app.post("/auto-trader/pro-ticker-manual-submissions")', start)
+        route = backend[start:end]
+        self.assertIn("require_app_session(request)", route)
+        self.assertIn('"allowed": False', route)
+        self.assertIn('"order_submitted": False', route)
+        self.assertIn('"virtual_budget_reconciliation_ready": False', route)
+        self.assertIn("execution_disabled_pending_reconciliation", route)
+        self.assertNotIn('alpaca_paper_request("POST"', route)
+        self.assertNotIn('alpaca_paper_request("DELETE"', route)
+
     def test_frontend_exposes_no_order_submission_controls(self):
         self.assertIn("Research only", self.html)
         self.assertIn("no PAPER orders placed", self.js)
