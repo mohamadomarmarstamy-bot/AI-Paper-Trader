@@ -74,6 +74,13 @@ class ProTickerFrontendIntegrationTests(unittest.TestCase):
             self.js.index("rows.replaceChildren()"),
         )
 
+    def test_successful_save_reports_history_refresh_failure(self):
+        self.assertIn("const historyLoaded = await refresh()", self.js)
+        self.assertIn("if (historyLoaded)", self.js)
+        self.assertIn("but history could not be refreshed", self.js)
+        self.assertIn("return true;", self.js)
+        self.assertIn("return false;", self.js)
+
     def test_frontend_exposes_no_order_submission_controls(self):
         self.assertIn("Research only", self.html)
         self.assertIn("no PAPER orders placed", self.js)
