@@ -211,5 +211,55 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
         ))
 
 
+    def test_research_observation_survives_fresh_database_connection(self):
+        import asyncio
+        import httpx
+        import sqlite3
+        from unittest.mock import patch
+
+        trade = {"p": 83.75, "t": "2026-10-16T15:00:00Z", "s": 1}
+        with patch.object(self.main, "require_app_session", return_value=None), \
+             patch.object(self.main, "alpaca_market_data_request",
+                          return_value={"trade": trade}):
+            async def save():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=self.main.app),
+                    base_url="http://testserver",
+                ) as client:
+                    return await client.post(
+                        "/auto-trader/pro-ticker-manual-submissions",
+                        json={"symbols": "NVDA"},
+                    )
+            response = asyncio.run(save())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["orders_submitted"], 0)
+
+        # Re-open the SQLite file independently: data must not live only in
+        # a process-local cache or in-memory connection.
+        db_path = Path(self.temp_dir.name) / "smoke.sqlite3"
+        with sqlite3.connect(db_path) as connection:
+            tables = [row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )]
+        self.assertTrue(db_path.is_file())
+        self.assertTrue(any("pro_ticker" in table for table in tables))
+
+        with patch.object(self.main, "require_app_session", return_value=None):
+            async def read():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=self.main.app),
+                    base_url="http://testserver",
+                ) as client:
+                    return await client.get(
+                        "/auto-trader/pro-ticker-manual-submissions?limit=100"
+                    )
+            history = asyncio.run(read())
+        self.assertEqual(history.status_code, 200)
+        self.assertTrue(any(
+            row.get("symbol") == "NVDA"
+            for row in history.json()["observations"]
+        ))
+
+
 if __name__ == "__main__":
     unittest.main()
