@@ -46,6 +46,14 @@ def audit_linked_paper_broker_snapshots(
         return {**base, "reason": "entry_broker_snapshot_not_fully_filled"}
     if entry_order.get("client_order_id") != "pt-" + reservation_id:
         return {**base, "reason": "entry_client_order_id_mismatch"}
+    with get_connection() as conn:
+        entry_rows = conn.execute(
+            "SELECT symbol, side FROM pro_ticker_strategy_fill_events "
+            "WHERE broker_order_id = ? GROUP BY symbol, side",
+            (entry_id,),
+        ).fetchall()
+    if len(entry_rows) != 1 or entry_rows[0]["symbol"] != reservation["symbol"] or entry_rows[0]["side"] != "buy":
+        return {**base, "reason": "entry_fill_attribution_mismatch"}
     if get_accounted_paper_order_shares(entry_id) != entry["filled_shares"]:
         return {**base, "reason": "entry_accounting_mismatch"}
     # Review persisted fills first. Missing exit-fill rows fail closed in
