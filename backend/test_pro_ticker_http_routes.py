@@ -4,6 +4,8 @@ Uses a real FastAPI ASGI request/response stack, without importing the productio
 app or accessing the database, market network, or broker. This is not staging.
 """
 import asyncio
+from datetime import datetime, timezone
+from types import SimpleNamespace
 import sys
 import unittest
 from pathlib import Path
@@ -145,6 +147,76 @@ class ProTickerResearchHTTPTests(unittest.TestCase):
         self.assertFalse(result["allowed"])
         self.assertFalse(result["order_submitted"])
         self.assertEqual(self.calls, [])
+
+
+    def test_eligible_http_preview_never_submits_order(self):
+        broker_calls = []
+        self.routes["fetch_alpaca_paper_positions"] = lambda: []
+        self.routes["fetch_alpaca_market_clock"] = lambda: {"is_open": True}
+        def paper_request(method, path, **kwargs):
+            broker_calls.append((method, path))
+            if method != "GET":
+                raise AssertionError("PAPER preview attempted broker write")
+            return [] if path == "/v2/orders" else {"buying_power": "100000"}
+        self.routes["alpaca_paper_request"] = paper_request
+        self.routes["alpaca_market_data_request"] = lambda method, path, **kwargs: {
+            "trade": {"p": 100, "t": datetime.now(timezone.utc).isoformat()}
+        }
+        fake_policy = ModuleType("pro_ticker_paper_policy")
+        fake_policy.check_pro_ticker_paper_entry = lambda **kwargs: SimpleNamespace(
+            allowed=True, reason="eligible"
+        )
+        fake_budget = ModuleType("pro_ticker_budget_ledger")
+        fake_budget.get_pro_ticker_budget = lambda: {"committed": 0}
+        with patch.dict(sys.modules, {
+            "pro_ticker_paper_policy": fake_policy,
+            "pro_ticker_budget_ledger": fake_budget,
+        }):
+            response = self.request(
+                "POST", "/auto-trader/pro-ticker-paper-preview",
+                json={"symbol": "AAPL", "proposed_notional": 10},
+                cookies={"test_session": "authorized"},
+            )
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        self.assertTrue(result["preflight_eligible"])
+        self.assertFalse(result["allowed"])
+        self.assertFalse(result["order_submitted"])
+        self.assertFalse(result["virtual_budget_reconciliation_ready"])
+        self.assertEqual(result["reason"], "execution_disabled_pending_reconciliation")
+        self.assertTrue(broker_calls)
+        self.assertTrue(all(method == "GET" for method, _ in broker_calls))
+
+    def test_ineligible_http_preview_is_blocked(self):
+        self.routes["fetch_alpaca_paper_positions"] = lambda: []
+        self.routes["fetch_alpaca_market_clock"] = lambda: {"is_open": False}
+        self.routes["alpaca_paper_request"] = lambda method, path, **kwargs: (
+            [] if path == "/v2/orders" else {"buying_power": "100000"}
+        )
+        self.routes["alpaca_market_data_request"] = lambda method, path, **kwargs: {
+            "trade": {"p": 100, "t": datetime.now(timezone.utc).isoformat()}
+        }
+        fake_policy = ModuleType("pro_ticker_paper_policy")
+        fake_policy.check_pro_ticker_paper_entry = lambda **kwargs: SimpleNamespace(
+            allowed=False, reason="market_closed"
+        )
+        fake_budget = ModuleType("pro_ticker_budget_ledger")
+        fake_budget.get_pro_ticker_budget = lambda: {"committed": 0}
+        with patch.dict(sys.modules, {
+            "pro_ticker_paper_policy": fake_policy,
+            "pro_ticker_budget_ledger": fake_budget,
+        }):
+            response = self.request(
+                "POST", "/auto-trader/pro-ticker-paper-preview",
+                json={"symbol": "AAPL", "proposed_notional": 10},
+                cookies={"test_session": "authorized"},
+            )
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        self.assertFalse(result["preflight_eligible"])
+        self.assertFalse(result["allowed"])
+        self.assertFalse(result["order_submitted"])
+        self.assertEqual(result["reason"], "market_closed")
 
 
 if __name__ == "__main__":
