@@ -87,3 +87,43 @@ test("submission only posts to research endpoint and refreshes history", async (
     assert.equal(app.elements.get("pro-ticker-manual-symbols").value, "");
     assert.match(app.elements.get("pro-ticker-manual-status").textContent, /no PAPER orders placed/);
 });
+
+test("malformed history response fails closed without rendering rows", async () => {
+    const app = setup(async () => reply({ count: -1, observations: [] }));
+    assert.equal(await app.refresh(), false);
+    assert.equal(app.elements.get("pro-ticker-manual-history").children.length, 0);
+    assert.match(app.elements.get("pro-ticker-manual-status").textContent, /Unexpected research response/);
+});
+test("failed research submission preserves user input and reenables button", async () => {
+    const app = setup(async () => reply({ detail: "Research service unavailable" }, false));
+    app.elements.get("pro-ticker-manual-symbols").value = "AAPL";
+    await app.submit();
+    assert.equal(app.elements.get("pro-ticker-manual-symbols").value, "AAPL");
+    assert.equal(app.elements.get("button").disabled, false);
+    assert.match(app.elements.get("pro-ticker-manual-status").textContent, /Research service unavailable/);
+    assert.equal(app.calls.length, 1);
+    assert.equal(app.calls[0].options.method, "POST");
+});
+test("duplicate submit is ignored while research request is pending", async () => {
+    let release;
+    const app = setup((url, options) => options.method === "POST"
+        ? new Promise(resolve => { release = resolve; })
+        : Promise.resolve(reply({ count: 0, observations: [] })));
+    const first = app.submit();
+    await app.submit();
+    assert.equal(app.calls.filter(x => x.options.method === "POST").length, 1);
+    assert.equal(app.elements.get("button").disabled, true);
+    release(reply({ count: 1 }));
+    await first;
+    assert.equal(app.elements.get("button").disabled, false);
+});
+test("save success with failed history refresh reports partial success", async () => {
+    const app = setup(async (url, options) => options.method === "POST"
+        ? reply({ count: 1 })
+        : reply({ detail: "History unavailable" }, false));
+    app.elements.get("pro-ticker-manual-symbols").value = "MSFT";
+    await app.submit();
+    assert.equal(app.elements.get("pro-ticker-manual-symbols").value, "");
+    assert.match(app.elements.get("pro-ticker-manual-status").textContent, /history could not be refreshed/);
+    assert.equal(app.elements.get("button").disabled, false);
+});
