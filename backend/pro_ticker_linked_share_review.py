@@ -29,6 +29,10 @@ def review_linked_reservation_paper_shares(reservation_id: str) -> dict[str, Any
             "WHERE reservation_id = ? ORDER BY broker_order_id",
             (reservation_id,),
         ).fetchall()
+    if len({link["broker_order_id"] for link in links}) != len(links):
+        return {**base, "reason": "duplicate_exit_order_links"}
+    if any(link["broker_order_id"] == entry_id for link in links):
+        return {**base, "reason": "entry_exit_order_id_overlap"}
     if any(link["symbol"] != reservation["symbol"] for link in links):
         return {**base, "reason": "exit_link_symbol_mismatch"}
     result = review_reservation_attributed_shares(
