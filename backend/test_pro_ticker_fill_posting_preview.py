@@ -6,11 +6,13 @@ from pro_ticker_fill_posting_preview import preview_entry_fill_delta
 class FillPostingPreviewTests(unittest.TestCase):
     def setUp(self):
         self.reservation = {
-            "id": "reservation-1", "symbol": "AAPL",
+            "id": "12345678-1234-1234-1234-123456789abc", "symbol": "AAPL",
+            "status": "submitted", "expected_shares": 10,
             "broker_order_id": "paper-order-1",
         }
         self.order = {
             "id": "paper-order-1", "symbol": "AAPL", "side": "buy",
+            "client_order_id": "pt-12345678-1234-1234-1234-123456789abc",
             "qty": "10", "filled_qty": "6", "status": "partially_filled",
         }
 
@@ -44,6 +46,20 @@ class FillPostingPreviewTests(unittest.TestCase):
 
     def test_invalid_accounted_quantity_is_blocked(self):
         self.assertFalse(self.preview(-1)["ready_for_posting"])
+
+    def test_mismatched_expected_quantity_is_blocked(self):
+        self.assertEqual(self.preview(0, qty="11")["reason"], "reservation_quantity_mismatch")
+
+    def test_wrong_client_order_id_is_blocked(self):
+        self.assertEqual(self.preview(0, client_order_id="scanner")["reason"], "client_order_id_mismatch")
+
+    def test_unbound_expected_quantity_is_blocked(self):
+        row = {**self.reservation, "expected_shares": None}
+        self.assertEqual(preview_entry_fill_delta(row, self.order, 0)["reason"], "reservation_expected_shares_missing")
+
+    def test_unsubmitted_reservation_is_blocked(self):
+        row = {**self.reservation, "status": "reserved"}
+        self.assertEqual(preview_entry_fill_delta(row, self.order, 0)["reason"], "reservation_not_submitted")
 
     def test_missing_order_is_blocked(self):
         self.assertFalse(preview_entry_fill_delta(self.reservation, None, 0)["ready_for_posting"])
