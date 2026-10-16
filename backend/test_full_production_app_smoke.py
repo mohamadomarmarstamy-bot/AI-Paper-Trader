@@ -267,5 +267,53 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
         ))
 
 
+    def test_real_signed_session_cookie_authenticates_history_without_auth_mock(self):
+        import asyncio
+        import httpx
+        from unittest.mock import patch
+
+        # Exercise the actual signed-session verifier, not a patched auth guard.
+        with patch.object(self.main, "APP_SESSION_SECRET", "isolated-ci-session-key"):
+            signed_token = self.main.create_app_session_token()
+
+            async def run():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=self.main.app),
+                    base_url="http://testserver",
+                    cookies={self.main.APP_SESSION_COOKIE: signed_token},
+                ) as client:
+                    return await client.get(
+                        "/auto-trader/pro-ticker-manual-submissions?limit=10"
+                    )
+
+            response = asyncio.run(run())
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["research_only"])
+
+    def test_real_signed_session_cookie_rejects_tampering(self):
+        import asyncio
+        import httpx
+        from unittest.mock import patch
+
+        with patch.object(self.main, "APP_SESSION_SECRET", "isolated-ci-session-key"):
+            signed_token = self.main.create_app_session_token()
+            bad_token = signed_token[:-1] + (
+                "0" if signed_token[-1] != "0" else "1"
+            )
+
+            async def run():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=self.main.app),
+                    base_url="http://testserver",
+                    cookies={self.main.APP_SESSION_COOKIE: bad_token},
+                ) as client:
+                    return await client.get(
+                        "/auto-trader/pro-ticker-manual-submissions?limit=10"
+                    )
+
+            response = asyncio.run(run())
+        self.assertEqual(response.status_code, 401)
+
+
 if __name__ == "__main__":
     unittest.main()
