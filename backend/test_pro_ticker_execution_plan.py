@@ -39,6 +39,24 @@ class PaperEntryPlanTests(unittest.TestCase):
     def test_blocks_closed_market(self):
         self.assertIn("market_closed", self.plan(market_open=False)["block_reasons"])
 
+    def test_unknown_position_or_order_state_blocks(self):
+        for value in (None, 0, 1, "false", [], {}):
+            with self.subTest(value=value):
+                self.assertFalse(self.plan(existing_position=value)["allowed_for_further_review"])
+                self.assertFalse(self.plan(existing_open_order=value)["allowed_for_further_review"])
+
+    def test_invalid_maximum_quote_age_blocks(self):
+        for value in (None, 0, -1, True, float("nan"), float("inf"), "30"):
+            with self.subTest(value=value):
+                result = self.plan(maximum_quote_age_seconds=value)
+                self.assertIn("invalid_maximum_quote_age", result["block_reasons"])
+                self.assertFalse(result["order_submitted"])
+
+    def test_market_open_must_be_explicit_boolean_true(self):
+        for value in (None, 0, 1, "open"):
+            with self.subTest(value=value):
+                self.assertIn("market_closed", self.plan(market_open=value)["block_reasons"])
+
     def test_blocks_bad_values(self):
         for value in (float("nan"), float("inf"), -1, True):
             with self.subTest(value=value):
