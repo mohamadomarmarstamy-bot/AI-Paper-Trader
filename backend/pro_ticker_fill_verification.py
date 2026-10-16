@@ -38,6 +38,8 @@ def assess_paper_order_fill(
         return {**base, "reason": "symbol_mismatch"}
     if str(broker_order.get("side") or "").lower() != expected_side:
         return {**base, "reason": "side_mismatch"}
+    if isinstance(broker_order.get("qty"), bool) or isinstance(broker_order.get("filled_qty"), bool):
+        return {**base, "reason": "invalid_broker_quantities"}
     try:
         order_qty = float(broker_order["qty"])
         filled_qty = float(broker_order["filled_qty"])
