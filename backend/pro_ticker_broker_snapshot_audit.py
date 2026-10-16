@@ -48,13 +48,20 @@ def audit_linked_paper_broker_snapshots(
         return {**base, "reason": "entry_client_order_id_mismatch"}
     if get_accounted_paper_order_shares(entry_id) != entry["filled_shares"]:
         return {**base, "reason": "entry_accounting_mismatch"}
+    # Review persisted fills first. Missing exit-fill rows fail closed in
+    # the ledger; only the broker-snapshot path below may accept a
+    # terminal, independently identified zero-fill exit.
     linked = review_linked_reservation_paper_shares(reservation_id)
-    if linked.get("remaining_attributed_shares") is not None and linked["remaining_attributed_shares"] < 0:
-        return {**base, "reason": "negative_reservation_share_balance"}
-    if "entry_shares" not in linked:
-        return {**base, "reason": linked.get("reason", "linked_share_review_failed")}
-    if linked["entry_shares"] != entry["filled_shares"]:
-        return {**base, "reason": "linked_entry_shares_mismatch"}
+    missing_zero_fill_candidate = (
+        linked.get("reason") == "exit_fills_missing_or_conflicting"
+    )
+    if not missing_zero_fill_candidate:
+        if linked.get("remaining_attributed_shares") is not None and linked["remaining_attributed_shares"] < 0:
+            return {**base, "reason": "negative_reservation_share_balance"}
+        if "entry_shares" not in linked:
+            return {**base, "reason": linked.get("reason", "linked_share_review_failed")}
+        if linked["entry_shares"] != entry["filled_shares"]:
+            return {**base, "reason": "linked_entry_shares_mismatch"}
     with get_connection() as conn:
         persisted_exit_ids = {
             row["broker_order_id"] for row in conn.execute(
@@ -80,10 +87,18 @@ def audit_linked_paper_broker_snapshots(
         total_exits += reviewed["filled_shares"]
     if total_exits > entry["filled_shares"]:
         return {**base, "reason": "broker_exit_shares_exceed_entry"}
-    if total_exits != linked["exit_shares"]:
-        return {**base, "reason": "exit_snapshots_incomplete_or_mismatched"}
-    if linked["remaining_attributed_shares"] != 0:
-        return {**base, "reason": "reservation_shares_still_open"}
+    if missing_zero_fill_candidate:
+        # The loop above has verified every persisted exit link against
+        # a terminal PAPER snapshot and its exact accounted share count.
+        # Reconstruct the reservation balance only for this read-only audit.
+        # Never treat this as broker-origin authentication or release proof.
+        if total_exits != entry["filled_shares"]:
+            return {**base, "reason": "reservation_shares_still_open"}
+    else:
+        if total_exits != linked["exit_shares"]:
+            return {**base, "reason": "exit_snapshots_incomplete_or_mismatched"}
+        if linked["remaining_attributed_shares"] != 0:
+            return {**base, "reason": "reservation_shares_still_open"}
     # This flag attests only to consistency of caller-provided snapshots,
     # not that this module independently fetched them from Alpaca PAPER.
     return {
