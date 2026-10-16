@@ -405,6 +405,38 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertEqual(get_pro_ticker_budget(), budget_before)
         self.assertTrue(self.audit()["verified"])
 
+    def test_paper_partial_exit_oversell_is_atomic_and_recoverable(self):
+        from pro_ticker_position_ledger import (
+            get_accounted_paper_order_shares, list_pro_ticker_strategy_positions,
+        )
+        from pro_ticker_budget_ledger import get_pro_ticker_budget
+        buy_id = "11111111-1111-4111-8111-111111111111"
+        sell_id = "22222222-2222-4222-8222-222222222222"
+        before_budget = get_pro_ticker_budget()
+        def post(order_id, side, cumulative):
+            return post_verified_cumulative_paper_fill(
+                broker_order_id=order_id, symbol="MSFT", side=side,
+                cumulative_filled_shares=cumulative,
+                ownership_verified=True, fill_verified=True,
+            )
+        self.assertEqual(post(buy_id, "buy", 3)["delta_shares"], 3)
+        self.assertEqual(post(sell_id, "sell", 2)["delta_shares"], 2)
+        with self.assertRaises(ValueError):
+            post(sell_id, "sell", 4)
+        self.assertEqual(get_accounted_paper_order_shares(sell_id), 2)
+        self.assertEqual(next(
+            row["shares"] for row in list_pro_ticker_strategy_positions()["positions"]
+            if row["symbol"] == "MSFT"
+        ), 1)
+        self.assertEqual(post(sell_id, "sell", 3)["delta_shares"], 1)
+        self.assertEqual(get_accounted_paper_order_shares(sell_id), 3)
+        self.assertFalse(any(
+            row["symbol"] == "MSFT"
+            for row in list_pro_ticker_strategy_positions()["positions"]
+        ))
+        self.assertEqual(get_pro_ticker_budget(), before_budget)
+        self.assertTrue(self.audit()["verified"])
+
     def test_full_alpaca_paper_get_rejects_wrong_exit_snapshot(self):
         orders = {
             ENTRY_ID: self.entry_order,
