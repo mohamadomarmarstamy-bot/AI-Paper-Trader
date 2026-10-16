@@ -70,6 +70,39 @@ class BudgetLedgerTests(unittest.TestCase):
                     )
                     self.assertEqual(get_pro_ticker_budget()["committed"], 0)
 
+    def test_full_virtual_budget_cannot_be_reserved_twice(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with tracked_test_connections():
+                with patch.object(database, "DATABASE_PATH", Path(directory) / "ledger.db"):
+                    reserve_pro_ticker_budget("AAPL", 50000)
+                    budget = get_pro_ticker_budget()
+                    self.assertEqual(budget["committed"], 50000)
+                    self.assertEqual(budget["available"], 0)
+                    with self.assertRaisesRegex(ValueError, "budget exceeded"):
+                        reserve_pro_ticker_budget("MSFT", 0.01)
+                    self.assertEqual(get_pro_ticker_budget()["committed"], 50000)
+
+    def test_repeated_rejected_state_cannot_restore_spent_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with tracked_test_connections():
+                with patch.object(database, "DATABASE_PATH", Path(directory) / "ledger.db"):
+                    reservation = reserve_pro_ticker_budget("AAPL", 1000)
+                    reservation_id = reservation["reservation_id"]
+                    with database.get_connection() as conn:
+                        conn.execute(
+                            "UPDATE pro_ticker_paper_reservations SET broker_order_id = ? WHERE id = ?",
+                            ("paper-rejected", reservation_id),
+                        )
+                    record_verified_paper_order_state(
+                        reservation_id, "paper-rejected", "rejected", filled_quantity=0,
+                    )
+                    self.assertEqual(get_pro_ticker_budget()["committed"], 0)
+                    with self.assertRaisesRegex(ValueError, "Terminal reservation"):
+                        record_verified_paper_order_state(
+                            reservation_id, "paper-rejected", "filled", filled_quantity=1,
+                        )
+                    self.assertEqual(get_pro_ticker_budget()["committed"], 0)
+
     def test_rejects_invalid_amount(self):
         for amount in (0, -1, float("nan"), float("inf"), 0.001):
             with self.subTest(amount=amount):
