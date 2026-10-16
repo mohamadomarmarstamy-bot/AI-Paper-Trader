@@ -118,5 +118,40 @@ class ProTickerRouteBoundaryTests(unittest.TestCase):
                 self.assertEqual(caught.exception.status_code, 422)
 
 
+    def test_authenticated_history_uses_read_only_intake(self):
+        import sys
+        from types import ModuleType
+        routes = isolated_routes()
+        routes["require_app_session"] = lambda request: None
+        fake = ModuleType("pro_ticker_manual_intake")
+        observed = []
+        def list_observations(limit):
+            observed.append(limit)
+            return {"paper": True, "research_only": True, "count": 0, "observations": []}
+        fake.list_manual_observations = list_observations
+        with patch.dict(sys.modules, {"pro_ticker_manual_intake": fake}):
+            result = routes["list_auto_trader_pro_ticker_manual_submissions"](FakeRequest(), limit=25)
+        self.assertEqual(observed, [25])
+        self.assertTrue(result["research_only"])
+        self.assertEqual(result["observations"], [])
+
+    def test_authenticated_manual_save_uses_research_intake_only(self):
+        import sys
+        from types import ModuleType
+        routes = isolated_routes()
+        routes["require_app_session"] = lambda request: None
+        fake = ModuleType("pro_ticker_manual_intake")
+        observed = []
+        def save(symbols, quote_fetcher=None):
+            observed.append((symbols, callable(quote_fetcher)))
+            return {"paper": True, "research_only": True, "orders_submitted": 0, "count": 1}
+        fake.save_manual_observations = save
+        with patch.dict(sys.modules, {"pro_ticker_manual_intake": fake}):
+            result = asyncio.run(routes["auto_trader_pro_ticker_manual_submissions"](FakeRequest({"symbols": "AAPL"})))
+        self.assertEqual(observed, [("AAPL", True)])
+        self.assertEqual(result["orders_submitted"], 0)
+        self.assertTrue(result["research_only"])
+
+
 if __name__ == "__main__":
     unittest.main()
