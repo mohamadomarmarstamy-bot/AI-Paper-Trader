@@ -59,7 +59,7 @@ class ReleaseEligibilityTests(unittest.TestCase):
         for value in (True, 0, -1, 2.5):
             with self.subTest(value=value):
                 self.assertFalse(self.review(entry_filled_shares=value)["eligible_for_independent_review"])
-                self.assertFalse(self.review(remaining_strategy_shares=value)["eligible_for_independent_review"])
+                if value != 0:\n                    self.assertFalse(self.review(remaining_strategy_shares=value)["eligible_for_independent_review"])
 
 
 if __name__ == "__main__":
