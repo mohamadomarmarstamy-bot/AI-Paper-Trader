@@ -81,6 +81,15 @@ class ProTickerFrontendIntegrationTests(unittest.TestCase):
         self.assertIn("return true;", self.js)
         self.assertIn("return false;", self.js)
 
+    def test_save_requires_valid_count_before_success_message(self):
+        self.assertIn("Number.isSafeInteger(result.count)", self.js)
+        self.assertIn("result.count < 0", self.js)
+        self.assertIn('throw new Error("Unexpected save response")', self.js)
+        self.assertLess(
+            self.js.index("Number.isSafeInteger(result.count)"),
+            self.js.index('setStatus("Saved " + result.count'),
+        )
+
     def test_frontend_exposes_no_order_submission_controls(self):
         self.assertIn("Research only", self.html)
         self.assertIn("no PAPER orders placed", self.js)
