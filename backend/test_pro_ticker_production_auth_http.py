@@ -116,5 +116,25 @@ class ProductionAuthenticationHTTPTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
 
+    def test_production_auth_rejects_wrong_signature(self):
+        cookies = self.signed_cookie()
+        token = cookies["ai_paper_trader_session"]
+        timestamp, _ = token.split(".", 1)
+        cookies["ai_paper_trader_session"] = timestamp + "." + ("0" * 64)
+        response = self.request("GET", cookies=cookies)
+        self.assertEqual(response.status_code, 401)
+
+    def test_production_auth_rejects_malformed_timestamp(self):
+        response = self.request(
+            "GET", cookies={"ai_paper_trader_session": "not-a-time.signature"}
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_production_auth_rejects_missing_secret_even_with_signed_cookie(self):
+        self.auth["APP_SESSION_SECRET"] = ""
+        response = self.request("GET", cookies=self.signed_cookie())
+        self.assertEqual(response.status_code, 401)
+
+
 if __name__ == "__main__":
     unittest.main()
