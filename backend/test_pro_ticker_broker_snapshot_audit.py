@@ -353,6 +353,53 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertEqual(result["exit_shares"], 5)
         self.assertFalse(result["release_authorized"])
 
+    def test_zero_fill_canceled_exit_does_not_close_remaining_shares(self):
+        # A canceled order with no fill is not evidence of a closed position.
+        # Keep the existing five-share fill out of this audit by using a
+        # separate reservation with no posted exit shares.
+        reservation_id = reserve_pro_ticker_budget("MSFT", 100)["reservation_id"]
+        entry_id = "11111111-1111-4111-8111-111111111112"
+        exit_id = "22222222-2222-4222-8222-222222222223"
+        client_id = "33333333-3333-4333-8333-333333333334"
+        set_paper_reservation_expected_shares(reservation_id, 5)
+        entry = {
+            "id": entry_id, "client_order_id": "pt-" + reservation_id,
+            "symbol": "MSFT", "side": "buy", "qty": "5",
+            "filled_qty": "5", "status": "filled",
+        }
+        link_verified_paper_entry_order(reservation_id, entry)
+        record_verified_paper_order_state(
+            reservation_id, entry_id, "filled", filled_quantity=5,
+        )
+        post_verified_cumulative_paper_fill(
+            broker_order_id=entry_id, symbol="MSFT", side="buy",
+            cumulative_filled_shares=5, ownership_verified=True,
+            fill_verified=True,
+        )
+        canceled = {
+            "id": exit_id, "client_order_id": "ptx-" + client_id,
+            "symbol": "MSFT", "side": "sell", "qty": "5",
+            "filled_qty": "0", "status": "canceled",
+        }
+        with patch("pro_ticker_exit_links.get_pro_ticker_reservation", return_value={
+            "id": reservation_id, "symbol": "MSFT", "status": "filled",
+            "broker_order_id": entry_id,
+        }):
+            link_verified_paper_exit(
+                reservation_id=reservation_id, symbol="MSFT",
+                expected_shares=5, exit_id=client_id,
+                broker_order=canceled,
+            )
+        result = self.audit(
+            reservation_id=reservation_id, entry_order=entry,
+            exit_orders={exit_id: canceled},
+        )
+        self.assertFalse(result["verified"], result)
+        self.assertEqual(result["reason"], "reservation_shares_still_open")
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+        self.assertFalse(result["database_updated"])
+
     def test_partially_filled_terminal_exit_and_second_exit_reconcile(self):
         # Start with a three-share first exit and a two-share second exit.
         # This test uses a separate ledger for each test run, with the
