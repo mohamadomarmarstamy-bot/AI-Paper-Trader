@@ -13,7 +13,7 @@ class PaperExitLinkTests(unittest.TestCase):
         self.reservation_id = "12345678-1234-1234-1234-123456789abc"
         self.exit_id = "abcdefab-1234-1234-1234-123456789abc"
         self.order = {
-            "id": "paper-exit-1", "client_order_id": "ptx-" + self.exit_id,
+            "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "client_order_id": "ptx-" + self.exit_id,
             "symbol": "AAPL", "side": "sell", "qty": "3",
             "status": "partially_filled",
         }
@@ -42,6 +42,17 @@ class PaperExitLinkTests(unittest.TestCase):
     def test_link_and_repeat_idempotently(self):
         self.assertFalse(self.link()["duplicate"])
         self.assertTrue(self.link()["duplicate"])
+
+    def test_linked_exit_can_be_retrieved_for_evidence_review(self):
+        self.link()
+        linked = exits.get_pro_ticker_exit_link(self.order["id"])
+        self.assertEqual(linked["reservation_id"], self.reservation_id)
+        self.assertEqual(linked["broker_order_id"], self.order["id"])
+        self.assertEqual(linked["expected_shares"], 3)
+
+    def test_noncanonical_broker_order_id_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Canonical PAPER broker order UUID"):
+            self.link({**self.order, "id": "paper-exit-1"})
 
     def test_wrong_client_order_id_rejected(self):
         with self.assertRaisesRegex(ValueError, "client order ID"):
