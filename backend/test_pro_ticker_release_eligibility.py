@@ -85,6 +85,24 @@ class ReleaseEligibilityTests(unittest.TestCase):
         self.assertFalse(result["release_authorized"])
         self.assertFalse(result["budget_released"])
 
+    def test_multiple_distinct_verified_exit_orders_can_qualify_for_review(self):
+        first = {**self.exits[0], "accounted_shares": 2}
+        second = {**self.exits[0], "broker_order_id": "exit-2", "accounted_shares": 3}
+        result = self.review(exit_fills=[first, second])
+        self.assertTrue(result["eligible_for_independent_review"])
+        self.assertEqual(result["accounted_exit_shares"], 5)
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+        self.assertFalse(result["database_updated"])
+
+    def test_extra_exit_shares_cannot_qualify_for_review(self):
+        first = {**self.exits[0], "accounted_shares": 5}
+        second = {**self.exits[0], "broker_order_id": "exit-2", "accounted_shares": 1}
+        result = self.review(exit_fills=[first, second])
+        self.assertEqual(result["reason"], "entry_exit_share_mismatch")
+        self.assertFalse(result["eligible_for_independent_review"])
+        self.assertFalse(result["budget_released"])
+
     def test_invalid_share_counts_do_not_qualify(self):
         for value in (True, 0, -1, 2.5):
             with self.subTest(value=value):
