@@ -127,3 +127,32 @@ test("save success with failed history refresh reports partial success", async (
     assert.match(app.elements.get("pro-ticker-manual-status").textContent, /history could not be refreshed/);
     assert.equal(app.elements.get("button").disabled, false);
 });
+
+test("in-flight old history cannot overwrite successful submission refresh", async () => {
+    let releaseOld;
+    let historyRequests = 0;
+    const app = setup((url, options) => {
+        if (options.method === "POST") return Promise.resolve(reply({ count: 1 }));
+        historyRequests++;
+        if (historyRequests === 1) {
+            return new Promise(resolve => { releaseOld = resolve; });
+        }
+        return Promise.resolve(reply({ count: 1, observations: [{ symbol: "MSFT" }] }));
+    });
+    const oldRefresh = app.refresh();
+    app.elements.get("pro-ticker-manual-symbols").value = "MSFT";
+    await app.submit();
+    releaseOld(reply({ count: 1, observations: [{ symbol: "AAPL" }] }));
+    assert.equal(await oldRefresh, false);
+    assert.equal(app.elements.get("pro-ticker-manual-history").children[0].children[0].textContent, "MSFT");
+    assert.match(app.elements.get("pro-ticker-manual-status").textContent, /Saved 1 symbol/);
+});
+test("malformed research observation does not render partial table", async () => {
+    const app = setup(async () => reply({ count: 2, observations: [
+        { symbol: "AAPL", order_status: "research_only" },
+        { symbol: "MSFT", market_snapshot: [] }
+    ] }));
+    assert.equal(await app.refresh(), false);
+    assert.equal(app.elements.get("pro-ticker-manual-history").children.length, 0);
+    assert.match(app.elements.get("pro-ticker-manual-status").textContent, /Invalid research observation/);
+});
