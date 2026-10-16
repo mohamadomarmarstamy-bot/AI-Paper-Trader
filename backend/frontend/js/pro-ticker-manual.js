@@ -25,6 +25,12 @@
             if (!Array.isArray(data.observations)) {
                 throw new Error("Unexpected research response");
             }
+            if (data.observations.some(record =>
+                !record || typeof record !== "object" ||
+                typeof record.symbol !== "string" || !record.symbol.trim()
+            )) {
+                throw new Error("Invalid research observation");
+            }
             rows.replaceChildren();
             for (const record of data.observations) {
                 const tr = document.createElement("tr");
