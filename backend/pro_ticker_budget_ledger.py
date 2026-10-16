@@ -157,7 +157,18 @@ def record_verified_paper_order_state(
         raise ValueError("Invalid filled quantity.")
     if not math.isfinite(filled_quantity) or filled_quantity < 0:
         raise ValueError("Invalid filled quantity.")
+    if not float(filled_quantity).is_integer():
+        raise ValueError("Invalid filled quantity: whole PAPER shares required.")
     normalized = str(status).lower()
+    if normalized not in {
+        "new", "accepted", "pending_new", "partially_filled", "pending_cancel",
+        "accepted_for_bidding", "stopped", "filled", "canceled", "expired", "rejected",
+    }:
+        raise ValueError("Unverified order state.")
+    if normalized in {"new", "accepted", "pending_new", "rejected"} and filled_quantity > 0:
+        raise ValueError("Inconsistent PAPER order state and filled quantity.")
+    if normalized == "filled" and filled_quantity == 0:
+        raise ValueError("Inconsistent PAPER filled order with zero shares.")
     if filled_quantity > 0:
         new_status = "filled"
     elif normalized in {"canceled", "expired", "rejected"}:
@@ -170,7 +181,7 @@ def record_verified_paper_order_state(
         _init(conn)
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT status, broker_order_id FROM pro_ticker_paper_reservations WHERE id = ?",
+            "SELECT status, broker_order_id, expected_shares FROM pro_ticker_paper_reservations WHERE id = ?",
             (reservation_id,),
         ).fetchone()
         if row is None:
@@ -183,6 +194,25 @@ def record_verified_paper_order_state(
             raise ValueError("Terminal reservation cannot be reopened.")
         if row["status"] == "filled" and new_status != "filled":
             raise ValueError("Filled reservation cannot be downgraded.")
+        expected = row["expected_shares"]
+        if expected is not None and (
+            filled_quantity > expected or (normalized == "filled" and filled_quantity != expected)
+        ):
+            raise ValueError("PAPER fill quantity differs from bound reservation shares.")
+        # Entry fill posting and order-state recording can be interrupted between
+        # operations. A stale zero-fill cancellation must never free funds after
+        # the linked order has already posted shares, even if status is submitted.
+        has_events = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'pro_ticker_strategy_fill_events'"
+        ).fetchone()
+        if has_events:
+            posted = conn.execute(
+                "SELECT COALESCE(SUM(shares), 0) FROM pro_ticker_strategy_fill_events "
+                "WHERE broker_order_id = ?", (order_id,),
+            ).fetchone()[0]
+            if posted > filled_quantity:
+                raise ValueError("PAPER order state is older than already accounted fills.")
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             "UPDATE pro_ticker_paper_reservations SET status = ?, broker_order_id = ?, "
