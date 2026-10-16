@@ -90,6 +90,18 @@ class AlpacaPaperReaderTests(unittest.TestCase):
                     self.reader(invalid)
         self.http_get.assert_not_called()
 
+    def test_json_decode_failure_propagates_without_retry(self):
+        self.response.json.side_effect = ValueError("invalid JSON")
+        with self.assertRaises(ValueError):
+            self.reader("abc")
+        self.http_get.assert_called_once()
+
+    def test_transport_exception_propagates_without_retry(self):
+        self.http_get.side_effect = TimeoutError("request timed out")
+        with self.assertRaises(TimeoutError):
+            self.reader("abc")
+        self.http_get.assert_called_once()
+
     def test_missing_credentials_rejected(self):
         with self.assertRaises(ValueError):
             make_alpaca_paper_order_reader(
