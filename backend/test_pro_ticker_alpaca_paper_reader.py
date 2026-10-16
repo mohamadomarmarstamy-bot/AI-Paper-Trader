@@ -79,6 +79,17 @@ class AlpacaPaperReaderTests(unittest.TestCase):
                     )
         self.http_get.assert_not_called()
 
+    def test_order_id_control_and_path_characters_rejected_before_network(self):
+        for invalid in (
+            "abc/def", "abc#fragment", "abc?query", "abc\\r",
+            "abc\\x00", "abc\\x7f", "abc\\n", "abc\\t",
+            "abc ", " abc", "abc\\u001f",
+        ):
+            with self.subTest(invalid=repr(invalid)):
+                with self.assertRaises(ValueError):
+                    self.reader(invalid)
+        self.http_get.assert_not_called()
+
     def test_missing_credentials_rejected(self):
         with self.assertRaises(ValueError):
             make_alpaca_paper_order_reader(
