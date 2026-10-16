@@ -22,7 +22,10 @@
         try {
             const data = await request(endpoint + "?limit=100");
             if (version !== refreshVersion) return false;
-            if (!Array.isArray(data.observations)) {
+            if (!Array.isArray(data.observations) ||
+                !Number.isSafeInteger(data.count) ||
+                data.count < 0 ||
+                data.count !== data.observations.length) {
                 throw new Error("Unexpected research response");
             }
             if (data.observations.some(record =>
