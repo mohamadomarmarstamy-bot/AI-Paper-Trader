@@ -119,5 +119,33 @@ class ProTickerResearchHTTPTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
 
+    def test_authenticated_preview_broker_unavailable_is_non_executing_http_200(self):
+        fake_policy = ModuleType("pro_ticker_paper_policy")
+        fake_policy.check_pro_ticker_paper_entry = lambda **kwargs: (
+            _ for _ in ()
+        ).throw(AssertionError("Broker unavailable must not reach eligibility"))
+        fake_budget = ModuleType("pro_ticker_budget_ledger")
+        fake_budget.get_pro_ticker_budget = lambda: {"committed": 0}
+        self.routes["fetch_alpaca_paper_positions"] = lambda: (
+            _ for _ in ()
+        ).throw(ConnectionError("Offline broker test"))
+        with patch.dict(sys.modules, {
+            "pro_ticker_paper_policy": fake_policy,
+            "pro_ticker_budget_ledger": fake_budget,
+        }):
+            response = self.request(
+                "POST", "/auto-trader/pro-ticker-paper-preview",
+                json={"symbol": "AAPL", "proposed_notional": 10},
+                cookies={"test_session": "authorized"},
+            )
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        self.assertTrue(result["paper"])
+        self.assertTrue(result["preview_only"])
+        self.assertFalse(result["allowed"])
+        self.assertFalse(result["order_submitted"])
+        self.assertEqual(self.calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()
