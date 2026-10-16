@@ -100,3 +100,24 @@ jobs:
         run: node --test backend/frontend/js/pro-ticker-manual.test.cjs
       - name: Frontend JavaScript syntax check
         run: node --check backend/frontend/js/pro-ticker-manual.js
+
+
+  full-app-import-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      ALPACA_API_KEY: ""
+      ALPACA_SECRET_KEY: ""
+      ALPACA_API_KEY_ID: ""
+      ALPACA_SECRET_KEY_ID: ""
+      APP_ACCESS_PASSWORD: ""
+      APP_SESSION_SECRET: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install production backend dependencies
+        run: python -m pip install -r backend/requirements.txt
+      - name: Import actual production app against temporary SQLite without lifespan
+        run: python -m unittest discover -s backend -p 'test_full_production_app_smoke.py' -v
