@@ -27,10 +27,6 @@ def review_persisted_paper_release(reservation_id: str) -> dict[str, Any]:
         return {**base, "reason": "entry_order_unlinked"}
     with get_connection() as conn:
         # Read only; never infer a completed exit from absent broker positions.
-        from pro_ticker_position_ledger import _initialize as init_positions
-        from pro_ticker_exit_links import _SCHEMA as exit_schema
-        init_positions(conn)
-        conn.executescript(exit_schema)
         entry = conn.execute(
             "SELECT side, symbol, COALESCE(SUM(shares), 0) AS shares "
             "FROM pro_ticker_strategy_fill_events WHERE broker_order_id = ? "
@@ -66,6 +62,22 @@ def review_persisted_paper_release(reservation_id: str) -> dict[str, Any]:
         remaining_strategy_shares=int(position["shares"]) if position else 0,
         broker_evidence_verified=False,
     )
-    return {**result, "reason": "persisted_records_not_independent_broker_proof",
-            "persisted_entry_shares": int(entry[0]["shares"]),
+    entry_shares = int(entry[0]["shares"])
+    exit_shares = sum(fill["accounted_shares"] for fill in exits)
+    remaining = int(position["shares"]) if position else 0
+    # Diagnostics only; persisted records are not independent broker proof.
+    if exit_shares > entry_shares:
+        evidence_reason = "persisted_exit_shares_exceed_entry"
+    elif entry_shares != exit_shares + remaining:
+        evidence_reason = "persisted_share_balance_mismatch"
+    elif remaining > 0:
+        evidence_reason = "persisted_strategy_position_still_open"
+    elif not exits:
+        evidence_reason = "persisted_exit_fills_missing"
+    else:
+        evidence_reason = "persisted_records_not_independent_broker_proof"
+    return {**result, "reason": evidence_reason,
+            "persisted_entry_shares": entry_shares,
+            "persisted_exit_shares": exit_shares,
+            "persisted_remaining_shares": remaining,
             "persisted_exit_orders": len(exits)}
