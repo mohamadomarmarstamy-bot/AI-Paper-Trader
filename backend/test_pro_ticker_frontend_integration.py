@@ -128,6 +128,15 @@ class ProTickerFrontendIntegrationTests(unittest.TestCase):
         self.assertIn("data.count < 0", self.js)
         self.assertNotIn("data.count !== data.observations.length", self.js)
 
+    def test_malformed_market_snapshot_is_rejected_before_rendering(self):
+        self.assertIn("record.market_snapshot != null", self.js)
+        self.assertIn('typeof record.market_snapshot !== "object"', self.js)
+        self.assertIn("Array.isArray(record.market_snapshot)", self.js)
+        self.assertLess(
+            self.js.index("record.market_snapshot != null"),
+            self.js.index("rows.replaceChildren()"),
+        )
+
     def test_frontend_exposes_no_order_submission_controls(self):
         self.assertIn("Research only", self.html)
         self.assertIn("no PAPER orders placed", self.js)
