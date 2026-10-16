@@ -156,6 +156,14 @@ class ProTickerFrontendIntegrationTests(unittest.TestCase):
         self.assertIn("A-Z0-9", self.js)
         self.assertIn('throw new Error("Invalid research observation")', self.js)
 
+    def test_nonstring_research_order_status_is_rejected(self):
+        self.assertIn("record.order_status != null", self.js)
+        self.assertIn('typeof record.order_status !== "string"', self.js)
+        self.assertLess(
+            self.js.index("record.order_status != null"),
+            self.js.index("rows.replaceChildren()"),
+        )
+
     def test_frontend_exposes_no_order_submission_controls(self):
         self.assertIn("Research only", self.html)
         self.assertIn("no PAPER orders placed", self.js)
