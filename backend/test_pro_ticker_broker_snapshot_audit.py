@@ -158,6 +158,46 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertFalse(second["budget_released"])
         self.assertFalse(second["database_updated"])
 
+    def test_failed_exit_fetch_then_retry_keeps_accounting_unchanged(self):
+        from database import get_connection
+        from pro_ticker_budget_ledger import get_pro_ticker_budget
+        def fill_rows():
+            with get_connection() as conn:
+                return [tuple(row) for row in conn.execute(
+                    "SELECT broker_order_id, symbol, side, shares "
+                    "FROM pro_ticker_strategy_fill_events "
+                    "ORDER BY broker_order_id, rowid"
+                ).fetchall()]
+        before_budget = get_pro_ticker_budget()
+        before_rows = fill_rows()
+        requests = []
+        def http_get(url, **kwargs):
+            order_id = url.rsplit("/", 1)[-1]
+            requests.append(order_id)
+            if order_id == EXIT_ID and requests.count(EXIT_ID) == 1:
+                raise TimeoutError("simulated PAPER exit fetch timeout")
+            response = Mock()
+            response.status_code = 200
+            response.json.return_value = (
+                self.entry_order if order_id == ENTRY_ID else self.exit_order
+            )
+            return response
+        params = dict(paper_key_id="test-paper-key",
+                      paper_secret_key="test-paper-secret", http_get=http_get)
+        first = audit_alpaca_paper_reservation(self.reservation_id, **params)
+        self.assertFalse(first["verified"])
+        self.assertEqual(first["reason"], "paper_order_fetch_failed")
+        self.assertEqual(get_pro_ticker_budget(), before_budget)
+        self.assertEqual(fill_rows(), before_rows)
+        second = audit_alpaca_paper_reservation(self.reservation_id, **params)
+        self.assertTrue(second["verified"], second)
+        self.assertEqual(requests, [ENTRY_ID, EXIT_ID, ENTRY_ID, EXIT_ID])
+        self.assertEqual(get_pro_ticker_budget(), before_budget)
+        self.assertEqual(fill_rows(), before_rows)
+        self.assertFalse(second["broker_origin_authenticated"])
+        self.assertFalse(second["release_authorized"])
+        self.assertFalse(second["budget_released"])
+
     def test_full_alpaca_paper_get_rejects_wrong_exit_snapshot(self):
         orders = {
             ENTRY_ID: self.entry_order,
