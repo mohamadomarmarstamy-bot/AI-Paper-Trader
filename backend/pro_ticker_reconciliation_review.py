@@ -50,7 +50,7 @@ def assess_reservation_state(
             return {"suggested_status": "filled", "safe_to_release": False, "reason": "matched_exit_fill_required"}
         return {"suggested_status": "filled", "safe_to_release": False, "reason": "shares_filled_or_close_unverified"}
     if status in {"canceled", "expired", "rejected"} and position_exists is False:
-        return {"suggested_status": "failed", "safe_to_release": True, "reason": "no_fill_and_no_position"}
+        return {"suggested_status": "failed", "safe_to_release": False, "reason": "zero_fill_exit_proof_and_release_authorization_required"}
     if status in {"new", "accepted", "pending_new", "pending_cancel", "partially_filled"}:
         return {"suggested_status": "submitted", "safe_to_release": False, "reason": "order_in_progress"}
     return {"suggested_status": current, "safe_to_release": False, "reason": "unverified_state"}
