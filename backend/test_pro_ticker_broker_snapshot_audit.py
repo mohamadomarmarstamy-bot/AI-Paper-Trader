@@ -237,6 +237,28 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertFalse(result["release_authorized"])
         self.assertFalse(result["budget_released"])
 
+    def test_partial_terminal_exit_accounting_mismatch_fails_closed(self):
+        # Broker reports only four of the five shares accounted in ledger.
+        incorrect = {**self.exit_order, "filled_qty": "4", "status": "canceled"}
+        result = self.audit(exit_orders={EXIT_ID: incorrect})
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["reason"], "exit_accounting_mismatch")
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+
+    def test_duplicate_exit_order_keys_are_not_accepted_as_extra_fills(self):
+        # Two snapshots with the same ID cannot represent two distinct exits.
+        result = self.audit(exit_orders={
+            EXIT_ID: self.exit_order,
+            "dddddddd-dddd-4ddd-8ddd-dddddddddddd": {
+                **self.exit_order,
+                "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            },
+        })
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["reason"], "exit_snapshots_incomplete_or_extra")
+        self.assertFalse(result["budget_released"])
+
     def test_complete_linked_broker_snapshots_match(self):
         result = self.audit()
         self.assertTrue(result["verified"])
