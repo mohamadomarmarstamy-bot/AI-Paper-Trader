@@ -64,6 +64,34 @@ class PaperFillLifecycleIntegrationTests(unittest.TestCase):
         self.assertTrue(result["stale_snapshot"])
         self.assertEqual(positions.get_accounted_paper_order_shares(self.order["id"]), 6)
 
+    def test_delayed_out_of_order_snapshots_converge_without_double_count(self):
+        self.assertEqual(self.snapshot(7)["delta_shares"], 7)
+        stale = self.snapshot(2)
+        self.assertTrue(stale["stale_snapshot"])
+        self.assertEqual(stale["delta_shares"], 0)
+        self.assertEqual(self.snapshot(9)["delta_shares"], 2)
+        self.assertEqual(self.snapshot(7)["delta_shares"], 0)
+        self.assertEqual(self.snapshot(10, status="filled")["delta_shares"], 1)
+        replay = self.snapshot(10, status="filled")
+        self.assertFalse(replay["posted"])
+        self.assertEqual(replay["delta_shares"], 0)
+        self.assertEqual(positions.get_accounted_paper_order_shares(self.order["id"]), 10)
+        self.assertEqual(
+            positions.list_pro_ticker_strategy_positions()["positions"][0]["shares"], 10,
+        )
+        self.assertEqual(budget.get_pro_ticker_budget()["committed"], 1000)
+
+    def test_terminal_canceled_partial_fill_replay_is_not_reversed(self):
+        self.assertEqual(self.snapshot(4, status="canceled")["delta_shares"], 4)
+        self.assertEqual(self.snapshot(4, status="canceled")["delta_shares"], 0)
+        stale = self.snapshot(0, status="new")
+        self.assertTrue(stale["stale_snapshot"])
+        self.assertEqual(positions.get_accounted_paper_order_shares(self.order["id"]), 4)
+        self.assertEqual(
+            positions.list_pro_ticker_strategy_positions()["positions"][0]["shares"], 4,
+        )
+        self.assertEqual(budget.get_pro_ticker_budget()["committed"], 1000)
+
     def test_wrong_client_id_cannot_mutate_ledger(self):
         with self.assertRaises(ValueError):
             self.snapshot(4, client_order_id="other")
