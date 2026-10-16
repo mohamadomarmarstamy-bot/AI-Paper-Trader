@@ -28,6 +28,19 @@ class VerifiedExitBridgeTests(unittest.TestCase):
         tracker = tracked_test_connections()
         tracker.__enter__()
         self.addCleanup(tracker.__exit__, None, None, None)
+        import uuid
+        from pro_ticker_budget_ledger import (
+            reserve_pro_ticker_budget, set_paper_reservation_expected_shares,
+            link_verified_paper_entry_order, record_verified_paper_order_state,
+        )
+        with patch('pro_ticker_budget_ledger.uuid.uuid4', return_value=uuid.UUID(RESERVATION_ID)):
+            reserve_pro_ticker_budget('AAPL', 100)
+        set_paper_reservation_expected_shares(RESERVATION_ID, 5)
+        link_verified_paper_entry_order(RESERVATION_ID, {
+            'id': ENTRY_ORDER_ID, 'client_order_id': 'pt-' + RESERVATION_ID,
+            'symbol': 'AAPL', 'side': 'buy', 'qty': '5', 'status': 'filled', 'filled_qty': '5',
+        })
+        record_verified_paper_order_state(RESERVATION_ID, ENTRY_ORDER_ID, 'filled', filled_quantity=5)
         self.reservation = {
             "id": RESERVATION_ID, "symbol": "AAPL", "status": "filled",
             "broker_order_id": ENTRY_ORDER_ID,

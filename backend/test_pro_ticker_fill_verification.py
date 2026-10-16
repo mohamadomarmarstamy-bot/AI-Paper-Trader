@@ -39,6 +39,14 @@ class FillVerificationTests(unittest.TestCase):
         self.assertTrue(result["verified"])
         self.assertEqual(result["filled_shares"], 2)
 
+    def test_rejected_order_cannot_claim_positive_fills(self):
+        for side in ('buy', 'sell'):
+            with self.subTest(side=side):
+                result = self.check(expected_side=side, broker_order={
+                    **self.base['broker_order'], 'side': side, 'status': 'rejected',
+                })
+                self.assertFalse(result['verified'])
+
     def test_wrong_order_rejected(self):
         self.assertFalse(self.check(expected_order_id="other")["verified"])
 

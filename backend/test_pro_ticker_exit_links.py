@@ -25,6 +25,16 @@ class PaperExitLinkTests(unittest.TestCase):
         db_patch = patch.object(database, "DATABASE_PATH", Path(self.temp.name) / "test.db")
         db_patch.start()
         self.addCleanup(db_patch.stop)
+        from pro_ticker_budget_ledger import (
+            reserve_pro_ticker_budget, set_paper_reservation_expected_shares,
+            link_verified_paper_entry_order,
+        )
+        self.reservation_id = reserve_pro_ticker_budget("AAPL", 100)["reservation_id"]
+        set_paper_reservation_expected_shares(self.reservation_id, 3)
+        link_verified_paper_entry_order(self.reservation_id, {
+            "id": "paper-entry-1", "client_order_id": "pt-" + self.reservation_id,
+            "symbol": "AAPL", "side": "buy", "qty": "3", "status": "new",
+        })
         owner = patch.object(exits, "get_pro_ticker_reservation", return_value={
             "id": self.reservation_id, "symbol": "AAPL", "status": "filled",
             "broker_order_id": "paper-entry-1",
@@ -38,6 +48,16 @@ class PaperExitLinkTests(unittest.TestCase):
             expected_shares=3, broker_order=self.order if order is None else order,
             exit_id=self.exit_id,
         )
+
+    def test_stale_active_lookup_cannot_link_exit_after_release(self):
+        with database.get_connection() as conn:
+            conn.execute("UPDATE pro_ticker_paper_reservations SET status = 'released' WHERE id = ?",
+                         (self.reservation_id,))
+        # The mocked pre-lock lookup still claims the reservation is active.
+        with self.assertRaisesRegex(ValueError, "changed before exit linking"):
+            self.link()
+        with database.get_connection() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM pro_ticker_paper_exit_links").fetchone()[0], 0)
 
     def test_link_and_repeat_idempotently(self):
         self.assertFalse(self.link()["duplicate"])

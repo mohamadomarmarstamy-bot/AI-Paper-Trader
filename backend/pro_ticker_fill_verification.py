@@ -62,7 +62,7 @@ def assess_paper_order_fill(
         return {**base, "reason": "unknown_broker_status"}
     if status == "filled" and filled_qty != order_qty:
         return {**base, "reason": "inconsistent_filled_status"}
-    if status in {"new", "accepted", "pending_new"} and filled_qty > 0:
+    if status in {"new", "accepted", "pending_new", "rejected"} and filled_qty > 0:
         return {**base, "reason": "inconsistent_pending_status"}
     return {
         **base, "verified": True, "reason": "verified_paper_order",

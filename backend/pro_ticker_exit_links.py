@@ -86,6 +86,16 @@ def link_verified_paper_exit(
     with get_connection() as conn:
         conn.executescript(_SCHEMA)
         conn.execute("BEGIN IMMEDIATE")
+        # The preliminary lookup can become stale while waiting for this lock.
+        # A completed manual release must not acquire a new exit ownership link.
+        current = conn.execute(
+            "SELECT symbol, status, broker_order_id FROM pro_ticker_paper_reservations WHERE id = ?",
+            (reservation_id,),
+        ).fetchone()
+        if (current is None or current["symbol"] != symbol
+                or current["status"] not in {"submitted", "filled"}
+                or current["broker_order_id"] != reservation["broker_order_id"]):
+            raise ValueError("PAPER reservation changed before exit linking.")
         previous = conn.execute(
             "SELECT reservation_id, client_order_id, symbol, expected_shares "
             "FROM pro_ticker_paper_exit_links WHERE broker_order_id = ?", (order_id,),
