@@ -30,7 +30,7 @@
             if (data.observations.some(record =>
                 !record || typeof record !== "object" || Array.isArray(record) ||
                 typeof record.symbol !== "string" ||
-                !/^[A-Z][A-Z0-9.\-]{0,14}$/.test(record.symbol) ||
+                !/^[A-Z][A-Z0-9.\-]{0,9}$/.test(record.symbol) ||
                 (record.market_snapshot != null &&
                     (typeof record.market_snapshot !== "object" ||
                      Array.isArray(record.market_snapshot))) ||
