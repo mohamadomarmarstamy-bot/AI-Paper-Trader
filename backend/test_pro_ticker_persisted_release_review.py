@@ -96,6 +96,22 @@ class PersistedPaperReleaseReviewTests(unittest.TestCase):
         self.assertEqual(positions.list_pro_ticker_strategy_positions()["positions"], [])
         self.assertEqual(get_pro_ticker_budget()["committed"], 1000)
 
+    def test_unattributed_sell_blocks_release_review(self):
+        exit_order_id = self.link_exit()
+        positions.post_verified_cumulative_paper_fill(
+            broker_order_id=exit_order_id, symbol="AAPL", side="sell",
+            cumulative_filled_shares=3, ownership_verified=True, fill_verified=True,
+        )
+        positions.post_verified_cumulative_paper_fill(
+            broker_order_id="eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+            symbol="AAPL", side="sell", cumulative_filled_shares=2,
+            ownership_verified=True, fill_verified=True,
+        )
+        result = review_persisted_paper_release(self.reservation_id)
+        self.assertEqual(result["reason"], "unattributed_strategy_sell_fills")
+        self.assertFalse(result["release_authorized"])
+        self.assertEqual(get_pro_ticker_budget()["committed"], 1000)
+
     def test_unknown_reservation_does_not_release(self):
         result = review_persisted_paper_release("dddddddd-dddd-4ddd-8ddd-dddddddddddd")
         self.assertEqual(result["reason"], "reservation_missing")
