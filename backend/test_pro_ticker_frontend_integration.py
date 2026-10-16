@@ -30,6 +30,23 @@ class ProTickerFrontendIntegrationTests(unittest.TestCase):
         self.assertIn('method: "POST"', self.js)
         self.assertIn('credentials: "same-origin"', self.js)
 
+    def test_authenticated_backend_research_routes_are_wired(self):
+        backend = (FRONTEND.parent / "main.py").read_text(encoding="utf-8-sig")
+        for decorator in (
+            '@app.get("/auto-trader/pro-ticker-manual-submissions")',
+            '@app.post("/auto-trader/pro-ticker-manual-submissions")',
+            '@app.post("/auto-trader/pro-ticker-paper-preview")',
+        ):
+            with self.subTest(decorator=decorator):
+                self.assertIn(decorator, backend)
+        start = backend.index('@app.get("/auto-trader/pro-ticker-manual-submissions")')
+        end = backend.index('@app.get("/auto-trader/pro-ticker-paper-budget")', start)
+        self.assertIn("require_app_session(request)", backend[start:end])
+        start = backend.index('@app.post("/auto-trader/pro-ticker-manual-submissions")')
+        end = backend.index('@app.get(', start)
+        self.assertIn("require_app_session(request)", backend[start:end])
+        self.assertIn("save_manual_observations", backend[start:end])
+
     def test_frontend_exposes_no_order_submission_controls(self):
         self.assertIn("Research only", self.html)
         self.assertIn("no PAPER orders placed", self.js)
