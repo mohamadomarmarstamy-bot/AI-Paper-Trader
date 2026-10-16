@@ -177,6 +177,36 @@ class PaperPositionLedgerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.cumulative(3, side="sell")
 
+    def test_cumulative_reordered_snapshots_preserve_high_water(self):
+        first = self.cumulative(3)
+        self.assertEqual(first["delta_shares"], 3)
+        stale = self.cumulative(1)
+        self.assertTrue(stale["stale_snapshot"])
+        self.assertEqual(stale["accounted_shares"], 3)
+        replay = self.cumulative(3)
+        self.assertEqual(replay["delta_shares"], 0)
+        latest = self.cumulative(7)
+        self.assertEqual(latest["delta_shares"], 4)
+        self.assertEqual(ledger.get_accounted_paper_order_shares("paper-order-cumulative"), 7)
+        self.assertEqual(ledger.list_pro_ticker_strategy_positions()["positions"][0]["shares"], 7)
+
+    def test_cumulative_replayed_sell_snapshot_does_not_double_count(self):
+        self.cumulative(8)
+        first = self.cumulative(
+            3, broker_order_id="paper-exit-cumulative", side="sell",
+        )
+        self.assertEqual(first["current_shares"], 5)
+        replay = self.cumulative(
+            3, broker_order_id="paper-exit-cumulative", side="sell",
+        )
+        self.assertEqual(replay["delta_shares"], 0)
+        stale = self.cumulative(
+            1, broker_order_id="paper-exit-cumulative", side="sell",
+        )
+        self.assertTrue(stale["stale_snapshot"])
+        self.assertEqual(ledger.get_accounted_paper_order_shares("paper-exit-cumulative"), 3)
+        self.assertEqual(ledger.list_pro_ticker_strategy_positions()["positions"][0]["shares"], 5)
+
     def test_cumulative_exit_partial_replay_and_full_close(self):
         self.cumulative(5)
         first = self.cumulative(
