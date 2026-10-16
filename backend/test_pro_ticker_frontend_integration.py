@@ -60,6 +60,12 @@ class ProTickerFrontendIntegrationTests(unittest.TestCase):
         self.assertNotIn('alpaca_paper_request("POST"', route)
         self.assertNotIn('alpaca_paper_request("DELETE"', route)
 
+    def test_research_history_fails_closed_on_malformed_response(self):
+        self.assertIn("Array.isArray(data.observations)", self.js)
+        self.assertIn('throw new Error("Unexpected research response")', self.js)
+        self.assertIn("rows.replaceChildren()", self.js)
+        self.assertIn('setStatus("Unable to load submissions: "', self.js)
+
     def test_frontend_exposes_no_order_submission_controls(self):
         self.assertIn("Research only", self.html)
         self.assertIn("no PAPER orders placed", self.js)
