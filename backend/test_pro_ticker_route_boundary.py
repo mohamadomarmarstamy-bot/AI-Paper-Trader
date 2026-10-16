@@ -153,5 +153,40 @@ class ProTickerRouteBoundaryTests(unittest.TestCase):
         self.assertTrue(result["research_only"])
 
 
+    def test_manual_submission_rejects_invalid_symbols_without_broker_calls(self):
+        import sys
+        from types import ModuleType
+        routes = isolated_routes()
+        routes["require_app_session"] = lambda request: None
+        fake = ModuleType("pro_ticker_manual_intake")
+        def reject_symbols(symbols, quote_fetcher=None):
+            raise ValueError("Invalid stock symbol")
+        fake.save_manual_observations = reject_symbols
+        with patch.dict(sys.modules, {"pro_ticker_manual_intake": fake}):
+            with self.assertRaises(RouteHTTPError) as caught:
+                asyncio.run(routes["auto_trader_pro_ticker_manual_submissions"](FakeRequest({"symbols": "BAD!"})))
+        self.assertEqual(caught.exception.status_code, 422)
+        self.assertIn("Invalid stock symbol", caught.exception.detail)
+
+    def test_manual_submission_quote_callback_is_read_only(self):
+        import sys
+        from types import ModuleType
+        routes = isolated_routes()
+        routes["require_app_session"] = lambda request: None
+        calls = []
+        routes["alpaca_market_data_request"] = lambda method, path, **kwargs: (
+            calls.append((method, path)) or {"trade": {"p": 100.0, "t": "2026-10-16T14:00:00Z"}}
+        )
+        fake = ModuleType("pro_ticker_manual_intake")
+        def capture(symbols, quote_fetcher=None):
+            quote = quote_fetcher("AAPL")
+            return {"paper": True, "research_only": True, "orders_submitted": 0, "price": quote["p"]}
+        fake.save_manual_observations = capture
+        with patch.dict(sys.modules, {"pro_ticker_manual_intake": fake}):
+            result = asyncio.run(routes["auto_trader_pro_ticker_manual_submissions"](FakeRequest({"symbols": "AAPL"})))
+        self.assertEqual(calls, [("GET", "/v2/stocks/AAPL/trades/latest")])
+        self.assertEqual(result["orders_submitted"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
