@@ -83,5 +83,10 @@ jobs:
         run: python -m unittest discover -s backend -p test_pro_ticker_verified_exit_review.py -v
       - name: All Pro Ticker Lab tests (including new broker audit tests)
         run: python -m unittest discover -s backend -p 'test_pro_ticker_*.py' -v
+      - name: Existing application regression tests (dependency-light)
+        run: |
+          python -m unittest discover -s backend -p 'test_broker_throttle.py' -v
+          python -m unittest discover -s backend -p 'test_entry_cooldown.py' -v
+          python -m unittest discover -s backend -p 'test_entry_quality.py' -v
       - name: Frontend JavaScript syntax check
         run: node --check backend/frontend/js/pro-ticker-manual.js
