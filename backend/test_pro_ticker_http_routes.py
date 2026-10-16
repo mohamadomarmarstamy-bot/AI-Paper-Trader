@@ -31,6 +31,10 @@ class ProTickerResearchHTTPTests(unittest.TestCase):
         def history(request: Request, limit: int = 100):
             return self.routes["list_auto_trader_pro_ticker_manual_submissions"](request, limit=limit)
 
+        @self.app.post("/auto-trader/pro-ticker-paper-preview")
+        async def preview(request: Request):
+            return await self.routes["pro_ticker_paper_preview"](request)
+
         @self.app.post("/auto-trader/pro-ticker-manual-submissions")
         async def save(request: Request):
             return await self.routes["auto_trader_pro_ticker_manual_submissions"](request)
@@ -90,6 +94,26 @@ class ProTickerResearchHTTPTests(unittest.TestCase):
     def test_invalid_payload_returns_http_422_without_saving(self):
         response = self.request("POST", "/auto-trader/pro-ticker-manual-submissions",
                                 json={"symbols": ["AAPL"]}, cookies={"test_session": "authorized"})
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.calls, [])
+
+
+    def test_anonymous_preview_is_http_401(self):
+        response = self.request("POST", "/auto-trader/pro-ticker-paper-preview",
+                                json={"symbol": "AAPL", "proposed_notional": 10})
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(self.calls, [])
+
+    def test_authenticated_preview_bad_json_is_http_400(self):
+        response = self.request("POST", "/auto-trader/pro-ticker-paper-preview",
+                                content="{bad", headers={"content-type": "application/json"},
+                                cookies={"test_session": "authorized"})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.calls, [])
+
+    def test_authenticated_preview_invalid_payload_is_http_422(self):
+        response = self.request("POST", "/auto-trader/pro-ticker-paper-preview",
+                                json=["AAPL"], cookies={"test_session": "authorized"})
         self.assertEqual(response.status_code, 422)
         self.assertEqual(self.calls, [])
 
