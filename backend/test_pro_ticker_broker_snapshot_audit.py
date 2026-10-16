@@ -538,6 +538,27 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertEqual(result["reason"], "exit_snapshots_incomplete_or_extra")
         self.assertFalse(result["budget_released"])
 
+    def test_repeated_successful_audit_never_changes_virtual_budget_or_fill_rows(self):
+        from database import get_connection
+        from pro_ticker_budget_ledger import get_pro_ticker_budget
+        before_budget = get_pro_ticker_budget()
+        with get_connection() as conn:
+            before_rows = conn.execute(
+                "SELECT COUNT(*) FROM pro_ticker_strategy_fill_events"
+            ).fetchone()[0]
+        for _ in range(3):
+            result = self.audit()
+            self.assertTrue(result["verified"], result)
+            self.assertFalse(result["release_authorized"])
+            self.assertFalse(result["budget_released"])
+            self.assertFalse(result["database_updated"])
+        self.assertEqual(get_pro_ticker_budget(), before_budget)
+        with get_connection() as conn:
+            after_rows = conn.execute(
+                "SELECT COUNT(*) FROM pro_ticker_strategy_fill_events"
+            ).fetchone()[0]
+        self.assertEqual(after_rows, before_rows)
+
     def test_complete_linked_broker_snapshots_match(self):
         result = self.audit()
         self.assertTrue(result["verified"])
