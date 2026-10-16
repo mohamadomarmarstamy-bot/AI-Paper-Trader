@@ -29,7 +29,10 @@
             }
             if (data.observations.some(record =>
                 !record || typeof record !== "object" ||
-                typeof record.symbol !== "string" || !record.symbol.trim()
+                typeof record.symbol !== "string" || !record.symbol.trim() ||
+                (record.market_snapshot != null &&
+                    (typeof record.market_snapshot !== "object" ||
+                     Array.isArray(record.market_snapshot)))
             )) {
                 throw new Error("Invalid research observation");
             }
