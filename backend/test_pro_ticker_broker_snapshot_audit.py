@@ -273,34 +273,15 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertEqual(result["reason"], "paper_order_fetch_incomplete")
         self.assertFalse(result["budget_released"])
 
-    def test_same_symbol_second_reservation_cannot_cross_reconcile(self):
-        second_id = reserve_pro_ticker_budget("AAPL", 100)["reservation_id"]
-        second_entry_id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
-        set_paper_reservation_expected_shares(second_id, 2)
-        second_entry = {
-            "id": second_entry_id, "client_order_id": "pt-" + second_id,
-            "symbol": "AAPL", "side": "buy", "qty": "2",
-            "filled_qty": "2", "status": "filled",
-        }
-        link_verified_paper_entry_order(second_id, second_entry)
-        record_verified_paper_order_state(
-            second_id, second_entry_id, "filled", filled_quantity=2,
-        )
-        post_verified_cumulative_paper_fill(
-            broker_order_id=second_entry_id, symbol="AAPL", side="buy",
-            cumulative_filled_shares=2, ownership_verified=True,
-            fill_verified=True,
-        )
+    def test_same_symbol_second_active_reservation_is_rejected(self):
+        # The virtual budget deliberately prohibits simultaneous active
+        # reservations for the same symbol; no cross-attribution is possible.
+        with self.assertRaisesRegex(ValueError, "active reservation already exists"):
+            reserve_pro_ticker_budget("AAPL", 100)
         first = self.audit()
         self.assertTrue(first["verified"])
         self.assertFalse(first["release_authorized"])
-        second = self.audit(
-            reservation_id=second_id, entry_order=second_entry,
-            exit_orders={EXIT_ID: self.exit_order},
-        )
-        self.assertFalse(second["verified"])
-        self.assertEqual(second["reason"], "exit_snapshots_incomplete_or_extra")
-        self.assertFalse(second["budget_released"])
+        self.assertFalse(first["budget_released"])
 
     def test_two_linked_exit_orders_do_not_double_count(self):
         # A second linked exit was canceled without a fill. It must not
