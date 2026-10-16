@@ -156,3 +156,25 @@ test("malformed research observation does not render partial table", async () =>
     assert.equal(app.elements.get("pro-ticker-manual-history").children.length, 0);
     assert.match(app.elements.get("pro-ticker-manual-status").textContent, /Invalid research observation/);
 });
+
+test("non-research execution statuses never appear in the history table", async () => {
+    for (const order_status of ["filled", "submitted", "accepted", 42]) {
+        const app = setup(async () => reply({ count: 1, observations: [{ symbol: "AAPL", order_status }] }));
+        assert.equal(await app.refresh(), false);
+        assert.equal(app.elements.get("pro-ticker-manual-history").children.length, 0);
+    }
+});
+test("network rejection clears previous history and reports failure", async () => {
+    let first = true;
+    const app = setup(async () => {
+        if (first) {
+            first = false;
+            return reply({ count: 1, observations: [{ symbol: "AAPL" }] });
+        }
+        throw new Error("Network offline");
+    });
+    assert.equal(await app.refresh(), true);
+    assert.equal(await app.refresh(), false);
+    assert.equal(app.elements.get("pro-ticker-manual-history").children.length, 0);
+    assert.match(app.elements.get("pro-ticker-manual-status").textContent, /Network offline/);
+});
