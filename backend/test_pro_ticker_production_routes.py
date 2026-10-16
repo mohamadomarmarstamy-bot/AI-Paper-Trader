@@ -96,5 +96,41 @@ class ProductionResearchRouteRegistrationTests(unittest.TestCase):
                 self.assertEqual(node.args[0].value, "GET")
 
 
+    def test_production_preview_always_disables_execution_on_success_and_failure(self):
+        tree = ast.parse(SOURCE.read_text(encoding="utf-8-sig"))
+        handlers = [node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)
+                    and node.name == "pro_ticker_paper_preview"]
+        self.assertEqual(len(handlers), 1)
+        returned = [node.value for node in ast.walk(handlers[0])
+                    if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict)]
+        self.assertEqual(len(returned), 2, "Preview success and error branches must be explicit")
+        for result in returned:
+            values = {key.value: value for key, value in zip(result.keys, result.values)
+                      if isinstance(key, ast.Constant) and isinstance(key.value, str)}
+            with self.subTest(line=result.lineno):
+                for field, expected in (("paper", True), ("preview_only", True),
+                                        ("order_submitted", False), ("allowed", False),
+                                        ("virtual_budget_reconciliation_ready", False)):
+                    self.assertIn(field, values)
+                    self.assertIsInstance(values[field], ast.Constant)
+                    self.assertIs(values[field].value, expected)
+
+    def test_research_submission_has_no_direct_broker_order_calls(self):
+        tree = ast.parse(SOURCE.read_text(encoding="utf-8-sig"))
+        handlers = [node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)
+                    and node.name == "auto_trader_pro_ticker_manual_submissions"]
+        self.assertEqual(len(handlers), 1)
+        calls = [node for node in ast.walk(handlers[0]) if isinstance(node, ast.Call)]
+        broker_calls = [node for node in calls if isinstance(node.func, ast.Name)
+                        and node.func.id == "alpaca_market_data_request"]
+        self.assertEqual(len(broker_calls), 1)
+        self.assertIsInstance(broker_calls[0].args[0], ast.Constant)
+        self.assertEqual(broker_calls[0].args[0].value, "GET")
+        forbidden = {"submit_alpaca_paper_market_order", "submit_alpaca_paper_order",
+                     "close_auto_trader_position", "alpaca_paper_request"}
+        invoked = {node.func.id for node in calls if isinstance(node.func, ast.Name)}
+        self.assertFalse(invoked & forbidden)
+
+
 if __name__ == "__main__":
     unittest.main()
