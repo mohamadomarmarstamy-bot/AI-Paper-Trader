@@ -10,6 +10,7 @@ from typing import Any
 from database import get_connection
 from pro_ticker_budget_ledger import get_pro_ticker_reservation
 from pro_ticker_release_eligibility import review_paper_release_eligibility
+from pro_ticker_exit_links import _SCHEMA as _EXIT_LINK_SCHEMA
 
 
 def review_persisted_paper_release(reservation_id: str) -> dict[str, Any]:
@@ -26,6 +27,10 @@ def review_persisted_paper_release(reservation_id: str) -> dict[str, Any]:
     if not entry_id:
         return {**base, "reason": "entry_order_unlinked"}
     with get_connection() as conn:
+        # A fresh PAPER ledger may not have any exit links yet.
+        # Initialize the empty link table before querying it; this never
+        # creates links, posts shares, or authorizes budget release.
+        conn.executescript(_EXIT_LINK_SCHEMA)
         # Read only; never infer a completed exit from absent broker positions.
         # SQLite symbol-wide share balances cannot establish reservation-level
         # ownership when there are multiple historical entry reservations.
