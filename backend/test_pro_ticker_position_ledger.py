@@ -58,6 +58,14 @@ class PaperPositionLedgerTests(unittest.TestCase):
             with self.subTest(updates=updates), self.assertRaises(ValueError):
                 self.post(**updates)
 
+    def test_one_broker_order_cannot_change_symbol_or_side_across_events(self):
+        self.post(filled_shares=2)
+        for updates in ({"symbol": "MSFT"}, {"side": "sell"}):
+            with self.subTest(updates=updates), self.assertRaisesRegex(ValueError, "another symbol or side"):
+                self.post("execution-2", filled_shares=1, **updates)
+        self.assertEqual(ledger.get_accounted_paper_order_shares("paper-order-1"), 2)
+        self.assertEqual(ledger.list_pro_ticker_strategy_positions()["positions"][0]["shares"], 2)
+
     def test_sell_reduces_strategy_position(self):
         self.post()
         result = self.post(
