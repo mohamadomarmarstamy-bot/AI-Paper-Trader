@@ -114,6 +114,15 @@ class ProTickerFrontendIntegrationTests(unittest.TestCase):
         self.assertLess(invalidate, save_request)
         self.assertIn("if (version !== refreshVersion) return false;", self.js)
 
+    def test_malformed_observations_are_rejected_before_rendering(self):
+        self.assertIn("data.observations.some(record =>", self.js)
+        self.assertIn('typeof record.symbol !== "string"', self.js)
+        self.assertIn('throw new Error("Invalid research observation")', self.js)
+        self.assertLess(
+            self.js.index("data.observations.some(record =>"),
+            self.js.index("rows.replaceChildren()"),
+        )
+
     def test_frontend_exposes_no_order_submission_controls(self):
         self.assertIn("Research only", self.html)
         self.assertIn("no PAPER orders placed", self.js)
