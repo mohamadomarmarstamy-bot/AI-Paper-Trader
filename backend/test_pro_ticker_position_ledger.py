@@ -117,6 +117,28 @@ class PaperPositionLedgerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.cumulative(3, side="sell")
 
+    def test_cumulative_exit_partial_replay_and_full_close(self):
+        self.cumulative(5)
+        first = self.cumulative(
+            2, broker_order_id="paper-sell-cumulative", side="sell",
+        )
+        self.assertEqual(first["delta_shares"], 2)
+        self.assertEqual(first["current_shares"], 3)
+        replay = self.cumulative(
+            2, broker_order_id="paper-sell-cumulative", side="sell",
+        )
+        self.assertEqual(replay["delta_shares"], 0)
+        completed = self.cumulative(
+            5, broker_order_id="paper-sell-cumulative", side="sell",
+        )
+        self.assertEqual(completed["delta_shares"], 3)
+        self.assertEqual(completed["current_shares"], 0)
+        stale = self.cumulative(
+            2, broker_order_id="paper-sell-cumulative", side="sell",
+        )
+        self.assertTrue(stale["stale_snapshot"])
+        self.assertEqual(ledger.list_pro_ticker_strategy_positions()["positions"], [])
+
     def test_cumulative_sell_cannot_oversell(self):
         self.cumulative(3)
         with self.assertRaises(ValueError):
