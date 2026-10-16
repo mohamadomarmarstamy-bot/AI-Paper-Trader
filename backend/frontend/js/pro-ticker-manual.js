@@ -20,7 +20,10 @@
         try {
             const data = await request(endpoint + "?limit=100");
             rows.replaceChildren();
-            for (const record of data.observations || []) {
+            if (!Array.isArray(data.observations)) {
+                throw new Error("Unexpected research response");
+            }
+            for (const record of data.observations) {
                 const tr = document.createElement("tr");
                 for (const value of [
                     record.symbol,
