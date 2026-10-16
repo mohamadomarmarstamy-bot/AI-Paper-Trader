@@ -492,6 +492,35 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertEqual(get_pro_ticker_reservation(new_id)["status"], "filled")
         self.assertGreaterEqual(get_pro_ticker_budget()["committed"], 75)
 
+    def test_partial_paper_exit_does_not_pass_final_reconciliation(self):
+        from pro_ticker_verified_exit_fill_bridge import account_linked_paper_exit_snapshot
+        from pro_ticker_budget_ledger import get_pro_ticker_budget
+        from pro_ticker_position_ledger import get_accounted_paper_order_shares
+        from database import get_connection
+        budget_before = get_pro_ticker_budget()
+        with get_connection() as conn:
+            conn.execute(
+                "DELETE FROM pro_ticker_strategy_fill_events WHERE broker_order_id = ?",
+                (EXIT_ID,),
+            )
+            conn.execute(
+                "UPDATE pro_ticker_strategy_positions SET shares = 5 WHERE symbol = ?",
+                ("AAPL",),
+            )
+        partial = {**self.exit_order, "status": "partially_filled", "filled_qty": "2"}
+        posted = account_linked_paper_exit_snapshot(EXIT_ID, partial)
+        self.assertEqual(posted["delta_shares"], 2)
+        self.assertEqual(get_accounted_paper_order_shares(EXIT_ID), 2)
+        review = self.audit(exit_orders={EXIT_ID: partial})
+        self.assertFalse(review["verified"])
+        self.assertFalse(review["release_authorized"])
+        self.assertFalse(review["budget_released"])
+        self.assertEqual(get_pro_ticker_budget(), budget_before)
+        final = account_linked_paper_exit_snapshot(EXIT_ID, self.exit_order)
+        self.assertEqual(final["delta_shares"], 3)
+        self.assertTrue(self.audit()["verified"])
+        self.assertEqual(get_pro_ticker_budget(), budget_before)
+
     def test_full_alpaca_paper_get_rejects_wrong_exit_snapshot(self):
         orders = {
             ENTRY_ID: self.entry_order,
