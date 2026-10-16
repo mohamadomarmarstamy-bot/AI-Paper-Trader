@@ -68,5 +68,22 @@ class ProTickerRouteBoundaryTests(unittest.TestCase):
             asyncio.run(routes["pro_ticker_paper_preview"](FakeRequest(error=RuntimeError("body should not be parsed"))))
 
 
+    def test_authenticated_submission_rejects_non_object_payload(self):
+        from fastapi import HTTPException
+        routes = isolated_routes()
+        routes["require_app_session"] = lambda request: None
+        with self.assertRaises(HTTPException) as caught:
+            asyncio.run(routes["auto_trader_pro_ticker_manual_submissions"](FakeRequest(["AAPL"])))
+        self.assertEqual(caught.exception.status_code, 422)
+
+    def test_authenticated_preview_rejects_non_object_payload(self):
+        from fastapi import HTTPException
+        routes = isolated_routes()
+        routes["require_app_session"] = lambda request: None
+        with self.assertRaises(HTTPException) as caught:
+            asyncio.run(routes["pro_ticker_paper_preview"](FakeRequest(["AAPL"])))
+        self.assertEqual(caught.exception.status_code, 422)
+
+
 if __name__ == "__main__":
     unittest.main()
