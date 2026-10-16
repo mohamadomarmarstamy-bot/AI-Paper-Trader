@@ -46,10 +46,13 @@
             return false;
         }
     }
+    let submitting = false;
     form.addEventListener("submit", async (event) => {
         event.preventDefault();
+        if (submitting) return;
+        submitting = true;
         const button = form.querySelector('button[type="submit"]');
-        button.disabled = true;
+        if (button) button.disabled = true;
         setStatus("Saving research observations...");
         try {
             const result = await request(endpoint, {
@@ -71,7 +74,8 @@
         } catch (error) {
             setStatus("Could not save: " + error.message);
         } finally {
-            button.disabled = false;
+            submitting = false;
+            if (button) button.disabled = false;
         }
     });
     window.loadProTickerManualLab = refresh;
