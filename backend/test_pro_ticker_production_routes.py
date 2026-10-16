@@ -58,5 +58,43 @@ class ProductionResearchRouteRegistrationTests(unittest.TestCase):
         self.assertEqual(preview, [("POST", "pro_ticker_paper_preview")])
 
 
+    def test_production_routes_require_session_before_request_body_or_io(self):
+        tree = ast.parse(SOURCE.read_text(encoding="utf-8-sig"))
+        handlers = set(EXPECTED.values())
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name not in handlers:
+                continue
+            with self.subTest(handler=node.name):
+                self.assertTrue(node.body, "Handler must not be empty")
+                first = node.body[1] if isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant) and isinstance(node.body[0].value.value, str) else node.body[0]
+                self.assertIsInstance(first, ast.Expr)
+                self.assertIsInstance(first.value, ast.Call)
+                self.assertIsInstance(first.value.func, ast.Name)
+                self.assertEqual(first.value.func.id, "require_app_session")
+
+    def test_production_preview_contains_no_order_submission_calls(self):
+        tree = ast.parse(SOURCE.read_text(encoding="utf-8-sig"))
+        handlers = [node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)
+                    and node.name == "pro_ticker_paper_preview"]
+        self.assertEqual(len(handlers), 1)
+        calls = [node for node in ast.walk(handlers[0]) if isinstance(node, ast.Call)]
+        forbidden = {
+            "submit_alpaca_paper_market_order",
+            "submit_alpaca_paper_order",
+            "close_auto_trader_position",
+            "close_all_auto_trader_positions",
+        }
+        invoked = {node.func.id for node in calls if isinstance(node.func, ast.Name)}
+        self.assertFalse(invoked & forbidden, f"Order calls in preview: {invoked & forbidden}")
+        broker_calls = [node for node in calls if isinstance(node.func, ast.Name)
+                        and node.func.id == "alpaca_paper_request"]
+        self.assertTrue(broker_calls)
+        for node in broker_calls:
+            with self.subTest(line=node.lineno):
+                self.assertTrue(node.args)
+                self.assertIsInstance(node.args[0], ast.Constant)
+                self.assertEqual(node.args[0].value, "GET")
+
+
 if __name__ == "__main__":
     unittest.main()
