@@ -11,6 +11,7 @@ class AlpacaPaperReaderTests(unittest.TestCase):
     def setUp(self):
         self.response = Mock()
         self.response.json.return_value = {"id": "abc", "status": "filled"}
+        self.response.status_code = 200
         self.http_get = Mock(return_value=self.response)
         self.reader = make_alpaca_paper_order_reader(
             key_id="test-key", secret_key="test-secret",
@@ -23,8 +24,15 @@ class AlpacaPaperReaderTests(unittest.TestCase):
         args, kwargs = self.http_get.call_args
         self.assertEqual(args[0], PAPER_BASE_URL + "/v2/orders/abc")
         self.assertEqual(kwargs["timeout"], 10.0)
+        self.assertFalse(kwargs["allow_redirects"])
         self.assertEqual(kwargs["headers"]["APCA-API-KEY-ID"], "test-key")
         self.response.raise_for_status.assert_called_once()
+
+    def test_redirect_refused_without_following(self):
+        self.response.status_code = 302
+        with self.assertRaisesRegex(ValueError, "redirect refused"):
+            self.reader("abc")
+        self.assertFalse(self.http_get.call_args.kwargs["allow_redirects"])
 
     def test_mismatched_order_fails_closed(self):
         self.response.json.return_value = {"id": "different"}
