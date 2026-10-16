@@ -23,6 +23,7 @@ on:
       - 'backend/pro_ticker_order_linking.py'
       - 'backend/pro_ticker_verified_fill_bridge.py'
       - 'backend/test_pro_ticker_verified_fill_bridge.py'
+      - 'backend/test_pro_ticker_paper_fill_lifecycle.py'
       - 'backend/test_pro_ticker_order_linking.py'
       - 'backend/test_pro_ticker_fill_posting_preview.py'
       - 'backend/test_pro_ticker_position_audit.py'
@@ -85,5 +86,7 @@ jobs:
         run: python -m unittest discover -s backend -p test_pro_ticker_order_linking.py -v
       - name: Verified PAPER entry fill bridge tests
         run: python -m unittest discover -s backend -p test_pro_ticker_verified_fill_bridge.py -v
+      - name: End-to-end PAPER fill ledger lifecycle tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_paper_fill_lifecycle.py -v
       - name: Frontend JavaScript syntax check
         run: node --check backend/frontend/js/pro-ticker-manual.js
