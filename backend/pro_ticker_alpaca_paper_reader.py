@@ -42,10 +42,13 @@ def make_alpaca_paper_order_reader(
             timeout=timeout_seconds,
             allow_redirects=False,
         )
-        if 300 <= response.status_code < 400:
+        status_code = response.status_code
+        if type(status_code) is not int:
+            raise ValueError("PAPER broker returned invalid HTTP status.")
+        if 300 <= status_code < 400:
             raise ValueError("PAPER broker redirect refused.")
         response.raise_for_status()
-        if response.status_code != 200:
+        if status_code != 200:
             raise ValueError("PAPER broker returned unexpected HTTP status.")
         payload = response.json()
         if not isinstance(payload, dict) or payload.get("id") != order_id:
