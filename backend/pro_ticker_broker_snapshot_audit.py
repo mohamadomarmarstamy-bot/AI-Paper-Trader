@@ -47,6 +47,8 @@ def audit_linked_paper_broker_snapshots(
     if get_accounted_paper_order_shares(entry_id) != entry["filled_shares"]:
         return {**base, "reason": "entry_accounting_mismatch"}
     linked = review_linked_reservation_paper_shares(reservation_id)
+    if linked.get("remaining_attributed_shares") is not None and linked["remaining_attributed_shares"] < 0:
+        return {**base, "reason": "negative_reservation_share_balance"}
     if "entry_shares" not in linked:
         return {**base, "reason": linked.get("reason", "linked_share_review_failed")}
     if linked["entry_shares"] != entry["filled_shares"]:
