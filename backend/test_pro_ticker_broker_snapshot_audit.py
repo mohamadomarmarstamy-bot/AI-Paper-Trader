@@ -187,6 +187,28 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertFalse(result["budget_released"])
         self.assertFalse(result["database_updated"])
 
+    def test_full_alpaca_paper_get_rejects_missing_exit_response(self):
+        requested = []
+        def http_get(url, **kwargs):
+            order_id = url.rsplit("/", 1)[-1]
+            requested.append(order_id)
+            response = Mock()
+            response.status_code = 200
+            response.json.return_value = (
+                self.entry_order if order_id == ENTRY_ID else None
+            )
+            return response
+        result = audit_alpaca_paper_reservation(
+            self.reservation_id, paper_key_id="test-paper-key",
+            paper_secret_key="test-paper-secret", http_get=http_get,
+        )
+        self.assertEqual(requested, [ENTRY_ID, EXIT_ID])
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["reason"], "paper_order_fetch_failed")
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+        self.assertFalse(result["database_updated"])
+
     def test_fetched_broker_audit_uses_exact_linked_order_ids(self):
         requested = []
         orders = {ENTRY_ID: self.entry_order, EXIT_ID: self.exit_order}
