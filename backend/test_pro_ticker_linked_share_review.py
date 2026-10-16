@@ -73,6 +73,18 @@ class LinkedReservationShareReviewTests(unittest.TestCase):
         self.assertFalse(first_result["release_authorized"])
         self.assertFalse(first_result["broker_reconciled"])
         self.assertFalse(second_result["budget_released"])
+        self.assertEqual(first_result["exit_shares"], 4)
+        self.assertEqual(second_result["exit_shares"], 0)
+        self.assertFalse(first_result["verified"])
+        self.assertFalse(second_result["verified"])
+
+    def test_missing_reservation_fails_closed(self):
+        result = review_linked_reservation_paper_shares(
+            "99999999-9999-4999-8999-999999999999"
+        )
+        self.assertEqual(result["reason"], "reservation_missing")
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
 
 
 if __name__ == "__main__":
