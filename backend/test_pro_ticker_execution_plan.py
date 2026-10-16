@@ -57,6 +57,14 @@ class PaperEntryPlanTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertIn("market_closed", self.plan(market_open=value)["block_reasons"])
 
+    def test_rejects_overflowing_or_zero_rounded_notional(self):
+        for price, shares in ((1e308, 2), (0.00001, 1)):
+            with self.subTest(price=price, shares=shares):
+                result = self.plan(reference_price=price, requested_shares=shares)
+                self.assertFalse(result["allowed_for_further_review"])
+                self.assertIn("invalid_estimated_notional", result["block_reasons"])
+                self.assertFalse(result["order_submitted"])
+
     def test_blocks_bad_values(self):
         for value in (float("nan"), float("inf"), -1, True):
             with self.subTest(value=value):
