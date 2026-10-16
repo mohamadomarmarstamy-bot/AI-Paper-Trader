@@ -72,6 +72,11 @@ class VerifiedExitBridgeTests(unittest.TestCase):
             )
         self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 5)
 
+    def test_noncanonical_order_id_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Canonical"):
+            account_linked_paper_exit_snapshot(" " + EXIT_ORDER_ID, self.order)
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 5)
+
     def test_unlinked_order_rejected(self):
         with self.assertRaisesRegex(ValueError, "ownership link missing"):
             account_linked_paper_exit_snapshot(
