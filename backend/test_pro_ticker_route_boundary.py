@@ -90,5 +90,33 @@ class ProTickerRouteBoundaryTests(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 422)
 
 
+    def test_authenticated_malformed_json_returns_400(self):
+        for route_name in ("auto_trader_pro_ticker_manual_submissions", "pro_ticker_paper_preview"):
+            with self.subTest(route=route_name):
+                routes = isolated_routes()
+                routes["require_app_session"] = lambda request: None
+                with self.assertRaises(RouteHTTPError) as caught:
+                    asyncio.run(routes[route_name](FakeRequest(error=ValueError("invalid JSON"))))
+                self.assertEqual(caught.exception.status_code, 400)
+
+    def test_authenticated_submission_requires_symbols_string(self):
+        for payload in ({}, {"symbols": None}, {"symbols": ["AAPL"]}, {"symbols": 123}):
+            with self.subTest(payload=payload):
+                routes = isolated_routes()
+                routes["require_app_session"] = lambda request: None
+                with self.assertRaises(RouteHTTPError) as caught:
+                    asyncio.run(routes["auto_trader_pro_ticker_manual_submissions"](FakeRequest(payload)))
+                self.assertEqual(caught.exception.status_code, 422)
+
+    def test_authenticated_preview_rejects_missing_or_invalid_notional(self):
+        for payload in ({"symbol": "AAPL"}, {"symbol": "AAPL", "proposed_notional": "bad"}, {"symbol": "AAPL MSFT", "proposed_notional": 10}):
+            with self.subTest(payload=payload):
+                routes = isolated_routes()
+                routes["require_app_session"] = lambda request: None
+                with self.assertRaises(RouteHTTPError) as caught:
+                    asyncio.run(routes["pro_ticker_paper_preview"](FakeRequest(payload)))
+                self.assertEqual(caught.exception.status_code, 422)
+
+
 if __name__ == "__main__":
     unittest.main()
