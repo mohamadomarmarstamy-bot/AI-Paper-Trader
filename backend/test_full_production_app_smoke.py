@@ -238,11 +238,17 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
         # a process-local cache or in-memory connection.
         db_path = Path(self.temp_dir.name) / "smoke.sqlite3"
         with sqlite3.connect(db_path) as connection:
-            tables = [row[0] for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )]
+            saved_rows = connection.execute(
+                "SELECT symbol, order_status, indicator_snapshot_json "
+                "FROM pro_ticker_manual_observations WHERE symbol = ? "
+                "ORDER BY id DESC LIMIT 1",
+                ("NVDA",),
+            ).fetchall()
         self.assertTrue(db_path.is_file())
-        self.assertTrue(any("pro_ticker" in table for table in tables))
+        self.assertEqual(len(saved_rows), 1)
+        self.assertEqual(saved_rows[0][0], "NVDA")
+        self.assertEqual(saved_rows[0][1], "research_only")
+        self.assertIn("alpaca_latest_trade", saved_rows[0][2])
 
         with patch.object(self.main, "require_app_session", return_value=None):
             async def read():
