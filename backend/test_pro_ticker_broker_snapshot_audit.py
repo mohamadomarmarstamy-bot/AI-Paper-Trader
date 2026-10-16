@@ -92,6 +92,20 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertFalse(result["verified"])
         self.assertEqual(result["reason"], "paper_exit_client_order_id_mismatch")
 
+    def test_entry_broker_snapshot_share_mismatch_fails_closed(self):
+        incorrect = {**self.entry_order, "filled_qty": "3", "status": "partially_filled"}
+        result = self.audit(entry_order=incorrect)
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["reason"], "entry_broker_snapshot_not_fully_filled")
+        self.assertFalse(result["budget_released"])
+
+    def test_exit_broker_snapshot_share_mismatch_fails_closed(self):
+        incorrect = {**self.exit_order, "filled_qty": "4", "status": "canceled"}
+        result = self.audit(exit_orders={EXIT_ID: incorrect})
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["reason"], "exit_accounting_mismatch")
+        self.assertFalse(result["release_authorized"])
+
     def test_partial_exit_snapshot_fails_closed(self):
         partial = {**self.exit_order, "status": "partially_filled", "filled_qty": "2"}
         result = self.audit(exit_orders={EXIT_ID: partial})
