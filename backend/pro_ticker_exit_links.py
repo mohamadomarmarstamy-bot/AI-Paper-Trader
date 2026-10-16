@@ -55,6 +55,11 @@ def link_verified_paper_exit(
     order_id = broker_order.get("id")
     if not isinstance(order_id, str) or not order_id:
         raise ValueError("PAPER broker order ID required.")
+    try:
+        if str(uuid.UUID(order_id)) != order_id:
+            raise ValueError("Noncanonical PAPER broker order UUID.")
+    except (ValueError, AttributeError, TypeError) as error:
+        raise ValueError("Canonical PAPER broker order UUID required.") from error
     if broker_order.get("client_order_id") != client_id:
         raise ValueError("PAPER exit client order ID mismatch.")
     if str(broker_order.get("symbol") or "") != symbol or str(broker_order.get("side") or "").lower() != "sell":
