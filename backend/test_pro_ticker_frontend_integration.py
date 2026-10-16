@@ -144,6 +144,13 @@ class ProTickerFrontendIntegrationTests(unittest.TestCase):
         self.assertIn("Loaded ", self.js)
         self.assertIn("research observation(s).", self.js)
 
+    def test_array_shaped_observation_records_are_rejected(self):
+        self.assertIn("Array.isArray(record)", self.js)
+        self.assertLess(
+            self.js.index("Array.isArray(record)"),
+            self.js.index("rows.replaceChildren()"),
+        )
+
     def test_frontend_exposes_no_order_submission_controls(self):
         self.assertIn("Research only", self.html)
         self.assertIn("no PAPER orders placed", self.js)
