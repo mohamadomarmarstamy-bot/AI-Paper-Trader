@@ -44,6 +44,14 @@ class AllocationAuditTests(unittest.TestCase):
         row = {**self.reservation, "status": "reserved", "broker_order_id": None}
         self.assertEqual(self.review(reservations=[row])["issues"][0]["reason"], "unsubmitted_position")
 
+    def test_unknown_reservation_status_fails_closed(self):
+        row = {**self.reservation, "status": "unexpected"}
+        self.assertEqual(self.review(reservations=[row])["reason"], "invalid_reservation_status")
+
+    def test_noncanonical_symbol_fails_closed(self):
+        row = {**self.reservation, "symbol": "aapl"}
+        self.assertEqual(self.review(reservations=[row])["reason"], "invalid_reservation")
+
     def test_invalid_snapshot_fails_closed(self):
         self.assertEqual(audit_virtual_allocations(None, [])["reason"], "invalid_snapshot")
 
