@@ -94,5 +94,7 @@ jobs:
       - name: Frontend research DOM wiring smoke test
         run: |
           python -m unittest discover -s backend -p 'test_pro_ticker_frontend_integration.py' -v
+      - name: Frontend research runtime DOM tests
+        run: node --test backend/frontend/js/pro-ticker-manual.test.cjs
       - name: Frontend JavaScript syntax check
         run: node --check backend/frontend/js/pro-ticker-manual.js
