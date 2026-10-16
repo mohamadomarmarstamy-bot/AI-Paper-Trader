@@ -96,6 +96,20 @@ class PersistedPaperReleaseReviewTests(unittest.TestCase):
         self.assertEqual(positions.list_pro_ticker_strategy_positions()["positions"], [])
         self.assertEqual(get_pro_ticker_budget()["committed"], 1000)
 
+    def test_historical_same_symbol_reservation_blocks_review(self):
+        with database.get_connection() as conn:
+            conn.execute(
+                "INSERT INTO pro_ticker_paper_reservations "
+                "(id, symbol, notional_cents, status, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                ("dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                 "AAPL", 100, "released",
+                 "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+            )
+        result = review_persisted_paper_release(self.reservation_id)
+        self.assertEqual(result["reason"], "other_reservations_share_symbol")
+        self.assertFalse(result["release_authorized"])
+
     def test_unattributed_buy_blocks_release_review(self):
         positions.post_verified_cumulative_paper_fill(
             broker_order_id="ffffffff-ffff-4fff-8fff-ffffffffffff",
