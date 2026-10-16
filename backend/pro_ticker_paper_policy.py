@@ -48,8 +48,17 @@ def check_pro_ticker_paper_entry(
     if data_age_seconds < 0 or max_data_age_seconds <= 0 or data_age_seconds > max_data_age_seconds:
         return PaperAdmission(False, "stale_market_data")
     normalized = symbol.strip().upper() if isinstance(symbol, str) else ""
-    if not normalized or not normalized.replace(".", "").isalnum():
+    if not normalized or not normalized.isascii() or not normalized.replace(".", "").isalnum():
         return PaperAdmission(False, "invalid_symbol")
+    # Missing or malformed broker collision snapshots must never imply
+    # that there are no existing PAPER positions or pending orders.
+    if (
+        not isinstance(open_position_symbols, (set, frozenset))
+        or not isinstance(open_order_symbols, (set, frozenset))
+        or any(not isinstance(s, str) or not s.strip() for s in open_position_symbols)
+        or any(not isinstance(s, str) or not s.strip() for s in open_order_symbols)
+    ):
+        return PaperAdmission(False, "invalid_broker_collision_snapshot")
     if normalized in {str(s).upper() for s in open_position_symbols}:
         return PaperAdmission(False, "existing_position")
     if normalized in {str(s).upper() for s in open_order_symbols}:
