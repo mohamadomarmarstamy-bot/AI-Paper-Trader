@@ -16221,6 +16221,34 @@ def pro_ticker_paper_fill_posting_preview(
         }
 
 
+@app.get("/auto-trader/pro-ticker-paper-combined-audit")
+def pro_ticker_paper_combined_audit(request: Request) -> dict[str, Any]:
+    """Read-only internal ledger and shared PAPER broker comparison."""
+    require_app_session(request)
+    from pro_ticker_budget_ledger import list_pro_ticker_reservations
+    from pro_ticker_position_ledger import list_pro_ticker_strategy_positions
+    from pro_ticker_combined_paper_audit import review_paper_allocation_and_broker
+
+    try:
+        reservations = list_pro_ticker_reservations(limit=500)["reservations"]
+        if len(reservations) >= 500:
+            raise ValueError("Incomplete reservation snapshot.")
+        positions = list_pro_ticker_strategy_positions()["positions"]
+        broker_positions = fetch_alpaca_paper_positions()
+        if not isinstance(broker_positions, list):
+            raise ValueError("Invalid PAPER broker positions.")
+        return review_paper_allocation_and_broker(
+            reservations, positions, broker_positions,
+        )
+    except Exception:
+        return {
+            "paper": True, "preview_only": True, "reconciled": False,
+            "order_submitted": False, "database_updated": False,
+            "budget_released": False,
+            "reason": "combined_paper_audit_unavailable",
+        }
+
+
 @app.get("/auto-trader/pro-ticker-paper-allocation-audit")
 def pro_ticker_paper_allocation_audit(request: Request) -> dict[str, Any]:
     """Read-only consistency audit of PAPER reservations and strategy shares."""
