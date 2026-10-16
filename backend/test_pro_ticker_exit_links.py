@@ -62,6 +62,18 @@ class PaperExitLinkTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "side mismatch"):
             self.link({**self.order, "side": "buy"})
 
+    def test_noncanonical_broker_side_rejected(self):
+        for side in ("SELL", "Sell", " sell ", 1):
+            with self.subTest(side=side):
+                with self.assertRaisesRegex(ValueError, "side mismatch"):
+                    self.link({**self.order, "side": side})
+
+    def test_noncanonical_broker_symbol_rejected(self):
+        for symbol in ("aapl", "AAPL ", " AAPL", 123):
+            with self.subTest(symbol=symbol):
+                with self.assertRaisesRegex(ValueError, "symbol or side mismatch"):
+                    self.link({**self.order, "symbol": symbol})
+
     def test_wrong_exit_quantity_rejected(self):
         with self.assertRaisesRegex(ValueError, "quantity mismatch"):
             self.link({**self.order, "qty": "4"})
