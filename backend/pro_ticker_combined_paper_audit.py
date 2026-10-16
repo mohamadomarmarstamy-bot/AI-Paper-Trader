@@ -26,10 +26,21 @@ def review_paper_allocation_and_broker(
         broker = audit_strategy_paper_positions(strategy_positions, broker_positions)
     except (TypeError, ValueError, KeyError):
         broker = {"reason": "invalid_broker_snapshot", "reconciled": False}
+    broker_reason = broker.get("reason")
+    if broker_reason == "invalid_snapshot" or broker_reason == "invalid_broker_snapshot":
+        reason = "broker_snapshot_invalid"
+    elif broker_reason == "broker_position_shortfall":
+        reason = "broker_position_shortfall"
+    elif broker_reason != "order_ownership_reconciliation_required":
+        reason = "broker_review_unrecognized"
+    else:
+        reason = "broker_review_requires_verified_strategy_order_ownership"
     return {
         "paper": True, "preview_only": True, "reconciled": False,
         "order_submitted": False, "database_updated": False,
-        "budget_released": False,
-        "reason": "broker_review_requires_verified_strategy_order_ownership",
+        "budget_released": False, "broker_snapshot_consistent": (
+            reason == "broker_review_requires_verified_strategy_order_ownership"
+        ),
+        "reason": reason,
         "allocation_audit": internal, "broker_audit": broker,
     }
