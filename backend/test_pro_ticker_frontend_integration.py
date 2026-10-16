@@ -107,6 +107,13 @@ class ProTickerFrontendIntegrationTests(unittest.TestCase):
             self.js.index("rows.replaceChildren()"),
         )
 
+    def test_submitting_invalidates_inflight_history_refresh(self):
+        submit = self.js.index('form.addEventListener("submit"')
+        invalidate = self.js.index("refreshVersion += 1;", submit)
+        save_request = self.js.index("const result = await request(endpoint,", submit)
+        self.assertLess(invalidate, save_request)
+        self.assertIn("if (version !== refreshVersion) return false;", self.js)
+
     def test_frontend_exposes_no_order_submission_controls(self):
         self.assertIn("Research only", self.html)
         self.assertIn("no PAPER orders placed", self.js)
