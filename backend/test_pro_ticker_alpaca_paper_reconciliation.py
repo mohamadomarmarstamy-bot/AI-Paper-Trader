@@ -84,6 +84,50 @@ class AlpacaPaperReconciliationTests(unittest.TestCase):
         self.assertFalse(result["release_authorized"])
         self.assertFalse(result["budget_released"])
 
+    def test_non_json_broker_response_fails_closed(self):
+        response = Mock()
+        response.status_code = 200
+        response.json.side_effect = ValueError("invalid JSON")
+        http_get = Mock(return_value=response)
+        with patch(
+            "pro_ticker_paper_broker_fetch_audit.get_pro_ticker_reservation",
+            return_value={"broker_order_id": "abc"},
+        ), patch(
+            "pro_ticker_paper_broker_fetch_audit.get_connection",
+        ) as connection:
+            connection.return_value.__enter__.return_value.execute.return_value.fetchall.return_value = []
+            result = audit_alpaca_paper_reservation(
+                "reservation", paper_key_id="paper-key",
+                paper_secret_key="paper-secret", http_get=http_get,
+            )
+        self.assertEqual(result["reason"], "paper_order_fetch_failed")
+        self.assertFalse(result["verified"])
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+
+    def test_exit_fetch_failure_fails_closed(self):
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {"id": "entry"}
+        http_get = Mock(return_value=response)
+        with patch(
+            "pro_ticker_paper_broker_fetch_audit.get_pro_ticker_reservation",
+            return_value={"broker_order_id": "entry"},
+        ), patch(
+            "pro_ticker_paper_broker_fetch_audit.get_connection",
+        ) as connection:
+            connection.return_value.__enter__.return_value.execute.return_value.fetchall.return_value = [
+                {"broker_order_id": "exit"},
+            ]
+            result = audit_alpaca_paper_reservation(
+                "reservation", paper_key_id="paper-key",
+                paper_secret_key="paper-secret", http_get=http_get,
+            )
+        self.assertEqual(result["reason"], "paper_order_fetch_failed")
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+        self.assertEqual(http_get.call_count, 2)
+
     def test_valid_config_passes_reader_to_audit_without_release(self):
         http_get = Mock()
         with patch(
