@@ -102,6 +102,27 @@ def reserve_pro_ticker_budget(symbol: str, amount: float) -> dict[str, Any]:
     }
 
 
+def get_pro_ticker_reservation(reservation_id: str) -> dict[str, Any] | None:
+    """Look up one reservation by exact UUID, independent of history pagination."""
+    if not isinstance(reservation_id, str):
+        raise ValueError("Valid reservation UUID required.")
+    try:
+        canonical_id = str(uuid.UUID(reservation_id))
+    except (ValueError, AttributeError) as error:
+        raise ValueError("Valid reservation UUID required.") from error
+    if canonical_id != reservation_id:
+        raise ValueError("Canonical reservation UUID required.")
+    with get_connection() as conn:
+        _init(conn)
+        row = conn.execute(
+            "SELECT id, symbol, notional_cents, status, created_at, updated_at, "
+            "broker_order_id, note, expected_shares FROM pro_ticker_paper_reservations "
+            "WHERE id = ?", (canonical_id,),
+        ).fetchone()
+    return ({**dict(row), "notional": row["notional_cents"] / 100}
+            if row is not None else None)
+
+
 def list_pro_ticker_reservations(limit: int = 100) -> dict[str, Any]:
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
         raise ValueError("Invalid limit.")
