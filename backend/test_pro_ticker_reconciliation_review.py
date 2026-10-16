@@ -7,7 +7,7 @@ from pro_ticker_reconciliation_review import assess_reservation_state
 class ReconciliationReviewTests(unittest.TestCase):
     def setUp(self):
         self.reservation = {"symbol": "AAPL", "status": "reserved", "broker_order_id": "paper-123"}
-        self.order = {"id": "paper-123", "symbol": "AAPL", "status": "filled", "filled_qty": "5"}
+        self.order = {"id": "paper-123", "symbol": "AAPL", "side": "buy", "status": "filled", "filled_qty": "5"}
 
     def test_missing_order_keeps_reservation(self):
         result = assess_reservation_state(self.reservation, None)
@@ -38,6 +38,14 @@ class ReconciliationReviewTests(unittest.TestCase):
                 result = assess_reservation_state(reservation, order, position_exists=False)
                 self.assertFalse(result["safe_to_release"])
                 self.assertEqual(result["reason"], "reservation_order_unlinked")
+
+    def test_sell_or_unknown_side_never_releases(self):
+        for side in ("sell", None, "unknown", 1):
+            with self.subTest(side=side):
+                order = {**self.order, "side": side, "status": "canceled", "filled_qty": "0"}
+                result = assess_reservation_state(self.reservation, order, position_exists=False)
+                self.assertFalse(result["safe_to_release"])
+                self.assertEqual(result["reason"], "entry_order_side_unverified")
 
     def test_mismatched_order_never_releases(self):
         result = assess_reservation_state(self.reservation, {**self.order, "id": "other"}, position_exists=False)
