@@ -123,6 +123,11 @@ class ProTickerFrontendIntegrationTests(unittest.TestCase):
             self.js.index("rows.replaceChildren()"),
         )
 
+    def test_research_history_count_must_be_nonnegative_integer(self):
+        self.assertIn("!Number.isSafeInteger(data.count)", self.js)
+        self.assertIn("data.count < 0", self.js)
+        self.assertNotIn("data.count !== data.observations.length", self.js)
+
     def test_frontend_exposes_no_order_submission_controls(self):
         self.assertIn("Research only", self.html)
         self.assertIn("no PAPER orders placed", self.js)
