@@ -32,11 +32,18 @@ def plan_paper_entry(
         blocked.append("invalid_market_or_budget_data")
     if market_open is not True:
         blocked.append("market_closed")
-    if existing_position:
-        blocked.append("position_already_exists")
-    if existing_open_order:
-        blocked.append("open_order_already_exists")
-    if isinstance(quote_age_seconds, (int, float)) and math.isfinite(quote_age_seconds):
+    if existing_position is not False:
+        blocked.append("position_already_exists_or_unknown")
+    if existing_open_order is not False:
+        blocked.append("open_order_already_exists_or_unknown")
+    if (
+        isinstance(maximum_quote_age_seconds, bool)
+        or not isinstance(maximum_quote_age_seconds, (int, float))
+        or not math.isfinite(maximum_quote_age_seconds)
+        or maximum_quote_age_seconds <= 0
+    ):
+        blocked.append("invalid_maximum_quote_age")
+    elif isinstance(quote_age_seconds, (int, float)) and not isinstance(quote_age_seconds, bool) and math.isfinite(quote_age_seconds):
         if quote_age_seconds > maximum_quote_age_seconds:
             blocked.append("stale_quote")
     estimated_notional = None
