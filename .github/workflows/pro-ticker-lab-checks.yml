@@ -26,6 +26,8 @@ on:
       - 'backend/test_pro_ticker_paper_fill_lifecycle.py'
       - 'backend/pro_ticker_virtual_allocation_audit.py'
       - 'backend/test_pro_ticker_virtual_allocation_audit.py'
+      - 'backend/pro_ticker_combined_paper_audit.py'
+      - 'backend/test_pro_ticker_combined_paper_audit.py'
       - 'backend/test_pro_ticker_order_linking.py'
       - 'backend/test_pro_ticker_fill_posting_preview.py'
       - 'backend/test_pro_ticker_position_audit.py'
@@ -92,5 +94,7 @@ jobs:
         run: python -m unittest discover -s backend -p test_pro_ticker_paper_fill_lifecycle.py -v
       - name: PAPER virtual allocation audit tests
         run: python -m unittest discover -s backend -p test_pro_ticker_virtual_allocation_audit.py -v
+      - name: Combined PAPER broker and allocation audit tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_combined_paper_audit.py -v
       - name: Frontend JavaScript syntax check
         run: node --check backend/frontend/js/pro-ticker-manual.js
