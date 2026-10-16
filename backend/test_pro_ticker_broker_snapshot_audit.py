@@ -2,7 +2,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 import database
 from pro_ticker_test_db_helper import tracked_test_connections
@@ -14,6 +14,7 @@ from pro_ticker_exit_links import link_verified_paper_exit
 from pro_ticker_position_ledger import post_verified_cumulative_paper_fill
 from pro_ticker_broker_snapshot_audit import audit_linked_paper_broker_snapshots
 from pro_ticker_paper_broker_fetch_audit import audit_fetched_paper_reservation
+from pro_ticker_alpaca_paper_reconciliation import audit_alpaca_paper_reservation
 
 
 ENTRY_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -73,6 +74,51 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         )
         values.update(updates)
         return audit_linked_paper_broker_snapshots(**values)
+
+    def test_full_alpaca_paper_get_to_sqlite_audit_read_only(self):
+        orders = {ENTRY_ID: self.entry_order, EXIT_ID: self.exit_order}
+        requested = []
+        def http_get(url, *, headers, timeout, allow_redirects):
+            self.assertTrue(url.startswith("https://paper-api.alpaca.markets/v2/orders/"))
+            self.assertFalse(allow_redirects)
+            self.assertEqual(timeout, 10.0)
+            self.assertEqual(headers["APCA-API-KEY-ID"], "test-paper-key")
+            order_id = url.rsplit("/", 1)[-1]
+            requested.append(order_id)
+            response = Mock()
+            response.status_code = 200
+            response.json.return_value = orders[order_id]
+            return response
+        result = audit_alpaca_paper_reservation(
+            self.reservation_id, paper_key_id="test-paper-key",
+            paper_secret_key="test-paper-secret", http_get=http_get,
+        )
+        self.assertEqual(set(requested), {ENTRY_ID, EXIT_ID})
+        self.assertEqual(len(requested), 2)
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["broker_origin_authenticated"])
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+        self.assertFalse(result["database_updated"])
+
+    def test_full_alpaca_paper_get_rejects_wrong_exit_snapshot(self):
+        orders = {
+            ENTRY_ID: self.entry_order,
+            EXIT_ID: {**self.exit_order, "filled_qty": "4", "status": "canceled"},
+        }
+        def http_get(url, **kwargs):
+            response = Mock()
+            response.status_code = 200
+            response.json.return_value = orders[url.rsplit("/", 1)[-1]]
+            return response
+        result = audit_alpaca_paper_reservation(
+            self.reservation_id, paper_key_id="test-paper-key",
+            paper_secret_key="test-paper-secret", http_get=http_get,
+        )
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["reason"], "exit_accounting_mismatch")
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
 
     def test_fetched_broker_audit_uses_exact_linked_order_ids(self):
         requested = []
