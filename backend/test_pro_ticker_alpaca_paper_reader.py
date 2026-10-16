@@ -44,6 +44,15 @@ class AlpacaPaperReaderTests(unittest.TestCase):
                     self.reader("abc")
                 self.response.json.assert_not_called()
 
+    def test_malformed_http_status_never_parses_order(self):
+        for status in (None, True, False, "200", 200.0, [], {}):
+            with self.subTest(status=status):
+                self.response.status_code = status
+                self.response.json.reset_mock()
+                with self.assertRaisesRegex(ValueError, "invalid HTTP status"):
+                    self.reader("abc")
+                self.response.json.assert_not_called()
+
     def test_mismatched_order_fails_closed(self):
         self.response.json.return_value = {"id": "different"}
         with self.assertRaises(ValueError):
