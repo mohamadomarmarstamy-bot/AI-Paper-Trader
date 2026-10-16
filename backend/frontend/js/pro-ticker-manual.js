@@ -28,7 +28,7 @@
                 throw new Error("Unexpected research response");
             }
             if (data.observations.some(record =>
-                !record || typeof record !== "object" ||
+                !record || typeof record !== "object" || Array.isArray(record) ||
                 typeof record.symbol !== "string" || !record.symbol.trim() ||
                 (record.market_snapshot != null &&
                     (typeof record.market_snapshot !== "object" ||
