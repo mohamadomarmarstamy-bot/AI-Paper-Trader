@@ -544,5 +544,64 @@ print("RESTART_RESULT:" + json.dumps(asyncio.run(check())))
         )
 
 
+    def test_mixed_batch_deduplicates_and_preserves_offline_research(self):
+        import asyncio
+        import httpx
+        from unittest.mock import patch
+
+        def read_only_quote(method, path, timeout):
+            self.assertEqual(method, "GET")
+            self.assertEqual(timeout, 3.0)
+            if path.endswith("/FAILR/trades/latest"):
+                raise RuntimeError("market feed unavailable")
+            self.assertEqual(path, "/v2/stocks/GOODR/trades/latest")
+            return {"trade": {
+                "p": 15.25, "t": "2026-10-16T15:00:00Z", "s": 3,
+            }}
+
+        with patch.object(self.main, "APP_SESSION_SECRET", "isolated-ci-session-key"), \
+             patch.object(self.main, "alpaca_market_data_request",
+                          side_effect=read_only_quote) as market, \
+             patch.object(self.main, "alpaca_paper_request",
+                          side_effect=AssertionError("No broker order access")):
+            token = self.main.create_app_session_token()
+
+            async def run():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=self.main.app),
+                    base_url="http://testserver",
+                    cookies={self.main.APP_SESSION_COOKIE: token},
+                ) as client:
+                    saved = await client.post(
+                        "/auto-trader/pro-ticker-manual-submissions",
+                        json={"symbols": "goodr, FAILR, GOODR"},
+                    )
+                    history = await client.get(
+                        "/auto-trader/pro-ticker-manual-submissions?limit=500"
+                    )
+                    return saved, history
+
+            saved, history = asyncio.run(run())
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(saved.json()["symbols"], ["GOODR", "FAILR"])
+        self.assertEqual(saved.json()["count"], 2)
+        self.assertEqual(saved.json()["market_snapshots_captured"], 1)
+        self.assertEqual(saved.json()["orders_submitted"], 0)
+        self.assertEqual(market.call_count, 2)
+        self.assertEqual(history.status_code, 200)
+        observations = {
+            row["symbol"]: row for row in history.json()["observations"]
+            if row["symbol"] in {"GOODR", "FAILR"}
+        }
+        self.assertEqual(observations["GOODR"]["market_snapshot"]["status"],
+                         "captured")
+        self.assertEqual(observations["FAILR"]["market_snapshot"]["status"],
+                         "unavailable")
+        self.assertTrue(all(
+            row["order_status"] == "research_only"
+            for row in observations.values()
+        ))
+
+
 if __name__ == "__main__":
     unittest.main()
