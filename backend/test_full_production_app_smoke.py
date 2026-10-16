@@ -88,5 +88,47 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
 
+    def test_real_app_authenticated_research_history_uses_temporary_database(self):
+        import asyncio
+        import httpx
+        from unittest.mock import patch
+
+        with patch.object(self.main, "require_app_session", return_value=None):
+            async def run():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=self.main.app),
+                    base_url="http://testserver",
+                ) as client:
+                    return await client.get(
+                        "/auto-trader/pro-ticker-manual-submissions?limit=10"
+                    )
+            response = asyncio.run(run())
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["research_only"])
+        self.assertEqual(response.json()["count"], 0)
+
+    def test_real_app_authenticated_preview_never_reaches_broker_on_bad_payload(self):
+        import asyncio
+        import httpx
+        from unittest.mock import patch
+
+        with patch.object(self.main, "require_app_session", return_value=None), \
+             patch.object(self.main, "alpaca_paper_request",
+                          side_effect=AssertionError("Broker must not be called")), \
+             patch.object(self.main, "fetch_alpaca_paper_positions",
+                          side_effect=AssertionError("Positions must not be called")):
+            async def run():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=self.main.app),
+                    base_url="http://testserver",
+                ) as client:
+                    return await client.post(
+                        "/auto-trader/pro-ticker-paper-preview",
+                        json={"symbol": "AAPL", "proposed_notional": "not-a-number"},
+                    )
+            response = asyncio.run(run())
+        self.assertEqual(response.status_code, 422)
+
+
 if __name__ == "__main__":
     unittest.main()
