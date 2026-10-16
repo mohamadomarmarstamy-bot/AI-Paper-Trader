@@ -16138,15 +16138,14 @@ def pro_ticker_paper_entry_fill_reconcile(
 ) -> dict[str, Any]:
     """Reconcile one linked PAPER entry order; never submit or cancel orders."""
     require_app_session(request)
-    from pro_ticker_budget_ledger import list_pro_ticker_reservations
+    from pro_ticker_budget_ledger import get_pro_ticker_reservation
     from pro_ticker_verified_fill_bridge import account_linked_paper_entry_snapshot
 
     try:
-        reservations = list_pro_ticker_reservations(limit=500)["reservations"]
-        matches = [row for row in reservations if row["id"] == reservation_id]
-        if len(matches) != 1 or not matches[0].get("broker_order_id"):
-            raise ValueError("A uniquely linked PAPER reservation is required.")
-        order_id = str(matches[0]["broker_order_id"])
+        reservation = get_pro_ticker_reservation(reservation_id)
+        if reservation is None or not reservation.get("broker_order_id"):
+            raise ValueError("A linked PAPER reservation is required.")
+        order_id = str(reservation["broker_order_id"])
         # Broker-generated Alpaca order IDs are UUIDs; reject unsafe paths.
         import uuid as _pro_ticker_uuid
         if str(_pro_ticker_uuid.UUID(order_id)) != order_id.lower():
