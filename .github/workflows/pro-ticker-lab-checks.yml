@@ -5,53 +5,6 @@ on:
     branches:
       - feature/pro-ticker-lab
   pull_request:
-    paths:
-      - 'backend/pro_ticker_manual_intake.py'
-      - 'backend/pro_ticker_paper_policy.py'
-      - 'backend/pro_ticker_budget_ledger.py'
-      - 'backend/pro_ticker_reconciliation_review.py'
-      - 'backend/pro_ticker_order_ownership.py'
-      - 'backend/pro_ticker_execution_plan.py'
-      - 'backend/pro_ticker_exit_plan.py'
-      - 'backend/pro_ticker_fill_verification.py'
-      - 'backend/pro_ticker_snapshot_review.py'
-      - 'backend/pro_ticker_exit_attribution.py'
-      - 'backend/pro_ticker_position_accounting.py'
-      - 'backend/pro_ticker_position_ledger.py'
-      - 'backend/pro_ticker_position_audit.py'
-      - 'backend/pro_ticker_fill_posting_preview.py'
-      - 'backend/pro_ticker_order_linking.py'
-      - 'backend/pro_ticker_verified_fill_bridge.py'
-      - 'backend/test_pro_ticker_verified_fill_bridge.py'
-      - 'backend/test_pro_ticker_paper_fill_lifecycle.py'
-      - 'backend/pro_ticker_virtual_allocation_audit.py'
-      - 'backend/test_pro_ticker_virtual_allocation_audit.py'
-      - 'backend/pro_ticker_combined_paper_audit.py'
-      - 'backend/test_pro_ticker_combined_paper_audit.py'
-      - 'backend/test_pro_ticker_reservation_lookup.py'
-      - 'backend/pro_ticker_exit_links.py'
-      - 'backend/test_pro_ticker_exit_links.py'
-      - 'backend/pro_ticker_verified_exit_review.py'
-      - 'backend/test_pro_ticker_verified_exit_review.py'
-      - 'backend/test_pro_ticker_order_linking.py'
-      - 'backend/test_pro_ticker_fill_posting_preview.py'
-      - 'backend/test_pro_ticker_position_audit.py'
-      - 'backend/test_pro_ticker_position_ledger.py'
-      - 'backend/test_pro_ticker_position_accounting.py'
-      - 'backend/test_pro_ticker_exit_attribution.py'
-      - 'backend/test_pro_ticker_snapshot_review.py'
-      - 'backend/test_pro_ticker_fill_verification.py'
-      - 'backend/test_pro_ticker_exit_plan.py'
-      - 'backend/test_pro_ticker_execution_plan.py'
-      - 'backend/test_pro_ticker_order_ownership.py'
-      - 'backend/test_pro_ticker_reconciliation_review.py'
-      - 'backend/test_pro_ticker_budget_ledger.py'
-      - 'backend/test_pro_ticker_paper_policy.py'
-      - 'backend/test_pro_ticker_manual_intake.py'
-      - 'backend/frontend/js/pro-ticker-manual.js'
-      - 'backend/frontend/index.html'
-      - 'backend/main.py'
-      - '.github/workflows/pro-ticker-lab-checks.yml'
 
 jobs:
   intake-tests:
@@ -128,5 +81,7 @@ jobs:
         run: python -m unittest discover -s backend -p test_pro_ticker_exit_links.py -v
       - name: Verified PAPER exit fill preview tests
         run: python -m unittest discover -s backend -p test_pro_ticker_verified_exit_review.py -v
+      - name: All Pro Ticker Lab tests (including new broker audit tests)
+        run: python -m unittest discover -s backend -p 'test_pro_ticker_*.py' -v
       - name: Frontend JavaScript syntax check
         run: node --check backend/frontend/js/pro-ticker-manual.js
