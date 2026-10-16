@@ -66,6 +66,20 @@ class PaperExitLinkTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "quantity mismatch"):
             self.link({**self.order, "qty": "4"})
 
+    def test_nonfinite_exit_quantity_rejected(self):
+        for value in ("nan", "inf", "-inf"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "quantity mismatch"):
+                    self.link({**self.order, "qty": value})
+
+    def test_symbol_whitespace_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Canonical symbol"):
+            exits.link_verified_paper_exit(
+                reservation_id=self.reservation_id, symbol="AAPL ",
+                expected_shares=3, broker_order={**self.order, "symbol": "AAPL "},
+                exit_id=self.exit_id,
+            )
+
     def test_unlinked_reservation_rejected(self):
         with patch.object(exits, "get_pro_ticker_reservation", return_value=None):
             with self.assertRaisesRegex(ValueError, "active PAPER"):
