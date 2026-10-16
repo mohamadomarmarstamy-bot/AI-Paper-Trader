@@ -16,6 +16,14 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
         cls.temp_dir = tempfile.TemporaryDirectory(prefix="pro-ticker-app-smoke-")
         cls.original_db = os.environ.get("DATABASE_PATH")
         os.environ["DATABASE_PATH"] = str(Path(cls.temp_dir.name) / "smoke.sqlite3")
+        # Discovery imports other test modules (and database) before setUpClass.
+        # Patch the already-loaded module as well as the environment so a broad
+        # suite never initializes or writes the repository's default SQLite file.
+        from unittest.mock import patch
+        database = importlib.import_module("database")
+        cls.db_patch = patch.object(database, "DATABASE_PATH", Path(os.environ["DATABASE_PATH"]))
+        cls.db_patch.start()
+        cls.addClassCleanup(cls.db_patch.stop)
         cls.main = importlib.import_module("main")
 
     @classmethod
