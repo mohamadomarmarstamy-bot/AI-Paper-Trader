@@ -299,6 +299,23 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
             self.assertFalse(audit["budget_released"])
         self.assertEqual(get_pro_ticker_budget(), budget_before)
 
+    def test_replayed_paper_exit_snapshot_with_reduced_fills_cannot_erase_ledger(self):
+        from pro_ticker_verified_exit_fill_bridge import account_linked_paper_exit_snapshot
+        from pro_ticker_position_ledger import get_accounted_paper_order_shares
+        from pro_ticker_budget_ledger import get_pro_ticker_budget
+        before = get_pro_ticker_budget()
+        stale = {**self.exit_order, "status": "canceled", "filled_qty": "3"}
+        result = account_linked_paper_exit_snapshot(EXIT_ID, stale)
+        self.assertFalse(result["posted"])
+        self.assertTrue(result["stale_snapshot"])
+        self.assertEqual(get_accounted_paper_order_shares(EXIT_ID), 5)
+        audit = self.audit(exit_orders={EXIT_ID: stale})
+        self.assertFalse(audit["verified"])
+        self.assertEqual(audit["reason"], "exit_accounting_mismatch")
+        self.assertFalse(audit["release_authorized"])
+        self.assertFalse(audit["budget_released"])
+        self.assertEqual(get_pro_ticker_budget(), before)
+
     def test_full_alpaca_paper_get_rejects_wrong_exit_snapshot(self):
         orders = {
             ENTRY_ID: self.entry_order,
