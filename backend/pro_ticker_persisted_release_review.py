@@ -61,6 +61,15 @@ def review_persisted_paper_release(reservation_id: str) -> dict[str, Any]:
         ).fetchone()[0]
         if other_reservations:
             return {**base, "reason": "other_active_reservations_share_symbol"}
+        # An unrelated entry in the symbol-wide position ledger makes its
+        # remaining share count unsuitable as reservation-specific proof.
+        unrelated_buys = conn.execute(
+            "SELECT COUNT(*) FROM pro_ticker_strategy_fill_events "
+            "WHERE symbol = ? AND side = 'buy' AND broker_order_id != ?",
+            (symbol, entry_id),
+        ).fetchone()[0]
+        if unrelated_buys:
+            return {**base, "reason": "unattributed_strategy_buy_fills"}
         unlinked_sells = conn.execute(
             "SELECT COUNT(*) FROM pro_ticker_strategy_fill_events "
             "WHERE symbol = ? AND side = 'sell' AND broker_order_id NOT IN "
