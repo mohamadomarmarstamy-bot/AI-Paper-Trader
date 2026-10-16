@@ -27,7 +27,7 @@ class AlpacaPaperReconciliationTests(unittest.TestCase):
         ), patch(
             "pro_ticker_paper_broker_fetch_audit.get_connection",
         ) as connection:
-            connection.return_value.__enter__.return_value.execute.return_value.fetchall.return_value = []
+            connection.return_value.execute.return_value.fetchall.return_value = []
             result = audit_alpaca_paper_reservation(
                 "reservation", paper_key_id="paper-key",
                 paper_secret_key="paper-secret", http_get=http_get,
@@ -47,7 +47,7 @@ class AlpacaPaperReconciliationTests(unittest.TestCase):
         ), patch(
             "pro_ticker_paper_broker_fetch_audit.get_connection",
         ) as connection:
-            connection.return_value.__enter__.return_value.execute.return_value.fetchall.return_value = []
+            connection.return_value.execute.return_value.fetchall.return_value = []
             result = audit_alpaca_paper_reservation(
                 "reservation", paper_key_id="paper-key",
                 paper_secret_key="paper-secret", http_get=http_get,
@@ -57,28 +57,36 @@ class AlpacaPaperReconciliationTests(unittest.TestCase):
         self.assertFalse(result["release_authorized"])
 
     def test_partial_fill_from_paper_endpoint_fails_closed(self):
-        response = Mock()
-        response.status_code = 200
-        response.json.return_value = {
-            "id": "abc", "client_order_id": "pt-reservation",
-            "symbol": "AAPL", "side": "buy", "qty": "5",
-            "filled_qty": "2", "status": "partially_filled",
-        }
-        http_get = Mock(return_value=response)
-        with patch(
-            "pro_ticker_paper_broker_fetch_audit.get_pro_ticker_reservation",
-            return_value={"broker_order_id": "abc"},
-        ), patch(
-            "pro_ticker_paper_broker_fetch_audit.get_connection",
-        ) as connection, patch(
-            "pro_ticker_broker_snapshot_audit.get_pro_ticker_reservation",
-            return_value={"broker_order_id": "abc", "status": "filled",
-                          "symbol": "AAPL", "expected_shares": 5},
+        import tempfile
+        from pathlib import Path
+        import database
+        from pro_ticker_test_db_helper import tracked_test_connections
+        from pro_ticker_budget_ledger import (
+            reserve_pro_ticker_budget, set_paper_reservation_expected_shares,
+            link_verified_paper_entry_order, record_verified_paper_order_state,
+        )
+        from pro_ticker_exit_links import get_pro_ticker_exit_link
+        from pro_ticker_position_ledger import list_pro_ticker_strategy_positions
+        with tempfile.TemporaryDirectory() as directory, tracked_test_connections(), patch.object(
+            database, "DATABASE_PATH", Path(directory) / "test.db",
         ):
-            connection.return_value.__enter__.return_value.execute.return_value.fetchall.return_value = []
+            reservation_id = reserve_pro_ticker_budget("AAPL", 100)["reservation_id"]
+            order_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+            set_paper_reservation_expected_shares(reservation_id, 5)
+            order = {
+                "id": order_id, "client_order_id": "pt-" + reservation_id,
+                "symbol": "AAPL", "side": "buy", "qty": "5",
+                "filled_qty": "2", "status": "partially_filled",
+            }
+            link_verified_paper_entry_order(reservation_id, order)
+            record_verified_paper_order_state(reservation_id, order_id, "partially_filled", filled_quantity=2)
+            get_pro_ticker_exit_link(order_id)  # Empty exit ledger.
+            list_pro_ticker_strategy_positions()  # Empty fill ledger.
+            response = Mock(status_code=200)
+            response.json.return_value = order
             result = audit_alpaca_paper_reservation(
-                "reservation", paper_key_id="paper-key",
-                paper_secret_key="paper-secret", http_get=http_get,
+                reservation_id, paper_key_id="paper-key",
+                paper_secret_key="paper-secret", http_get=Mock(return_value=response),
             )
         self.assertEqual(result["reason"], "entry_broker_snapshot_not_fully_filled")
         self.assertFalse(result["verified"])
@@ -96,7 +104,7 @@ class AlpacaPaperReconciliationTests(unittest.TestCase):
         ), patch(
             "pro_ticker_paper_broker_fetch_audit.get_connection",
         ) as connection:
-            connection.return_value.__enter__.return_value.execute.return_value.fetchall.return_value = []
+            connection.return_value.execute.return_value.fetchall.return_value = []
             result = audit_alpaca_paper_reservation(
                 "reservation", paper_key_id="paper-key",
                 paper_secret_key="paper-secret", http_get=http_get,
@@ -117,7 +125,7 @@ class AlpacaPaperReconciliationTests(unittest.TestCase):
         ), patch(
             "pro_ticker_paper_broker_fetch_audit.get_connection",
         ) as connection:
-            connection.return_value.__enter__.return_value.execute.return_value.fetchall.return_value = [
+            connection.return_value.execute.return_value.fetchall.return_value = [
                 {"broker_order_id": "exit"},
             ]
             result = audit_alpaca_paper_reservation(
@@ -140,7 +148,7 @@ class AlpacaPaperReconciliationTests(unittest.TestCase):
         ), patch(
             "pro_ticker_paper_broker_fetch_audit.get_connection",
         ) as connection:
-            connection.return_value.__enter__.return_value.execute.return_value.fetchall.return_value = []
+            connection.return_value.execute.return_value.fetchall.return_value = []
             result = audit_alpaca_paper_reservation(
                 "reservation", paper_key_id="paper-key",
                 paper_secret_key="paper-secret", http_get=http_get,
@@ -164,7 +172,7 @@ class AlpacaPaperReconciliationTests(unittest.TestCase):
         ), patch(
             "pro_ticker_paper_broker_fetch_audit.get_connection",
         ) as connection:
-            connection.return_value.__enter__.return_value.execute.return_value.fetchall.return_value = []
+            connection.return_value.execute.return_value.fetchall.return_value = []
             result = audit_alpaca_paper_reservation(
                 "reservation", paper_key_id="paper-key",
                 paper_secret_key="paper-secret", http_get=http_get,

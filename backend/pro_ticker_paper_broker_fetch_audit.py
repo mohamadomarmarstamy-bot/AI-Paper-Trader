@@ -6,6 +6,7 @@ caller-supplied order dictionaries as authenticated broker provenance.
 from __future__ import annotations
 
 from typing import Any, Callable
+from contextlib import closing
 
 from database import get_connection
 from pro_ticker_budget_ledger import get_pro_ticker_reservation
@@ -26,10 +27,21 @@ def audit_fetched_paper_reservation(
         return {**base, "reason": "paper_order_reader_required"}
     if not isinstance(reservation_id, str) or not reservation_id.strip() or reservation_id != reservation_id.strip():
         return {**base, "reason": "invalid_reservation_id"}
-    reservation = get_pro_ticker_reservation(reservation_id)
+    try:
+        reservation = get_pro_ticker_reservation(reservation_id)
+    except ValueError:
+        return {**base, "reason": "invalid_reservation_id"}
     if not reservation or not reservation.get("broker_order_id"):
         return {**base, "reason": "reservation_or_entry_order_missing"}
-    with get_connection() as conn:
+    with closing(get_connection()) as conn:
+        # Empty ledgers are expected before the first exit. Do not create
+        # tables or claim closure just to satisfy a diagnostic read.
+        exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'pro_ticker_paper_exit_links'"
+        ).fetchone()
+        if exists is None:
+            return {**base, "reason": "paper_exit_ledger_missing"}
         exit_ids = [
             row["broker_order_id"] for row in conn.execute(
                 "SELECT broker_order_id FROM pro_ticker_paper_exit_links "

@@ -7,13 +7,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from contextlib import closing
+import sqlite3
+import uuid
+
 from database import get_connection
-from pro_ticker_budget_ledger import get_pro_ticker_reservation
 from pro_ticker_broker_audit_inputs import validate_paper_snapshot_inputs
-from pro_ticker_exit_links import get_pro_ticker_exit_link
 from pro_ticker_fill_verification import assess_paper_order_fill
-from pro_ticker_linked_share_review import review_linked_reservation_paper_shares
-from pro_ticker_position_ledger import get_accounted_paper_order_shares
 
 
 def audit_linked_paper_broker_snapshots(
@@ -32,7 +32,29 @@ def audit_linked_paper_broker_snapshots(
     input_failure = validate_paper_snapshot_inputs(entry_order, exit_orders)
     if input_failure:
         return {**base, "reason": input_failure}
-    reservation = get_pro_ticker_reservation(reservation_id)
+    try:
+        if str(uuid.UUID(reservation_id)) != reservation_id:
+            raise ValueError("Noncanonical reservation UUID")
+    except (ValueError, TypeError, AttributeError):
+        return {**base, "reason": "invalid_reservation_id"}
+    with closing(get_connection()) as conn:
+        # No schema initialization or HTTP work inside this read transaction.
+        # Every ownership link and cumulative fill is from the same snapshot.
+        conn.execute("BEGIN")
+        tables = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )}
+        if not {"pro_ticker_paper_reservations", "pro_ticker_strategy_fill_events",
+                "pro_ticker_paper_exit_links"}.issubset(tables):
+            return {**base, "reason": "paper_accounting_schema_incomplete"}
+        return _audit_snapshot(conn, reservation_id, entry_order, exit_orders, base)
+
+
+def _audit_snapshot(conn, reservation_id, entry_order, exit_orders, base):
+    row = conn.execute(
+        "SELECT * FROM pro_ticker_paper_reservations WHERE id = ?", (reservation_id,),
+    ).fetchone()
+    reservation = dict(row) if row else None
     if not reservation or reservation.get("status") != "filled":
         return {**base, "reason": "reservation_missing_or_not_filled"}
     entry_id = reservation.get("broker_order_id")
@@ -42,46 +64,35 @@ def audit_linked_paper_broker_snapshots(
         expected_side="buy", expected_shares=expected_shares,
         broker_order=entry_order,
     )
-    if not entry["verified"] or not entry["terminal"] or entry["broker_status"] != "filled":
+    if (not entry["verified"] or not entry["terminal"] or entry["filled_shares"] <= 0
+            or entry["broker_status"] not in {"filled", "canceled", "expired"}):
         return {**base, "reason": "entry_broker_snapshot_not_fully_filled"}
     if entry_order.get("client_order_id") != "pt-" + reservation_id:
         return {**base, "reason": "entry_client_order_id_mismatch"}
-    with get_connection() as conn:
-        entry_rows = conn.execute(
-            "SELECT symbol, side FROM pro_ticker_strategy_fill_events "
-            "WHERE broker_order_id = ? GROUP BY symbol, side",
-            (entry_id,),
-        ).fetchall()
+    entry_rows = conn.execute(
+        "SELECT symbol, side FROM pro_ticker_strategy_fill_events "
+        "WHERE broker_order_id = ? GROUP BY symbol, side",
+        (entry_id,),
+    ).fetchall()
     if len(entry_rows) != 1 or entry_rows[0]["symbol"] != reservation["symbol"] or entry_rows[0]["side"] != "buy":
         return {**base, "reason": "entry_fill_attribution_mismatch"}
-    if get_accounted_paper_order_shares(entry_id) != entry["filled_shares"]:
+    if _accounted(conn, entry_id) != entry["filled_shares"]:
         return {**base, "reason": "entry_accounting_mismatch"}
-    # Review persisted fills first. Missing exit-fill rows fail closed in
-    # the ledger; only the broker-snapshot path below may accept a
-    # terminal, independently identified zero-fill exit.
-    linked = review_linked_reservation_paper_shares(reservation_id)
-    missing_zero_fill_candidate = (
-        linked.get("reason") == "exit_fills_missing_or_conflicting"
-    )
-    if not missing_zero_fill_candidate:
-        if linked.get("remaining_attributed_shares") is not None and linked["remaining_attributed_shares"] < 0:
-            return {**base, "reason": "negative_reservation_share_balance"}
-        if "entry_shares" not in linked:
-            return {**base, "reason": linked.get("reason", "linked_share_review_failed")}
-        if linked["entry_shares"] != entry["filled_shares"]:
-            return {**base, "reason": "linked_entry_shares_mismatch"}
-    with get_connection() as conn:
-        persisted_exit_ids = {
-            row["broker_order_id"] for row in conn.execute(
-                "SELECT broker_order_id FROM pro_ticker_paper_exit_links "
-                "WHERE reservation_id = ?", (reservation_id,),
-            ).fetchall()
-        }
+    links = [dict(row) for row in conn.execute(
+        "SELECT * FROM pro_ticker_paper_exit_links WHERE reservation_id = ?",
+        (reservation_id,),
+    )]
+    if any(link["broker_order_id"] == entry_id for link in links):
+        return {**base, "reason": "entry_exit_order_id_overlap"}
+    if any(link["symbol"] != reservation["symbol"] for link in links):
+        return {**base, "reason": "exit_link_symbol_mismatch"}
+    persisted_exit_ids = {link["broker_order_id"] for link in links}
+    by_id = {link["broker_order_id"]: link for link in links}
     if set(exit_orders) != persisted_exit_ids:
         return {**base, "reason": "exit_snapshots_incomplete_or_extra"}
     total_exits = 0
     for order_id, snapshot in exit_orders.items():
-        link = get_pro_ticker_exit_link(order_id)
+        link = by_id.get(order_id)
         if not link or link.get("reservation_id") != reservation_id:
             return {**base, "reason": "exit_ownership_link_missing"}
         from pro_ticker_verified_exit_review import review_verified_paper_exit_link
@@ -92,36 +103,25 @@ def audit_linked_paper_broker_snapshots(
             return {**base, "reason": "exit_broker_order_not_terminal"}
         # Total shares alone cannot detect a corrupted fill record posted
         # under the wrong symbol or side. Verify the event attribution too.
-        with get_connection() as conn:
-            fill_groups = conn.execute(
-                "SELECT symbol, side, SUM(shares) AS shares "
-                "FROM pro_ticker_strategy_fill_events WHERE broker_order_id = ? "
-                "GROUP BY symbol, side",
-                (order_id,),
-            ).fetchall()
+        fill_groups = conn.execute(
+            "SELECT symbol, side, SUM(shares) AS shares "
+            "FROM pro_ticker_strategy_fill_events WHERE broker_order_id = ? "
+            "GROUP BY symbol, side",
+            (order_id,),
+        ).fetchall()
         if fill_groups and (
             len(fill_groups) != 1
             or fill_groups[0]["symbol"] != reservation["symbol"]
             or fill_groups[0]["side"] != "sell"
         ):
             return {**base, "reason": "exit_fill_attribution_mismatch"}
-        if get_accounted_paper_order_shares(order_id) != reviewed["filled_shares"]:
+        if _accounted(conn, order_id) != reviewed["filled_shares"]:
             return {**base, "reason": "exit_accounting_mismatch"}
         total_exits += reviewed["filled_shares"]
     if total_exits > entry["filled_shares"]:
         return {**base, "reason": "broker_exit_shares_exceed_entry"}
-    if missing_zero_fill_candidate:
-        # The loop above has verified every persisted exit link against
-        # a terminal PAPER snapshot and its exact accounted share count.
-        # Reconstruct the reservation balance only for this read-only audit.
-        # Never treat this as broker-origin authentication or release proof.
-        if total_exits != entry["filled_shares"]:
-            return {**base, "reason": "reservation_shares_still_open"}
-    else:
-        if total_exits != linked["exit_shares"]:
-            return {**base, "reason": "exit_snapshots_incomplete_or_mismatched"}
-        if linked["remaining_attributed_shares"] != 0:
-            return {**base, "reason": "reservation_shares_still_open"}
+    if total_exits != entry["filled_shares"]:
+        return {**base, "reason": "reservation_shares_still_open"}
     # This flag attests only to consistency of caller-provided snapshots,
     # not that this module independently fetched them from Alpaca PAPER.
     return {
@@ -130,3 +130,10 @@ def audit_linked_paper_broker_snapshots(
         "entry_shares": entry["filled_shares"],
         "exit_shares": total_exits,
     }
+
+
+def _accounted(conn: sqlite3.Connection, order_id: str) -> int:
+    return conn.execute(
+        "SELECT COALESCE(SUM(shares), 0) FROM pro_ticker_strategy_fill_events "
+        "WHERE broker_order_id = ?", (order_id,),
+    ).fetchone()[0]
