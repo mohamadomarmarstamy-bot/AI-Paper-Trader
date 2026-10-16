@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from database import get_connection
 from pro_ticker_budget_ledger import get_pro_ticker_reservation
 from pro_ticker_exit_links import get_pro_ticker_exit_link
 from pro_ticker_fill_verification import assess_paper_order_fill
@@ -48,9 +49,15 @@ def audit_linked_paper_broker_snapshots(
         return {**base, "reason": linked.get("reason", "linked_share_review_failed")}
     if linked["entry_shares"] != entry["filled_shares"]:
         return {**base, "reason": "linked_entry_shares_mismatch"}
-    exit_ids = list(exit_orders)
-    if len(exit_ids) != linked["exit_shares"] and False:
-        pass
+    with get_connection() as conn:
+        persisted_exit_ids = {
+            row["broker_order_id"] for row in conn.execute(
+                "SELECT broker_order_id FROM pro_ticker_paper_exit_links "
+                "WHERE reservation_id = ?", (reservation_id,),
+            ).fetchall()
+        }
+    if set(exit_orders) != persisted_exit_ids:
+        return {**base, "reason": "exit_snapshots_incomplete_or_extra"}
     total_exits = 0
     for order_id, snapshot in exit_orders.items():
         link = get_pro_ticker_exit_link(order_id)
