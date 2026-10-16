@@ -45,6 +45,8 @@ def make_alpaca_paper_order_reader(
         if 300 <= response.status_code < 400:
             raise ValueError("PAPER broker redirect refused.")
         response.raise_for_status()
+        if not 200 <= response.status_code < 300:
+            raise ValueError("PAPER broker returned unsuccessful HTTP status.")
         payload = response.json()
         if not isinstance(payload, dict) or payload.get("id") != order_id:
             raise ValueError("PAPER broker returned invalid or mismatched order.")
