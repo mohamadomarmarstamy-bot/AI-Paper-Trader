@@ -85,6 +85,13 @@ def post_verified_paper_fill(
                 "symbol": normalized_symbol,
                 "current_shares": int(shares_row["shares"]) if shares_row else 0,
             }
+        conflicting = conn.execute(
+            "SELECT 1 FROM pro_ticker_strategy_fill_events "
+            "WHERE broker_order_id = ? AND (symbol != ? OR side != ?) LIMIT 1",
+            (broker_order_id, normalized_symbol, side),
+        ).fetchone()
+        if conflicting is not None:
+            raise ValueError("Broker order already attributed to another symbol or side.")
         row = conn.execute(
             "SELECT shares FROM pro_ticker_strategy_positions WHERE symbol = ?",
             (normalized_symbol,),
