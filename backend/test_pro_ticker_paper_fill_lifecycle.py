@@ -92,6 +92,28 @@ class PaperFillLifecycleIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(budget.get_pro_ticker_budget()["committed"], 1000)
 
+    def test_conflicting_entry_identity_after_partial_fill_is_rejected(self):
+        self.assertEqual(self.snapshot(3)["delta_shares"], 3)
+        for changes in (
+            {"client_order_id": "unrelated"},
+            {"symbol": "MSFT"},
+            {"side": "sell"},
+            {"qty": "11"},
+            {"id": "different-broker-order"},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.snapshot(10, status="filled", **changes)
+            self.assertEqual(
+                positions.get_accounted_paper_order_shares(self.order["id"]), 3,
+            )
+            self.assertEqual(
+                positions.list_pro_ticker_strategy_positions()["positions"][0]["shares"], 3,
+            )
+        self.assertEqual(self.snapshot(10, status="filled")["delta_shares"], 7)
+        self.assertEqual(
+            positions.list_pro_ticker_strategy_positions()["positions"][0]["shares"], 10,
+        )
+
     def test_wrong_client_id_cannot_mutate_ledger(self):
         with self.assertRaises(ValueError):
             self.snapshot(4, client_order_id="other")
