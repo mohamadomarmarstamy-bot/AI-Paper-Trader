@@ -360,6 +360,19 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertFalse(audit["budget_released"])
         self.assertEqual(get_pro_ticker_budget(), budget_before)
 
+    def test_invalid_paper_exit_snapshot_does_not_change_accounted_shares(self):
+        from pro_ticker_verified_exit_fill_bridge import account_linked_paper_exit_snapshot
+        from pro_ticker_position_ledger import get_accounted_paper_order_shares
+        from pro_ticker_budget_ledger import get_pro_ticker_budget
+        before = get_pro_ticker_budget()
+        corrupted = {**self.exit_order, "side": "buy"}
+        with self.assertRaises(ValueError):
+            account_linked_paper_exit_snapshot(EXIT_ID, corrupted)
+        self.assertEqual(get_accounted_paper_order_shares(EXIT_ID), 5)
+        self.assertEqual(get_pro_ticker_budget(), before)
+        self.assertTrue(self.audit()["verified"])
+        self.assertFalse(self.audit(exit_orders={EXIT_ID: corrupted})["verified"])
+
     def test_full_alpaca_paper_get_rejects_wrong_exit_snapshot(self):
         orders = {
             ENTRY_ID: self.entry_order,
