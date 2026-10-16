@@ -305,7 +305,7 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         result = self.audit(exit_orders={
             EXIT_ID: self.exit_order, second_exit_id: second_exit,
         })
-        self.assertTrue(result["verified"])
+        self.assertTrue(result["verified"], result)
         self.assertEqual(result["exit_shares"], 5)
         self.assertFalse(result["release_authorized"])
 
