@@ -75,6 +75,30 @@ class PaperPositionLedgerTests(unittest.TestCase):
                 self.cumulative(1, broker_order_id=broker_order_id)
         self.assertEqual(ledger.list_pro_ticker_strategy_positions()["positions"], [])
 
+    def test_reservation_attribution_uses_order_ids_not_symbol_balance(self):
+        self.post(filled_shares=4)
+        self.post("execution-2", broker_order_id="another-entry",
+                  filled_shares=3)
+        self.post("execution-3", broker_order_id="linked-exit",
+                  side="sell", filled_shares=4)
+        result = ledger.review_reservation_attributed_shares(
+            reservation_id="reservation-1", entry_order_id="paper-order-1",
+            exit_order_ids=["linked-exit"],
+        )
+        self.assertEqual(result["entry_shares"], 4)
+        self.assertEqual(result["exit_shares"], 4)
+        self.assertEqual(result["remaining_attributed_shares"], 0)
+        self.assertEqual(ledger.list_pro_ticker_strategy_positions()["positions"][0]["shares"], 3)
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["verified"])
+
+    def test_reservation_attribution_rejects_duplicate_exit_ids(self):
+        with self.assertRaisesRegex(ValueError, "Duplicate"):
+            ledger.review_reservation_attributed_shares(
+                reservation_id="reservation-1", entry_order_id="entry",
+                exit_order_ids=["exit", "exit"],
+            )
+
     def test_sell_reduces_strategy_position(self):
         self.post()
         result = self.post(
