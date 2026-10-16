@@ -48,10 +48,16 @@ def plan_paper_entry(
             blocked.append("stale_quote")
     estimated_notional = None
     if not blocked:
-        estimated_notional = round(reference_price * requested_shares, 2)
-        if estimated_notional > available_budget:
+        raw_notional = reference_price * requested_shares
+        if not math.isfinite(raw_notional) or raw_notional <= 0:
+            blocked.append("invalid_estimated_notional")
+        else:
+            estimated_notional = round(raw_notional, 2)
+            if estimated_notional <= 0:
+                blocked.append("invalid_estimated_notional")
+        if estimated_notional is not None and estimated_notional > available_budget:
             blocked.append("virtual_budget_exceeded")
-        if estimated_notional > broker_buying_power:
+        if estimated_notional is not None and estimated_notional > broker_buying_power:
             blocked.append("broker_buying_power_exceeded")
     return {
         "paper": True,
