@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 from database import get_connection
+from pro_ticker_budget_ledger import get_pro_ticker_reservation
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS pro_ticker_paper_exit_links (
@@ -69,6 +70,11 @@ def link_verified_paper_exit(
         "pending_cancel", "canceled", "expired", "rejected",
     }:
         raise ValueError("Unknown PAPER exit order status.")
+    reservation = get_pro_ticker_reservation(reservation_id)
+    if (reservation is None or reservation.get("symbol") != symbol
+            or reservation.get("status") not in {"submitted", "filled"}
+            or not reservation.get("broker_order_id")):
+        raise ValueError("A linked, active PAPER strategy reservation is required.")
     now = datetime.now(timezone.utc).isoformat()
     with get_connection() as conn:
         conn.executescript(_SCHEMA)
