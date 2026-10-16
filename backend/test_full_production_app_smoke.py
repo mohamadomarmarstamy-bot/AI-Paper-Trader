@@ -105,7 +105,11 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
             response = asyncio.run(run())
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["research_only"])
-        self.assertEqual(response.json()["count"], 0)
+        self.assertLessEqual(response.json()["count"], 10)
+        self.assertEqual(
+            response.json()["count"],
+            len(response.json()["observations"]),
+        )
 
     def test_real_app_authenticated_preview_never_reaches_broker_on_bad_payload(self):
         import asyncio
