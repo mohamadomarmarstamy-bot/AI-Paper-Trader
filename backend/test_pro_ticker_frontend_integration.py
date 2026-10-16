@@ -98,6 +98,15 @@ class ProTickerFrontendIntegrationTests(unittest.TestCase):
         self.assertIn("if (button) button.disabled = true;", self.js)
         self.assertIn("if (button) button.disabled = false;", self.js)
 
+    def test_out_of_order_refresh_responses_are_ignored(self):
+        self.assertIn("let refreshVersion = 0;", self.js)
+        self.assertIn("const version = ++refreshVersion;", self.js)
+        self.assertEqual(self.js.count("if (version !== refreshVersion) return false;"), 2)
+        self.assertLess(
+            self.js.index("if (version !== refreshVersion) return false;"),
+            self.js.index("rows.replaceChildren()"),
+        )
+
     def test_frontend_exposes_no_order_submission_controls(self):
         self.assertIn("Research only", self.html)
         self.assertIn("no PAPER orders placed", self.js)
