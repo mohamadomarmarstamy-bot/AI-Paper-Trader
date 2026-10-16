@@ -52,7 +52,13 @@
                 }
                 rows.appendChild(tr);
             }
-            if (!data.count) setStatus("No manual research submissions yet.");
+            if (!data.observations.length) {
+                setStatus(data.count === 0
+                    ? "No manual research submissions yet."
+                    : "No research observations returned for this page.");
+            } else {
+                setStatus("Loaded " + data.observations.length + " research observation(s).");
+            }
             return true;
         } catch (error) {
             if (version !== refreshVersion) return false;
