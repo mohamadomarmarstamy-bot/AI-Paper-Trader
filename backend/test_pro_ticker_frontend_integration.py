@@ -90,6 +90,14 @@ class ProTickerFrontendIntegrationTests(unittest.TestCase):
             self.js.index('setStatus("Saved " + result.count'),
         )
 
+    def test_form_rejects_overlapping_submissions(self):
+        self.assertIn("let submitting = false;", self.js)
+        self.assertIn("if (submitting) return;", self.js)
+        self.assertIn("submitting = true;", self.js)
+        self.assertIn("submitting = false;", self.js)
+        self.assertIn("if (button) button.disabled = true;", self.js)
+        self.assertIn("if (button) button.disabled = false;", self.js)
+
     def test_frontend_exposes_no_order_submission_controls(self):
         self.assertIn("Research only", self.html)
         self.assertIn("no PAPER orders placed", self.js)
