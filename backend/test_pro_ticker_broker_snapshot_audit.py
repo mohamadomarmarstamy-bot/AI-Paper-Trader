@@ -240,6 +240,22 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertFalse(result["database_updated"])
         self.assertEqual(get_pro_ticker_budget(), before_budget)
 
+    def test_audit_rejects_corrupted_entry_quantity_after_database_reopen(self):
+        from database import get_connection
+        from pro_ticker_budget_ledger import get_pro_ticker_budget
+        before_budget = get_pro_ticker_budget()
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE pro_ticker_paper_reservations SET expected_shares = ? "
+                "WHERE id = ?", (6, self.reservation_id),
+            )
+        result = self.audit()
+        self.assertFalse(result["verified"], result)
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+        self.assertFalse(result["database_updated"])
+        self.assertEqual(get_pro_ticker_budget(), before_budget)
+
     def test_full_alpaca_paper_get_rejects_wrong_exit_snapshot(self):
         orders = {
             ENTRY_ID: self.entry_order,
