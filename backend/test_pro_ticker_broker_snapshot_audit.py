@@ -256,6 +256,23 @@ class BrokerSnapshotAuditTests(unittest.TestCase):
         self.assertFalse(result["database_updated"])
         self.assertEqual(get_pro_ticker_budget(), before_budget)
 
+    def test_reopened_database_missing_entry_fill_fails_closed(self):
+        from database import get_connection
+        from pro_ticker_budget_ledger import get_pro_ticker_budget
+        before_budget = get_pro_ticker_budget()
+        with get_connection() as conn:
+            conn.execute(
+                "DELETE FROM pro_ticker_strategy_fill_events "
+                "WHERE broker_order_id = ?", (ENTRY_ID,),
+            )
+        result = self.audit()
+        self.assertFalse(result["verified"], result)
+        self.assertEqual(result["reason"], "entry_fill_attribution_mismatch")
+        self.assertFalse(result["release_authorized"])
+        self.assertFalse(result["budget_released"])
+        self.assertFalse(result["database_updated"])
+        self.assertEqual(get_pro_ticker_budget(), before_budget)
+
     def test_full_alpaca_paper_get_rejects_wrong_exit_snapshot(self):
         orders = {
             ENTRY_ID: self.entry_order,
