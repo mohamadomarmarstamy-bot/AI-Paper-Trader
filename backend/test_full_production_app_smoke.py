@@ -398,12 +398,16 @@ async def check():
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app),
         base_url="http://testserver",
-        cookies={main.APP_SESSION_COOKIE: token},
     ) as client:
+        anonymous = await client.get(
+            "/auto-trader/pro-ticker-manual-submissions?limit=500"
+        )
+        client.cookies.set(main.APP_SESSION_COOKIE, token)
         response = await client.get(
             "/auto-trader/pro-ticker-manual-submissions?limit=500"
         )
     return {
+        "anonymous_status": anonymous.status_code,
         "status": response.status_code,
         "found": response.status_code == 200 and any(
             row.get("symbol") == "RSTRT"
@@ -439,6 +443,7 @@ print("RESTART_RESULT:" + json.dumps(asyncio.run(check())))
             if line.startswith(marker)
         )
         result = json.loads(result_line[len(marker):])
+        self.assertEqual(result["anonymous_status"], 401)
         self.assertEqual(result["status"], 200)
         self.assertTrue(result["found"])
 
