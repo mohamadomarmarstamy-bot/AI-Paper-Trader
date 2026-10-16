@@ -70,7 +70,7 @@ class ProTickerFrontendIntegrationTests(unittest.TestCase):
         catch_start = self.js.index('setStatus("Unable to load submissions: "')
         self.assertIn("rows.replaceChildren()", self.js[max(0, catch_start - 100):catch_start])
         self.assertLess(
-            self.js.index("if (!Array.isArray(data.observations))"),
+            self.js.index("if (!Array.isArray(data.observations) ||"),
             self.js.index("rows.replaceChildren()"),
         )
 
