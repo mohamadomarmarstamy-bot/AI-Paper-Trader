@@ -16220,6 +16220,35 @@ def pro_ticker_paper_fill_posting_preview(
         }
 
 
+@app.get("/auto-trader/pro-ticker-paper-exit-fill-preview")
+def pro_ticker_paper_exit_fill_preview(
+    request: Request,
+    order_id: str = Query(..., min_length=36, max_length=36),
+) -> dict[str, Any]:
+    """Verify linked PAPER exit fills without posting shares or releasing funds."""
+    require_app_session(request)
+    from pro_ticker_exit_links import get_pro_ticker_exit_link
+    from pro_ticker_budget_ledger import get_pro_ticker_reservation
+    from pro_ticker_verified_exit_review import review_verified_paper_exit_link
+
+    base = {
+        "paper": True, "preview_only": True, "reconciled": False,
+        "order_submitted": False, "database_updated": False,
+        "budget_released": False, "verified": False,
+    }
+    try:
+        link = get_pro_ticker_exit_link(order_id)
+        if link is None:
+            return {**base, "reason": "exit_order_not_linked"}
+        reservation = get_pro_ticker_reservation(link["reservation_id"])
+        broker_order = alpaca_paper_request(
+            "GET", "/v2/orders/" + order_id, timeout=10.0,
+        )
+        return review_verified_paper_exit_link(link, reservation, broker_order)
+    except Exception:
+        return {**base, "reason": "paper_exit_review_unavailable"}
+
+
 @app.get("/auto-trader/pro-ticker-paper-combined-audit")
 def pro_ticker_paper_combined_audit(request: Request) -> dict[str, Any]:
     """Read-only internal ledger and shared PAPER broker comparison."""
