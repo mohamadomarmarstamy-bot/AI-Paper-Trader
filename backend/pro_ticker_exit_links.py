@@ -51,7 +51,9 @@ def link_verified_paper_exit(
         raise ValueError("Verified PAPER broker snapshot required.")
     if isinstance(expected_shares, bool) or not isinstance(expected_shares, int) or expected_shares <= 0:
         raise ValueError("Positive whole-share exit quantity required.")
-    if (not isinstance(symbol, str) or not symbol or symbol != symbol.upper()\n            or symbol != symbol.strip()):\n        raise ValueError("Canonical symbol required.")
+    if (not isinstance(symbol, str) or not symbol or symbol != symbol.upper()
+            or symbol != symbol.strip()):
+        raise ValueError("Canonical symbol required.")
     order_id = broker_order.get("id")
     if not isinstance(order_id, str) or not order_id:
         raise ValueError("PAPER broker order ID required.")
