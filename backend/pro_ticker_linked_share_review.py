@@ -9,6 +9,7 @@ from typing import Any
 from database import get_connection
 from pro_ticker_budget_ledger import get_pro_ticker_reservation
 from pro_ticker_position_ledger import review_reservation_attributed_shares
+from pro_ticker_exit_links import _SCHEMA as _EXIT_LINK_SCHEMA
 
 
 def review_linked_reservation_paper_shares(reservation_id: str) -> dict[str, Any]:
@@ -24,6 +25,10 @@ def review_linked_reservation_paper_shares(reservation_id: str) -> dict[str, Any
     if not isinstance(entry_id, str) or not entry_id:
         return {**base, "reason": "entry_order_unlinked"}
     with get_connection() as conn:
+        # Fresh PAPER reservations can have no exit links yet.
+        # Initializing an empty link table does not establish ownership,
+        # post fills, or authorize virtual budget release.
+        conn.executescript(_EXIT_LINK_SCHEMA)
         links = conn.execute(
             "SELECT broker_order_id, symbol FROM pro_ticker_paper_exit_links "
             "WHERE reservation_id = ? ORDER BY broker_order_id",
