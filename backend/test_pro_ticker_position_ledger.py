@@ -66,6 +66,15 @@ class PaperPositionLedgerTests(unittest.TestCase):
         self.assertEqual(ledger.get_accounted_paper_order_shares("paper-order-1"), 2)
         self.assertEqual(ledger.list_pro_ticker_strategy_positions()["positions"][0]["shares"], 2)
 
+    def test_whitespace_order_and_event_ids_cannot_create_distinct_attribution(self):
+        for updates in ({"event_id": " execution-1"}, {"broker_order_id": "paper-order-1 "}):
+            with self.subTest(updates=updates), self.assertRaisesRegex(ValueError, "Canonical"):
+                self.post(**updates)
+        for broker_order_id in (" paper-order-cumulative", "paper-order-cumulative "):
+            with self.subTest(broker_order_id=broker_order_id), self.assertRaisesRegex(ValueError, "Canonical"):
+                self.cumulative(1, broker_order_id=broker_order_id)
+        self.assertEqual(ledger.list_pro_ticker_strategy_positions()["positions"], [])
+
     def test_sell_reduces_strategy_position(self):
         self.post()
         result = self.post(
