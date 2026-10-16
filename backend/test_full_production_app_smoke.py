@@ -374,5 +374,74 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
 
 
+    def test_research_history_survives_fresh_production_app_process(self):
+        import json
+        import subprocess
+        import sys
+        from pro_ticker_manual_intake import save_manual_observations
+
+        saved = save_manual_observations("RSTRT")
+        self.assertEqual(saved["orders_submitted"], 0)
+        self.assertTrue(saved["research_only"])
+
+        # A second Python interpreter imports the actual production app
+        # against the same on-disk database and serves an authenticated
+        # ASGI request. Lifespan startup and broker credentials are disabled.
+        script = """
+import asyncio
+import json
+import httpx
+import main
+
+async def check():
+    token = main.create_app_session_token()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=main.app),
+        base_url="http://testserver",
+        cookies={main.APP_SESSION_COOKIE: token},
+    ) as client:
+        response = await client.get(
+            "/auto-trader/pro-ticker-manual-submissions?limit=500"
+        )
+    return {
+        "status": response.status_code,
+        "found": response.status_code == 200 and any(
+            row.get("symbol") == "RSTRT"
+            and row.get("order_status") == "research_only"
+            for row in response.json().get("observations", [])
+        ),
+    }
+
+print("RESTART_RESULT:" + json.dumps(asyncio.run(check())))
+"""
+        env = os.environ.copy()
+        env.update({
+            "DATABASE_PATH": str(Path(self.temp_dir.name) / "smoke.sqlite3"),
+            "APP_SESSION_SECRET": "isolated-restart-ci-secret",
+            "APP_ACCESS_PASSWORD": "",
+            "ALPACA_API_KEY": "",
+            "ALPACA_SECRET_KEY": "",
+            "ALPACA_API_KEY_ID": "",
+            "ALPACA_SECRET_KEY_ID": "",
+        })
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=str(Path(__file__).resolve().parent),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=35,
+            check=True,
+        )
+        marker = "RESTART_RESULT:"
+        result_line = next(
+            line for line in completed.stdout.splitlines()
+            if line.startswith(marker)
+        )
+        result = json.loads(result_line[len(marker):])
+        self.assertEqual(result["status"], 200)
+        self.assertTrue(result["found"])
+
+
 if __name__ == "__main__":
     unittest.main()
