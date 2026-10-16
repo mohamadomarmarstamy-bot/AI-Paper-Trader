@@ -65,6 +65,30 @@ class VerifiedExitBridgeTests(unittest.TestCase):
         stale = account_linked_paper_exit_snapshot(EXIT_ORDER_ID, self.order)
         self.assertTrue(stale["stale_snapshot"])
 
+    def test_canceled_zero_fill_exit_is_idempotent_and_leaves_position_open(self):
+        canceled = {**self.order, "filled_qty": "0", "status": "canceled"}
+        first = account_linked_paper_exit_snapshot(EXIT_ORDER_ID, canceled)
+        replay = account_linked_paper_exit_snapshot(EXIT_ORDER_ID, canceled)
+        self.assertFalse(first["posted"])
+        self.assertFalse(replay["posted"])
+        self.assertEqual(first["delta_shares"], 0)
+        self.assertEqual(replay["delta_shares"], 0)
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 5)
+
+    def test_exit_overfill_rejected_without_position_mutation(self):
+        with self.assertRaises(ValueError):
+            account_linked_paper_exit_snapshot(
+                EXIT_ORDER_ID, {**self.order, "filled_qty": "6", "status": "filled"},
+            )
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 5)
+
+    def test_wrong_exit_symbol_rejected_without_position_mutation(self):
+        with self.assertRaises(ValueError):
+            account_linked_paper_exit_snapshot(
+                EXIT_ORDER_ID, {**self.order, "symbol": "MSFT"},
+            )
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 5)
+
     def test_wrong_client_order_rejected_without_post(self):
         with self.assertRaisesRegex(ValueError, "client_order_id_mismatch"):
             account_linked_paper_exit_snapshot(
