@@ -16,6 +16,12 @@ class Denied(Exception):
     pass
 
 
+class RouteHTTPError(Exception):
+    def __init__(self, status_code, detail):
+        self.status_code = status_code
+        self.detail = detail
+
+
 class FakeRequest:
     def __init__(self, payload=None, error=None):
         self.payload = payload
@@ -43,6 +49,7 @@ def isolated_routes():
             arg.annotation = None
     namespace = {
         "Request": object,
+        "HTTPException": RouteHTTPError,
         "Any": object,
         "require_app_session": lambda request: (_ for _ in ()).throw(Denied()),
     }
@@ -69,18 +76,16 @@ class ProTickerRouteBoundaryTests(unittest.TestCase):
 
 
     def test_authenticated_submission_rejects_non_object_payload(self):
-        from fastapi import HTTPException
         routes = isolated_routes()
         routes["require_app_session"] = lambda request: None
-        with self.assertRaises(HTTPException) as caught:
+        with self.assertRaises(RouteHTTPError) as caught:
             asyncio.run(routes["auto_trader_pro_ticker_manual_submissions"](FakeRequest(["AAPL"])))
         self.assertEqual(caught.exception.status_code, 422)
 
     def test_authenticated_preview_rejects_non_object_payload(self):
-        from fastapi import HTTPException
         routes = isolated_routes()
         routes["require_app_session"] = lambda request: None
-        with self.assertRaises(HTTPException) as caught:
+        with self.assertRaises(RouteHTTPError) as caught:
             asyncio.run(routes["pro_ticker_paper_preview"](FakeRequest(["AAPL"])))
         self.assertEqual(caught.exception.status_code, 422)
 
