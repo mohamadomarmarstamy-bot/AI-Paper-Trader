@@ -177,5 +177,39 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
 
 
+    def test_real_app_saved_research_observation_is_visible_in_history(self):
+        import asyncio
+        import httpx
+        from unittest.mock import patch
+
+        trade = {"p": 124.25, "t": "2026-10-16T15:00:00Z", "s": 1}
+        with patch.object(self.main, "require_app_session", return_value=None), \
+             patch.object(self.main, "alpaca_market_data_request",
+                          return_value={"trade": trade}):
+            async def run():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=self.main.app),
+                    base_url="http://testserver",
+                ) as client:
+                    saved = await client.post(
+                        "/auto-trader/pro-ticker-manual-submissions",
+                        json={"symbols": "MSFT"},
+                    )
+                    history = await client.get(
+                        "/auto-trader/pro-ticker-manual-submissions?limit=100"
+                    )
+                    return saved, history
+            saved, history = asyncio.run(run())
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(history.status_code, 200)
+        self.assertTrue(saved.json()["research_only"])
+        self.assertEqual(saved.json()["orders_submitted"], 0)
+        self.assertGreaterEqual(history.json()["count"], 1)
+        self.assertTrue(any(
+            observation.get("symbol") == "MSFT"
+            for observation in history.json()["observations"]
+        ))
+
+
 if __name__ == "__main__":
     unittest.main()
