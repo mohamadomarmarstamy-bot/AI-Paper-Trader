@@ -3,6 +3,7 @@ import asyncio
 from contextlib import closing
 import hashlib
 import hmac
+import sqlite3
 import time
 import unittest
 from unittest.mock import Mock, patch
@@ -56,6 +57,46 @@ class ReleaseHTTPTests(unittest.TestCase):
 
     def confirmation(self, review):
         return dict(review_id=review['review_id'], evidence_digest=review['evidence_digest'], paper_provenance_confirmed=True)
+
+    def test_owner_release_updates_workspace_without_inventing_trade_profit(self):
+        from pro_ticker_workspace import build_workspace_router
+        self.app.include_router(build_workspace_router(require_session=self.auth['require_app_session']))
+        def workspace():
+            def connect():
+                # The sync HTTP route owns and closes this connection in its
+                # worker thread; keep it out of the fixture's main-thread tracker.
+                conn = sqlite3.connect(database.DATABASE_PATH, timeout=30)
+                conn.row_factory = sqlite3.Row
+                return conn
+            async def read():
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url='http://testserver') as client:
+                    stamp = str(int(time.time()))
+                    sig = hmac.new(b'offline-http-test-secret', stamp.encode(), hashlib.sha256).hexdigest()
+                    client.cookies.set('ai_paper_trader_session', stamp + '.' + sig)
+                    response = await client.get('/auto-trader/pro-ticker/workspace')
+                    self.assertEqual(response.status_code, 200)
+                    return response.json()
+            with patch.object(database, 'get_connection', side_effect=connect):
+                return asyncio.run(read())
+        before = workspace()
+        self.assertEqual(before['budget']['committed_cents'], 10000)
+        self.assertEqual(before['positions']['total'], 0)
+        self.assertEqual(before['journal']['total'], 2)
+        review = self.review()
+        self.assertEqual(workspace()['budget'], before['budget'])
+        confirmed = self.write('/release-confirm', self.confirmation(review))
+        self.assertEqual(confirmed.status_code, 200)
+        after = workspace()
+        self.assertEqual(after['budget']['committed_cents'], 0)
+        self.assertEqual(after['budget']['available_cents'], before['budget']['available_cents'] + 10000)
+        self.assertEqual(after['reservations']['rows'][0]['status'], 'released')
+        self.assertEqual(after['journal'], before['journal'])
+        self.assertIsNone(after['performance']['realized_pnl'])
+        self.assertFalse(after['automatic_release_enabled'])
+        self.assertFalse(after['order_execution_enabled'])
+        retry = self.write('/release-confirm', self.confirmation(review))
+        self.assertEqual(retry.status_code, 200)
+        self.assertEqual(workspace()['budget'], after['budget'])
 
     def test_all_endpoints_reject_anonymous_before_broker_or_ledger_work(self):
         for method, path in [('GET', '/release-status'), ('GET', '/release-events'),
