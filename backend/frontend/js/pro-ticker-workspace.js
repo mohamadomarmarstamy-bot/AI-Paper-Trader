@@ -98,7 +98,10 @@
         table("positions", snapshot?.positions.rows || [], [r=>r.symbol,r=>r.shares,r=>date(r.updated_at)]);
         table("orders", snapshot?.reservations.rows || [], [r=>r.symbol,r=>r.status,r=>money(r.notional_cents),r=>r.broker_order_id]);
         table("reservations", snapshot?.reservations.rows || [], [r=>r.id,r=>r.symbol,r=>money(r.notional_cents),r=>r.status,r=>date(r.updated_at)]);
-        el("scanner-note").textContent=snapshot ? snapshot.scanner.reason + (snapshot.scanner.unattributed_research_records ? " Research records without an identified symbol: " + snapshot.scanner.unattributed_research_records + ". They are excluded from candidates." : "") : "Scanner data unavailable.";
+        const discovery = snapshot?.scanner?.public_discovery;
+        el("scanner-note").textContent=snapshot ? snapshot.scanner.reason +
+            (snapshot.scanner.unattributed_research_records ? " Research records without an identified symbol: " + snapshot.scanner.unattributed_research_records + ". They are excluded from candidates." : "") +
+            (discovery && typeof discovery.status === "string" ? " Last public discovery: " + discovery.status + (discovery.run?.finished_at ? " (" + date(discovery.run.finished_at) + ")" : "") + ". This is not a live market scan." : "") : "Scanner data unavailable.";
         el("performance-note").textContent=snapshot ? snapshot.performance.reason : "Performance data unavailable.";
         el("health").textContent=snapshot ? "Database: readable. Broker: not checked. Automatic discovery: disabled. Order submission: disabled. Automatic release: disabled. No background jobs are started by this workspace." : "System health unavailable.";
         el("research-detail").replaceChildren();
