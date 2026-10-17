@@ -77,6 +77,27 @@ class IsolatedStagingTests(unittest.TestCase):
                 production.assert_not_called()
         asyncio.run(run())
 
+    def test_workspace_and_hypothetical_proposal_use_real_owner_auth_without_broker_calls(self):
+        app = self.app()
+        path = '/auto-trader/pro-ticker/workspace'
+        self.assertEqual(self.request(app, 'GET', path).status_code, 401)
+        with patch.object(self.main, 'alpaca_paper_request', side_effect=AssertionError('unexpected broker call')):
+            response = self.request(app, 'GET', path, authenticated=True)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()['scope'], 'pro_ticker_strategy_ledger')
+            html = self.request(app, 'GET', '/', authenticated=True).text
+            self.assertIn('/js/pro-ticker-workspace.js', html)
+            self.assertEqual(html.count('role="tabpanel"'), 8)
+            payload = dict(symbol='AAPL', reference_price='10', shares=2,
+                           stop_loss_percent='2', take_profit_percent='4')
+            response = self.request(app, 'POST', '/auto-trader/pro-ticker/proposal',
+                authenticated=True, headers={'Origin': 'https://staging.test'}, json=payload)
+            self.assertEqual(response.status_code, 200)
+            self.assertFalse(response.json()['order_submitted'])
+            response = self.request(app, 'POST', '/auto-trader/pro-ticker/proposal',
+                authenticated=True, headers={'Origin': 'https://evil.test'}, json=payload)
+            self.assertEqual(response.status_code, 403)
+
     def test_order_account_and_email_controls_are_absent(self):
         app = self.app()
         with patch.object(self.main, 'alpaca_paper_request', side_effect=AssertionError('unexpected broker request')):

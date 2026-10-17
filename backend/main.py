@@ -16127,6 +16127,9 @@ def make_pro_ticker_manual_release_reader():
     )
 
 
+from pro_ticker_workspace import build_workspace_router
+app.include_router(build_workspace_router(require_session=require_app_session))
+
 from pro_ticker_release_routes import build_paper_release_router
 app.include_router(build_paper_release_router(
     require_session=require_app_session,

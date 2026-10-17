@@ -137,13 +137,15 @@ jobs:
       - name: Install headless Chromium
         run: npx playwright install --with-deps chromium --only-shell
       - name: PAPER release desktop and mobile browser smoke
-        run: node --test backend/frontend/js/pro-ticker-release.browser.cjs
+        run: node --test backend/frontend/js/pro-ticker-release.browser.cjs backend/frontend/js/pro-ticker-workspace.browser.cjs
       - name: Keep PAPER release screenshots for review
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: paper-release-browser-screenshots
-          path: .artifacts/paper-release/
+          path: |
+            .artifacts/paper-release/
+            .artifacts/pro-ticker-workspace/
           if-no-files-found: ignore
 
   isolated-staging-container:

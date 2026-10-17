@@ -74,14 +74,16 @@ def create_staging_app(*, _data_directory='/staging-data'):
 <link rel="stylesheet" href="/style.css"></head><body><main style="padding:24px;max-width:1050px;margin:auto">
 <p role="note">Isolated PAPER staging. Broker order submissions and background trading are disabled.</p>'''
             + section + '''</main><script src="/js/pro-ticker-manual.js"></script>
-<script src="/js/pro-ticker-release.js"></script><script>
-window.loadProTickerManualLab(); window.loadProTickerReleasePanel();</script></body></html>''')
+<script src="/js/pro-ticker-release.js"></script><script src="/js/pro-ticker-workspace.js"></script><script>
+window.loadProTickerManualLab(); window.loadProTickerReleasePanel(); window.loadProTickerWorkspace();</script></body></html>''')
 
     app.add_api_route('/style.css', main.frontend_style, methods=['GET'])
     app.mount('/js', StaticFiles(directory=str(Path(main.FRONTEND_DIR) / 'js')), name='js')
     app.add_api_route('/auto-trader/pro-ticker-manual-submissions', main.list_auto_trader_pro_ticker_manual_submissions, methods=['GET'])
     app.add_api_route('/auto-trader/pro-ticker-manual-submissions', main.auto_trader_pro_ticker_manual_submissions, methods=['POST'])
     app.add_api_route('/auto-trader/pro-ticker-paper-budget', main.pro_ticker_paper_budget, methods=['GET'])
+    from pro_ticker_workspace import build_workspace_router
+    app.include_router(build_workspace_router(require_session=main.require_app_session))
     app.include_router(build_paper_release_router(
         require_session=main.require_app_session,
         operator_enabled=lambda: os.getenv('PRO_TICKER_MANUAL_RELEASE_ENABLED', '') == 'true',

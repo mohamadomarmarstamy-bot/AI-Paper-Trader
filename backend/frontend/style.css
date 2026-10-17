@@ -4780,3 +4780,23 @@ body.jarvis-drawer-open {
     padding: 0;
     accent-color: var(--color-primary);
 }
+
+/* Pro Ticker workspace: scoped to preserve the original application. */
+#pro-ticker-manual-section { min-width: 0; }
+#pro-ticker-manual-section .pt-toolbar { display:flex; align-items:center; gap:1rem; flex-wrap:wrap; margin-bottom:1rem; }
+#pro-ticker-manual-section .pt-tabs { display:flex; flex-wrap:wrap; gap:.5rem; margin:1rem 0; }
+#pro-ticker-manual-section .pt-tabs button { padding:.7rem 1rem; border:1px solid #50637d; border-radius:.6rem; background:transparent; color:inherit; cursor:pointer; }
+#pro-ticker-manual-section .pt-tabs [aria-selected="true"] { background:#154b60; color:#fff; border-color:#66c9c3; }
+#pro-ticker-manual-section .pt-panel { padding:1.4rem; margin-bottom:1rem; min-width:0; overflow-wrap:anywhere; }
+#pro-ticker-manual-section [hidden] { display:none !important; }
+#pro-ticker-manual-section .pt-metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(155px,1fr)); gap:1rem; margin:1rem 0; }
+#pro-ticker-manual-section .pt-metric { padding:1rem; border:1px solid #50637d; border-radius:.7rem; }
+#pro-ticker-manual-section .pt-metric strong { display:block; font-size:1.45rem; margin-top:.5rem; }
+#pro-ticker-manual-section .pt-table { overflow-x:auto; max-width:100%; margin:1rem 0; }
+#pro-ticker-manual-section table { width:100%; border-collapse:collapse; font-size:.9rem; }
+#pro-ticker-manual-section th, #pro-ticker-manual-section td { text-align:left; padding:.7rem; border-bottom:1px solid #50637d; vertical-align:top; }
+#pro-ticker-manual-section .pt-filters { display:flex; flex-wrap:wrap; gap:1rem; align-items:end; margin:1rem 0; }
+#pro-ticker-manual-section .pt-filters label { display:grid; gap:.4rem; min-width:0; }
+#pro-ticker-manual-section .pt-filters input, #pro-ticker-manual-section .pt-filters select { width:100%; max-width:240px; padding:.6rem; }
+#pro-ticker-manual-section button:focus-visible { outline:3px solid #66c9c3; outline-offset:3px; }
+@media(max-width:600px) { #pro-ticker-manual-section .pt-panel {padding:1rem;} #pro-ticker-manual-section .pt-tabs button {flex:1 1 42%;} #pro-ticker-manual-section .pt-filters label {width:100%;} }
