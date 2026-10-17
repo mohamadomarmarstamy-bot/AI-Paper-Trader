@@ -4757,3 +4757,26 @@ body.jarvis-drawer-open {
         gap: 12px;
     }
 }
+
+
+/* Manual PAPER release verification stays compact on desktop and mobile. */
+#pro-ticker-manual-section > .panel + .panel {
+    margin-top: 20px;
+}
+
+#pro-ticker-manual-section .pro-ticker-release-attestation {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 16px 0;
+}
+
+#pro-ticker-release-attest {
+    flex: 0 0 20px;
+    width: 20px;
+    height: 20px;
+    min-height: 20px;
+    margin: 3px 0 0;
+    padding: 0;
+    accent-color: var(--color-primary);
+}

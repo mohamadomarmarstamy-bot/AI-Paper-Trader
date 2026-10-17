@@ -25,8 +25,8 @@ test("desktop and mobile require manual verification and render release history"
         try {
             const url = new URL(req.url, origin);
             if (url.pathname === "/") {
-                res.setHeader("Content-Type", "text/html");
-                res.end('<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>' + css + '</style></head><body><main style="padding:20px;max-width:1050px;margin:auto">' + section +
+                res.setHeader("Content-Type", "text/html; charset=utf-8");
+                res.end('<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>' + css + '</style></head><body><main style="padding:20px;max-width:1050px;margin:auto">' + section +
                     '</main><script src="/release.js"></script><script>window.loadProTickerReleasePanel();</script></body></html>');
                 return;
             }
@@ -91,6 +91,9 @@ test("desktop and mobile require manual verification and render release history"
             await page.locator("#pro-ticker-release-prepare").click();
             await page.waitForFunction(() => !document.getElementById("pro-ticker-release-attest").disabled);
             assert.equal(await page.locator("#pro-ticker-release-confirm").isDisabled(), true);
+            const checkbox = await page.locator("#pro-ticker-release-attest").boundingBox();
+            assert.ok(checkbox.width >= 18 && checkbox.width <= 24);
+            assert.ok(checkbox.height >= 18 && checkbox.height <= 24);
             assert.equal(writes.length, 1);
             await page.screenshot({path: `.artifacts/paper-release/review-${width}.png`, fullPage: true});
             assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);

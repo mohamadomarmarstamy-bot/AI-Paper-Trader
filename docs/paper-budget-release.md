@@ -76,7 +76,13 @@ cannot inject transport, broker data, or an operator identity. Retries of the
 same committed confirmation return the existing event, even if broker
 credentials are temporarily unavailable. Automatic release remains disabled.
 
+Chromium CI now checks the real panel interactions at desktop and mobile
+widths, including manual confirmation, same-origin headers and cookies, disabled
+controls, bounded checkbox sizing and horizontal overflow. Screenshots are kept
+as workflow artifacts for visual review. Legacy-schema fixtures cover migration,
+concurrent initial requests, preservation of allocations and rejection of
+ambiguous ownership.
+
 Remaining validation: isolated staging with real PAPER credentials and a
-representative deployed-schema copy. A real-browser visual check also remains;
-local headless browser installation was unavailable. Synthetic HTTP, DOM,
-production-app smoke and concurrency tests do not replace those checks.
+representative deployed-schema copy. Synthetic HTTP, browser, production-app
+smoke and concurrency tests do not replace those checks.
