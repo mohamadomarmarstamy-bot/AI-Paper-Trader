@@ -202,7 +202,16 @@ jobs:
                   raise AssertionError('Unexpected exposed staging route: ' + path)
               except urllib.error.HTTPError as error:
                   assert error.code == expected, (path, error.code)
-          print('Isolated staging HTTP boundaries verified')
+          # Simulate the HTTPS edge reaching the container over HTTP.
+          import urllib.parse
+          login = urllib.request.Request(base + '/login',
+              data=urllib.parse.urlencode({'password': 'ci-staging-password-not-real'}).encode(),
+              headers={'Origin': base.replace('http:', 'https:'), 'X-Forwarded-Proto': 'https'},
+              method='POST')
+          with urllib.request.urlopen(login, timeout=3) as response:
+              assert response.status == 200
+              assert 'Secure' in response.headers['Set-Cookie']
+          print('Isolated staging HTTP boundaries and HTTPS proxy login verified')
           PY
           docker exec paper-staging-ci python -c "from pathlib import Path; import sqlite3; assert Path('/staging-data/trader.db').is_file(); assert not Path('/app/backend/trader.db').exists(); assert not Path('/data/trader.db').exists(); c=sqlite3.connect('/staging-data/trader.db'); c.execute('CREATE TABLE staging_ci_marker (value TEXT)'); c.execute(\"INSERT INTO staging_ci_marker VALUES ('retained')\"); c.commit(); c.close()"
           docker restart paper-staging-ci

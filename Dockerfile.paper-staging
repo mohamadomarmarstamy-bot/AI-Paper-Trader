@@ -4,4 +4,4 @@ COPY backend/requirements.txt ./requirements.txt
 RUN python -m pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
-CMD ["sh", "-c", "exec uvicorn paper_staging:create_staging_app --factory --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "exec uvicorn paper_staging:create_staging_app --factory --proxy-headers --forwarded-allow-ips '*' --host 0.0.0.0 --port ${PORT:-8000}"]

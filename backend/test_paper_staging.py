@@ -39,9 +39,9 @@ class IsolatedStagingTests(unittest.TestCase):
             self.addCleanup(patcher.stop)
         return app
 
-    def request(self, app, method, path, *, authenticated=False, **kwargs):
+    def request(self, app, method, path, *, authenticated=False, base_url='https://staging.test', **kwargs):
         async def run():
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='https://staging.test') as client:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=base_url) as client:
                 if authenticated:
                     client.cookies.set(self.main.APP_SESSION_COOKIE, self.main.create_app_session_token())
                 return await client.request(method, path, **kwargs)
@@ -103,6 +103,19 @@ class IsolatedStagingTests(unittest.TestCase):
         status = self.request(app, 'GET', '/auto-trader/pro-ticker-paper/release-status', authenticated=True).json()
         self.assertTrue(status['manual_release_enabled'])
         self.assertFalse(status['automatic_release_enabled'])
+
+    def test_https_proxy_preserves_origin_checks_and_secure_login(self):
+        from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+        app = ProxyHeadersMiddleware(self.app(), trusted_hosts='*')
+        response = self.request(app, 'POST', '/login', base_url='http://staging.test',
+            data={'password': os.environ['APP_ACCESS_PASSWORD']},
+            headers={'Origin': 'https://staging.test', 'X-Forwarded-Proto': 'https'})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Secure', response.headers['set-cookie'])
+        blocked = self.request(app, 'POST', '/login', base_url='http://staging.test',
+            data={'password': os.environ['APP_ACCESS_PASSWORD']},
+            headers={'Origin': 'https://other.test', 'X-Forwarded-Proto': 'https'})
+        self.assertEqual(blocked.status_code, 403)
 
     def test_cross_origin_login_and_research_writes_are_blocked(self):
         app = self.app()

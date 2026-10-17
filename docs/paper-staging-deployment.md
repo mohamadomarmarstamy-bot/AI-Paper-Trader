@@ -11,6 +11,10 @@ existing service does not adopt the staging entry point accidentally.
 - Build from repository root with `Dockerfile.paper-staging` selected explicitly.
 - Use a separate volume mounted at `/staging-data`; never mount production `/data`.
 - Start command is supplied by the Dockerfile. Healthcheck path: `/health`.
+- The staging entry point trusts forwarded protocol headers from Railway's
+  HTTPS edge so secure cookies and same-origin checks use the public scheme.
+  Keep this container behind the hosting HTTP proxy; do not expose it as an
+  unproxied public TCP service. Client IP headers are not authorization.
 - Keep one replica for the SQLite staging service.
 - Use a separate public HTTPS staging hostname and fresh owner credentials.
 - Do not copy production environment variables wholesale.
