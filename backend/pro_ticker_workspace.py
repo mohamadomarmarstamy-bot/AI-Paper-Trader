@@ -77,6 +77,10 @@ def workspace_snapshot(*, limit=200):
             'updated_at DESC,id DESC', "WHERE symbol IS NOT NULL AND TRIM(symbol) != ''")
         unattributed_research = conn.execute("SELECT COUNT(*) FROM pro_ticker_research WHERE symbol IS NULL OR TRIM(symbol) = ''").fetchone()[0] if 'pro_ticker_research' in tables else 0
         conn.rollback()
+    # Discovery is separate from a market scanner. Surface its persisted
+    # status without misrepresenting saved articles as live market signals.
+    from pro_ticker_discovery import discovery_status
+    discovery = discovery_status()
     budget_cents = round(PRO_TICKER_VIRTUAL_BUDGET * 100)
     return {
         'paper': True, 'scope': 'pro_ticker_strategy_ledger',
@@ -91,6 +95,7 @@ def workspace_snapshot(*, limit=200):
                         'profit_factor': None, 'drawdown': None,
                         'reason': 'Verified execution prices and current marks are not stored in the strategy share ledger.'},
         'scanner': {'status': 'saved_research_only', 'automatic_discovery_enabled': False,
+                    'public_discovery': discovery,
                     'unattributed_research_records': unattributed_research,
                     'last_scan_at': None, 'reason': 'Saved research is not a live scanner or a new AI evaluation.'},
         'health': {'database': 'readable', 'broker': 'not_checked', 'background_jobs': 'not_started_by_workspace'},
