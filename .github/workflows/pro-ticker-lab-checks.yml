@@ -97,9 +97,11 @@ jobs:
         run: |
           python -m unittest discover -s backend -p 'test_pro_ticker_frontend_integration.py' -v
       - name: Frontend research runtime DOM tests
-        run: node --test backend/frontend/js/pro-ticker-manual.test.cjs
+        run: node --test backend/frontend/js/pro-ticker-*.test.cjs
       - name: Frontend JavaScript syntax check
-        run: node --check backend/frontend/js/pro-ticker-manual.js
+        run: |
+          node --check backend/frontend/js/pro-ticker-manual.js
+          node --check backend/frontend/js/pro-ticker-release.js
 
 
   full-app-import-smoke:

@@ -16116,6 +16116,25 @@ def build_pro_ticker_learning_analysis(
     }
 
 
+def make_pro_ticker_manual_release_reader():
+    """Server-only authenticated GET reader pinned to Alpaca's PAPER host."""
+    from pro_ticker_alpaca_paper_reader import make_alpaca_paper_order_reader
+    credentials = get_alpaca_credentials()
+    if credentials is None:
+        raise RuntimeError("PAPER credentials unavailable.")
+    return make_alpaca_paper_order_reader(
+        key_id=credentials[0], secret_key=credentials[1], http_get=requests.get,
+    )
+
+
+from pro_ticker_release_routes import build_paper_release_router
+app.include_router(build_paper_release_router(
+    require_session=require_app_session,
+    operator_enabled=lambda: os.getenv("PRO_TICKER_MANUAL_RELEASE_ENABLED", "") == "true",
+    make_paper_reader=make_pro_ticker_manual_release_reader,
+))
+
+
 @app.get("/auto-trader/pro-ticker-manual-submissions")
 def list_auto_trader_pro_ticker_manual_submissions(
     request: Request,

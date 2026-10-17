@@ -34,6 +34,50 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
             os.environ["DATABASE_PATH"] = cls.original_db
         cls.temp_dir.cleanup()
 
+    def test_actual_release_routes_default_disabled_and_authenticated(self):
+        import asyncio
+        import httpx
+        from unittest.mock import patch
+        with patch.dict(os.environ, {"PRO_TICKER_MANUAL_RELEASE_ENABLED": ""}), \
+             patch.object(self.main, "APP_SESSION_SECRET", "isolated-operator-smoke-secret"), \
+             patch.object(self.main, "get_alpaca_credentials") as credentials:
+            async def run():
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.main.app), base_url="http://testserver") as client:
+                    anonymous = await client.get("/auto-trader/pro-ticker-paper/release-events")
+                    client.cookies.set(self.main.APP_SESSION_COOKIE, self.main.create_app_session_token())
+                    status = await client.get("/auto-trader/pro-ticker-paper/release-status")
+                    history = await client.get("/auto-trader/pro-ticker-paper/release-events")
+                    blocked = await client.post("/auto-trader/pro-ticker-paper/release-review",
+                        json={"reservation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+                        headers={"Origin": "http://testserver", "X-Pro-Ticker-Operator": "manual-release"})
+                    return anonymous, status, history, blocked
+            anonymous, status, history, blocked = asyncio.run(run())
+        self.assertEqual(anonymous.status_code, 401)
+        self.assertEqual(status.status_code, 200)
+        self.assertFalse(status.json()["manual_release_enabled"])
+        self.assertFalse(status.json()["automatic_release_enabled"])
+        self.assertEqual(history.status_code, 200)
+        self.assertFalse(history.json()["counts_as_realized_profit"])
+        self.assertEqual(blocked.status_code, 403)
+        credentials.assert_not_called()
+
+    def test_actual_release_route_rejects_request_selected_operator(self):
+        import asyncio
+        import httpx
+        from unittest.mock import patch
+        with patch.dict(os.environ, {"PRO_TICKER_MANUAL_RELEASE_ENABLED": "true"}), \
+             patch.object(self.main, "APP_SESSION_SECRET", "isolated-operator-smoke-secret"), \
+             patch.object(self.main, "get_alpaca_credentials") as credentials:
+            async def run():
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.main.app), base_url="http://testserver") as client:
+                    client.cookies.set(self.main.APP_SESSION_COOKIE, self.main.create_app_session_token())
+                    return await client.post("/auto-trader/pro-ticker-paper/release-review",
+                        json={"reservation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "approved_by": "forged"},
+                        headers={"Origin": "http://testserver", "X-Pro-Ticker-Operator": "manual-release"})
+            response = asyncio.run(run())
+        self.assertEqual(response.status_code, 422)
+        credentials.assert_not_called()
+
     def test_real_production_app_has_research_routes(self):
         routes = {(method, route.path): route.endpoint.__name__
                   for route in self.main.app.routes

@@ -1205,6 +1205,23 @@
                             <tbody id="pro-ticker-manual-history"></tbody></table>
                         </div>
                     </div>
+                    <div class="panel" style="padding:1.5rem">
+                        <h3>PAPER virtual budget releases</h3>
+                        <p>Returned reserved funds are separate from realized trading profit.</p>
+                        <p id="pro-ticker-release-status" role="status" aria-live="polite">Load the lab to view release history.</p>
+                        <form id="pro-ticker-release-form" hidden>
+                            <label for="pro-ticker-release-reservation">Closed reservation UUID</label>
+                            <input id="pro-ticker-release-reservation" type="text" maxlength="36" required style="display:block;width:100%;margin:0.75rem 0;padding:0.75rem">
+                            <button id="pro-ticker-release-prepare" type="submit" class="primary-button" disabled>Review closed PAPER reservation</button>
+                            <p id="pro-ticker-release-review" style="overflow-wrap:anywhere"></p>
+                            <label><input id="pro-ticker-release-attest" type="checkbox" disabled> I independently checked these orders in my PAPER account and verified that the position is fully closed.</label>
+                            <button id="pro-ticker-release-confirm" type="button" class="primary-button" disabled>Confirm return of virtual funds</button>
+                        </form>
+                        <div style="overflow-x:auto">
+                            <table><thead><tr><th>Symbol</th><th>Virtual funds returned</th><th>Released at</th><th>Reservation</th></tr></thead>
+                            <tbody id="pro-ticker-release-events"></tbody></table>
+                        </div>
+                    </div>
                 </section>
                 <section
                     id="strategy-section"
@@ -1932,6 +1949,7 @@
     <script src="js/watchlist.js"></script>
     <script src="js/portfolio.js"></script>
     <script src="js/pro-ticker-manual.js"></script>
+    <script src="js/pro-ticker-release.js"></script>
     <script src="js/strategy.js"></script>
     <script src="js/jarvis.js"></script>
     <script src="js/profile.js"></script>
@@ -2039,7 +2057,7 @@ document.addEventListener(
                 }
 
                 if (sectionId === "pro-ticker-manual-section") {
-                    window.setTimeout(() => window.loadProTickerManualLab?.(), 80);
+                    window.setTimeout(() => { window.loadProTickerManualLab?.(); window.loadProTickerReleasePanel?.(); }, 80);
                 }
 
                 if (sectionId === "scanner-section") {

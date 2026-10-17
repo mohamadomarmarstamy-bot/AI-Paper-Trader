@@ -1,8 +1,10 @@
 # Manual PAPER budget release
 
-`backend/pro_ticker_manual_release.py` is an internal operator service. It has
-**no HTTP route, scanner integration, scheduled caller, or automatic approval**.
-Adding those requires a separate authentication and authorization integration.
+`backend/pro_ticker_manual_release.py` is an operator service behind the
+opt-in `pro_ticker_release_routes` router. It has **no scanner integration,
+scheduled caller, or automatic approval**. The app has one owner login; this
+is not a multi-user authorization system. All approver identities are supplied
+by the server after authenticating the signed app-owner session.
 It only changes Pro Ticker virtual allocations; it never submits broker orders,
 changes broker cash, or accesses live trading endpoints.
 
@@ -18,7 +20,9 @@ changes broker cash, or accesses live trading endpoints.
    snapshot and SHA-256 digest in a review expiring after five minutes.
 3. An authenticated operator independently checks PAPER account provenance and
    the exact review digest before calling `approve_manual_paper_release`.
-   `approved_by` must come from trusted identity, not user-supplied request input.
+   The router sets `approved_by` to `authenticated-app-owner`; request bodies
+   cannot set an actor or provide broker snapshots. Same-origin JSON and the
+   explicit operator header are required for both write endpoints.
    The explicit attestation is an operator assertion, **not cryptographic proof
    supplied by an injected transport**. Test callbacks never establish automatic
    authority.
@@ -53,6 +57,26 @@ rollback after an injected database interruption, evidence retention and
 rejection of ownership mismatches. All use temporary SQLite and synthetic
 broker responses. No real account has been used to exercise this service.
 
-Remaining integration work: authenticated operator review UI, explicit access
-control, release-event reporting in history/activity, and isolated staging
-validation. Automatic release remains disabled.
+## App controls and history
+
+The Pro Ticker panel displays virtual budget release history separately from
+trade P/L. GET `release-status` and `release-events` under
+`/auto-trader/pro-ticker-paper` require an app session. History reads never
+initialize tables or release funds. The operator UI requires preparation,
+independent verification of the displayed PAPER orders, a checkbox, and a
+separate confirmation click. Pending or unlinked broker orders must also be
+reviewed by the operator; this service cannot discover ownership of unlinked
+orders.
+
+POST `release-review` and `release-confirm` are disabled unless
+`PRO_TICKER_MANUAL_RELEASE_ENABLED` equals the literal `true`. No deployed
+setting has been changed. Enable only in an explicitly approved isolated
+PAPER staging environment before production consideration. Request bodies
+cannot inject transport, broker data, or an operator identity. Retries of the
+same committed confirmation return the existing event, even if broker
+credentials are temporarily unavailable. Automatic release remains disabled.
+
+Remaining validation: isolated staging with real PAPER credentials and a
+representative deployed-schema copy. A real-browser visual check also remains;
+local headless browser installation was unavailable. Synthetic HTTP, DOM,
+production-app smoke and concurrency tests do not replace those checks.

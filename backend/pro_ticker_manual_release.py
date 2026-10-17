@@ -1,6 +1,7 @@
-"""Explicit operator-approved virtual PAPER release; deliberately not routed.
+"""Explicit operator-approved virtual PAPER release service.
 
-No scheduler, HTTP route, scanner or broker submission calls this module.
+Only the opt-in authenticated operator router calls this module in the app.
+No scheduler, scanner or broker submission calls this module.
 A trusted operator must independently verify PAPER provenance and approve the
 exact review digest. A generic reader's output is never automatic authority.
 The service re-fetches orders and rechecks all evidence before committing.
@@ -151,10 +152,12 @@ def prepare_manual_paper_release(reservation_id, *, fetch_paper_order):
             '(id, reservation_id, evidence_digest, evidence_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
             (review_id, reservation_id, digest, _evidence_json(current, entry, exits), now, now + 300),
         )
-    return {**_BASE, 'database_updated': True, 'review_id': review_id,
+    return {**_BASE, 'database_updated': True, 'review_id': review_id, 'reservation_id': reservation_id,
             'evidence_digest': digest, 'expires_at': now + 300,
             'symbol': current['reservation']['symbol'],
             'reserved_cents': current['reservation']['notional_cents'],
+            'filled_entry_shares': int(float(entry['filled_qty'])),
+            'filled_exit_shares': sum(int(float(order['filled_qty'])) for order in exits.values()),
             'entry_order_id': current['reservation']['broker_order_id'],
             'exit_order_ids': sorted(exits),
             'reason': 'requires_independent_operator_paper_provenance_approval'}
@@ -162,11 +165,12 @@ def prepare_manual_paper_release(reservation_id, *, fetch_paper_order):
 
 def approve_manual_paper_release(review_id, *, evidence_digest, approved_by,
                                  independent_paper_provenance_confirmed=False):
-    """Trusted operator boundary; NEVER expose actor/attestation as request input.
+    """Trusted operator boundary; NEVER accept operator identity from request input.
 
     Approval must come from an authenticated operator who has independently
     checked the PAPER account, linked orders and the displayed evidence digest.
-    This standalone service has no HTTP route or automatic callers.
+    The operator router authenticates same-origin requests before accepting an
+    explicit human attestation. There are no automatic callers.
     """
     _uuid(review_id)
     if independent_paper_provenance_confirmed is not True:
@@ -178,7 +182,11 @@ def approve_manual_paper_release(review_id, *, evidence_digest, approved_by,
         review = conn.execute('SELECT * FROM pro_ticker_manual_release_reviews WHERE id = ?', (review_id,)).fetchone()
         if review is None or review['evidence_digest'] != evidence_digest:
             raise ValueError('Exact reviewed PAPER evidence digest required.')
-        if time.time() >= review['expires_at'] or review['consumed_at'] is not None:
+        if review['consumed_at'] is not None:
+            if review['approved_by'] == approved_by:
+                return dict(paper=True, review_id=review_id, manual_approval_recorded=True, budget_released=False)
+            raise ValueError('PAPER review already consumed by another operator.')
+        if time.time() >= review['expires_at']:
             raise ValueError('PAPER review expired or consumed.')
         if review['approved_by'] not in (None, approved_by):
             raise ValueError('PAPER review already approved by another operator.')

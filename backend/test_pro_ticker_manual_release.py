@@ -231,9 +231,9 @@ class ManualPaperReleaseTests(unittest.TestCase):
     def test_service_is_not_imported_by_execution_or_http_modules(self):
         import ast
         from pathlib import Path
-        # Keep operator approval isolated until authenticated operator UI exists.
+        # Only the guarded operator router may import the mutation service.
         for path in Path(__file__).parent.glob('*.py'):
-            if path.name.startswith('test') or path.name == 'pro_ticker_manual_release.py':
+            if path.name.startswith('test') or path.name in {'pro_ticker_manual_release.py', 'pro_ticker_release_routes.py'}:
                 continue
             tree = ast.parse(path.read_text(encoding='utf-8-sig'))
             imports = [node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
