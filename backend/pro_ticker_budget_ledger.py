@@ -37,7 +37,17 @@ def _init(connection: sqlite3.Connection) -> None:
     # Existing Railway databases may predate expected_shares.
     columns = {row['name'] for row in connection.execute('PRAGMA table_info(pro_ticker_paper_reservations)')}
     if 'expected_shares' not in columns:
-        connection.execute('ALTER TABLE pro_ticker_paper_reservations ADD COLUMN expected_shares INTEGER')
+        # Concurrent first requests can both observe the legacy schema. Serialize
+        # the migration and recheck after acquiring the lock before ALTER TABLE.
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            columns = {row['name'] for row in connection.execute('PRAGMA table_info(pro_ticker_paper_reservations)')}
+            if 'expected_shares' not in columns:
+                connection.execute('ALTER TABLE pro_ticker_paper_reservations ADD COLUMN expected_shares INTEGER')
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
 
 
 def _cents(amount: float) -> int:
