@@ -44,9 +44,13 @@
 ## Interpretation
 
 Public discovery is an explicit operator action, not an automatic market scan.
-It reads one public listing page, considers up to 20 discovered links, and
-collects at most five previously unseen articles per run. It checks a 120-second
-window between requests; individual HTTP calls can extend beyond that window.
+It reads one public listing page, inspects at most five article links through
+the existing signal collector, and collects at most five previously unseen
+signal articles per run. The legacy collector refetches selected articles for
+storage. The collection loop checks elapsed time before additional work;
+listing inspection, redirects and in-flight HTTP calls can extend beyond its
+120-second window. Empty results can mean that the inspected articles do not
+contain ticker/signal evidence; general market news is not promoted to a signal.
 A ten-minute database lease prevents concurrent runs. A lost browser response
 does not imply server failure: refresh persisted status before retrying.
 Expired runs remain visible as interrupted; only an explicit retry starts new

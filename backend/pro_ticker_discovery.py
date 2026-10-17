@@ -67,7 +67,9 @@ def run_discovery(*, discover=None, collect=None, clock=time.time):
             from pro_ticker_collector import discover_pro_ticker_articles, collect_pro_ticker_article
             discover = discover or discover_pro_ticker_articles
             collect = collect or collect_pro_ticker_article
-        items = discover(start_page=1,max_pages=1,max_articles=20)
+        # The legacy discovery function inspects article bodies before returning
+        # links. Bound that work too, not only the later collection loop.
+        items = discover(start_page=1,max_pages=1,max_articles=5)
         if not isinstance(items,list):
             raise ValueError('Invalid discovery results.')
         result['discovered'] = len(items)

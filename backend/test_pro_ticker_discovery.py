@@ -33,7 +33,7 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(result['status'],'completed');self.assertEqual(result['run']['saved'],2)
         self.assertEqual({r['symbol'] for r in workspace_snapshot()['research']['rows']},{'AAPL','MSFT'})
         self.assertEqual(discovery_status()['run']['id'],result['run']['id'])
-        source.assert_called_once_with(start_page=1,max_pages=1,max_articles=20)
+        source.assert_called_once_with(start_page=1,max_pages=1,max_articles=5)
         second=run_discovery(discover=source,collect=collect)
         self.assertEqual(second['run']['saved'],0);self.assertEqual(second['run']['skipped'],2)
         self.assertEqual(collect.call_count,2)
