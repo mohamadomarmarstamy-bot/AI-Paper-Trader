@@ -145,3 +145,71 @@ jobs:
           name: paper-release-browser-screenshots
           path: .artifacts/paper-release/
           if-no-files-found: ignore
+
+  isolated-staging-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build staging-only container
+        run: docker build --file Dockerfile.paper-staging --tag paper-staging:ci .
+      - name: Boot isolated staging with synthetic owner credentials
+        run: |
+          mkdir -p "$RUNNER_TEMP/paper-staging-data"
+          docker run --detach --name paper-staging-ci \
+            --publish 127.0.0.1:18080:8000 \
+            --mount "type=bind,src=$RUNNER_TEMP/paper-staging-data,dst=/staging-data" \
+            --env PAPER_STAGING_MODE=true \
+            --env DATABASE_PATH=/staging-data/trader.db \
+            --env AUTO_TRADER_START_ENABLED=false \
+            --env PRO_TICKER_MANUAL_RELEASE_ENABLED=true \
+            --env APP_ACCESS_PASSWORD=ci-staging-password-not-real \
+            --env APP_SESSION_SECRET=ci-staging-session-secret-not-real-at-least-32 \
+            paper-staging:ci
+      - name: Validate staging health, route isolation and persistence
+        run: |
+          python - <<'PY'
+          import json
+          import time
+          import urllib.error
+          import urllib.request
+
+          base = 'http://127.0.0.1:18080'
+          deadline = time.monotonic() + 60
+          while True:
+              try:
+                  with urllib.request.urlopen(base + '/health', timeout=2) as response:
+                      health = json.load(response)
+                  break
+              except (OSError, urllib.error.URLError):
+                  if time.monotonic() >= deadline:
+                      raise
+                  time.sleep(1)
+          assert health['environment'] == 'isolated-staging'
+          assert health['paper'] is True
+          assert health['background_jobs_enabled'] is False
+          assert health['broker_order_submission_enabled'] is False
+          checks = [
+              ('GET', '/auto-trader/pro-ticker-paper/release-events', 401),
+              ('GET', '/account/live', 404),
+              ('POST', '/auto-trader/positions/close-all', 404),
+              ('POST', '/auto-trader/report/test-email', 404),
+          ]
+          for method, path, expected in checks:
+              request = urllib.request.Request(base + path, method=method, headers={'Origin': base})
+              try:
+                  urllib.request.urlopen(request, timeout=3)
+                  raise AssertionError('Unexpected exposed staging route: ' + path)
+              except urllib.error.HTTPError as error:
+                  assert error.code == expected, (path, error.code)
+          print('Isolated staging HTTP boundaries verified')
+          PY
+          docker exec paper-staging-ci python -c "from pathlib import Path; import sqlite3; assert Path('/staging-data/trader.db').is_file(); assert not Path('/app/backend/trader.db').exists(); assert not Path('/data/trader.db').exists(); c=sqlite3.connect('/staging-data/trader.db'); c.execute('CREATE TABLE staging_ci_marker (value TEXT)'); c.execute(\"INSERT INTO staging_ci_marker VALUES ('retained')\"); c.commit(); c.close()"
+          docker restart paper-staging-ci
+          docker exec paper-staging-ci python -c "import sqlite3; c=sqlite3.connect('/staging-data/trader.db'); assert c.execute('SELECT value FROM staging_ci_marker').fetchone()[0] == 'retained'; c.close(); print('Separate volume persistence verified')"
+      - name: Show failed container startup logs
+        if: failure()
+        run: docker logs paper-staging-ci || true
+      - name: Remove disposable staging container
+        if: always()
+        run: docker rm --force paper-staging-ci || true
