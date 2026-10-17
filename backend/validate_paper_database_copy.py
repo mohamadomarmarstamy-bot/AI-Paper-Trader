@@ -57,8 +57,10 @@ def validate_database_backup(source):
     source = Path(source).resolve()
     if not source.is_file():
         raise ValueError('An exported SQLite backup file is required.')
-    if Path(str(source) + '-wal').exists():
-        raise ValueError('Use a standalone, consistent SQLite backup without a live WAL.')
+    # immutable mode skips journal recovery. A rollback journal can therefore
+    # hide an interrupted transaction just as a WAL can hide committed rows.
+    if any(Path(str(source) + suffix).exists() for suffix in ('-wal', '-journal', '-shm')):
+        raise ValueError('Use a standalone, consistent SQLite backup without journal sidecars.')
     with tempfile.TemporaryDirectory(prefix='paper-db-validation-') as directory:
         target = Path(directory) / 'validation.sqlite3'
         try:

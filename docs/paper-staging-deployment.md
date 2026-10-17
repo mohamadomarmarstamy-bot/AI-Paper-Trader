@@ -54,7 +54,7 @@ make authenticated read-only PAPER/market-data requests.
    controlled test runner and dedicated account; this staging web app cannot
    submit those trades. Partial fills cannot be guaranteed on demand.
 5. Obtain a consistent standalone backup of the deployed SQLite database
-   (no live WAL beside the exported file). Run
+   (no WAL, rollback journal, or shared-memory sidecar beside the exported file). Run
    `python backend/validate_paper_database_copy.py /secure/export.sqlite3`.
    The validator opens the export immutably, migrates a disposable copy in an
    isolated process, checks integrity and reservation accounting, and prints

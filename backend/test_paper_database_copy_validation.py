@@ -54,6 +54,19 @@ class DatabaseCopyValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_database_backup(self.source)
 
+    def test_journal_sidecars_are_rejected_without_recovery_or_source_changes(self):
+        self.seed()
+        before = self.source.read_bytes()
+        for suffix in ('-journal', '-shm'):
+            with self.subTest(suffix=suffix):
+                sidecar = Path(str(self.source) + suffix)
+                sidecar.write_bytes(b'private-interrupted-transaction')
+                with self.assertRaisesRegex(ValueError, 'standalone'):
+                    validate_database_backup(self.source)
+                self.assertEqual(self.source.read_bytes(), before)
+                self.assertEqual(sidecar.read_bytes(), b'private-interrupted-transaction')
+                sidecar.unlink()
+
 
 if __name__ == '__main__':
     unittest.main()
