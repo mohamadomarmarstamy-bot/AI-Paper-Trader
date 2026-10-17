@@ -29,6 +29,17 @@ class WorkspaceTests(unittest.TestCase):
         with closing(database.get_connection()) as c:
             self.assertEqual(c.execute('SELECT COUNT(*) FROM sqlite_master').fetchone()[0],0)
 
+    def test_scanner_exposes_persisted_discovery_status_without_claiming_live_scan(self):
+        from pro_ticker_discovery import run_discovery
+        result = run_discovery(discover=lambda **kwargs: [], collect=lambda url: None)
+        self.assertEqual(result['status'], 'no_results')
+        data = workspace_snapshot()
+        self.assertEqual(data['scanner']['public_discovery']['status'], 'no_results')
+        self.assertEqual(data['scanner']['public_discovery']['run']['id'], result['run']['id'])
+        self.assertEqual(data['scanner']['status'], 'saved_research_only')
+        self.assertFalse(data['scanner']['automatic_discovery_enabled'])
+        self.assertFalse(data['order_execution_enabled'])
+
     def test_partial_entry_exit_lifecycle_is_visible_without_shared_account_rows(self):
         reservation=reserve_pro_ticker_budget('AAPL',100)
         for event,side,qty in [('entry-1','buy',3),('entry-2','buy',2),('exit-1','sell',2)]:
