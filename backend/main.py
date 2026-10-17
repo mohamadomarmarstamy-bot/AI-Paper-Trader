@@ -2038,9 +2038,12 @@ def verify_app_session_token(
     except (ValueError, TypeError):
         return False
 
+    # Reject tokens dated in the future as well as expired sessions.
+    # A small allowance avoids invalidating sessions during minor clock skew.
+    token_age_seconds = time.time() - timestamp
     if (
-        time.time() - timestamp
-        > APP_SESSION_MAX_AGE_SECONDS
+        token_age_seconds < -60
+        or token_age_seconds > APP_SESSION_MAX_AGE_SECONDS
     ):
         return False
 
@@ -16111,6 +16114,408 @@ def build_pro_ticker_learning_analysis(
         "minimum_research_sample": 30,
         "examples": examples,
     }
+
+
+def make_pro_ticker_manual_release_reader():
+    """Server-only authenticated GET reader pinned to Alpaca's PAPER host."""
+    from pro_ticker_alpaca_paper_reader import make_alpaca_paper_order_reader
+    credentials = get_alpaca_credentials()
+    if credentials is None:
+        raise RuntimeError("PAPER credentials unavailable.")
+    return make_alpaca_paper_order_reader(
+        key_id=credentials[0], secret_key=credentials[1], http_get=requests.get,
+    )
+
+
+from pro_ticker_workspace import build_workspace_router
+app.include_router(build_workspace_router(require_session=require_app_session))
+
+from pro_ticker_release_routes import build_paper_release_router
+app.include_router(build_paper_release_router(
+    require_session=require_app_session,
+    operator_enabled=lambda: os.getenv("PRO_TICKER_MANUAL_RELEASE_ENABLED", "") == "true",
+    make_paper_reader=make_pro_ticker_manual_release_reader,
+))
+
+
+@app.get("/auto-trader/pro-ticker-manual-submissions")
+def list_auto_trader_pro_ticker_manual_submissions(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    require_app_session(request)
+    from pro_ticker_manual_intake import list_manual_observations
+    return list_manual_observations(limit=limit)
+
+
+@app.get("/auto-trader/pro-ticker-paper-budget")
+def pro_ticker_paper_budget(request: Request) -> dict[str, Any]:
+    """Read the durable virtual PAPER budget; execution remains disabled."""
+    require_app_session(request)
+    from pro_ticker_budget_ledger import get_pro_ticker_budget
+    return get_pro_ticker_budget()
+
+
+@app.post("/auto-trader/pro-ticker-paper-entry-fill-reconcile")
+def pro_ticker_paper_entry_fill_reconcile(
+    request: Request,
+    reservation_id: str = Query(..., min_length=36, max_length=36),
+) -> dict[str, Any]:
+    """Reconcile one linked PAPER entry order; never submit or cancel orders."""
+    require_app_session(request)
+    from pro_ticker_budget_ledger import get_pro_ticker_reservation
+    from pro_ticker_verified_fill_bridge import account_linked_paper_entry_snapshot
+
+    try:
+        reservation = get_pro_ticker_reservation(reservation_id)
+        if reservation is None or not reservation.get("broker_order_id"):
+            raise ValueError("A linked PAPER reservation is required.")
+        order_id = str(reservation["broker_order_id"])
+        # Broker-generated Alpaca order IDs are UUIDs; reject unsafe paths.
+        import uuid as _pro_ticker_uuid
+        if str(_pro_ticker_uuid.UUID(order_id)) != order_id.lower():
+            raise ValueError("Invalid PAPER broker order ID.")
+        # Fetch this exact order directly from the hard-coded PAPER broker.
+        # Never accept a client-supplied order payload as evidence of a fill.
+        broker_order = alpaca_paper_request(
+            "GET", "/v2/orders/" + order_id, timeout=10.0,
+        )
+        if not isinstance(broker_order, dict):
+            raise ValueError("PAPER broker order unavailable.")
+        result = account_linked_paper_entry_snapshot(
+            reservation_id, broker_order,
+        )
+        return {
+            "paper": True, "order_submitted": False,
+            "reservation_id": reservation_id, **result,
+        }
+    except Exception:
+        return {
+            "paper": True, "order_submitted": False,
+            "posted": False, "reconciled": False,
+            "reservation_id": reservation_id,
+            "reason": "verified_paper_entry_reconciliation_unavailable",
+        }
+
+
+@app.get("/auto-trader/pro-ticker-paper-fill-posting-preview")
+def pro_ticker_paper_fill_posting_preview(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=100),
+) -> dict[str, Any]:
+    """Inspect linked PAPER entry fills without posting them to the ledger."""
+    require_app_session(request)
+    from pro_ticker_budget_ledger import list_pro_ticker_reservations
+    from pro_ticker_position_ledger import get_accounted_paper_order_shares
+    from pro_ticker_fill_posting_preview import preview_entry_fill_delta
+
+    try:
+        reservations = list_pro_ticker_reservations(limit)["reservations"]
+        orders = fetch_alpaca_paper_orders(limit=500)
+        if not isinstance(orders, list):
+            raise ValueError("Broker order snapshot missing.")
+        by_id = {
+            str(order["id"]): order for order in orders
+            if isinstance(order, dict) and order.get("id")
+        }
+        results = []
+        for reservation in reservations:
+            broker_id = str(reservation.get("broker_order_id") or "")
+            accounted = get_accounted_paper_order_shares(broker_id) if broker_id else 0
+            review = preview_entry_fill_delta(
+                reservation, by_id.get(broker_id), accounted,
+            )
+            results.append({
+                "reservation_id": reservation["id"],
+                "symbol": reservation["symbol"], **review,
+            })
+        return {
+            "paper": True, "preview_only": True,
+            "order_submitted": False, "database_updated": False,
+            "broker_snapshot_available": True,
+            "count": len(results), "results": results,
+        }
+    except Exception:
+        return {
+            "paper": True, "preview_only": True,
+            "order_submitted": False, "database_updated": False,
+            "broker_snapshot_available": False,
+            "count": 0, "results": [],
+            "reason": "broker_or_ledger_snapshot_unavailable",
+        }
+
+
+@app.get("/auto-trader/pro-ticker-paper-exit-fill-preview")
+def pro_ticker_paper_exit_fill_preview(
+    request: Request,
+    order_id: str = Query(..., min_length=36, max_length=36),
+) -> dict[str, Any]:
+    """Verify linked PAPER exit fills without posting shares or releasing funds."""
+    require_app_session(request)
+    from pro_ticker_exit_links import get_pro_ticker_exit_link
+    from pro_ticker_budget_ledger import get_pro_ticker_reservation
+    from pro_ticker_verified_exit_review import review_verified_paper_exit_link
+
+    base = {
+        "paper": True, "preview_only": True, "reconciled": False,
+        "order_submitted": False, "database_updated": False,
+        "budget_released": False, "verified": False,
+    }
+    try:
+        link = get_pro_ticker_exit_link(order_id)
+        if link is None:
+            return {**base, "reason": "exit_order_not_linked"}
+        reservation = get_pro_ticker_reservation(link["reservation_id"])
+        broker_order = alpaca_paper_request(
+            "GET", "/v2/orders/" + order_id, timeout=10.0,
+        )
+        return review_verified_paper_exit_link(link, reservation, broker_order)
+    except Exception:
+        return {**base, "reason": "paper_exit_review_unavailable"}
+
+
+@app.get("/auto-trader/pro-ticker-paper-combined-audit")
+def pro_ticker_paper_combined_audit(request: Request) -> dict[str, Any]:
+    """Read-only internal ledger and shared PAPER broker comparison."""
+    require_app_session(request)
+    from pro_ticker_budget_ledger import list_pro_ticker_reservations
+    from pro_ticker_position_ledger import list_pro_ticker_strategy_positions
+    from pro_ticker_combined_paper_audit import review_paper_allocation_and_broker
+
+    try:
+        reservations = list_pro_ticker_reservations(limit=500)["reservations"]
+        if len(reservations) >= 500:
+            raise ValueError("Incomplete reservation snapshot.")
+        positions = list_pro_ticker_strategy_positions()["positions"]
+        broker_positions = fetch_alpaca_paper_positions()
+        if not isinstance(broker_positions, list):
+            raise ValueError("Invalid PAPER broker positions.")
+        return review_paper_allocation_and_broker(
+            reservations, positions, broker_positions,
+        )
+    except Exception:
+        return {
+            "paper": True, "preview_only": True, "reconciled": False,
+            "order_submitted": False, "database_updated": False,
+            "budget_released": False,
+            "reason": "combined_paper_audit_unavailable",
+        }
+
+
+@app.get("/auto-trader/pro-ticker-paper-allocation-audit")
+def pro_ticker_paper_allocation_audit(request: Request) -> dict[str, Any]:
+    """Read-only consistency audit of PAPER reservations and strategy shares."""
+    require_app_session(request)
+    from pro_ticker_budget_ledger import list_pro_ticker_reservations
+    from pro_ticker_position_ledger import list_pro_ticker_strategy_positions
+    from pro_ticker_virtual_allocation_audit import audit_virtual_allocations
+
+    try:
+        # Refuse to claim completeness if the ledger exceeds this bounded
+        # snapshot. The audit cannot reconcile omitted reservations.
+        reservations = list_pro_ticker_reservations(limit=500)["reservations"]
+        if len(reservations) >= 500:
+            raise ValueError("Reservation audit snapshot could be truncated.")
+        positions = list_pro_ticker_strategy_positions()["positions"]
+        return {
+            **audit_virtual_allocations(reservations, positions),
+            "order_submitted": False,
+        }
+    except Exception:
+        return {
+            "paper": True, "preview_only": True, "reconciled": False,
+            "ledger_consistent": False, "database_updated": False,
+            "budget_released": False, "order_submitted": False,
+            "reason": "allocation_audit_snapshot_unavailable", "issues": [],
+        }
+
+
+@app.get("/auto-trader/pro-ticker-paper-position-audit")
+def pro_ticker_paper_position_audit(request: Request) -> dict[str, Any]:
+    """Read-only comparison of attributed strategy shares to shared PAPER broker."""
+    require_app_session(request)
+    from pro_ticker_position_ledger import list_pro_ticker_strategy_positions
+    from pro_ticker_position_audit import audit_strategy_paper_positions
+
+    try:
+        strategy = list_pro_ticker_strategy_positions()["positions"]
+        broker = fetch_alpaca_paper_positions()
+        return {
+            **audit_strategy_paper_positions(strategy, broker),
+            "order_submitted": False,
+            "database_updated": False,
+        }
+    except Exception:
+        return {
+            "paper": True, "preview_only": True, "reconciled": False,
+            "broker_snapshot_consistent": False,
+            "reason": "broker_or_database_snapshot_unavailable",
+            "findings": [], "order_submitted": False,
+            "database_updated": False,
+        }
+
+
+@app.get("/auto-trader/pro-ticker-paper-reconciliation-preview")
+def pro_ticker_paper_reconciliation_preview(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=100),
+) -> dict[str, Any]:
+    """Compare PAPER reservations to broker state without modifying anything."""
+    require_app_session(request)
+    from pro_ticker_budget_ledger import list_pro_ticker_reservations
+    from pro_ticker_snapshot_review import review_paper_reservation
+
+    reservations = list_pro_ticker_reservations(limit)["reservations"]
+    try:
+        # These are PAPER-only broker endpoints. Failure is never interpreted
+        # as proof that an order or position is absent.
+        positions = fetch_alpaca_paper_positions()
+        orders = fetch_alpaca_paper_orders(limit=500)
+        by_id = {
+            str(order.get("id")): order for order in orders
+            if isinstance(order, dict) and order.get("id")
+        }
+        position_symbols = {
+            str(position.get("symbol") or "").upper()
+            for position in positions if isinstance(position, dict)
+        }
+    except Exception:
+        return {
+            "paper": True, "preview_only": True, "broker_snapshot_available": False,
+            "order_submitted": False, "database_updated": False,
+            "count": len(reservations),
+            "results": [
+                {
+                    "reservation_id": row["id"], "symbol": row["symbol"],
+                    "suggested_status": row["status"], "safe_to_release": False,
+                    "reason": "broker_snapshot_unavailable",
+                } for row in reservations
+            ],
+        }
+
+    results = [
+        review_paper_reservation(
+            row,
+            by_id.get(str(row.get("broker_order_id") or "")),
+            position_exists=row["symbol"].upper() in position_symbols,
+        )
+        for row in reservations
+    ]
+    return {
+        "paper": True, "preview_only": True, "broker_snapshot_available": True,
+        "order_submitted": False, "database_updated": False,
+        "count": len(results), "results": results,
+    }
+
+
+@app.post("/auto-trader/pro-ticker-paper-preview")
+async def pro_ticker_paper_preview(request: Request) -> dict[str, Any]:
+    """Evaluate one PAPER order intent. Preview only: no broker writes."""
+    require_app_session(request)
+    from pro_ticker_paper_policy import check_pro_ticker_paper_entry
+    from pro_ticker_manual_intake import parse_manual_symbols
+    from pro_ticker_budget_ledger import get_pro_ticker_budget
+
+    try:
+        payload = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Expected JSON body.")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Expected JSON object.")
+    try:
+        symbol = parse_manual_symbols(payload.get("symbol", ""))
+        if len(symbol) != 1:
+            raise ValueError("Provide exactly one symbol.")
+        proposed_notional = float(payload.get("proposed_notional"))
+    except (ValueError, TypeError) as error:
+        raise HTTPException(status_code=422, detail="Invalid symbol or proposed notional.") from error
+
+    # Conservative until durable strategy ledger and broker/order locking exist:
+    # no submitted trades, even if all preview checks pass.
+    try:
+        positions = fetch_alpaca_paper_positions()
+        orders = alpaca_paper_request(
+            "GET", "/v2/orders",
+            params={"status": "open", "limit": 500, "nested": "true"},
+        )
+        clock = fetch_alpaca_market_clock()
+        account = alpaca_paper_request("GET", "/v2/account")
+        quote = alpaca_market_data_request(
+            "GET", f"/v2/stocks/{symbol[0]}/trades/latest", timeout=3.0,
+        )
+        if not isinstance(positions, list) or not isinstance(orders, list) or not isinstance(account, dict) or not isinstance(clock, dict):
+            raise ValueError("Broker snapshot incomplete")
+        if not isinstance(quote, dict) or not isinstance(quote.get("trade"), dict):
+            raise ValueError("Latest trade missing")
+        from datetime import datetime, timezone
+        trade_time = datetime.fromisoformat(
+            str(quote["trade"].get("t", "")).replace("Z", "+00:00")
+        )
+        data_age_seconds = (datetime.now(timezone.utc) - trade_time).total_seconds()
+        budget = get_pro_ticker_budget()
+        result = check_pro_ticker_paper_entry(
+            symbol=symbol[0],
+            proposed_notional=proposed_notional,
+            # Ledger exists, but broker reconciliation is not yet wired.
+            # Force a blocked preview until that reconciliation is verified.
+            pro_ticker_committed=budget["committed"],
+            broker_buying_power=float(account.get("buying_power", 0)),
+            open_position_symbols={p.get("symbol", "") for p in positions},
+            open_order_symbols={o.get("symbol", "") for o in orders},
+            market_open=clock.get("is_open") is True,
+            broker_paper=True,
+            data_age_seconds=data_age_seconds,
+        )
+        return {
+            "paper": True, "preview_only": True, "order_submitted": False,
+            "symbol": symbol[0], "allowed": False,
+            "preflight_eligible": result.allowed,
+            "reason": "execution_disabled_pending_reconciliation" if result.allowed else result.reason,
+            "preflight_reason": result.reason,
+            "data_age_seconds": data_age_seconds,
+            "virtual_budget": budget,
+            "virtual_budget_reconciliation_ready": False,
+        }
+    except Exception:
+        return {
+            "paper": True, "preview_only": True, "order_submitted": False,
+            "symbol": symbol[0], "allowed": False,
+            "reason": "broker_or_market_snapshot_unavailable",
+            "virtual_budget_reconciliation_ready": False,
+        }
+
+
+@app.post("/auto-trader/pro-ticker-manual-submissions")
+async def auto_trader_pro_ticker_manual_submissions(
+    request: Request,
+) -> dict[str, Any]:
+    """Store manually discovered symbols for research; NEVER submit orders."""
+    require_app_session(request)
+    try:
+        payload = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Expected JSON body.")
+    if not isinstance(payload, dict) or not isinstance(payload.get("symbols"), str):
+        raise HTTPException(
+            status_code=422,
+            detail="Provide a 'symbols' string with comma-separated tickers.",
+        )
+    from pro_ticker_manual_intake import save_manual_observations
+
+    def fetch_latest_trade(symbol: str) -> dict[str, Any]:
+        data = alpaca_market_data_request(
+            "GET",
+            f"/v2/stocks/{symbol}/trades/latest",
+            timeout=3.0,
+        )
+        if not isinstance(data, dict) or not isinstance(data.get("trade"), dict):
+            raise ValueError("No latest trade available")
+        return data["trade"]
+
+    try:
+        return save_manual_observations(payload["symbols"], quote_fetcher=fetch_latest_trade)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.get(

@@ -1,0 +1,16 @@
+.git
+.artifacts
+**/__pycache__
+**/*.pyc
+**/*.db
+**/*.db-*
+**/*.sqlite
+**/*.sqlite-*
+**/*.sqlite3
+**/*.sqlite3-*
+**/.env
+**/.env.*
+**/*credentials*
+**/*secret*
+**/*_log.json
+**/*_journal.json
