@@ -98,7 +98,7 @@
         table("positions", snapshot?.positions.rows || [], [r=>r.symbol,r=>r.shares,r=>date(r.updated_at)]);
         table("orders", snapshot?.reservations.rows || [], [r=>r.symbol,r=>r.status,r=>money(r.notional_cents),r=>r.broker_order_id]);
         table("reservations", snapshot?.reservations.rows || [], [r=>r.id,r=>r.symbol,r=>money(r.notional_cents),r=>r.status,r=>date(r.updated_at)]);
-        el("scanner-note").textContent=snapshot ? snapshot.scanner.reason : "Scanner data unavailable.";
+        el("scanner-note").textContent=snapshot ? snapshot.scanner.reason + (snapshot.scanner.unattributed_research_records ? " Research records without an identified symbol: " + snapshot.scanner.unattributed_research_records + ". They are excluded from candidates." : "") : "Scanner data unavailable.";
         el("performance-note").textContent=snapshot ? snapshot.performance.reason : "Performance data unavailable.";
         el("health").textContent=snapshot ? "Database: readable. Broker: not checked. Automatic discovery: disabled. Order submission: disabled. Automatic release: disabled. No background jobs are started by this workspace." : "System health unavailable.";
         el("research-detail").replaceChildren();
@@ -133,7 +133,45 @@
             snapshot=null;render();el("status").textContent="Unable to load workspace: "+error.message;
         }
     }
-    el("refresh").addEventListener("click",()=> { refresh(); window.loadProTickerManualLab?.(); window.loadProTickerReleasePanel?.(); });
+    let discovering = false, discoveryVersion = 0;
+    function showDiscovery(data) {
+        if (data.paper !== true || data.automatic_discovery_enabled !== false || data.order_execution_enabled !== false ||
+            !["not_run","running","completed","partial","failed","no_results","interrupted"].includes(data.status)) throw Error("Invalid discovery status");
+        const run = data.run;
+        let text = "Public research discovery: " + data.status + ". ";
+        if (run) {
+            text += "Started: " + date(run.started_at) + ". ";
+            if (run.finished_at) text += "Finished: " + date(run.finished_at) + ". ";
+            if (Number.isSafeInteger(run.saved)) text += "Saved articles: " + run.saved + "; skipped: " + run.skipped + "; failures: " + run.failed + ". ";
+            if (typeof run.reason === "string") text += run.reason;
+        }
+        el("discovery-status").textContent = text;
+    }
+    async function loadDiscovery() {
+        const current = ++discoveryVersion;
+        try {
+            const response = await fetch("/auto-trader/pro-ticker/discovery", {credentials:"same-origin",cache:"no-store"});
+            if (!response.ok) throw Error("Discovery status request failed (" + response.status + ").");
+            const data = await response.json();
+            if (current === discoveryVersion) showDiscovery(data);
+        } catch (error) {
+            if (current === discoveryVersion) el("discovery-status").textContent = "Discovery status unavailable: " + error.message;
+        }
+    }
+    el("discover").addEventListener("click", async () => {
+        if (discovering) return;
+        discovering = true; discoveryVersion += 1; el("discover").disabled = true;
+        el("discovery-status").textContent = "Discovering public research. One page and at most five new articles; this may take up to a few minutes.";
+        try {
+            const response = await fetch("/auto-trader/pro-ticker/discovery", {method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:"{}"});
+            if (!response.ok) throw Error("Discovery request failed (" + response.status + ").");
+            showDiscovery(await response.json());
+            await refresh();
+        } catch (error) {
+            el("discovery-status").textContent = "Discovery response unavailable: " + error.message + " Check persisted status before retrying; the server may still be working.";
+        } finally { discovering = false; el("discover").disabled = false; }
+    });
+    el("refresh").addEventListener("click",()=> { refresh(); loadDiscovery(); window.loadProTickerManualLab?.(); window.loadProTickerReleasePanel?.(); });
     let calculating = false, proposalVersion = 0;
     el("proposal-form").addEventListener("input", () => {
         proposalVersion += 1;
@@ -179,5 +217,5 @@
         const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
         const link=document.createElement("a");link.href=url;link.download="pro-ticker-ledger-fills.csv";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
     });
-    render(); window.loadProTickerWorkspace=refresh;
+    render(); window.loadProTickerWorkspace=() => { loadDiscovery(); return refresh(); };
 })();

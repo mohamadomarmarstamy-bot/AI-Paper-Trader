@@ -14,6 +14,10 @@
 - [x] Journal symbol/date filters and CSV export of posted share events.
 - [x] Reuse manual research intake and manual release approval/history controls.
 - [x] Scoped responsive styling; keyboard tab navigation and refresh/error states.
+- [x] Operator-triggered public article discovery, persisted run history/status, single-run lease and interrupted retry protection.
+- [x] Skip saved URLs, bound article collection, deduplicate candidate symbols and retain partial successes.
+- [x] Public-source redirect allowlist; no email or broker calls from workspace discovery.
+- [x] Exclude symbol-less article records from candidates while reporting their count; financial views remain available.
 
 ## Highest-priority remaining integration
 
@@ -38,6 +42,15 @@
 - [ ] Full PR review and explicit merge approval. Keep PR #1 draft.
 
 ## Interpretation
+
+Public discovery is an explicit operator action, not an automatic market scan.
+It reads one public listing page, considers up to 20 discovered links, and
+collects at most five previously unseen articles per run. It checks a 120-second
+window between requests; individual HTTP calls can extend beyond that window.
+A ten-minute database lease prevents concurrent runs. A lost browser response
+does not imply server failure: refresh persisted status before retrying.
+Expired runs remain visible as interrupted; only an explicit retry starts new
+work. Empty source responses are not reported as proof of scanner health.
 
 The workspace shows a configured virtual allocation, not a dedicated brokerage
 account. Share fill events currently have no execution price, so performance is

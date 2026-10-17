@@ -74,7 +74,8 @@ def workspace_snapshot(*, limit=200):
             'event_id,broker_order_id,symbol,side,shares,recorded_at', 'recorded_at DESC,event_id DESC')
         research = read('pro_ticker_research',
             'id,symbol,article_title,published_date,direction,long_level,short_level,setup_type,relative_volume,rsi_context,volume_context,article_summary,our_scanner_score,our_scanner_confidence,our_skip_reason,updated_at',
-            'updated_at DESC,id DESC')
+            'updated_at DESC,id DESC', "WHERE symbol IS NOT NULL AND TRIM(symbol) != ''")
+        unattributed_research = conn.execute("SELECT COUNT(*) FROM pro_ticker_research WHERE symbol IS NULL OR TRIM(symbol) = ''").fetchone()[0] if 'pro_ticker_research' in tables else 0
         conn.rollback()
     budget_cents = round(PRO_TICKER_VIRTUAL_BUDGET * 100)
     return {
@@ -90,6 +91,7 @@ def workspace_snapshot(*, limit=200):
                         'profit_factor': None, 'drawdown': None,
                         'reason': 'Verified execution prices and current marks are not stored in the strategy share ledger.'},
         'scanner': {'status': 'saved_research_only', 'automatic_discovery_enabled': False,
+                    'unattributed_research_records': unattributed_research,
                     'last_scan_at': None, 'reason': 'Saved research is not a live scanner or a new AI evaluation.'},
         'health': {'database': 'readable', 'broker': 'not_checked', 'background_jobs': 'not_started_by_workspace'},
     }
@@ -119,4 +121,31 @@ def build_workspace_router(*, require_session):
             raise HTTPException(422, 'Invalid hypothetical proposal.') from None
         except Exception:
             raise HTTPException(503, 'Proposal data unavailable.') from None
+    @router.get('/auto-trader/pro-ticker/discovery')
+    def discovery(request: Request):
+        require_session(request)
+        from pro_ticker_discovery import discovery_status
+        try:
+            return discovery_status()
+        except Exception:
+            raise HTTPException(503, 'Discovery status unavailable.') from None
+    @router.post('/auto-trader/pro-ticker/discovery')
+    async def discover(request: Request):
+        require_session(request)
+        if request.headers.get('origin') != str(request.base_url).rstrip('/'):
+            raise HTTPException(403, 'Same-origin discovery request required.')
+        if request.headers.get('content-type', '').split(';')[0].strip().lower() != 'application/json':
+            raise HTTPException(415, 'Expected JSON.')
+        try:
+            payload = await request.json()
+        except ValueError:
+            raise HTTPException(422, 'Expected empty JSON object.') from None
+        if payload != {}:
+            raise HTTPException(422, 'Discovery accepts no URLs, credentials or execution settings.')
+        from pro_ticker_discovery import run_discovery
+        from starlette.concurrency import run_in_threadpool
+        try:
+            return await run_in_threadpool(run_discovery)
+        except Exception:
+            raise HTTPException(503, 'Discovery unavailable.') from None
     return router
