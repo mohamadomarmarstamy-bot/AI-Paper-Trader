@@ -4,6 +4,55 @@
     const el=id=>document.getElementById("pt-signal-"+id), endpoint="/auto-trader/pro-ticker/manual-signals";
     let requestId=null,saving=false,version=0,detailVersion=0;
     const draftIntents=new Map();
+    const allocationIds=new Map();
+    let intentVersion=0;
+    const intentHistory=document.createElement("article"),intentTitle=document.createElement("h3"),intentStatus=document.createElement("p"),intentRows=document.createElement("tbody");
+    intentTitle.textContent="Saved PAPER allocation intents";intentStatus.setAttribute("role","status");
+    const intentTable=document.createElement("table"),intentHead=document.createElement("thead"),intentHeader=document.createElement("tr"),intentScroller=document.createElement("div");
+    for(const text of ["Saved","Symbol","Shares","Virtual allocation","State","Broker submission"]){const th=document.createElement("th");th.textContent=text;intentHeader.appendChild(th);}
+    intentHead.appendChild(intentHeader);intentTable.append(intentHead,intentRows);intentScroller.style.overflowX="auto";intentScroller.appendChild(intentTable);intentHistory.id="pt-order-intents";intentHistory.append(intentTitle,intentStatus,intentScroller);document.getElementById("pt-panel-trading")?.appendChild(intentHistory);
+    function validateIntent(intent,proposal){
+        if(!intent||intent.paper!==true||intent.execution_enabled!==false||intent.order_submitted!==false||intent.automatic_release_enabled!==false||!["prepared","canceled"].includes(intent.status)||intent.budget_reserved!==(intent.status==="prepared")||typeof intent.id!=="string"||typeof intent.reservation_id!=="string"||!intent.plan||intent.plan.order_submitted!==false||intent.plan.order_execution_enabled!==false||!Number.isSafeInteger(intent.plan.allocation_cents)||intent.plan.allocation_cents<1||!Number.isSafeInteger(intent.plan.shares)||intent.plan.shares<1||typeof intent.plan.symbol!=="string")throw Error("Invalid PAPER allocation evidence");
+        if(proposal&&(intent.proposal_id!==proposal.request_id||intent.plan.symbol!==proposal.symbol||intent.plan.shares!==proposal.shares||intent.plan.allocation_cents>proposal.allocation_cents))throw Error("Allocation does not match saved draft");
+    }
+    async function refreshIntents(){
+        const current=++intentVersion;intentStatus.textContent="Loading saved virtual allocations…";
+        try{
+            const response=await fetch("/auto-trader/pro-ticker/order-intents",{credentials:"same-origin",cache:"no-store"});if(!response.ok)throw Error("History request failed ("+response.status+").");
+            const data=await response.json();if(data.paper!==true||data.execution_enabled!==false||data.automatic_release_enabled!==false||!Array.isArray(data.intents)||!Number.isSafeInteger(data.total_count)||data.total_count<data.intents.length||typeof data.has_more!=="boolean")throw Error("Invalid allocation history");
+            data.intents.forEach(intent=>validateIntent(intent));if(current!==intentVersion)return;intentRows.replaceChildren();
+            for(const intent of data.intents){const tr=document.createElement("tr");for(const value of [date(intent.created_at),intent.plan.symbol,intent.plan.shares,"$"+(intent.plan.allocation_cents/100).toFixed(2),intent.status==="prepared"?"Virtual funds reserved":"Canceled; virtual funds returned","Disabled — no order"]){const td=document.createElement("td");td.textContent=String(value);tr.appendChild(td);}intentRows.appendChild(tr);}
+            intentStatus.textContent=data.total_count?"Saved "+data.total_count+" allocation intent(s). "+(data.has_more?"Latest 200 displayed. ":"")+"Virtual funds returned are not trading profits. Inspect the stock's saved review in Manual Signals to manage its allocation.":"No saved allocation intents. Inspect a saved BUY draft in Manual Signals to explicitly reserve virtual funds. Broker submission remains disabled.";
+        }catch(error){if(current===intentVersion){intentRows.replaceChildren();intentStatus.textContent="Allocation history unavailable: "+error.message;}}
+    }
+    function allocationControls(review,node,selected){
+        const proposal=review.proposal,intent=review.order_intent;
+        if(intent)validateIntent(intent,proposal);
+        const status=document.createElement("p");status.setAttribute("role","status");node.appendChild(status);
+        if(intent?.status==="canceled"){status.textContent="Allocation canceled. Returned virtual funds are not trading profit. This intent cannot be submitted or reserved again.";return;}
+        const cancel=intent?.status==="prepared",label=document.createElement("label"),confirm=document.createElement("input"),button=document.createElement("button");confirm.type="checkbox";confirm.style.width="auto";
+        label.append(confirm,document.createTextNode(cancel?" I approve canceling this never-submitted allocation and returning its virtual funds.":" I approve reserving up to $"+(proposal.allocation_cents/100).toFixed(2)+" of virtual PAPER funds. This does not place an order."));
+        button.type="button";button.disabled=true;button.textContent=cancel?"Cancel unsubmitted allocation":"Reserve virtual funds (no order)";
+        let busy=false;confirm.addEventListener("change",()=>{button.disabled=busy||!confirm.checked;});
+        status.textContent=cancel?"Virtual funds reserved: $"+(intent.plan.allocation_cents/100).toFixed(2)+". Broker submission remains disabled.":"No funds reserved. Allocation uses a fresh server quote and cannot exceed this draft's saved cost/risk ceilings.";
+        button.addEventListener("click",async()=>{
+            if(busy||!confirm.checked)return;busy=true;button.disabled=true;confirm.disabled=true;
+            try{
+                let payload,url="/auto-trader/pro-ticker/order-intents";
+                if(cancel){url+="/"+encodeURIComponent(intent.id)+"/cancel";payload={confirmed:true};}
+                else{let id=allocationIds.get(proposal.request_id);if(!id){id=crypto.randomUUID();allocationIds.set(proposal.request_id,id);}payload={request_id:id,proposal_id:proposal.request_id,confirmed:true};}
+                status.textContent=cancel?"Verifying this allocation was never submitted…":"Reserving virtual funds atomically…";
+                const response=await fetch(url,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+                if(!response.ok)throw Error("Request could not be confirmed ("+response.status+"). Refresh saved state before retrying.");
+                const data=await response.json();if(data.paper!==true)throw Error("Invalid PAPER response");validateIntent(data.intent,proposal);
+                const loaded=await refresh();if(detailVersion===selected)detail({...review,order_intent:data.intent});
+                await window.loadProTickerWorkspace?.();
+                if(!loaded)el("status").textContent="Allocation update confirmed, but review refresh failed. Refresh saved state before further actions.";
+            }catch(error){status.textContent="Allocation update unconfirmed: "+error.message;busy=false;confirm.disabled=false;button.disabled=!confirm.checked;}
+        });
+        node.append(label,button);
+    }
+
     const date=value=>value&&Number.isFinite(Date.parse(value))?new Date(value).toLocaleString():"Unavailable";
     function flags(data){if(!data||data.paper!==true||data.orders_submitted!==0||data.automatic_execution_enabled!==false)throw Error("Unexpected PAPER safety flags");}
     function validateDraft(proposal,review){
@@ -18,6 +67,7 @@
         const outcome=value.forward_outcome;
         if(outcome&&(outcome.kind!=="forward_quote_return_not_trade_pnl"||outcome.training_eligible!==false||!Number.isFinite(outcome.return_percent)||outcome.request_id!==value.request_id))throw Error("Invalid forward evidence");
         if(value.proposal)validateDraft(value.proposal,value);
+        if(value.order_intent)validateIntent(value.order_intent,value.proposal);
         return value;
     }
     function detail(review){
@@ -54,9 +104,9 @@
         const draftStatus=document.createElement("p");draftStatus.setAttribute("role","status");
         function showDraft(proposal){
             validateDraft(proposal,review);
-            draftStatus.textContent="Saved PAPER research draft: "+proposal.shares+" shares; estimated allocation $"+(proposal.allocation_cents/100).toFixed(2)+" at creation. Stop: "+String(proposal.stop_price??"Unavailable")+"; target: "+String(proposal.take_profit_price??"Unavailable")+". Saved: "+date(proposal.created_at)+". No funds reserved or order placed. This saved quote and risk estimate must be revalidated before execution.";
+            draftStatus.textContent="Saved PAPER research draft: "+proposal.shares+" shares; estimated allocation $"+(proposal.allocation_cents/100).toFixed(2)+" at creation. Stop: "+String(proposal.stop_price??"Unavailable")+"; target: "+String(proposal.take_profit_price??"Unavailable")+". Saved: "+date(proposal.created_at)+". The draft itself does not reserve funds or place an order. This saved quote and risk estimate must be revalidated before execution.";
         }
-        if(review.proposal){showDraft(review.proposal);node.appendChild(draftStatus);return;}
+        if(review.proposal){showDraft(review.proposal);node.appendChild(draftStatus);allocationControls(review,node,selected);return;}
         if(review.status!=="graded"||grade?.signal!=="BUY")return;
         const draftForm=document.createElement("form"),inputs={};
         const heading=document.createElement("h4");heading.textContent="Save a PAPER trade draft";draftForm.appendChild(heading);
@@ -75,7 +125,7 @@
                 const response=await fetch(endpoint+"/proposal",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({...sizing,request_id:intent.request_id,signal_id:review.request_id})});
                 if(!response.ok)throw Error(response.status===409?"Draft already exists. Refresh saved reviews before retrying.":"Draft could not be verified ("+response.status+"). Refresh saved reviews before retrying.");
                 const data=await response.json();if(data.paper!==true)throw Error("Invalid PAPER draft response");showDraft(data.proposal);
-                save.textContent="PAPER draft saved";await refresh();return;
+                save.textContent="PAPER draft saved";await refresh();if(detailVersion===selected)detail({...review,proposal:data.proposal});return;
             }catch(error){draftStatus.textContent="Unable to confirm draft: "+error.message;save.disabled=false;Object.values(inputs).forEach(input=>input.disabled=false);}
         });
         node.append(draftForm,draftStatus);
@@ -95,6 +145,7 @@
     }
     async function refresh(){
         const current=++version;
+        void refreshIntents();
         el("status").textContent="Loading saved signal reviews…";
         try{
             const response=await fetch(endpoint,{credentials:"same-origin",cache:"no-store"});if(!response.ok)throw Error("History request failed ("+response.status+").");

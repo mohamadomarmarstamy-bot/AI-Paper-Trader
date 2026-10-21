@@ -90,8 +90,10 @@ def list_manual_signals():
         outcomes=outcomes_for_signals(conn,[r['request_id'] for r in rows])
         from pro_ticker_signal_proposals import proposals_for_signals
         proposals=proposals_for_signals(conn,[r['request_id'] for r in rows])
+        from pro_ticker_order_intents import intents_for_proposals
+        intents=intents_for_proposals(conn,[p['request_id'] for p in proposals.values()])
     return {'paper':True,'orders_submitted':0,'automatic_execution_enabled':False,
-            'signals':[{**_record(r,time.time()),'forward_outcome':outcomes.get(r['request_id']),'proposal':proposals.get(r['request_id'])} for r in rows],'total_count':count,'has_more':count>len(rows)}
+            'signals':[{**_record(r,time.time()),'forward_outcome':outcomes.get(r['request_id']),'proposal':proposals.get(r['request_id']),'order_intent':intents.get(proposals.get(r['request_id'],{}).get('request_id'))} for r in rows],'total_count':count,'has_more':count>len(rows)}
 
 
 def submit_manual_signal(payload, *, quote_fetcher, analyzer, clock=time.time):
@@ -139,8 +141,10 @@ def list_result(row,now):
         outcome=outcomes_for_signals(conn,[row['request_id']]).get(row['request_id'])
         from pro_ticker_signal_proposals import proposals_for_signals
         proposal=proposals_for_signals(conn,[row['request_id']]).get(row['request_id'])
+        from pro_ticker_order_intents import intents_for_proposals
+        intent=intents_for_proposals(conn,[proposal['request_id']]).get(proposal['request_id']) if proposal else None
     return {'paper':True,'orders_submitted':0,'automatic_execution_enabled':False,
-            'signal':{**_record(row,now),'forward_outcome':outcome,'proposal':proposal},'execution_blocked_reason':'broker_execution_and_outcome_learning_not_connected'}
+            'signal':{**_record(row,now),'forward_outcome':outcome,'proposal':proposal,'order_intent':intent},'execution_blocked_reason':'broker_execution_and_outcome_learning_not_connected'}
 
 
 def build_manual_signal_router(*,require_session,quote_fetcher,analyzer):
@@ -194,4 +198,6 @@ def build_manual_signal_router(*,require_session,quote_fetcher,analyzer):
         except SignalConflict:raise HTTPException(409,'Stock review already pending or request ID reused. Refresh saved status.') from None
         except ValueError:raise HTTPException(422,'Provide one valid symbol and canonical request ID.') from None
         except Exception:raise HTTPException(503,'Signal review unavailable. Refresh saved status before retrying.') from None
+    from pro_ticker_order_intents import build_order_intent_router
+    router.include_router(build_order_intent_router(require_session=require_session,quote_fetcher=quote_fetcher))
     return router

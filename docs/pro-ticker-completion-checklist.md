@@ -164,3 +164,35 @@ Risk sizing also uses the larger of the requested stop distance and the distance
 to the rounded stop price. This avoids understating losses when four-decimal
 rounding widens the stop on a large share count. Saved draft details show stop,
 target and save time, while continuing to require fresh admission before orders.
+
+## Explicit draft allocation intents
+
+Saved BUY drafts now support an owner-confirmed virtual allocation. A new server
+quote is checked under a SQLite write transaction against current settings,
+remaining strategy budget and the original draft's maximum cost/risk. Any price
+increase beyond those saved ceilings is rejected. The reservation, immutable
+planned shares, stable client order ID, intent and owner audit event commit
+atomically. Concurrent requests and retries cannot allocate the same draft twice.
+The original research draft stays immutable and is not reclassified as a fill.
+
+Manual Signals provides a separate unchecked approval box for allocating funds.
+The PAPER Workspace lists persisted allocation intents. Neither action enables
+broker submission, verifies broker buying power, or authorizes automatic trading.
+There is no submit-order endpoint for these intents.
+
+An owner can explicitly cancel an allocation only while its intent is prepared,
+no submission attempt or broker link exists, reservation identity/amount/shares
+still match, and no open strategy position or new fill evidence contradicts the
+never-submitted state. Cancellation, returned virtual funds and the audit event
+are atomic and retry-safe. Submitted/uncertain intents remain blocked for broker
+reconciliation. Returned funds are never recorded as trading profit. Automatic
+budget release remains disabled.
+
+Tests cover transaction rollback after an audit failure, concurrent allocation
+and cancellation, competing-symbol budget exhaustion, intent/request conflicts,
+settings changes, stale/future/mismatched quotes, original approval ceilings,
+explicit owner confirmation and sanitized provider errors. Signed-owner staging
+app recreation verifies intent/reservation persistence without broker calls.
+Browser fixtures exercise lost allocation confirmation, unchanged retry, explicit
+cancellation and desktop/mobile history. Hosted restart/account validation still
+requires the separately documented access and approval.

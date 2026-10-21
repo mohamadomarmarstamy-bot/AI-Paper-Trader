@@ -77,39 +77,46 @@ def get_pro_ticker_budget() -> dict[str, Any]:
         }
 
 
-def reserve_pro_ticker_budget(symbol: str, amount: float) -> dict[str, Any]:
-    """Atomically reserve PAPER notional; duplicate symbols and overspend fail."""
+def reserve_budget_in_transaction(conn, *, reservation_id, symbol, notional_cents, expected_shares=None):
+    """Insert a reservation inside the caller's write transaction; never commit.
+
+    Initialize the ledger schema before BEGIN IMMEDIATE. This helper deliberately
+    performs no DDL, allowing intent, allocation and audit writes to roll back
+    together after any failure.
+    """
     from pro_ticker_manual_intake import parse_manual_symbols
+    if not conn.in_transaction:
+        raise ValueError('Reservation requires an active write transaction.')
     symbols = parse_manual_symbols(symbol)
     if len(symbols) != 1:
-        raise ValueError("Exactly one valid symbol is required.")
-    cents = _cents(amount)
-    reservation_id = str(uuid.uuid4())
+        raise ValueError('Exactly one valid symbol is required.')
+    if str(uuid.UUID(reservation_id)) != reservation_id:
+        raise ValueError('Canonical reservation UUID required.')
+    if isinstance(notional_cents, bool) or not isinstance(notional_cents, int) or notional_cents <= 0:
+        raise ValueError('Positive integer cents required.')
+    if expected_shares is not None and (isinstance(expected_shares, bool) or not isinstance(expected_shares, int) or not 1 <= expected_shares <= 1000000):
+        raise ValueError('Whole PAPER shares required.')
+    committed = conn.execute("SELECT COALESCE(SUM(notional_cents),0) FROM pro_ticker_paper_reservations WHERE status IN ('reserved','submitted','filled')").fetchone()[0]
+    if committed + notional_cents > round(PRO_TICKER_VIRTUAL_BUDGET * 100):
+        raise ValueError('Pro Ticker PAPER virtual budget exceeded.')
     now = datetime.now(timezone.utc).isoformat()
+    try:
+        conn.execute("INSERT INTO pro_ticker_paper_reservations (id,symbol,notional_cents,status,created_at,updated_at,expected_shares) VALUES (?,?,?,'reserved',?,?,?)",
+                     (reservation_id,symbols[0],notional_cents,now,now,expected_shares))
+    except sqlite3.IntegrityError as error:
+        raise ValueError('An active reservation already exists for this symbol.') from error
+    return {'paper':True,'reservation_id':reservation_id,'symbol':symbols[0],
+            'reserved':notional_cents/100,'status':'reserved','order_submitted':False}
+
+
+def reserve_pro_ticker_budget(symbol: str, amount: float) -> dict[str, Any]:
+    """Atomically reserve PAPER notional; duplicate symbols and overspend fail."""
+    cents = _cents(amount)
     with get_connection() as conn:
-        # DDL outside transaction so the reservation is serialized by BEGIN IMMEDIATE.
         _init(conn)
-        conn.execute("BEGIN IMMEDIATE")
-        committed = conn.execute(
-            "SELECT COALESCE(SUM(notional_cents), 0) FROM pro_ticker_paper_reservations "
-            "WHERE status IN ('reserved', 'submitted', 'filled')"
-        ).fetchone()[0]
-        if committed + cents > round(PRO_TICKER_VIRTUAL_BUDGET * 100):
-            raise ValueError("Pro Ticker PAPER virtual budget exceeded.")
-        try:
-            conn.execute(
-                "INSERT INTO pro_ticker_paper_reservations "
-                "(id, symbol, notional_cents, status, created_at, updated_at) "
-                "VALUES (?, ?, ?, 'reserved', ?, ?)",
-                (reservation_id, symbols[0], cents, now, now),
-            )
-        except sqlite3.IntegrityError as error:
-            raise ValueError("An active reservation already exists for this symbol.") from error
-    return {
-        "paper": True, "reservation_id": reservation_id,
-        "symbol": symbols[0], "reserved": cents / 100,
-        "status": "reserved", "order_submitted": False,
-    }
+        conn.execute('BEGIN IMMEDIATE')
+        return reserve_budget_in_transaction(conn,reservation_id=str(uuid.uuid4()),
+                                             symbol=symbol,notional_cents=cents)
 
 
 def get_pro_ticker_reservation(reservation_id: str) -> dict[str, Any] | None:

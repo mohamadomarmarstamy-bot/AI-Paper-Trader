@@ -35,7 +35,7 @@ def validate_proposal_inputs(payload):
     return symbol, shares, values
 
 
-def hypothetical_proposal(payload):
+def hypothetical_proposal(payload, *, connection=None):
     """Operator reference prices are estimates, never broker execution evidence."""
     symbol, shares, values = validate_proposal_inputs(payload)
     price = values['reference_price']
@@ -48,9 +48,14 @@ def hypothetical_proposal(payload):
     target_price = (price * (1+values['take_profit_percent']/100)).quantize(Decimal('.0001'))
     if not 0 < stop_price < price < target_price:
         raise ValueError('Protection levels cannot collapse at supported price precision.')
-    budget = workspace_snapshot(limit=1)['budget']
+    if connection is None:
+        available_cents = workspace_snapshot(limit=1)['budget']['available_cents']
+    else:
+        exists = connection.execute("SELECT 1 FROM sqlite_master WHERE name='pro_ticker_paper_reservations'").fetchone()
+        committed = connection.execute("SELECT COALESCE(SUM(notional_cents),0) FROM pro_ticker_paper_reservations WHERE status IN ('reserved','submitted','filled')").fetchone()[0] if exists else 0
+        available_cents = max(0, round(PRO_TICKER_VIRTUAL_BUDGET*100)-committed)
     from pro_ticker_settings import read_settings
-    settings = read_settings()
+    settings = read_settings(connection)
     # Four-decimal protection rounding can widen actual stop distance. Use
     # the larger requested/rounded distance so sizing never understates it.
     stop_risk = cents(max(price * values['stop_loss_percent']/100, price-stop_price) * shares)
@@ -68,8 +73,8 @@ def hypothetical_proposal(payload):
             'estimated_stop_risk_cents': stop_risk,
             'settings_revision': settings['revision'],
             'risk_limits_satisfied': not reasons, 'risk_limit_reasons': reasons,
-            'available_virtual_cents': budget['available_cents'],
-            'within_virtual_budget': allocation <= budget['available_cents'],
+            'available_virtual_cents': available_cents,
+            'within_virtual_budget': allocation <= available_cents,
             'reason': 'Estimate only. Broker buying power, market freshness, ownership and protection are unverified. Slippage, gaps and fees can increase losses.'}
 
 

@@ -12,7 +12,7 @@ const fixture=()=>({paper:true,scope:'pro_ticker_strategy_ledger',generated_at:s
  scanner:{reason:'Saved research is not a live scan.'},performance:{reason:'Verified execution prices are unavailable.'}});
 
 test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed refresh', {timeout:90000},async()=>{
- let data=fixture(),fail=false,requests=[],browser,forwardDue=false,savedSignal=null,draftRequests=[],signalRequests=[],discoveries=0,invalidProposal=false,invalidSettings=false,settingsRevision=0,settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
+ let data=fixture(),fail=false,requests=[],browser,forwardDue=false,savedSignal=null,draftRequests=[],allocationRequests=[],signalRequests=[],discoveries=0,invalidProposal=false,invalidSettings=false,settingsRevision=0,settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
  const raw=fs.readFileSync(path.join(frontend,'index.html'),'utf8');const start=raw.indexOf('<section id="pro-ticker-manual-section"');
  const section=raw.slice(start,raw.indexOf('</section>',start)+10).replace('class="app-section hidden"','class="app-section"').replace(' hidden>','>');
  const server=http.createServer(async(req,res)=>{
@@ -21,6 +21,21 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
   if(req.url==='/style.css'){res.setHeader('Content-Type','text/css');res.end(fs.readFileSync(path.join(frontend,'style.css')));return;}
   if(req.url==='/js/pro-ticker-workspace.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(__dirname,'pro-ticker-workspace.js')));return;}
   if(req.url==='/js/pro-ticker-signals.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(__dirname,'pro-ticker-signals.js')));return;}
+  if(req.url==='/auto-trader/pro-ticker/order-intents'){
+   res.setHeader('Content-Type','application/json');
+   if(req.method==='GET'){res.end(JSON.stringify({paper:true,execution_enabled:false,automatic_release_enabled:false,intents:savedSignal?.order_intent?[savedSignal.order_intent]:[],total_count:savedSignal?.order_intent?1:0,has_more:false}));return;}
+   assert.equal(req.method,'POST');assert.equal(req.headers.origin,origin);const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=JSON.parse(Buffer.concat(chunks).toString());
+   assert.deepEqual(Object.keys(body).sort(),['confirmed','proposal_id','request_id']);assert.equal(body.confirmed,true);assert.equal(body.proposal_id,savedSignal.proposal.request_id);allocationRequests.push(body);
+   savedSignal.order_intent=savedSignal.order_intent||{paper:true,id:body.request_id,proposal_id:body.proposal_id,reservation_id:'test-allocation-reservation',client_order_id:'pt-synthetic',status:'prepared',created_at:stamp,budget_reserved:true,execution_enabled:false,order_submitted:false,automatic_release_enabled:false,plan:{symbol:'AAPL',shares:2,allocation_cents:2100,order_submitted:false,order_execution_enabled:false}};
+   data.budget.committed_cents=12100;data.budget.available_cents=4987900;
+   if(allocationRequests.length===1){res.statusCode=503;res.end(JSON.stringify({detail:'Simulated lost allocation confirmation'}));return;}
+   assert.equal(body.request_id,allocationRequests[0].request_id);res.end(JSON.stringify({paper:true,duplicate:true,intent:savedSignal.order_intent}));return;
+  }
+  if(req.url.startsWith('/auto-trader/pro-ticker/order-intents/')&&req.url.endsWith('/cancel')){
+   assert.equal(req.method,'POST');assert.equal(req.headers.origin,origin);const chunks=[];for await(const chunk of req)chunks.push(chunk);assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString()),{confirmed:true});
+   savedSignal.order_intent={...savedSignal.order_intent,status:'canceled',budget_reserved:false,virtual_funds_returned_cents:2100};data.budget.committed_cents=10000;data.budget.available_cents=4990000;
+   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,duplicate:false,intent:savedSignal.order_intent}));return;
+  }
   if(req.url==='/auto-trader/pro-ticker/manual-signals/proposal'){
    assert.equal(req.method,'POST');assert.equal(req.headers.origin,origin);
    const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=JSON.parse(Buffer.concat(chunks).toString());draftRequests.push(body);
@@ -80,7 +95,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
  try{
   browser=await chromium.launch({headless:true});fs.mkdirSync('.artifacts/pro-ticker-workspace',{recursive:true});
   for(const width of [1280,390]){
-   data=fixture();fail=false;requests=[];forwardDue=false;savedSignal=null;draftRequests=[];signalRequests=[];discoveries=0;invalidProposal=false;invalidSettings=false;settingsRevision=0;settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
+   data=fixture();fail=false;requests=[];forwardDue=false;savedSignal=null;draftRequests=[];allocationRequests=[];signalRequests=[];discoveries=0;invalidProposal=false;invalidSettings=false;settingsRevision=0;settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
    const context=await browser.newContext({viewport:{width,height:1000},acceptDownloads:true});const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
    await page.goto(origin);await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('Ledger snapshot:'));
    assert.equal(await page.locator('[role=tab]').count(),9);assert.equal(await page.locator('[role=tabpanel]:visible').count(),1);
@@ -103,8 +118,21 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    assert.equal(await page.getByRole('button',{name:'Save PAPER draft (no order)',exact:true}).isDisabled(),false);
    await page.getByRole('button',{name:'Save PAPER draft (no order)',exact:true}).click();await page.waitForFunction(()=>document.getElementById('pt-signal-detail').textContent.includes('Saved PAPER research draft'));
    assert.equal(draftRequests.length,2);assert.equal(draftRequests[0].request_id,draftRequests[1].request_id);
-   await page.getByRole('button',{name:'Inspect AAPL review',exact:true}).click();assert.equal(await page.locator('#pt-signal-detail form').count(),0);assert.match(await page.locator('#pt-signal-detail').innerText(),/No funds reserved or order placed/);
+   await page.getByRole('button',{name:'Inspect AAPL review',exact:true}).click();assert.equal(await page.locator('#pt-signal-detail form').count(),0);assert.match(await page.locator('#pt-signal-detail').innerText(),/draft itself does not reserve funds or place an order/);
    await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-saved-draft.png',fullPage:true});
+   assert.equal(await page.getByRole('button',{name:'Reserve virtual funds (no order)',exact:true}).isDisabled(),true);
+   await page.locator('#pt-signal-detail input[type="checkbox"]').check();await page.getByRole('button',{name:'Reserve virtual funds (no order)',exact:true}).click();
+   await page.waitForFunction(()=>document.getElementById('pt-signal-detail').textContent.includes('Allocation update unconfirmed'));
+   await page.getByRole('button',{name:'Reserve virtual funds (no order)',exact:true}).click();
+   await page.waitForFunction(()=>document.getElementById('pt-signal-detail').textContent.includes('Virtual funds reserved: $21.00'));
+   assert.equal(allocationRequests.length,2);assert.equal(allocationRequests[0].request_id,allocationRequests[1].request_id);
+   await page.locator('#pt-tab-trading').click();await page.waitForFunction(()=>document.getElementById('pt-order-intents').textContent.includes('Virtual funds reserved'));assert.match(await page.locator('#pt-order-intents').innerText(),/AAPL/);
+   await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-reserved-intent.png',fullPage:true});await page.locator('#pt-tab-signals').click();
+   assert.equal(await page.getByRole('button',{name:'Cancel unsubmitted allocation',exact:true}).isDisabled(),true);
+   await page.locator('#pt-signal-detail input[type="checkbox"]').check();await page.getByRole('button',{name:'Cancel unsubmitted allocation',exact:true}).click();
+   await page.waitForFunction(()=>document.getElementById('pt-signal-detail').textContent.includes('Allocation canceled. Returned virtual funds are not trading profit'));
+   assert.equal(savedSignal.order_intent.status,'canceled');assert.equal(data.budget.committed_cents,10000);
+
    await page.getByRole('button',{name:'Check 24+ hour forward quote',exact:true}).click();await page.waitForFunction(()=>document.getElementById('pt-signal-status').textContent.includes('Wait until a fresh market quote'));assert.equal(savedSignal.forward_outcome,undefined);
    forwardDue=true;await page.getByRole('button',{name:'Check 24+ hour forward quote',exact:true}).click();await page.waitForFunction(()=>document.getElementById('pt-signal-status').textContent.includes('did not update an AI model'));
    assert.match(await page.locator('#pt-signal-detail').innerText(),/-14\.285714/);assert.equal(savedSignal.entry_grade.score,4);
@@ -157,7 +185,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.locator('#pt-tab-overview').focus();await page.keyboard.press('ArrowRight');assert.equal(await page.locator('#pt-tab-scanner').getAttribute('aria-selected'),'true');
    fail=true;await page.locator('#pt-refresh').click();await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('Unable to load'));assert.equal(await page.locator('#pt-metrics').innerText(),'');assert.match(await page.locator('#pt-journal').innerText(),/Data unavailable/);
    fail=false;data=fixture();data.paper=false;await page.locator('#pt-refresh').click();await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('safety flags'));assert.equal(await page.locator('#pt-metrics').innerText(),'');
-   assert.deepEqual(errors,[]);assert.ok(requests.every(([method,url])=>method==='GET'||method==='POST'&&['/auto-trader/pro-ticker/proposal','/auto-trader/pro-ticker/discovery','/auto-trader/pro-ticker/manual-signals','/auto-trader/pro-ticker/manual-signals/proposal'].includes(url)||method==='POST'&&url.startsWith('/auto-trader/pro-ticker/manual-signals/')&&url.endsWith('/forward-review')||method==='PUT'&&url==='/auto-trader/pro-ticker/settings'),'workspace must never place an order');await context.close();
+   assert.deepEqual(errors,[]);assert.ok(requests.every(([method,url])=>method==='GET'||method==='POST'&&['/auto-trader/pro-ticker/proposal','/auto-trader/pro-ticker/discovery','/auto-trader/pro-ticker/manual-signals','/auto-trader/pro-ticker/manual-signals/proposal','/auto-trader/pro-ticker/order-intents'].includes(url)||method==='POST'&&url.startsWith('/auto-trader/pro-ticker/manual-signals/')&&url.endsWith('/forward-review')||method==='POST'&&url.startsWith('/auto-trader/pro-ticker/order-intents/')&&url.endsWith('/cancel')||method==='PUT'&&url==='/auto-trader/pro-ticker/settings'),'workspace must never place an order');await context.close();
   }
  }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
 });

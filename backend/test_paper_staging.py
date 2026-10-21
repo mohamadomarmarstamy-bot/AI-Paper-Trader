@@ -154,6 +154,20 @@ class IsolatedStagingTests(unittest.TestCase):
             retry = self.request(recreated, 'POST', path+'/proposal', authenticated=True, json=draft,
                 headers={'Origin': 'https://staging.test'})
             self.assertTrue(retry.json()['duplicate'])
+            intent_path='/auto-trader/pro-ticker/order-intents'
+            allocation={'request_id':str(uuid.uuid4()),'proposal_id':draft['request_id'],'confirmed':True}
+            allocated=self.request(recreated,'POST',intent_path,authenticated=True,json=allocation,
+                headers={'Origin':'https://staging.test'})
+            self.assertEqual(allocated.status_code,200)
+            self.assertTrue(allocated.json()['intent']['budget_reserved'])
+            self.assertFalse(allocated.json()['intent']['order_submitted'])
+            reopened=self.app()
+            history=self.request(reopened,'GET',intent_path,authenticated=True).json()
+            self.assertEqual(history['intents'][0],allocated.json()['intent'])
+            canceled=self.request(reopened,'POST',intent_path+'/'+allocation['request_id']+'/cancel',authenticated=True,
+                json={'confirmed':True},headers={'Origin':'https://staging.test'})
+            self.assertEqual(canceled.status_code,200)
+            self.assertFalse(canceled.json()['intent']['budget_reserved'])
             broker.assert_not_called()
 
     def test_order_account_and_email_controls_are_absent(self):
