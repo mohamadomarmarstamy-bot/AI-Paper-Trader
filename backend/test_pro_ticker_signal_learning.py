@@ -65,6 +65,20 @@ class ForwardResearchTests(unittest.TestCase):
             with self.assertRaises(ValueError):evaluate_forward_outcome(entry['request_id'],quote_fetcher=provider,clock=lambda:future)
         self.assertEqual(learning_summary()['evaluated_count'],0)
 
+    def test_mismatched_forward_symbol_cannot_poison_saved_outcome(self):
+        entry=self.entry();future=self.now+86410
+        provider=lambda _:{'symbol':'MSFT','p':12,'t':datetime.fromtimestamp(future-1,timezone.utc).isoformat()}
+        with self.assertRaises(ValueError):evaluate_forward_outcome(entry['request_id'],quote_fetcher=provider,clock=lambda:future)
+        self.assertEqual(learning_summary()['evaluated_count'],0)
+
+    def test_quote_expiring_before_write_commit_cannot_become_label(self):
+        entry=self.entry();future=self.now+86410
+        provider=lambda _:{'p':12,'t':datetime.fromtimestamp(future-1,timezone.utc).isoformat()}
+        clock=Mock(side_effect=[future,future,future,future+100])
+        with self.assertRaises(ValueError):evaluate_forward_outcome(entry['request_id'],quote_fetcher=provider,clock=clock)
+        self.assertEqual(learning_summary()['evaluated_count'],0)
+        self.assertFalse(self.evaluate(entry)['duplicate'])
+
     def test_concurrent_checks_keep_one_outcome(self):
         entry=self.entry()
         with ThreadPoolExecutor(max_workers=2) as pool:

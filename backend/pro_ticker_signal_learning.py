@@ -58,7 +58,11 @@ def evaluate_forward_outcome(request_id,*,quote_fetcher,clock=None):
         completed=_date(review['completed_at']);submitted=_date(review['submitted_at'])
         if completed<submitted:raise ValueError('Invalid review chronology.')
         if now<completed+HORIZON_SECONDS:raise ForwardNotDue('At least 24 hours must elapse after grading completes.')
-    try:snapshot=quote_snapshot(quote_fetcher(review['symbol']),now=clock())
+    try:
+        raw=quote_fetcher(review['symbol'])
+        if isinstance(raw,dict) and raw.get('symbol') not in (None,review['symbol']):
+            raise ValueError('Forward quote belongs to another stock.')
+        snapshot=quote_snapshot(raw,now=clock())
     except Exception:raise ValueError('A fresh forward quote is unavailable.') from None
     if snapshot['status']!='captured' or snapshot['fresh'] is not True:raise ValueError('Fresh forward quote required.')
     market_at=_date(snapshot['market_timestamp'])
@@ -74,6 +78,7 @@ def evaluate_forward_outcome(request_id,*,quote_fetcher,clock=None):
         saved=conn.execute('SELECT * FROM pro_ticker_signal_forward_outcomes WHERE request_id=?',(request_id,)).fetchone()
         duplicate=saved is not None
         if not duplicate:
+            if not quote_snapshot(raw,now=clock())['fresh']:raise ValueError('Forward quote expired before commit.')
             # Entry snapshots and grades are immutable through the service.
             conn.execute('INSERT INTO pro_ticker_signal_forward_outcomes VALUES (?,?,?,?,?,?,?)',
                 (request_id,datetime.fromtimestamp(finished,timezone.utc).isoformat(),snapshot['market_timestamp'],baseline,observed,market_at-completed,percent))
@@ -84,6 +89,7 @@ def evaluate_forward_outcome(request_id,*,quote_fetcher,clock=None):
 
 def learning_summary():
     with closing(database.get_connection()) as conn:
+        conn.execute('BEGIN')
         exists=conn.execute("SELECT 1 FROM sqlite_master WHERE name='pro_ticker_manual_signal_reviews'").fetchone()
         total=conn.execute('SELECT COUNT(*) FROM pro_ticker_manual_signal_reviews').fetchone()[0] if exists else 0
         reviews=conn.execute('SELECT request_id,grade_json FROM pro_ticker_manual_signal_reviews ORDER BY submitted_at DESC,request_id DESC LIMIT 500').fetchall() if exists else []

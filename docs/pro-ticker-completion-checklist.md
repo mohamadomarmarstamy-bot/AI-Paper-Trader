@@ -2,11 +2,11 @@
 
 ## Implemented in the dedicated workspace
 
-- [x] Reuse the existing Pro Ticker navigation entry and section; eight accessible tabs.
+- [x] Reuse the existing Pro Ticker navigation entry and section; nine accessible tabs.
 - [x] Read strategy-scoped reservations, attributed positions, fill events and saved research.
 - [x] Consistent SQLite snapshot; complete budget aggregate despite limited displayed records.
 - [x] Exclude original trader account equity and trade-book P/L from Pro Ticker views.
-- [x] Explicit unknown performance, broker connectivity and protection states.
+- [x] Explicit unknown net/open-position performance, broker connectivity and protection states; separately reported owner-reconciled gross closed estimates where prices exist.
 - [x] Research search, direction filter, score/symbol sorting and symbol deduplication.
 - [x] Inspect saved evidence; distinguish historical research from current AI evaluation.
 - [x] Hypothetical proposal calculator using operator reference prices and current virtual allocation limits.
@@ -26,10 +26,13 @@
 - [ ] AI research evaluation with provenance, bullish/bearish evidence, regime and supported news sources.
 - [ ] Persist verified execution prices, actual execution timestamps and reservation attribution in the fill journal.
 - [ ] Compute realized P/L, unrealized marks, equity series, drawdown and cost-adjusted metrics only from verified priced data.
-- [ ] Wire proposals to atomic reservations, independently checked broker admission and authorized PAPER submission.
-- [ ] Persist execution intent before network calls, resolve interrupted submissions by client order ID, and verify protective orders.
-- [ ] Connect entry/partial exit/complete exit reconciliation and release review end-to-end through HTTP/UI.
-- [ ] Keep automatic release disabled unless separately approved.
+- [x] Wire saved BUY drafts to explicit owner-approved atomic reservations and durable client-order-ID intents.
+- [ ] Independently checked broker admission and authorized PAPER submission; no submit endpoint is enabled.
+- [x] Persist immutable planned shares, reservation-specific client order ID, allocation intent and owner audit together.
+- [ ] Resolve interrupted broker submissions by client order ID and verify protective orders before enabling execution.
+- [x] Combined authenticated HTTP/accounting fixture covers manual grading -> draft -> allocation -> verified partial fills -> partial/canceled exits -> owner release -> gross reporting.
+- [ ] Complete application execution through HTTP/UI: broker dispatch and protective orders are still absent from that fixture.
+- [x] Keep automatic release disabled unless separately approved.
 - [x] Versioned Pro Ticker proposal allocation/estimated-stop-risk limits and manual discovery size, with authenticated same-origin saves, optimistic concurrency and atomic audit records.
 - [ ] Execution/scanner strategy settings beyond hypothetical proposals and bounded manual discovery.
 - [ ] Link journal outcomes and forward research to measured strategy/regime comparisons.
@@ -59,8 +62,9 @@ Expired runs remain visible as interrupted; only an explicit retry starts new
 work. Empty source responses are not reported as proof of scanner health.
 
 The workspace shows a configured virtual allocation, not a dedicated brokerage
-account. Share fill events currently have no execution price, so performance is
-unavailable. Candidate rows are historical saved research, not an operational
+account. Individual share fill events still lack execution prices. A separate
+closed report captures gross estimates from owner-reviewed terminal broker
+averages; net/open-position P&L and equity-level performance remain unavailable. Candidate rows are historical saved research, not an operational
 independent scanner. Proposal calculations use operator estimates, are not
 broker-approved plans, and do not claim a stop will cap actual losses. No chart
 or measured strategy improvement is fabricated to fill missing integrations.
@@ -99,11 +103,11 @@ Expired workers cannot overwrite finalized reviews. No browser-provided grade,
 quote, outcome, execution flag or identity is accepted. Broker order submission
 is never called by this workflow.
 
-Still required for the user's enter -> PAPER buy -> learn target: explicit
-per-entry sizing/risk admission, durable order intent and client-order-ID retry
-resolution, verified PAPER broker fills and protection, outcome attachment to
-those exact fills, loss-inclusive point-in-time learning data, and independently
-validated model evaluation. The manual grade does not enable automatic buying,
+Explicit per-entry sizing, owner-approved virtual allocation and durable order
+intent now exist. Still required for the user's enter -> PAPER buy -> learn
+target: independent broker admission, client-order-ID submission recovery,
+verified execution/protection, exact execution outcome attachment, point-in-time
+learning data and independently validated model evaluation. The manual grade does not enable automatic buying,
 change model parameters or claim to detect original Pro Ticker alerts.
 
 ## Separate forward research for manual grades
@@ -292,3 +296,9 @@ The integrated workflow also covers a canceled partial exit followed by a second
 linked exit: both exit orders' filled quantities and average prices contribute
 to closure and the negative gross estimate. A loss remains a loss after budget
 return, and retrying closure still creates only one performance record.
+
+Forward-research evaluation additionally rejects provider snapshots naming a
+different symbol and rechecks quote freshness after acquiring the outcome write
+lock. Expired/mismatched evidence cannot become an immutable learning label;
+unchanged retries can recover after a rejected attempt. Research summary reads
+use one database snapshot for counts, grades and outcomes.
