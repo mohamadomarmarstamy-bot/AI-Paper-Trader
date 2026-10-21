@@ -138,6 +138,14 @@ class WorkspaceTests(unittest.TestCase):
         reserve_pro_ticker_budget('MSFT',49800)
         self.assertFalse(hypothetical_proposal(base)['within_virtual_budget'])
 
+    def test_stop_rounding_cannot_understate_risk_at_large_share_counts(self):
+        from pro_ticker_settings import save_settings
+        save_settings({'expected_revision':0,'settings':{'max_allocation_cents':5000000,'max_stop_risk_cents':10002,'discovery_article_limit':5}})
+        result=hypothetical_proposal(dict(symbol='AAPL',reference_price='10.00004',shares=1000,stop_loss_percent='1',take_profit_percent='5'))
+        self.assertEqual(result['stop_price'],'9.9000')
+        self.assertEqual(result['estimated_stop_risk_cents'],10004)
+        self.assertIn('estimated_stop_risk_exceeds_pro_ticker_limit',result['risk_limit_reasons'])
+
     def test_collapsed_or_zero_protection_levels_are_rejected(self):
         base=dict(symbol='AAPL',reference_price='1',shares=1,stop_loss_percent='5',take_profit_percent='10')
         for update in [{'reference_price':'.00001','shares':100000},

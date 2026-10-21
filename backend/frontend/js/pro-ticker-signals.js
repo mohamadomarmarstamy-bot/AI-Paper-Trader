@@ -54,7 +54,7 @@
         const draftStatus=document.createElement("p");draftStatus.setAttribute("role","status");
         function showDraft(proposal){
             validateDraft(proposal,review);
-            draftStatus.textContent="Saved PAPER research draft: "+proposal.shares+" shares; estimated allocation $"+(proposal.allocation_cents/100).toFixed(2)+" at creation. No funds reserved or order placed. This saved quote and risk estimate must be revalidated before execution.";
+            draftStatus.textContent="Saved PAPER research draft: "+proposal.shares+" shares; estimated allocation $"+(proposal.allocation_cents/100).toFixed(2)+" at creation. Stop: "+String(proposal.stop_price??"Unavailable")+"; target: "+String(proposal.take_profit_price??"Unavailable")+". Saved: "+date(proposal.created_at)+". No funds reserved or order placed. This saved quote and risk estimate must be revalidated before execution.";
         }
         if(review.proposal){showDraft(review.proposal);node.appendChild(draftStatus);return;}
         if(review.status!=="graded"||grade?.signal!=="BUY")return;

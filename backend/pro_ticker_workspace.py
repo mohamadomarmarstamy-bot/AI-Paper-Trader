@@ -45,7 +45,9 @@ def hypothetical_proposal(payload):
     budget = workspace_snapshot(limit=1)['budget']
     from pro_ticker_settings import read_settings
     settings = read_settings()
-    stop_risk = cents(price * shares * values['stop_loss_percent']/100)
+    # Four-decimal protection rounding can widen actual stop distance. Use
+    # the larger requested/rounded distance so sizing never understates it.
+    stop_risk = cents(max(price * values['stop_loss_percent']/100, price-stop_price) * shares)
     reasons = []
     if allocation > settings['settings']['max_allocation_cents']:
         reasons.append('allocation_exceeds_pro_ticker_limit')

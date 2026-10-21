@@ -159,3 +159,8 @@ rejected. Pure entry plans reject malformed/non-ASCII symbols and extreme intege
 inputs without raising overflow errors. Draft saves reject an explicitly
 mismatched provider symbol and recheck quote freshness after acquiring the write
 lock. These remain review-only estimates, not executable price guarantees.
+
+Risk sizing also uses the larger of the requested stop distance and the distance
+to the rounded stop price. This avoids understating losses when four-decimal
+rounding widens the stop on a large share count. Saved draft details show stop,
+target and save time, while continuing to require fresh admission before orders.
