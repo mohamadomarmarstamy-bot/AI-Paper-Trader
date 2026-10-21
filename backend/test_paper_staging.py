@@ -177,6 +177,11 @@ class IsolatedStagingTests(unittest.TestCase):
             exported=self.request(reopened,'GET',dataset_path+'?format=csv',authenticated=True)
             self.assertEqual(exported.status_code,200)
             self.assertEqual(exported.headers['x-research-window-count'],'1')
+            performance_path='/auto-trader/pro-ticker/closed-performance'
+            self.assertEqual(self.request(reopened,'GET',performance_path).status_code,401)
+            performance=self.request(reopened,'GET',performance_path,authenticated=True).json()
+            self.assertEqual(performance['closed_reservations_count'],0)
+            self.assertIsNone(performance['gross_pnl_cents']);self.assertIsNone(performance['net_pnl'])
             broker.assert_not_called()
 
     def test_order_account_and_email_controls_are_absent(self):

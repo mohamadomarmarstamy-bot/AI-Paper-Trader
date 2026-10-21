@@ -3,6 +3,29 @@
     const root = document.getElementById("pro-ticker-manual-section");
     if (!root || !document.getElementById("pt-status")) return;
     const el = id => document.getElementById("pt-" + id);
+    const closedPanel=document.createElement("article"),closedTitle=document.createElement("h3"),closedStatus=document.createElement("p"),closedMetrics=document.createElement("p"),closedRows=document.createElement("tbody"),closedTable=document.createElement("table"),closedHead=document.createElement("thead"),closedHeader=document.createElement("tr"),closedScroller=document.createElement("div");
+    closedPanel.id="pt-closed-performance";closedTitle.textContent="Closed PAPER outcomes — gross estimates";closedStatus.setAttribute("role","status");
+    for(const label of ["Recorded at (not execution time)","Symbol","Shares","Gross estimate","Price coverage"]){const th=document.createElement("th");th.textContent=label;closedHeader.appendChild(th);}
+    closedHead.appendChild(closedHeader);closedTable.append(closedHead,closedRows);closedScroller.style.overflowX="auto";closedScroller.appendChild(closedTable);closedPanel.append(closedTitle,closedStatus,closedMetrics,closedScroller);el("panel-performance")?.appendChild(closedPanel);
+    let closedVersion=0;
+    async function loadClosedPerformance(){
+        const current=++closedVersion;closedStatus.textContent="Loading closed PAPER outcome evidence…";
+        try{
+            const response=await fetch("/auto-trader/pro-ticker/closed-performance",{credentials:"same-origin",cache:"no-store"});if(!response.ok)throw Error("Report request failed ("+response.status+").");
+            const data=await response.json(),counts=[data.closed_reservations_count,data.recorded_count,data.priced_count,data.unpriced_count,data.gross_wins,data.gross_losses,data.gross_flat];
+            if(data.paper!==true||data.kind!=="closed_gross_estimate_from_terminal_broker_averages"||data.model_updated!==false||data.net_pnl!==null||data.unrealized_pnl!==null||data.drawdown!==null||!counts.every(n=>Number.isSafeInteger(n)&&n>=0)||data.recorded_count>data.closed_reservations_count||data.priced_count+data.unpriced_count!==data.closed_reservations_count||data.gross_wins+data.gross_losses+data.gross_flat!==data.priced_count||!Array.isArray(data.rows)||data.rows.length>data.recorded_count||data.has_more!==(data.recorded_count>data.rows.length))throw Error("Invalid closed PAPER report");
+            if(data.priced_count){
+                if(![data.gross_pnl_cents,data.gross_profit_cents,data.gross_loss_cents].every(Number.isSafeInteger)||data.gross_profit_cents<0||data.gross_loss_cents<0||data.gross_pnl_cents!==data.gross_profit_cents-data.gross_loss_cents||!Number.isFinite(data.gross_win_rate_percent)||data.gross_win_rate_percent<0||data.gross_win_rate_percent>100||(data.gross_profit_factor!==null&&(!Number.isFinite(data.gross_profit_factor)||data.gross_profit_factor<0)))throw Error("Invalid gross metrics");
+            }else if([data.gross_pnl_cents,data.gross_profit_cents,data.gross_loss_cents,data.gross_win_rate_percent,data.gross_profit_factor].some(v=>v!==null))throw Error("Missing prices cannot imply performance");
+            for(const [field,count]of [["average_gross_gain_cents",data.gross_wins],["average_gross_loss_cents",data.gross_losses]])if(count?(!Number.isSafeInteger(data[field])||(field==="average_gross_gain_cents"?data[field]<=0:data[field]>=0)):data[field]!==null)throw Error("Invalid average gross result");
+            if(data.rows.some(row=>!row||row.paper!==true||row.kind!==data.kind||typeof row.symbol!=="string"||!Number.isFinite(Date.parse(row.recorded_at))||!["priced","unavailable"].includes(row.status)||row.training_eligible!==false||row.net_pnl!==null||row.fees!==null||(row.status==="priced"?(!Number.isSafeInteger(row.gross_pnl_cents)||!Number.isSafeInteger(row.shares)||row.shares<1):row.gross_pnl_cents!==null)))throw Error("Invalid closed outcome rows");
+            if(current!==closedVersion)return;closedRows.replaceChildren();
+            for(const row of data.rows){const tr=document.createElement("tr");for(const value of [date(row.recorded_at),row.symbol,row.shares??"Unavailable",row.status==="priced"?money(row.gross_pnl_cents):"Unavailable",row.status==="priced"?"Terminal average prices; fees unknown":"Average prices unavailable"]){const td=document.createElement("td");td.textContent=String(value);tr.appendChild(td);}closedRows.appendChild(tr);}
+            closedStatus.textContent="Price coverage: "+data.priced_count+" of "+data.closed_reservations_count+" owner-reconciled closed reservations. "+data.unpriced_count+" remain unpriced. "+(data.has_more?"Displayed rows are limited; summary includes all recorded outcomes. ":"")+"Gross estimates use terminal broker average fill prices. Net P&L, fees, exact execution prices and equity drawdown remain unavailable. Returned virtual funds are not profit.";
+            closedMetrics.textContent=data.priced_count?"Gross closed estimate: "+money(data.gross_pnl_cents)+" · Gross wins/losses/flat: "+data.gross_wins+" / "+data.gross_losses+" / "+data.gross_flat+" · Gross win rate: "+data.gross_win_rate_percent.toFixed(1)+"% · Gross profit factor: "+(data.gross_profit_factor===null?"Unavailable (no gross losses)":data.gross_profit_factor.toFixed(2))+" · Average gross gain / loss: "+(data.average_gross_gain_cents===null?"Unavailable":money(data.average_gross_gain_cents))+" / "+(data.average_gross_loss_cents===null?"Unavailable":money(data.average_gross_loss_cents)):"No priced closed outcomes. No zero profit or win-rate result is inferred.";
+        }catch(error){if(current===closedVersion){closedRows.replaceChildren();closedMetrics.textContent="";closedStatus.textContent="Closed PAPER performance unavailable: "+error.message;}}
+    }
+
     let snapshot = null, version = 0, journalRows = [];
     const tabs = Array.from(root.querySelectorAll("[data-pt-tab]"));
     function activate(key, focus = false) {
@@ -134,7 +157,7 @@
         return data;
     }
     async function refresh() {
-        const requestVersion=++version; el("status").textContent="Loading persisted Pro Ticker data…";
+        const requestVersion=++version; void loadClosedPerformance(); el("status").textContent="Loading persisted Pro Ticker data…";
         try {
             const response=await fetch("/auto-trader/pro-ticker/workspace",{credentials:"same-origin",cache:"no-store"});
             if (!response.ok) throw Error(response.status===401 ? "Sign in again to load your workspace." : "Workspace request failed ("+response.status+").");

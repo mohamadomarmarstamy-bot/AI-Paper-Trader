@@ -208,4 +208,6 @@ def build_workspace_router(*, require_session):
             return await run_in_threadpool(run_discovery)
         except Exception:
             raise HTTPException(503, 'Discovery unavailable.') from None
+    from pro_ticker_closed_performance import build_closed_performance_router
+    router.include_router(build_closed_performance_router(require_session=require_session))
     return router

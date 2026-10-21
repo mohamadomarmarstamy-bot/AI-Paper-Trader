@@ -18,6 +18,7 @@ import uuid
 from database import get_connection
 from pro_ticker_broker_audit_inputs import validate_paper_snapshot_inputs
 from pro_ticker_broker_snapshot_audit import _audit_snapshot
+from pro_ticker_closed_performance import SCHEMA as _PERFORMANCE_SCHEMA, capture_closed_performance
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS pro_ticker_manual_release_reviews (
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS pro_ticker_budget_release_events (
     released_at TEXT NOT NULL
 );
 """
+_SCHEMA += _PERFORMANCE_SCHEMA
 _BASE = dict(paper=True, verified=False, preview_only=True,
              release_authorized=False, budget_released=False, database_updated=False,
              broker_origin_authenticated=False)
@@ -203,6 +205,7 @@ def release_manually_approved_paper_budget(review_id, *, fetch_paper_order):
     """
     _uuid(review_id)
     with closing(get_connection()) as conn:
+        conn.executescript(_PERFORMANCE_SCHEMA)
         review = conn.execute('SELECT * FROM pro_ticker_manual_release_reviews WHERE id = ?', (review_id,)).fetchone()
         if review is None or not review['approved_by']:
             raise ValueError('Explicit operator PAPER approval required.')
@@ -237,6 +240,7 @@ def release_manually_approved_paper_budget(review_id, *, fetch_paper_order):
         if changed != 1:
             raise ValueError('PAPER reservation is no longer releasable.')
         conn.execute('UPDATE pro_ticker_manual_release_reviews SET consumed_at = ? WHERE id = ?', (time.time(), review_id))
+        capture_closed_performance(conn,reservation=current['reservation'],entry=entry,exits=exits,recorded_at=now)
     return dict(paper=True, budget_released=True, already_released=False,
                 reservation_id=live['reservation_id'], released_cents=cents,
                 automatic_release_enabled=False)

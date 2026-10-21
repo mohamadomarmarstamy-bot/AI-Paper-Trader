@@ -12,7 +12,7 @@ const fixture=()=>({paper:true,scope:'pro_ticker_strategy_ledger',generated_at:s
  scanner:{reason:'Saved research is not a live scan.'},performance:{reason:'Verified execution prices are unavailable.'}});
 
 test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed refresh', {timeout:90000},async()=>{
- let data=fixture(),fail=false,requests=[],browser,forwardDue=false,savedSignal=null,draftRequests=[],allocationRequests=[],signalRequests=[],discoveries=0,invalidDataset=false,invalidProposal=false,invalidSettings=false,settingsRevision=0,settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
+ let data=fixture(),fail=false,requests=[],browser,forwardDue=false,savedSignal=null,draftRequests=[],allocationRequests=[],signalRequests=[],discoveries=0,invalidClosedPerformance=false,invalidDataset=false,invalidProposal=false,invalidSettings=false,settingsRevision=0,settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
  const raw=fs.readFileSync(path.join(frontend,'index.html'),'utf8');const start=raw.indexOf('<section id="pro-ticker-manual-section"');
  const section=raw.slice(start,raw.indexOf('</section>',start)+10).replace('class="app-section hidden"','class="app-section"').replace(' hidden>','>');
  const server=http.createServer(async(req,res)=>{
@@ -21,6 +21,11 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
   if(req.url==='/style.css'){res.setHeader('Content-Type','text/css');res.end(fs.readFileSync(path.join(frontend,'style.css')));return;}
   if(req.url==='/js/pro-ticker-workspace.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(__dirname,'pro-ticker-workspace.js')));return;}
   if(req.url==='/js/pro-ticker-signals.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(__dirname,'pro-ticker-signals.js')));return;}
+  if(req.url==='/auto-trader/pro-ticker/closed-performance'){
+   const kind='closed_gross_estimate_from_terminal_broker_averages';
+   const row=(symbol,pnl)=>({paper:true,kind,symbol,recorded_at:stamp,status:pnl===null?'unavailable':'priced',shares:pnl===null?null:2,gross_pnl_cents:pnl,training_eligible:false,net_pnl:null,fees:null});
+   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,kind,model_updated:false,net_pnl:invalidClosedPerformance?123:null,unrealized_pnl:null,drawdown:null,closed_reservations_count:3,recorded_count:3,priced_count:2,unpriced_count:1,gross_wins:1,gross_losses:1,gross_flat:0,has_more:false,rows:[row('AAPL',500),row('MSFT',-200),row('AMD',null)],gross_pnl_cents:300,gross_profit_cents:500,gross_loss_cents:200,gross_win_rate_percent:50,gross_profit_factor:2.5,average_gross_gain_cents:500,average_gross_loss_cents:-200}));return;
+  }
   if(req.url.startsWith('/auto-trader/pro-ticker/manual-signals/dataset')){
    const count=savedSignal?1:0,evaluated=savedSignal?.forward_outcome?1:0;
    if(req.url.endsWith('?format=csv')){
@@ -103,7 +108,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
  try{
   browser=await chromium.launch({headless:true});fs.mkdirSync('.artifacts/pro-ticker-workspace',{recursive:true});
   for(const width of [1280,390]){
-   data=fixture();fail=false;requests=[];forwardDue=false;savedSignal=null;draftRequests=[];allocationRequests=[];signalRequests=[];discoveries=0;invalidDataset=false;invalidProposal=false;invalidSettings=false;settingsRevision=0;settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
+   data=fixture();fail=false;requests=[];forwardDue=false;savedSignal=null;draftRequests=[];allocationRequests=[];signalRequests=[];discoveries=0;invalidClosedPerformance=false;invalidDataset=false;invalidProposal=false;invalidSettings=false;settingsRevision=0;settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
    const context=await browser.newContext({viewport:{width,height:1000},acceptDownloads:true});const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
    await page.goto(origin);await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('Ledger snapshot:'));
    assert.equal(await page.locator('[role=tab]').count(),9);assert.equal(await page.locator('[role=tabpanel]:visible').count(),1);
@@ -167,6 +172,13 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-forward-research.png',fullPage:true});
    invalidDataset=true;await page.evaluate(()=>window.loadProTickerSignals());await page.waitForFunction(()=>document.getElementById('pt-research-export').textContent.includes('Invalid research readiness evidence'));
    assert.equal(await page.getByRole('button',{name:'Export research evidence (CSV)',exact:true}).isDisabled(),true);
+   await page.waitForFunction(()=>document.getElementById('pt-closed-performance').textContent.includes('Gross closed estimate: $3.00'));
+   assert.match(await page.locator('#pt-closed-performance').innerText(),/Gross win rate: 50.0%/);assert.match(await page.locator('#pt-closed-performance').innerText(),/Gross profit factor: 2.50/);assert.match(await page.locator('#pt-closed-performance').innerText(),/-\$2.00/);
+   await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-closed-gross-estimates.png',fullPage:true});
+   invalidClosedPerformance=true;await page.evaluate(()=>window.loadProTickerWorkspace());await page.waitForFunction(()=>document.getElementById('pt-closed-performance').textContent.includes('Invalid closed PAPER report'));
+   assert.doesNotMatch(await page.locator('#pt-closed-performance').innerText(),/Gross closed estimate: \$3.00/);
+   invalidClosedPerformance=false;await page.evaluate(()=>window.loadProTickerWorkspace());
+
    invalidDataset=false;await page.evaluate(()=>window.loadProTickerSignals());await page.locator('#pt-tab-signals').click();
    await page.locator('#pt-signal-new').click();assert.equal(await page.locator('#pt-signal-symbol').inputValue(),'');
    await page.evaluate(()=>{window.testOriginalUUID=crypto.randomUUID.bind(crypto);crypto.randomUUID=()=>{throw Error('Synthetic UUID unavailable');};});

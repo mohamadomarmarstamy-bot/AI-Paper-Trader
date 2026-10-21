@@ -32,6 +32,12 @@ class ManualWorkflowIntegrationTests(unittest.TestCase):
         p=patch.object(database,'DATABASE_PATH',Path(temp.name)/'workflow.db');p.start();self.addCleanup(p.stop)
 
     def test_http_manual_grade_allocation_verified_partial_fills_closure_and_owner_release(self):
+        self.run_workflow(split_exits=False)
+
+    def test_canceled_partial_exit_and_second_exit_preserve_loss_and_close_once(self):
+        self.run_workflow(split_exits=True)
+
+    def run_workflow(self, *, split_exits):
         orders={};app=FastAPI()
         def auth(request):
             if request.headers.get('x-test-owner')!='yes':raise HTTPException(401)
@@ -67,7 +73,7 @@ class ManualWorkflowIntegrationTests(unittest.TestCase):
                 bad={**entry,'symbol':'MSFT','filled_qty':'1','status':'partially_filled'}
                 with self.assertRaises(ValueError):account_linked_paper_entry_snapshot(reservation,bad)
                 for filled,status in [(1,'partially_filled'),(4,'filled'),(4,'filled')]:
-                    entry={**entry,'filled_qty':str(filled),'status':status};orders[entry['id']]=entry
+                    entry={**entry,'filled_qty':str(filled),'status':status,'filled_avg_price':'10.5'};orders[entry['id']]=entry
                     account_linked_paper_entry_snapshot(reservation,entry)
                     record_verified_paper_order_state(reservation,entry['id'],status,filled_quantity=filled)
                 current=(await client.get(workspace)).json();self.assertEqual(current['positions']['rows'][0]['shares'],4)
@@ -76,12 +82,21 @@ class ManualWorkflowIntegrationTests(unittest.TestCase):
                 exit_id=str(uuid.uuid4());exit_order={'id':str(uuid.uuid4()),'client_order_id':pro_ticker_exit_client_order_id(reservation,exit_id),
                     'symbol':'AAPL','side':'sell','qty':'4','filled_qty':'0','status':'new'}
                 link_verified_paper_exit(reservation_id=reservation,symbol='AAPL',expected_shares=4,broker_order=exit_order,exit_id=exit_id)
-                exit_order={**exit_order,'filled_qty':'2','status':'partially_filled'};orders[exit_order['id']]=exit_order
+                exit_order={**exit_order,'filled_qty':'2','status':'partially_filled','filled_avg_price':'11'};orders[exit_order['id']]=exit_order
                 account_linked_paper_exit_snapshot(exit_order['id'],exit_order)
                 release_headers={**headers,'X-Pro-Ticker-Operator':'manual-release'};release='/auto-trader/pro-ticker-paper'
                 self.assertEqual((await client.post(release+'/release-review',json={'reservation_id':reservation},headers=release_headers)).status_code,409)
                 self.assertEqual((await client.get(workspace)).json()['budget']['committed_cents'],4200)
-                exit_order={**exit_order,'filled_qty':'4','status':'filled'};orders[exit_order['id']]=exit_order
+                if split_exits:
+                    exit_order={**exit_order,'status':'canceled'};orders[exit_order['id']]=exit_order
+                    self.assertEqual(account_linked_paper_exit_snapshot(exit_order['id'],exit_order)['delta_shares'],0)
+                    second_exit_id=str(uuid.uuid4())
+                    exit_order={'id':str(uuid.uuid4()),'client_order_id':pro_ticker_exit_client_order_id(reservation,second_exit_id),
+                        'symbol':'AAPL','side':'sell','qty':'2','filled_qty':'2','status':'filled','filled_avg_price':'9'}
+                    link_verified_paper_exit(reservation_id=reservation,symbol='AAPL',expected_shares=2,broker_order=exit_order,exit_id=second_exit_id)
+                else:
+                    exit_order={**exit_order,'filled_qty':'4','status':'filled'}
+                orders[exit_order['id']]=exit_order
                 account_linked_paper_exit_snapshot(exit_order['id'],exit_order)
                 self.assertEqual(account_linked_paper_exit_snapshot(exit_order['id'],exit_order)['delta_shares'],0)
                 current=(await client.get(workspace)).json();self.assertEqual(current['positions']['total'],0)
@@ -106,4 +121,7 @@ class ManualWorkflowIntegrationTests(unittest.TestCase):
                 dataset=(await client.get(signals+'/dataset')).json();self.assertEqual(dataset['training_ready_samples'],0)
                 self.assertIsNone(dataset['rows'][0]['future_outcome'])
                 self.assertEqual((await client.get(release+'/release-events')).json()['total_count'],1)
+                priced=(await client.get('/auto-trader/pro-ticker/closed-performance')).json()
+                self.assertEqual(priced['priced_count'],1);self.assertEqual(priced['gross_pnl_cents'],-200 if split_exits else 200)
+                self.assertIsNone(priced['net_pnl']);self.assertEqual(priced['recorded_count'],1)
         asyncio.run(run())

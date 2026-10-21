@@ -256,3 +256,39 @@ Allocation inspection also exposes the persisted owner audit events and their
 server-recorded times. Read-only status changes do not fabricate new owner
 actions; the existing Budget release history remains the audit for a linked
 reservation's approved closure.
+
+## Closed PAPER gross-outcome reporting
+
+An owner-approved, independently re-fetched terminal closure now captures a
+separate immutable performance record in the same transaction as the release.
+Valid broker `filled_avg_price` and filled quantities produce a gross closed
+estimate from entry cost and all linked exit proceeds. Missing or invalid prices
+produce an unavailable record rather than zero profit; they do not substitute
+for share-closure verification. A failed performance write rolls back the release
+and audit together. Exact retries do not fetch a later price or rewrite results.
+
+The authenticated closed-performance report verifies each record's release-review
+and evidence-digest linkage. It includes gross gains, losses, flat outcomes,
+win rate, profit factor and average gain/loss for the priced closed subset.
+Aggregate totals cover all recorded priced outcomes even if displayed rows are
+limited. Legacy releases and unavailable-price records remain counted as
+unpriced. Canceled, never-submitted allocations are not counted as closed trades.
+
+Performance displays this separately from forward-quote research, including
+coverage, positive/negative gross estimates, and server record times explicitly
+labeled as not execution times. Broker average prices may themselves be rounded;
+exact execution/lot prices, fees, net P/L, open-position valuation, dated equity
+and drawdown remain unavailable. No equity curve or daily realized result is
+fabricated, and model training stays disabled.
+
+The combined simulated HTTP/accounting workflow now also captures a $2 gross
+closed estimate from a fabricated 4-share $10.50 entry and $11 exit, while returning
+its separate $42 virtual reservation once. This is a synthetic test result, not
+an account performance claim. Tests also cover losses, missing/invalid prices,
+report linkage, atomic rollback, immutable retries, multi-trade summary coverage,
+authentication and desktop/mobile rendering with invalid-data rejection.
+
+The integrated workflow also covers a canceled partial exit followed by a second
+linked exit: both exit orders' filled quantities and average prices contribute
+to closure and the negative gross estimate. A loss remains a loss after budget
+return, and retrying closure still creates only one performance record.
