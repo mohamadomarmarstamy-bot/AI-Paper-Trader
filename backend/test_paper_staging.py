@@ -140,6 +140,20 @@ class IsolatedStagingTests(unittest.TestCase):
                 headers={'Origin': 'https://staging.test'})
             self.assertTrue(retry.json()['duplicate']); analyze.assert_called_once()
             self.assertEqual(self.request(app, 'GET', path, authenticated=True).json()['total_count'], 1)
+            draft = {'signal_id': payload['request_id'], 'request_id': str(uuid.uuid4()),
+                     'shares': 2, 'stop_loss_percent': '5', 'take_profit_percent': '10'}
+            self.assertEqual(self.request(app, 'POST', path+'/proposal', json=draft,
+                headers={'Origin': 'https://staging.test'}).status_code, 401)
+            saved = self.request(app, 'POST', path+'/proposal', authenticated=True, json=draft,
+                headers={'Origin': 'https://staging.test'})
+            self.assertEqual(saved.status_code, 200)
+            self.assertFalse(saved.json()['proposal']['budget_reserved'])
+            recreated = self.app()
+            history = self.request(recreated, 'GET', path, authenticated=True).json()
+            self.assertEqual(history['signals'][0]['proposal'], saved.json()['proposal'])
+            retry = self.request(recreated, 'POST', path+'/proposal', authenticated=True, json=draft,
+                headers={'Origin': 'https://staging.test'})
+            self.assertTrue(retry.json()['duplicate'])
             broker.assert_not_called()
 
     def test_order_account_and_email_controls_are_absent(self):

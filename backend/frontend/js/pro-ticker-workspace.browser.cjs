@@ -12,7 +12,7 @@ const fixture=()=>({paper:true,scope:'pro_ticker_strategy_ledger',generated_at:s
  scanner:{reason:'Saved research is not a live scan.'},performance:{reason:'Verified execution prices are unavailable.'}});
 
 test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed refresh', {timeout:90000},async()=>{
- let data=fixture(),fail=false,requests=[],browser,forwardDue=false,savedSignal=null,signalRequests=[],discoveries=0,invalidProposal=false,invalidSettings=false,settingsRevision=0,settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
+ let data=fixture(),fail=false,requests=[],browser,forwardDue=false,savedSignal=null,draftRequests=[],signalRequests=[],discoveries=0,invalidProposal=false,invalidSettings=false,settingsRevision=0,settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
  const raw=fs.readFileSync(path.join(frontend,'index.html'),'utf8');const start=raw.indexOf('<section id="pro-ticker-manual-section"');
  const section=raw.slice(start,raw.indexOf('</section>',start)+10).replace('class="app-section hidden"','class="app-section"').replace(' hidden>','>');
  const server=http.createServer(async(req,res)=>{
@@ -21,6 +21,15 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
   if(req.url==='/style.css'){res.setHeader('Content-Type','text/css');res.end(fs.readFileSync(path.join(frontend,'style.css')));return;}
   if(req.url==='/js/pro-ticker-workspace.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(__dirname,'pro-ticker-workspace.js')));return;}
   if(req.url==='/js/pro-ticker-signals.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(__dirname,'pro-ticker-signals.js')));return;}
+  if(req.url==='/auto-trader/pro-ticker/manual-signals/proposal'){
+   assert.equal(req.method,'POST');assert.equal(req.headers.origin,origin);
+   const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=JSON.parse(Buffer.concat(chunks).toString());draftRequests.push(body);
+   assert.deepEqual(Object.keys(body).sort(),['request_id','shares','signal_id','stop_loss_percent','take_profit_percent']);assert.equal(body.signal_id,savedSignal.request_id);assert.equal(body.shares,2);
+   savedSignal.proposal=savedSignal.proposal||{paper:true,signal_id:body.signal_id,request_id:body.request_id,symbol:'AAPL',shares:2,allocation_cents:2100,budget_reserved:false,order_submitted:false,execution_authorized:false,status:'research_draft'};
+   res.setHeader('Content-Type','application/json');
+   if(draftRequests.length===1){res.statusCode=503;res.end(JSON.stringify({detail:'Simulated lost confirmation after persistence'}));return;}
+   assert.equal(body.request_id,draftRequests[0].request_id);res.end(JSON.stringify({paper:true,proposal:savedSignal.proposal,duplicate:true}));return;
+  }
   if(req.url==='/auto-trader/pro-ticker/manual-signals/learning'){
    const outcome=savedSignal?.forward_outcome;
    res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,kind:'forward_quote_return_not_trade_pnl',model_updated:false,training_enabled:false,training_ready_samples:0,review_count:savedSignal?1:0,window_count:savedSignal?1:0,evaluated_count:outcome?1:0,has_more:false,groups:outcome?[{version:'pro_ticker_daily_technical_grade_v1',grade:'A',samples:1,positive:0,negative:1,flat:0,mean_forward_return_percent:outcome.return_percent}]:[],reason:'Research only; no model updates.'}));return;
@@ -71,7 +80,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
  try{
   browser=await chromium.launch({headless:true});fs.mkdirSync('.artifacts/pro-ticker-workspace',{recursive:true});
   for(const width of [1280,390]){
-   data=fixture();fail=false;requests=[];forwardDue=false;savedSignal=null;signalRequests=[];discoveries=0;invalidProposal=false;invalidSettings=false;settingsRevision=0;settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
+   data=fixture();fail=false;requests=[];forwardDue=false;savedSignal=null;draftRequests=[];signalRequests=[];discoveries=0;invalidProposal=false;invalidSettings=false;settingsRevision=0;settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
    const context=await browser.newContext({viewport:{width,height:1000},acceptDownloads:true});const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
    await page.goto(origin);await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('Ledger snapshot:'));
    assert.equal(await page.locator('[role=tab]').count(),9);assert.equal(await page.locator('[role=tabpanel]:visible').count(),1);
@@ -89,6 +98,13 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.locator('#pt-signal-submit').click();await page.waitForFunction(()=>document.getElementById('pt-signal-status').textContent.includes('Review graded'));
    assert.equal(signalRequests.length,2);assert.equal(signalRequests[0].request_id,signalRequests[1].request_id);
    assert.equal(await page.locator('#pt-signal-history tr').count(),1);await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-manual-signals.png',fullPage:true});
+   await page.locator('#pt-signal-detail input[name="shares"]').fill('2');await page.locator('#pt-signal-detail input[name="stop_loss_percent"]').fill('5');await page.locator('#pt-signal-detail input[name="take_profit_percent"]').fill('10');
+   await page.getByRole('button',{name:'Save PAPER draft (no order)',exact:true}).click();await page.waitForFunction(()=>document.getElementById('pt-signal-detail').textContent.includes('Unable to confirm draft'));
+   assert.equal(await page.getByRole('button',{name:'Save PAPER draft (no order)',exact:true}).isDisabled(),false);
+   await page.getByRole('button',{name:'Save PAPER draft (no order)',exact:true}).click();await page.waitForFunction(()=>document.getElementById('pt-signal-detail').textContent.includes('Saved PAPER research draft'));
+   assert.equal(draftRequests.length,2);assert.equal(draftRequests[0].request_id,draftRequests[1].request_id);
+   await page.getByRole('button',{name:'Inspect AAPL review',exact:true}).click();assert.equal(await page.locator('#pt-signal-detail form').count(),0);assert.match(await page.locator('#pt-signal-detail').innerText(),/No funds reserved or order placed/);
+   await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-saved-draft.png',fullPage:true});
    await page.getByRole('button',{name:'Check 24+ hour forward quote',exact:true}).click();await page.waitForFunction(()=>document.getElementById('pt-signal-status').textContent.includes('Wait until a fresh market quote'));assert.equal(savedSignal.forward_outcome,undefined);
    forwardDue=true;await page.getByRole('button',{name:'Check 24+ hour forward quote',exact:true}).click();await page.waitForFunction(()=>document.getElementById('pt-signal-status').textContent.includes('did not update an AI model'));
    assert.match(await page.locator('#pt-signal-detail').innerText(),/-14\.285714/);assert.equal(savedSignal.entry_grade.score,4);
@@ -141,7 +157,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.locator('#pt-tab-overview').focus();await page.keyboard.press('ArrowRight');assert.equal(await page.locator('#pt-tab-scanner').getAttribute('aria-selected'),'true');
    fail=true;await page.locator('#pt-refresh').click();await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('Unable to load'));assert.equal(await page.locator('#pt-metrics').innerText(),'');assert.match(await page.locator('#pt-journal').innerText(),/Data unavailable/);
    fail=false;data=fixture();data.paper=false;await page.locator('#pt-refresh').click();await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('safety flags'));assert.equal(await page.locator('#pt-metrics').innerText(),'');
-   assert.deepEqual(errors,[]);assert.ok(requests.every(([method,url])=>method==='GET'||method==='POST'&&['/auto-trader/pro-ticker/proposal','/auto-trader/pro-ticker/discovery','/auto-trader/pro-ticker/manual-signals'].includes(url)||method==='POST'&&url.startsWith('/auto-trader/pro-ticker/manual-signals/')&&url.endsWith('/forward-review')||method==='PUT'&&url==='/auto-trader/pro-ticker/settings'),'workspace must never place an order');await context.close();
+   assert.deepEqual(errors,[]);assert.ok(requests.every(([method,url])=>method==='GET'||method==='POST'&&['/auto-trader/pro-ticker/proposal','/auto-trader/pro-ticker/discovery','/auto-trader/pro-ticker/manual-signals','/auto-trader/pro-ticker/manual-signals/proposal'].includes(url)||method==='POST'&&url.startsWith('/auto-trader/pro-ticker/manual-signals/')&&url.endsWith('/forward-review')||method==='PUT'&&url==='/auto-trader/pro-ticker/settings'),'workspace must never place an order');await context.close();
   }
  }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
 });

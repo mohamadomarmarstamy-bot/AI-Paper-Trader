@@ -3,8 +3,12 @@
     const form=document.getElementById("pt-signal-form"); if(!form)return;
     const el=id=>document.getElementById("pt-signal-"+id), endpoint="/auto-trader/pro-ticker/manual-signals";
     let requestId=null,saving=false,version=0,detailVersion=0;
+    const draftIntents=new Map();
     const date=value=>value&&Number.isFinite(Date.parse(value))?new Date(value).toLocaleString():"Unavailable";
     function flags(data){if(!data||data.paper!==true||data.orders_submitted!==0||data.automatic_execution_enabled!==false)throw Error("Unexpected PAPER safety flags");}
+    function validateDraft(proposal,review){
+        if(proposal?.paper!==true||proposal.signal_id!==review.request_id||proposal.symbol!==review.symbol||proposal.budget_reserved!==false||proposal.order_submitted!==false||proposal.execution_authorized!==false||proposal.status!=="research_draft"||!Number.isSafeInteger(proposal.shares)||proposal.shares<1||!Number.isSafeInteger(proposal.allocation_cents)||proposal.allocation_cents<1)throw Error("Invalid saved draft safety flags");
+    }
     function record(value){
         if(!value||typeof value.symbol!=="string"||!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(value.symbol)||typeof value.request_id!=="string"||
             !["pending","graded","unavailable","interrupted"].includes(value.status))throw Error("Invalid saved review");
@@ -13,6 +17,7 @@
             !["graded","unavailable"].includes(grade.status)||grade.status==="graded"&&(!["A","B","C","D"].includes(grade.grade)||!Number.isFinite(grade.score)||grade.score< -6||grade.score>6)))throw Error("Invalid grade evidence");
         const outcome=value.forward_outcome;
         if(outcome&&(outcome.kind!=="forward_quote_return_not_trade_pnl"||outcome.training_eligible!==false||!Number.isFinite(outcome.return_percent)||outcome.request_id!==value.request_id))throw Error("Invalid forward evidence");
+        if(value.proposal)validateDraft(value.proposal,value);
         return value;
     }
     function detail(review){
@@ -46,6 +51,34 @@
             finally{check.disabled=false;}
         });
         node.appendChild(check);
+        const draftStatus=document.createElement("p");draftStatus.setAttribute("role","status");
+        function showDraft(proposal){
+            validateDraft(proposal,review);
+            draftStatus.textContent="Saved PAPER research draft: "+proposal.shares+" shares; estimated allocation $"+(proposal.allocation_cents/100).toFixed(2)+" at creation. No funds reserved or order placed. This saved quote and risk estimate must be revalidated before execution.";
+        }
+        if(review.proposal){showDraft(review.proposal);node.appendChild(draftStatus);return;}
+        if(review.status!=="graded"||grade?.signal!=="BUY")return;
+        const draftForm=document.createElement("form"),inputs={};
+        const heading=document.createElement("h4");heading.textContent="Save a PAPER trade draft";draftForm.appendChild(heading);
+        const explanation=document.createElement("p");explanation.textContent="Choose your own size and risk assumptions. A fresh server quote is required. One immutable draft per review; no buying power is reserved and no order is placed.";draftForm.appendChild(explanation);
+        for(const [key,label,maximum]of [["shares","Whole shares",100000],["stop_loss_percent","Stop-loss %",99],["take_profit_percent","Take-profit %",99]]){
+            const wrapper=document.createElement("label"),input=document.createElement("input");wrapper.textContent=label+" ";input.name=key;input.type="number";input.min=key==="shares"?"1":"0.0001";input.max=String(maximum);input.step=key==="shares"?"1":"any";input.required=true;inputs[key]=input;wrapper.appendChild(input);draftForm.appendChild(wrapper);
+        }
+        const save=document.createElement("button");save.type="submit";save.textContent="Save PAPER draft (no order)";draftForm.appendChild(save);
+        draftForm.addEventListener("submit",async event=>{
+            event.preventDefault();if(save.disabled)return;save.disabled=true;Object.values(inputs).forEach(input=>input.disabled=true);
+            try{
+                const sizing={shares:Number(inputs.shares.value),stop_loss_percent:inputs.stop_loss_percent.value,take_profit_percent:inputs.take_profit_percent.value};
+                const signature=JSON.stringify(sizing);let intent=draftIntents.get(review.request_id);
+                if(!intent||intent.signature!==signature){intent={signature,request_id:crypto.randomUUID()};draftIntents.set(review.request_id,intent);}
+                draftStatus.textContent="Saving a draft with a fresh server quote…";
+                const response=await fetch(endpoint+"/proposal",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({...sizing,request_id:intent.request_id,signal_id:review.request_id})});
+                if(!response.ok)throw Error(response.status===409?"Draft already exists. Refresh saved reviews before retrying.":"Draft could not be verified ("+response.status+"). Refresh saved reviews before retrying.");
+                const data=await response.json();if(data.paper!==true)throw Error("Invalid PAPER draft response");showDraft(data.proposal);
+                save.textContent="PAPER draft saved";await refresh();return;
+            }catch(error){draftStatus.textContent="Unable to confirm draft: "+error.message;save.disabled=false;Object.values(inputs).forEach(input=>input.disabled=false);}
+        });
+        node.append(draftForm,draftStatus);
     }
     async function learning(current){
         const rows=el("learning-rows"),status=el("learning");if(!rows||!status)return;

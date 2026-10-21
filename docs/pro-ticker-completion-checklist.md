@@ -124,3 +124,28 @@ samples therefore remain zero: this descriptive research neither updates an AI
 model nor changes automatic trading thresholds. Verified execution outcomes,
 point-in-time feature validation, loss-inclusive datasets and chronological
 out-of-sample evaluation are still required for adaptive signal detection.
+
+## Saved manual-signal PAPER drafts
+
+Manual Signals now offers an explicit share/stop/target form on saved BUY grades.
+The owner can save one immutable research draft per review using a new server
+quote (90-second freshness limit). The draft preserves the grade, server quote,
+settings revision, sizing and estimated risk. It survives application recreation
+and is shown when inspecting the saved review. Request IDs bind the exact intent;
+unchanged retries return the first draft and conflicting intent is rejected.
+Unique database constraints and an atomic insert handle concurrent retries and
+interrupted writes. Provider failures and stale quotes leave no partial draft.
+
+Drafts reserve **no funds**, submit **no orders**, and grant **no execution
+permission**. Their captured budget/risk checks are informational as of creation;
+all admission evidence must be independently revalidated before a future order.
+Broker account identity, market session, positions/open orders, protective orders
+and actual reservations remain unresolved admission blockers. This is progress
+on the manual signal workflow, not completion of automatic buying or learning.
+
+Validation includes signed-owner HTTP authentication, cross-origin rejection,
+provider error sanitization, concurrency, rollback/retry, stale quotes, duplicate
+intent, risk/budget rejection and persistence across staging app recreation.
+Chromium tests exercise desktop/mobile form submission and a lost confirmation
+followed by an unchanged retry, using synthetic fixtures only. No hosted restart
+or deployment is performed by these tests.

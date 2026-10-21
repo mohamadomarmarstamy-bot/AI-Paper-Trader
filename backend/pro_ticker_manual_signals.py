@@ -88,8 +88,10 @@ def list_manual_signals():
         count=conn.execute('SELECT COUNT(*) FROM pro_ticker_manual_signal_reviews').fetchone()[0] if exists else 0
         from pro_ticker_signal_learning import outcomes_for_signals
         outcomes=outcomes_for_signals(conn,[r['request_id'] for r in rows])
+        from pro_ticker_signal_proposals import proposals_for_signals
+        proposals=proposals_for_signals(conn,[r['request_id'] for r in rows])
     return {'paper':True,'orders_submitted':0,'automatic_execution_enabled':False,
-            'signals':[{**_record(r,time.time()),'forward_outcome':outcomes.get(r['request_id'])} for r in rows],'total_count':count,'has_more':count>len(rows)}
+            'signals':[{**_record(r,time.time()),'forward_outcome':outcomes.get(r['request_id']),'proposal':proposals.get(r['request_id'])} for r in rows],'total_count':count,'has_more':count>len(rows)}
 
 
 def submit_manual_signal(payload, *, quote_fetcher, analyzer, clock=time.time):
@@ -135,13 +137,27 @@ def list_result(row,now):
     from pro_ticker_signal_learning import outcomes_for_signals
     with closing(database.get_connection()) as conn:
         outcome=outcomes_for_signals(conn,[row['request_id']]).get(row['request_id'])
+        from pro_ticker_signal_proposals import proposals_for_signals
+        proposal=proposals_for_signals(conn,[row['request_id']]).get(row['request_id'])
     return {'paper':True,'orders_submitted':0,'automatic_execution_enabled':False,
-            'signal':{**_record(row,now),'forward_outcome':outcome},'execution_blocked_reason':'broker_execution_and_outcome_learning_not_connected'}
+            'signal':{**_record(row,now),'forward_outcome':outcome,'proposal':proposal},'execution_blocked_reason':'broker_execution_and_outcome_learning_not_connected'}
 
 
 def build_manual_signal_router(*,require_session,quote_fetcher,analyzer):
     from starlette.concurrency import run_in_threadpool
     router=APIRouter()
+    @router.post('/auto-trader/pro-ticker/manual-signals/proposal')
+    async def proposal(request:Request):
+        require_session(request)
+        if request.headers.get('origin')!=str(request.base_url).rstrip('/'):raise HTTPException(403,'Same-origin request required.')
+        if request.headers.get('content-type','').split(';')[0].strip().lower()!='application/json':raise HTTPException(415,'Expected JSON.')
+        body=await request.body()
+        if len(body)>2048:raise HTTPException(413,'Request too large.')
+        from pro_ticker_signal_proposals import save_signal_proposal,ProposalConflict
+        try:return await run_in_threadpool(save_signal_proposal,json.loads(body),quote_fetcher=quote_fetcher)
+        except ProposalConflict:raise HTTPException(409,'A draft already exists for this review or request ID. Refresh saved status.') from None
+        except ValueError:raise HTTPException(422,'A saved BUY grade, valid sizing, fresh server quote and sufficient virtual budget within risk limits are required.') from None
+        except Exception:raise HTTPException(503,'Draft unavailable. Refresh saved status before retrying.') from None
     @router.get('/auto-trader/pro-ticker/manual-signals/learning')
     def learning(request:Request):
         require_session(request)
