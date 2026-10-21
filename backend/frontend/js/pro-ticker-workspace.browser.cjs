@@ -95,6 +95,11 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.locator('#pt-tab-performance').click();assert.match(await page.locator('#pt-signal-learning').innerText(),/not realized P&L/);assert.match(await page.locator('#pt-signal-learning-rows').innerText(),/-14\.29/);
    await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-forward-research.png',fullPage:true});await page.locator('#pt-tab-signals').click();
    await page.locator('#pt-signal-new').click();assert.equal(await page.locator('#pt-signal-symbol').inputValue(),'');
+   await page.evaluate(()=>{window.testOriginalUUID=crypto.randomUUID.bind(crypto);crypto.randomUUID=()=>{throw Error('Synthetic UUID unavailable');};});
+   await page.locator('#pt-signal-symbol').fill('AAPL');await page.locator('#pt-signal-submit').click();await page.waitForFunction(()=>document.getElementById('pt-signal-status').textContent.includes('Synthetic UUID unavailable'));
+   assert.equal(await page.locator('#pt-signal-submit').isDisabled(),false);assert.equal(await page.locator('#pt-signal-symbol').isDisabled(),false);
+   await page.evaluate(()=>{crypto.randomUUID=window.testOriginalUUID;});
+
    await page.locator('#pt-tab-health').click();
    await page.waitForFunction(()=>document.getElementById('pt-settings-status').textContent.includes('revision 0'));
    await page.locator('#pt-settings-allocation').fill('40');await page.locator('#pt-settings-risk').fill('1');await page.locator('#pt-settings-articles').fill('2');

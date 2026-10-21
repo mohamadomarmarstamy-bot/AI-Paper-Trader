@@ -20,10 +20,12 @@
         const node=el("detail");node.replaceChildren();
         const grade=review.entry_grade,snapshot=review.market_snapshot;
         for(const [label,value]of [["Symbol",review.symbol],["Submitted",date(review.submitted_at)],["Analysis completed",date(review.completed_at)],
-            ["Provisional grade",grade?.grade],["Technical score",grade?.score],["Version",grade?.version],["Signal",grade?.signal],
-            ["Heuristic confidence (not win probability)",grade?.confidence],["Entry quote",snapshot?.price],
+            ["Provisional grade",grade?.grade],["Technical score",grade?.score],["Version",grade?.version=== "pro_ticker_daily_technical_grade_v1"?"Daily technical grade v1":null],["Signal",grade?.signal],
+            ["Heuristic confidence (not win probability)",grade?.confidence],["Submission reference quote",snapshot?.price],
             ["Quote market time",snapshot?.market_timestamp],["Quote fresh at capture",snapshot?.fresh===true?"Yes":"No / unavailable"],
-            ["Indicators",grade?.indicators?JSON.stringify(grade.indicators):null],["Reasons",grade?.reasons?.join(" ")],
+            ["20-day moving average",grade?.indicators?.sma_20],["50-day moving average",grade?.indicators?.sma_50],
+            ["RSI",grade?.indicators?.rsi],["Five-day momentum %",grade?.indicators?.five_day_momentum],
+            ["Volume relative to 20-day average",grade?.indicators?.volume_ratio],["Reasons",grade?.reasons?.join(" ")],
             ["Limitations",grade?.limitations?.join(" ")],
             ["Saved forward quote change (not trade profit)",review.forward_outcome?String(review.forward_outcome.return_percent)+"%":"Not evaluated"],
             ["Execution","No order placed. Broker admission, execution and model training are not connected."]]){
@@ -80,9 +82,9 @@
     el("symbol").addEventListener("input",()=>{requestId=null;});
     form.addEventListener("submit",async event=>{
         event.preventDefault();if(saving)return;saving=true;version++;el("submit").disabled=true;el("symbol").disabled=true;
-        requestId=requestId||crypto.randomUUID();
         el("status").textContent="Capturing reference data and grading the stock. This does not submit a PAPER order…";
         try{
+            requestId=requestId||crypto.randomUUID();
             const response=await fetch(endpoint,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbol:el("symbol").value.trim().toUpperCase(),request_id:requestId})});
             if(!response.ok)throw Error("Review request failed ("+response.status+"). Refresh saved status before retrying.");
             const data=await response.json();flags(data);const review=record(data.signal);
