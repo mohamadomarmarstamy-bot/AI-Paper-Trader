@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 
 
@@ -19,14 +20,19 @@ def plan_paper_entry(
     maximum_quote_age_seconds: float = 30.0,
 ) -> dict[str, Any]:
     """Fail-closed integer-share plan; caller must revalidate before execution."""
+    def finite(value):
+        try:
+            return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
+        except OverflowError:
+            return False
     blocked: list[str] = []
-    normalized_symbol = str(symbol or "").strip().upper()
-    if not normalized_symbol or not normalized_symbol.replace(".", "").isalnum():
+    normalized_symbol = symbol.strip().upper() if isinstance(symbol, str) else ""
+    if not re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", normalized_symbol):
         blocked.append("invalid_symbol")
-    if not isinstance(requested_shares, int) or isinstance(requested_shares, bool) or requested_shares < 1:
+    if not isinstance(requested_shares, int) or isinstance(requested_shares, bool) or not 1 <= requested_shares <= 100000:
         blocked.append("invalid_quantity")
     values = (reference_price, available_budget, broker_buying_power, quote_age_seconds)
-    if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) for value in values):
+    if any(not finite(value) for value in values):
         blocked.append("invalid_market_or_budget_data")
     elif reference_price <= 0 or available_budget < 0 or broker_buying_power < 0 or quote_age_seconds < 0:
         blocked.append("invalid_market_or_budget_data")
@@ -36,14 +42,9 @@ def plan_paper_entry(
         blocked.append("position_already_exists")
     if existing_open_order is not False:
         blocked.append("open_order_already_exists")
-    if (
-        isinstance(maximum_quote_age_seconds, bool)
-        or not isinstance(maximum_quote_age_seconds, (int, float))
-        or not math.isfinite(maximum_quote_age_seconds)
-        or maximum_quote_age_seconds <= 0
-    ):
+    if not finite(maximum_quote_age_seconds) or maximum_quote_age_seconds <= 0:
         blocked.append("invalid_maximum_quote_age")
-    elif isinstance(quote_age_seconds, (int, float)) and not isinstance(quote_age_seconds, bool) and math.isfinite(quote_age_seconds):
+    elif finite(quote_age_seconds):
         if quote_age_seconds > maximum_quote_age_seconds:
             blocked.append("stale_quote")
     estimated_notional = None

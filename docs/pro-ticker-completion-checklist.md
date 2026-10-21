@@ -149,3 +149,13 @@ intent, risk/budget rejection and persistence across staging app recreation.
 Chromium tests exercise desktop/mobile form submission and a lost confirmation
 followed by an unchanged retry, using synthetic fixtures only. No hosted restart
 or deployment is performed by these tests.
+
+### Sizing boundary hardening
+
+Proposal costs and stop-risk estimates round **up** to cents, so fractional-cent
+exposure cannot pass a cent-denominated limit by rounding down. Stop and target
+levels that collapse to zero or the entry price at supported precision are
+rejected. Pure entry plans reject malformed/non-ASCII symbols and extreme integer
+inputs without raising overflow errors. Draft saves reject an explicitly
+mismatched provider symbol and recheck quote freshness after acquiring the write
+lock. These remain review-only estimates, not executable price guarantees.

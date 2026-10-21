@@ -96,6 +96,14 @@ class SignalProposalTests(unittest.TestCase):
         with closing(database.get_connection()) as conn:conn.execute('DROP TRIGGER fail_draft');conn.commit()
         self.assertFalse(self.save()['duplicate'])
 
+    def test_wrong_symbol_or_quote_expiring_during_save_cannot_persist(self):
+        self.quote.return_value['symbol']='MSFT'
+        with self.assertRaises(ValueError):self.save()
+        self.quote.return_value.pop('symbol')
+        clock=Mock(side_effect=[self.now,self.now,self.now+100])
+        with self.assertRaises(ValueError):save_signal_proposal(self.payload,quote_fetcher=self.quote,clock=clock)
+        self.assertIsNone(list_manual_signals()['signals'][0]['proposal'])
+
     def test_http_auth_origin_validation_and_sanitized_provider_failure(self):
         app=FastAPI()
         def auth(request):

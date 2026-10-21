@@ -126,6 +126,25 @@ class WorkspaceTests(unittest.TestCase):
             with self.subTest(update=update),self.assertRaises(ValueError):
                 hypothetical_proposal({**base,**update})
 
+    def test_fractional_cent_cost_and_risk_round_up_before_limits(self):
+        from pro_ticker_settings import save_settings
+        save_settings({'expected_revision':0,'settings':{'max_allocation_cents':20000,'max_stop_risk_cents':1000,'discovery_article_limit':5}})
+        base=dict(symbol='AAPL',reference_price='100.002',shares=2,stop_loss_percent='5',take_profit_percent='10')
+        result=hypothetical_proposal(base)
+        self.assertEqual(result['allocation_cents'],20001)
+        self.assertEqual(result['estimated_stop_risk_cents'],1001)
+        self.assertFalse(result['risk_limits_satisfied'])
+        self.assertEqual(len(result['risk_limit_reasons']),2)
+        reserve_pro_ticker_budget('MSFT',49800)
+        self.assertFalse(hypothetical_proposal(base)['within_virtual_budget'])
+
+    def test_collapsed_or_zero_protection_levels_are_rejected(self):
+        base=dict(symbol='AAPL',reference_price='1',shares=1,stop_loss_percent='5',take_profit_percent='10')
+        for update in [{'reference_price':'.00001','shares':100000},
+                       {'stop_loss_percent':'.000001'},{'take_profit_percent':'.000001'}]:
+            with self.subTest(update=update),self.assertRaises(ValueError):
+                hypothetical_proposal({**base,**update})
+
     def test_proposal_http_requires_auth_origin_and_json(self):
         def auth(request):
             if request.headers.get('x-test-owner')!='yes':raise HTTPException(401,'Sign in')

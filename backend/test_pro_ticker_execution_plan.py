@@ -76,6 +76,17 @@ class PaperEntryPlanTests(unittest.TestCase):
                 self.assertIn("invalid_estimated_notional", result["block_reasons"])
                 self.assertFalse(result["order_submitted"])
 
+    def test_symbol_grammar_matches_workspace_and_broker_boundary(self):
+        for symbol in [123,True,'123','ÄAPL','A..TOOLONG01','<AAPL>']:
+            with self.subTest(symbol=symbol):self.assertIn('invalid_symbol',self.plan(symbol=symbol)['block_reasons'])
+        self.assertTrue(self.plan(symbol='brk.b')['allowed_for_further_review'])
+
+    def test_extreme_integer_inputs_fail_closed_without_overflow(self):
+        for field in ['reference_price','broker_buying_power','available_budget','quote_age_seconds','maximum_quote_age_seconds','requested_shares']:
+            with self.subTest(field=field):
+                result=self.plan(**{field:10**1000})
+                self.assertFalse(result['allowed_for_further_review']);self.assertFalse(result['order_submitted'])
+
     def test_blocks_bad_values(self):
         for value in (float("nan"), float("inf"), -1, True):
             with self.subTest(value=value):

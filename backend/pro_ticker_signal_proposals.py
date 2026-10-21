@@ -67,6 +67,8 @@ def save_signal_proposal(payload, *, quote_fetcher, clock=None):
         hypothetical_proposal({'symbol': review['symbol'], 'reference_price': '1', **sizing})
         from pro_ticker_manual_signals import quote_snapshot
         raw = quote_fetcher(review['symbol'])
+        if isinstance(raw, dict) and raw.get('symbol') not in (None, review['symbol']):
+            raise ValueError('Quote belongs to another symbol.')
         snapshot = quote_snapshot(raw, now=(clock or time.time)())
         if snapshot['fresh'] is not True:
             raise ValueError('Fresh server quote required.')
@@ -87,6 +89,8 @@ def save_signal_proposal(payload, *, quote_fetcher, clock=None):
         if prior:
             conn.rollback()
             return prior
+        if not quote_snapshot(raw, now=(clock or time.time)())['fresh']:
+            raise ValueError('Quote expired while waiting to save.')
         conn.execute('INSERT INTO pro_ticker_signal_proposals VALUES (?,?,?,?)',
                      (request_id, signal_id, intent, json.dumps(proposal, allow_nan=False)))
         conn.commit()

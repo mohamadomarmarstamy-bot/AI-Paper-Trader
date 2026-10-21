@@ -1,7 +1,7 @@
 """Read-only, strategy-scoped workspace snapshot. Never query shared trade P/L."""
 from contextlib import closing
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_CEILING
 import re
 from fastapi import APIRouter, HTTPException, Request
 import database
@@ -34,10 +34,14 @@ def hypothetical_proposal(payload):
         values[key] = value
     price = values['reference_price']
     def cents(value):
-        return int((value * 100).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+        return int((value * 100).quantize(Decimal('1'), rounding=ROUND_CEILING))
     allocation = cents(price * shares)
     if allocation <= 0:
         raise ValueError('Estimated allocation must be at least one cent.')
+    stop_price = (price * (1-values['stop_loss_percent']/100)).quantize(Decimal('.0001'))
+    target_price = (price * (1+values['take_profit_percent']/100)).quantize(Decimal('.0001'))
+    if not 0 < stop_price < price < target_price:
+        raise ValueError('Protection levels cannot collapse at supported price precision.')
     budget = workspace_snapshot(limit=1)['budget']
     from pro_ticker_settings import read_settings
     settings = read_settings()
@@ -51,8 +55,8 @@ def hypothetical_proposal(payload):
             'order_execution_enabled': False, 'budget_reserved': False,
             'symbol': symbol, 'shares': shares, 'reference_price_source': 'operator_estimate',
             'allocation_cents': allocation,
-            'stop_price': str((price * (1-values['stop_loss_percent']/100)).quantize(Decimal('.0001'))),
-            'take_profit_price': str((price * (1+values['take_profit_percent']/100)).quantize(Decimal('.0001'))),
+            'stop_price': str(stop_price),
+            'take_profit_price': str(target_price),
             'estimated_stop_risk_cents': stop_risk,
             'settings_revision': settings['revision'],
             'risk_limits_satisfied': not reasons, 'risk_limit_reasons': reasons,
