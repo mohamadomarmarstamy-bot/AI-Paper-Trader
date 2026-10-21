@@ -161,6 +161,13 @@ class IsolatedStagingTests(unittest.TestCase):
             self.assertEqual(allocated.status_code,200)
             self.assertTrue(allocated.json()['intent']['budget_reserved'])
             self.assertFalse(allocated.json()['intent']['order_submitted'])
+            execution=self.request(recreated,'GET','/auto-trader/pro-ticker/execution-status',authenticated=True).json()
+            self.assertFalse(execution['admission_review_enabled']);self.assertFalse(execution['recovery_enabled'])
+            self.assertFalse(execution['execution_enabled'])
+            for suffix,body in [('admission-review',{'request_id':str(uuid.uuid4())}),('recover',{})]:
+                disabled=self.request(recreated,'POST',intent_path+'/'+allocation['request_id']+'/'+suffix,authenticated=True,
+                    json=body,headers={'Origin':'https://staging.test'})
+                self.assertEqual(disabled.status_code,403)
             reopened=self.app()
             history=self.request(reopened,'GET',intent_path,authenticated=True).json()
             self.assertEqual(history['intents'][0],allocated.json()['intent'])

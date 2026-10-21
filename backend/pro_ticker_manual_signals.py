@@ -149,7 +149,7 @@ def list_result(row,now):
             'signal':{**_record(row,now),'forward_outcome':outcome,'proposal':proposal,'order_intent':intent},'execution_blocked_reason':'broker_execution_and_outcome_learning_not_connected'}
 
 
-def build_manual_signal_router(*,require_session,quote_fetcher,analyzer):
+def build_manual_signal_router(*,require_session,quote_fetcher,analyzer,execution_context=None):
     from starlette.concurrency import run_in_threadpool
     router=APIRouter()
     @router.post('/auto-trader/pro-ticker/manual-signals/proposal')
@@ -204,4 +204,6 @@ def build_manual_signal_router(*,require_session,quote_fetcher,analyzer):
     router.include_router(build_order_intent_router(require_session=require_session,quote_fetcher=quote_fetcher))
     from pro_ticker_research_dataset import build_research_dataset_router
     router.include_router(build_research_dataset_router(require_session=require_session))
+    from pro_ticker_execution_routes import build_paper_execution_router
+    router.include_router(build_paper_execution_router(require_session=require_session,context=execution_context))
     return router

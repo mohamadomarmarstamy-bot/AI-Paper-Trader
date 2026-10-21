@@ -302,3 +302,45 @@ different symbol and rechecks quote freshness after acquiring the outcome write
 lock. Expired/mismatched evidence cannot become an immutable learning label;
 unchanged retries can recover after a rejected attempt. Research summary reads
 use one database snapshot for counts, grades and outcomes.
+
+## Dedicated PAPER admission evidence and uncertain-attempt recovery
+
+The workspace now exposes server-authenticated admission/recovery status. Normal
+main and isolated staging do not supply an execution context: both controls are
+disabled, no credentials are loaded, and no fallback to the original trader's
+PAPER credentials exists. There remains no submit-order endpoint.
+
+An explicitly constructed server context requires a separately approved dedicated
+account UUID and a PAPER-only gateway. The new adapter supports GET only, pins
+trading reads to `https://paper-api.alpaca.markets`, pins quote reads to Alpaca's
+market-data host, refuses redirects and unexpected/malformed HTTP statuses, and
+uses bounded timeouts. HTTP/credential failures are sanitized. It contains no
+submit/cancel/replace method and reads no environment credentials.
+
+Read-only admission reviews preserve a request ID, 30-second expiry and ledger
+fingerprint. They check account identity/status/currency/block flags, buying
+power, fresh regular-market clock, tradable equity, complete position/open-order
+collision snapshots, fresh trade data, reserved entry ceiling, unchanged ledger
+and current risk settings. Nested orders and a potentially truncated 500-order
+snapshot cannot imply no collisions. Passing every check still does not authorize
+execution: broker submission stays disabled and protection remains unverified.
+
+Recovery requires an already recorded submission attempt. It looks up the exact
+reservation-specific client order ID on the dedicated account, verifies the
+broker UUID/client ID/symbol/buy side/bound quantity/fills, and atomically links the
+existing order and recovery audit. Cumulative entry-fill posting is retry-safe,
+including an interruption after linking and out-of-order snapshots. A not-found
+lookup is not proof that no submission occurred: funds stay reserved, cancellation
+remains blocked, and the service never sends another buy. A zero-fill rejection
+also cannot trigger automatic budget release here. Recovery does not claim that
+protective orders exist.
+
+The UI distinguishes uncertain submission from no order, exposes read-only checks
+and existing-order lookup only when server-configured, and never enables the
+existing disabled submit control. Tests use separately constructed synthetic
+PAPER gateways; actual account access and deployed admission/recovery remain
+blocked pending approval/configuration and dedicated-account validation.
+
+Implementation references: Alpaca [order tracking](https://docs.alpaca.markets/us/docs/working-with-orders),
+[order lifecycle and buying power](https://docs.alpaca.markets/us/docs/orders-at-alpaca),
+and [PAPER account retrieval](https://docs.alpaca.markets/us/reference/getaccount-1).
