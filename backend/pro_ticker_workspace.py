@@ -8,8 +8,8 @@ import database
 from pro_ticker_paper_policy import PRO_TICKER_VIRTUAL_BUDGET
 
 
-def hypothetical_proposal(payload):
-    """Operator reference prices are estimates, never broker execution evidence."""
+def validate_proposal_inputs(payload):
+    """Validate sizing fields without database reads or price-level rounding."""
     fields = {'symbol', 'reference_price', 'shares', 'stop_loss_percent', 'take_profit_percent'}
     if not isinstance(payload, dict) or set(payload) != fields:
         raise ValueError('Provide exactly the proposal fields.')
@@ -32,6 +32,12 @@ def hypothetical_proposal(payload):
         if not value.is_finite() or not 0 < value <= maximum:
             raise ValueError('Proposal numbers are outside permitted ranges.')
         values[key] = value
+    return symbol, shares, values
+
+
+def hypothetical_proposal(payload):
+    """Operator reference prices are estimates, never broker execution evidence."""
+    symbol, shares, values = validate_proposal_inputs(payload)
     price = values['reference_price']
     def cents(value):
         return int((value * 100).quantize(Decimal('1'), rounding=ROUND_CEILING))

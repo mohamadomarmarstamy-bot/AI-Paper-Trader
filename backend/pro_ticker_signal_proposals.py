@@ -62,9 +62,9 @@ def save_signal_proposal(payload, *, quote_fetcher, clock=None):
         if grade.get('status') != 'graded' or grade.get('signal') != 'BUY':
             raise ValueError('A BUY research grade is required for a long draft.')
         # Validate operator numbers BEFORE touching the provider.
-        from pro_ticker_workspace import hypothetical_proposal
+        from pro_ticker_workspace import hypothetical_proposal, validate_proposal_inputs
         sizing = {key: payload[key] for key in ('shares', 'stop_loss_percent', 'take_profit_percent')}
-        hypothetical_proposal({'symbol': review['symbol'], 'reference_price': '1', **sizing})
+        validate_proposal_inputs({'symbol': review['symbol'], 'reference_price': '1', **sizing})
         from pro_ticker_manual_signals import quote_snapshot
         raw = quote_fetcher(review['symbol'])
         if isinstance(raw, dict) and raw.get('symbol') not in (None, review['symbol']):

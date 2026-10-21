@@ -59,6 +59,13 @@ class SignalProposalTests(unittest.TestCase):
             with self.subTest(shares=shares),self.assertRaises(ValueError):self.save(shares=shares)
         self.quote.assert_not_called()
 
+    def test_protection_precision_is_validated_against_real_quote_not_dummy_price(self):
+        self.quote.return_value['p']=1000
+        result=self.save(stop_loss_percent='.001',take_profit_percent='.001')
+        self.assertEqual(result['proposal']['stop_price'],'999.9900')
+        self.assertEqual(result['proposal']['take_profit_price'],'1000.0100')
+        self.assertEqual(result['proposal']['estimated_stop_risk_cents'],2)
+
     def test_stale_quote_and_broker_failure_allow_same_intent_retry(self):
         self.quote.return_value={'p':10,'t':datetime.fromtimestamp(self.now-120,timezone.utc).isoformat()}
         with self.assertRaises(ValueError):self.save()
