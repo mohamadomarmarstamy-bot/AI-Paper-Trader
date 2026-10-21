@@ -61,6 +61,18 @@
             const p = document.createElement("p"), strong = document.createElement("strong");
             strong.textContent = label + ": "; p.appendChild(strong); p.appendChild(document.createTextNode(value == null || value === "" ? "Unavailable" : String(value))); node.appendChild(p);
         }
+        const draft = document.createElement("button");
+        draft.type = "button"; draft.textContent = "Draft an estimate for " + record.symbol;
+        draft.addEventListener("click", () => {
+            el("proposal-symbol").value = record.symbol;
+            // Research levels are historical, not verified current prices. Also
+            // clear the previous symbol's quantity and protection assumptions.
+            for (const id of ["price","shares","stop","target"]) el("proposal-" + id).value = "";
+            el("proposal-form").dispatchEvent(new Event("input", {bubbles:true}));
+            el("proposal-result").textContent = "Selected " + record.symbol + " from saved research. Enter a reference price and new risk assumptions; historical research is not current broker evidence.";
+            activate("trading"); el("proposal-price").focus();
+        });
+        node.appendChild(draft);
         activate("research");
     }
     function candidates() {
@@ -259,6 +271,8 @@
             if (result.paper !== true || result.hypothetical !== true || result.order_submitted !== false ||
                 result.order_execution_enabled !== false || result.budget_reserved !== false ||
                 typeof result.risk_limits_satisfied !== "boolean" || !Array.isArray(result.risk_limit_reasons) ||
+                result.risk_limit_reasons.some(reason => !["allocation_exceeds_pro_ticker_limit","estimated_stop_risk_exceeds_pro_ticker_limit"].includes(reason)) ||
+                result.risk_limits_satisfied !== (result.risk_limit_reasons.length === 0) ||
                 !Number.isSafeInteger(result.settings_revision) || result.settings_revision < 0 ||
                 typeof result.within_virtual_budget !== "boolean" || typeof result.reason !== "string" ||
                 ![result.allocation_cents,result.estimated_stop_risk_cents,result.available_virtual_cents].every(n=>Number.isSafeInteger(n)&&n>=0)) throw Error("Invalid proposal safety or amount data");
@@ -267,7 +281,10 @@
                 ". Estimated stop risk: " + money(result.estimated_stop_risk_cents) +
                 ". Available virtual funds: " + money(result.available_virtual_cents) +
                 (result.within_virtual_budget ? ". Within virtual allocation limit. " : ". BLOCKED: exceeds virtual allocation limit. ") +
-                (result.risk_limits_satisfied ? "Within Pro Ticker proposal limits. " : "BLOCKED by Pro Ticker proposal limits: " + result.risk_limit_reasons.join(", ") + ". ") +
+                (result.risk_limits_satisfied ? "Within Pro Ticker proposal limits. " : "BLOCKED by Pro Ticker proposal limits: " + result.risk_limit_reasons.map(reason => ({
+                    allocation_exceeds_pro_ticker_limit:"allocation exceeds your saved maximum",
+                    estimated_stop_risk_exceeds_pro_ticker_limit:"estimated stop risk exceeds your saved maximum"
+                }[reason])).join("; ") + ". ") +
                 "Settings revision: " + result.settings_revision + ". " +
                 result.reason + " No funds reserved; no order placed.";
         } catch (error) {

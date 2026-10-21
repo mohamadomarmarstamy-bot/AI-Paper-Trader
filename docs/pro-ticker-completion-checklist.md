@@ -10,6 +10,7 @@
 - [x] Research search, direction filter, score/symbol sorting and symbol deduplication.
 - [x] Inspect saved evidence; distinguish historical research from current AI evaluation.
 - [x] Hypothetical proposal calculator using operator reference prices and current virtual allocation limits.
+- [x] Research-to-proposal symbol handoff clears stale prices, share quantities and protection assumptions; historical source prices are never inferred as current quotes.
 - [x] Proposal requires owner session, same-origin JSON; never reserves budget or submits orders.
 - [x] Journal symbol/date filters and CSV export of posted share events.
 - [x] Reuse manual research intake and manual release approval/history controls.
