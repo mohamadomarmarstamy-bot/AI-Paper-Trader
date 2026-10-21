@@ -246,7 +246,7 @@
             settings = null; settingsControls(true); el("settings-status").textContent = "Unable to save: " + error.message;
         } finally { savingSettings = false; el("settings-reload").disabled = false; }
     });
-    el("refresh").addEventListener("click",()=> { refresh(); loadDiscovery(); loadSettings(); window.loadProTickerManualLab?.(); window.loadProTickerReleasePanel?.(); });
+    el("refresh").addEventListener("click",()=> { refresh(); loadDiscovery(); loadSettings(); window.loadProTickerManualLab?.(); window.loadProTickerReleasePanel?.(); window.loadProTickerSignals?.(); });
     let calculating = false, proposalVersion = 0;
     el("proposal-form").addEventListener("input", () => {
         proposalVersion += 1;

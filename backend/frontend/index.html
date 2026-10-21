@@ -1197,7 +1197,7 @@
 <div class="pt-tabs" role="tablist" aria-label="Pro Ticker workspace">
 <button type="button" role="tab" id="pt-tab-overview" aria-controls="pt-panel-overview" aria-selected="false" data-pt-tab="overview">Overview</button>
 <button type="button" role="tab" id="pt-tab-scanner" aria-controls="pt-panel-scanner" aria-selected="false" data-pt-tab="scanner">Scanner</button>
-<button type="button" role="tab" id="pt-tab-research" aria-controls="pt-panel-research" aria-selected="false" data-pt-tab="research">Research Lab</button>
+<button type="button" role="tab" id="pt-tab-signals" aria-controls="pt-panel-signals" aria-selected="false" data-pt-tab="signals">Manual Signals</button><button type="button" role="tab" id="pt-tab-research" aria-controls="pt-panel-research" aria-selected="false" data-pt-tab="research">Research Lab</button>
 <button type="button" role="tab" id="pt-tab-trading" aria-controls="pt-panel-trading" aria-selected="false" data-pt-tab="trading">PAPER Workspace</button>
 <button type="button" role="tab" id="pt-tab-journal" aria-controls="pt-panel-journal" aria-selected="false" data-pt-tab="journal">Trade Journal</button>
 <button type="button" role="tab" id="pt-tab-performance" aria-controls="pt-panel-performance" aria-selected="false" data-pt-tab="performance">Performance</button>
@@ -1224,11 +1224,19 @@
 <p id="pt-candidate-count" role="status"></p>
 <div class="pt-table">
 <table><thead><tr><th scope="col">Symbol</th><th scope="col">Recorded score</th><th scope="col">Confidence</th><th scope="col">Direction</th><th scope="col">Updated</th><th scope="col">Research</th></tr></thead><tbody id="pt-candidates"></tbody></table></div></div>
+<div class="panel pt-panel" role="tabpanel" id="pt-panel-signals" aria-labelledby="pt-tab-signals">
+<h3>Manual Pro Ticker signals</h3>
+<p>Enter one stock to capture its submission-time reference and save a provisional daily technical grade. This is a manual observation, not proof of an original Pro Ticker alert. PAPER auto-buy remains blocked until the execution lifecycle is verified.</p>
+<form id="pt-signal-form" class="pt-filters"><label>Stock symbol<input id="pt-signal-symbol" maxlength="10" pattern="[A-Za-z][A-Za-z0-9.\-]{0,9}" required autocomplete="off" placeholder="AAPL"></label><button type="submit" id="pt-signal-submit">Save &amp; grade stock</button><button type="button" id="pt-signal-refresh">Refresh saved reviews</button><button type="button" id="pt-signal-new">Start a new review</button></form>
+<p id="pt-signal-status" role="status" aria-live="polite">No reviews loaded.</p>
+<p>Grades A/B/C/D are versioned technical heuristics, not win probabilities or a trained AI forecast. Missing data is recorded as unavailable. Later trade outcomes must be measured separately before training.</p>
+<div class="pt-table"><table><thead><tr><th>Submitted</th><th>Symbol</th><th>Grade</th><th>Technical score</th><th>Quote status</th><th>Workflow</th><th>Evidence</th></tr></thead><tbody id="pt-signal-history"></tbody></table></div>
+<article id="pt-signal-detail"><p>Select a review to see its saved evidence and limitations.</p></article></div>
 <div class="panel pt-panel" role="tabpanel" id="pt-panel-research" aria-labelledby="pt-tab-research">
 <h3>Research detail</h3>
 <article id="pt-research-detail">
 <p>Select a saved candidate in Scanner to inspect its evidence.</p></article>
-<h3>Manual symbol intake</h3>
+<h3>Bulk research symbol intake (ungraded)</h3>
 <div class="panel" style="padding:1.5rem">
 
 <form id="pro-ticker-manual-form">
@@ -2064,6 +2072,7 @@
     <script src="js/pro-ticker-manual.js"></script>
     <script src="js/pro-ticker-release.js"></script>
     <script src="js/pro-ticker-workspace.js"></script>
+    <script src="js/pro-ticker-signals.js"></script>
     <script src="js/strategy.js"></script>
     <script src="js/jarvis.js"></script>
     <script src="js/profile.js"></script>
@@ -2171,7 +2180,7 @@ document.addEventListener(
                 }
 
                 if (sectionId === "pro-ticker-manual-section") {
-                    window.setTimeout(() => { window.loadProTickerManualLab?.(); window.loadProTickerReleasePanel?.(); window.loadProTickerWorkspace?.(); }, 80);
+                    window.setTimeout(() => { window.loadProTickerManualLab?.(); window.loadProTickerReleasePanel?.(); window.loadProTickerWorkspace?.(); window.loadProTickerSignals?.(); }, 80);
                 }
 
                 if (sectionId === "scanner-section") {

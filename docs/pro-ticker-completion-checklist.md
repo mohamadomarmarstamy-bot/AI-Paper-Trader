@@ -82,3 +82,26 @@ retrying. Browser refresh preserves unsaved edits; explicit reload discards them
 Discovery captures its settings revision when it starts; changing settings does
 not alter a run in progress. These fields cannot enable live/PAPER execution,
 automatic discovery, or automatic budget release.
+
+## Manual Signals workflow
+
+The dedicated Manual Signals tab accepts one stock and a stable request UUID.
+It stores an immutable submission-time reference quote and a provisional grade
+from the existing daily technical analyzer, including its version, raw -6..+6
+score, heuristic confidence, indicators and reasons. Grades A/B/C/D are not a
+trained model or calibrated win probabilities. Missing, malformed, stale and
+future market data are distinguished; missing analysis never produces a grade.
+Indicator as-of time is unknown, so these rows are not training-ready.
+
+A duplicate request returns the original review without refreshing its score or
+reference price. A different request for a stock already being graded is blocked.
+Expired workers cannot overwrite finalized reviews. No browser-provided grade,
+quote, outcome, execution flag or identity is accepted. Broker order submission
+is never called by this workflow.
+
+Still required for the user's enter -> PAPER buy -> learn target: explicit
+per-entry sizing/risk admission, durable order intent and client-order-ID retry
+resolution, verified PAPER broker fills and protection, outcome attachment to
+those exact fills, loss-inclusive point-in-time learning data, and independently
+validated model evaluation. The manual grade does not enable automatic buying,
+change model parameters or claim to detect original Pro Ticker alerts.

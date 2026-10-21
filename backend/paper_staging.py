@@ -74,14 +74,17 @@ def create_staging_app(*, _data_directory='/staging-data'):
 <link rel="stylesheet" href="/style.css"></head><body><main style="padding:24px;max-width:1050px;margin:auto">
 <p role="note">Isolated PAPER staging. Broker order submissions and background trading are disabled.</p>'''
             + section + '''</main><script src="/js/pro-ticker-manual.js"></script>
-<script src="/js/pro-ticker-release.js"></script><script src="/js/pro-ticker-workspace.js"></script><script>
-window.loadProTickerManualLab(); window.loadProTickerReleasePanel(); window.loadProTickerWorkspace();</script></body></html>''')
+<script src="/js/pro-ticker-release.js"></script><script src="/js/pro-ticker-workspace.js"></script><script src="/js/pro-ticker-signals.js"></script><script>
+window.loadProTickerManualLab(); window.loadProTickerReleasePanel(); window.loadProTickerWorkspace(); window.loadProTickerSignals();</script></body></html>''')
 
     app.add_api_route('/style.css', main.frontend_style, methods=['GET'])
     app.mount('/js', StaticFiles(directory=str(Path(main.FRONTEND_DIR) / 'js')), name='js')
     app.add_api_route('/auto-trader/pro-ticker-manual-submissions', main.list_auto_trader_pro_ticker_manual_submissions, methods=['GET'])
     app.add_api_route('/auto-trader/pro-ticker-manual-submissions', main.auto_trader_pro_ticker_manual_submissions, methods=['POST'])
     app.add_api_route('/auto-trader/pro-ticker-paper-budget', main.pro_ticker_paper_budget, methods=['GET'])
+    from pro_ticker_manual_signals import build_manual_signal_router
+    app.include_router(build_manual_signal_router(require_session=main.require_app_session,
+        quote_fetcher=main.fetch_pro_ticker_manual_signal_quote, analyzer=lambda symbol: main.analyze_symbol(symbol)))
     from pro_ticker_workspace import build_workspace_router
     app.include_router(build_workspace_router(require_session=main.require_app_session))
     app.include_router(build_paper_release_router(

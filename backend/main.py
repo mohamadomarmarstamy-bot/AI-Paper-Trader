@@ -16127,6 +16127,21 @@ def make_pro_ticker_manual_release_reader():
     )
 
 
+def fetch_pro_ticker_manual_signal_quote(symbol):
+    data = alpaca_market_data_request("GET", f"/v2/stocks/{symbol}/trades/latest", timeout=3.0)
+    if not isinstance(data, dict) or not isinstance(data.get("trade"), dict):
+        raise ValueError("Latest trade unavailable.")
+    return data["trade"]
+
+
+from pro_ticker_manual_signals import build_manual_signal_router
+app.include_router(build_manual_signal_router(
+    require_session=require_app_session,
+    quote_fetcher=fetch_pro_ticker_manual_signal_quote,
+    analyzer=lambda symbol: analyze_symbol(symbol),
+))
+
+
 from pro_ticker_workspace import build_workspace_router
 app.include_router(build_workspace_router(require_session=require_app_session))
 

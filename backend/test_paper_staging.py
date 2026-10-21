@@ -87,7 +87,7 @@ class IsolatedStagingTests(unittest.TestCase):
             self.assertEqual(response.json()['scope'], 'pro_ticker_strategy_ledger')
             html = self.request(app, 'GET', '/', authenticated=True).text
             self.assertIn('/js/pro-ticker-workspace.js', html)
-            self.assertEqual(html.count('role="tabpanel"'), 8)
+            self.assertEqual(html.count('role="tabpanel"'), 9)
             payload = dict(symbol='AAPL', reference_price='10', shares=2,
                            stop_loss_percent='2', take_profit_percent='4')
             response = self.request(app, 'POST', '/auto-trader/pro-ticker/proposal',
@@ -120,6 +120,27 @@ class IsolatedStagingTests(unittest.TestCase):
             self.assertEqual(self.request(recreated, 'PUT', path, authenticated=True, json=payload,
                 headers={'Origin': 'https://staging.test'}).status_code, 409)
             self.assertEqual(self.request(recreated, 'GET', '/auto-trader/settings', authenticated=True).status_code, 404)
+
+    def test_manual_signal_uses_signed_owner_read_providers_and_never_submits_orders(self):
+        from datetime import datetime, timezone
+        import uuid
+        from test_pro_ticker_manual_signals import analysis
+        app = self.app(); path = '/auto-trader/pro-ticker/manual-signals'
+        payload = {'symbol': 'AAPL', 'request_id': str(uuid.uuid4())}
+        self.assertEqual(self.request(app, 'GET', path).status_code, 401)
+        with patch.object(self.main, 'alpaca_market_data_request', return_value={'trade': {
+                'p': 10.5, 't': datetime.now(timezone.utc).isoformat()}}), \
+             patch.object(self.main, 'analyze_symbol', return_value=analysis()) as analyze, \
+             patch.object(self.main, 'alpaca_paper_request', side_effect=AssertionError('order access forbidden')) as broker:
+            first = self.request(app, 'POST', path, authenticated=True, json=payload,
+                headers={'Origin': 'https://staging.test'})
+            self.assertEqual(first.status_code, 200)
+            self.assertEqual(first.json()['signal']['entry_grade']['grade'], 'A')
+            retry = self.request(app, 'POST', path, authenticated=True, json=payload,
+                headers={'Origin': 'https://staging.test'})
+            self.assertTrue(retry.json()['duplicate']); analyze.assert_called_once()
+            self.assertEqual(self.request(app, 'GET', path, authenticated=True).json()['total_count'], 1)
+            broker.assert_not_called()
 
     def test_order_account_and_email_controls_are_absent(self):
         app = self.app()
