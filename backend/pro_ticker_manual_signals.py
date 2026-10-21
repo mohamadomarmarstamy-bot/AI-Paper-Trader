@@ -200,4 +200,6 @@ def build_manual_signal_router(*,require_session,quote_fetcher,analyzer):
         except Exception:raise HTTPException(503,'Signal review unavailable. Refresh saved status before retrying.') from None
     from pro_ticker_order_intents import build_order_intent_router
     router.include_router(build_order_intent_router(require_session=require_session,quote_fetcher=quote_fetcher))
+    from pro_ticker_research_dataset import build_research_dataset_router
+    router.include_router(build_research_dataset_router(require_session=require_session))
     return router

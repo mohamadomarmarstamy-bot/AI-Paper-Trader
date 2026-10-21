@@ -11,6 +11,33 @@
     const intentTable=document.createElement("table"),intentHead=document.createElement("thead"),intentHeader=document.createElement("tr"),intentScroller=document.createElement("div");
     for(const text of ["Saved","Symbol","Shares","Virtual allocation","State","Broker submission"]){const th=document.createElement("th");th.textContent=text;intentHeader.appendChild(th);}
     intentHead.appendChild(intentHeader);intentTable.append(intentHead,intentRows);intentScroller.style.overflowX="auto";intentScroller.appendChild(intentTable);intentHistory.id="pt-order-intents";intentHistory.append(intentTitle,intentStatus,intentScroller);document.getElementById("pt-panel-trading")?.appendChild(intentHistory);
+    const researchPanel=document.createElement("article"),researchTitle=document.createElement("h3"),researchStatus=document.createElement("p"),exportButton=document.createElement("button");
+    researchPanel.id="pt-research-export";researchTitle.textContent="Research evidence & training readiness";researchStatus.setAttribute("role","status");exportButton.type="button";exportButton.textContent="Export research evidence (CSV)";exportButton.disabled=true;researchPanel.append(researchTitle,researchStatus,exportButton);document.getElementById("pt-panel-performance")?.appendChild(researchPanel);
+    let exporting=false;
+    async function researchQuality(current){
+        exportButton.disabled=true;researchStatus.textContent="Checking stored research evidence…";
+        try{
+            const response=await fetch(endpoint+"/dataset",{credentials:"same-origin",cache:"no-store"});if(!response.ok)throw Error("Dataset request failed ("+response.status+").");
+            const data=await response.json();
+            if(data.paper!==true||data.version!=="pro_ticker_research_evidence_v1"||data.kind!=="forward_quote_return_not_trade_pnl"||data.training_enabled!==false||data.model_updated!==false||data.training_ready_samples!==0||![data.total_count,data.window_count,data.graded_count,data.evaluated_count,data.unevaluated_count].every(n=>Number.isSafeInteger(n)&&n>=0)||data.window_count>data.total_count||data.graded_count>data.window_count||data.evaluated_count+data.unevaluated_count!==data.window_count||data.has_more!==(data.total_count>data.window_count))throw Error("Invalid research readiness evidence");
+            if(current!==version)return;
+            researchStatus.textContent="Export window: "+data.window_count+" of "+data.total_count+" reviews; "+data.graded_count+" graded, "+data.evaluated_count+" with a separate forward quote. Training-ready samples: 0. "+(data.has_more?"Latest 500 only; export is incomplete. ":"")+"Gains, losses and unevaluated reviews are retained. Entry features and future outcomes are separate. Indicator timing, actual executions, costs and out-of-sample evaluation remain unverified. Research returns are not trade P&L; no AI model is trained.";
+            exportButton.disabled=exporting;
+        }catch(error){if(current===version){researchStatus.textContent="Research export unavailable: "+error.message;exportButton.disabled=true;}}
+    }
+    exportButton.addEventListener("click",async()=>{
+        if(exporting||exportButton.disabled)return;exporting=true;exportButton.disabled=true;
+        try{
+            const response=await fetch(endpoint+"/dataset?format=csv",{credentials:"same-origin",cache:"no-store"});
+            if(!response.ok||!response.headers.get("content-type")?.startsWith("text/csv"))throw Error("CSV request failed");
+            const number=name=>{const raw=response.headers.get(name);if(raw===null||!/^\d+$/.test(raw)||!Number.isSafeInteger(Number(raw)))throw Error("Missing export counts");return Number(raw);};
+            const total=number("X-Research-Total-Count"),count=number("X-Research-Window-Count"),hasMore=response.headers.get("X-Research-Has-More");
+            if(count>total||!["true","false"].includes(hasMore)||(hasMore==="true")!==(total>count))throw Error("Invalid export window");
+            const url=URL.createObjectURL(await response.blob()),link=document.createElement("a");link.href=url;link.download="pro-ticker-research-evidence.csv";document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+            researchStatus.textContent="Downloaded "+count+" of "+total+" reviews. "+(hasMore==="true"?"Latest 500 only; incomplete export. ":"")+"Audit/research evidence only: training remains disabled and quote changes are not trade P&L.";
+        }catch(error){researchStatus.textContent="Research download failed: "+error.message;}
+        finally{exporting=false;exportButton.disabled=false;}
+    });
     function validateIntent(intent,proposal){
         if(!intent||intent.paper!==true||intent.execution_enabled!==false||intent.order_submitted!==false||intent.automatic_release_enabled!==false||!["prepared","canceled"].includes(intent.status)||intent.budget_reserved!==(intent.status==="prepared")||typeof intent.id!=="string"||typeof intent.reservation_id!=="string"||!intent.plan||intent.plan.order_submitted!==false||intent.plan.order_execution_enabled!==false||!Number.isSafeInteger(intent.plan.allocation_cents)||intent.plan.allocation_cents<1||!Number.isSafeInteger(intent.plan.shares)||intent.plan.shares<1||typeof intent.plan.symbol!=="string")throw Error("Invalid PAPER allocation evidence");
         if(proposal&&(intent.proposal_id!==proposal.request_id||intent.plan.symbol!==proposal.symbol||intent.plan.shares!==proposal.shares||intent.plan.allocation_cents>proposal.allocation_cents))throw Error("Allocation does not match saved draft");
@@ -146,6 +173,7 @@
     async function refresh(){
         const current=++version;
         void refreshIntents();
+        void researchQuality(current);
         el("status").textContent="Loading saved signal reviews…";
         try{
             const response=await fetch(endpoint,{credentials:"same-origin",cache:"no-store"});if(!response.ok)throw Error("History request failed ("+response.status+").");

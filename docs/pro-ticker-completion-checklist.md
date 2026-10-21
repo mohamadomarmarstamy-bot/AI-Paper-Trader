@@ -196,3 +196,35 @@ app recreation verifies intent/reservation persistence without broker calls.
 Browser fixtures exercise lost allocation confirmation, unchanged retry, explicit
 cancellation and desktop/mobile history. Hosted restart/account validation still
 requires the separately documented access and approval.
+
+## Research evidence export and training readiness
+
+Performance now includes authenticated JSON/CSV research evidence export and a
+readiness summary. A consistent database snapshot contains the latest 500 manual
+reviews, preserving graded, unavailable and unevaluated rows, as well as gains,
+losses and flat forward quotes. The full count and limited export window are
+explicit; no outcome-based filter selects only successful examples.
+
+Entry features are whitelisted into a separate object from later outcomes.
+Original reference timestamps and versioned grades remain unchanged. Every row
+includes explicit training exclusions: unverified indicator as-of times, reference
+preceding analysis completion, absent verified execution outcomes, unmodeled
+costs/corporate actions, manual sample-selection bias and missing out-of-sample
+evaluation. Training-ready samples stay zero; exports do not train or alter any
+model. CSV textual formula injection is escaped while negative numeric returns
+remain numeric. Authentication, no-store headers, bounded snapshots, CSV download
+and desktop/mobile readiness behavior are tested with synthetic fixtures.
+
+### Next implementation priorities after these checkpoints
+
+1. Broker admission/uncertain submission recovery using the reservation-specific
+   client order ID, isolated from the original trader. Actual order submission
+   stays disabled until a dedicated PAPER account and tested protection exist.
+2. Priced verified executions and reservation-linked closed-trade outcomes;
+   measured journal/performance UI must not use quote research as trading P/L.
+3. Full simulated order -> partial fills -> protection -> exit -> reconciliation
+   -> owner release -> priced journal integration through authenticated HTTP/UI.
+4. Independent fresh scanner jobs and chronologically evaluated signal research.
+5. Hosted persistence and representative database-export validation. New hosted
+   deployments require explicit approval; production PAPER credentials cannot be
+   reused for staging.

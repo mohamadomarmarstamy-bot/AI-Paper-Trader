@@ -168,6 +168,15 @@ class IsolatedStagingTests(unittest.TestCase):
                 json={'confirmed':True},headers={'Origin':'https://staging.test'})
             self.assertEqual(canceled.status_code,200)
             self.assertFalse(canceled.json()['intent']['budget_reserved'])
+            dataset_path=path+'/dataset'
+            self.assertEqual(self.request(reopened,'GET',dataset_path).status_code,401)
+            dataset=self.request(reopened,'GET',dataset_path,authenticated=True).json()
+            self.assertEqual(dataset['total_count'],1)
+            self.assertEqual(dataset['training_ready_samples'],0)
+            self.assertEqual(dataset['rows'][0]['entry_features']['score'],4)
+            exported=self.request(reopened,'GET',dataset_path+'?format=csv',authenticated=True)
+            self.assertEqual(exported.status_code,200)
+            self.assertEqual(exported.headers['x-research-window-count'],'1')
             broker.assert_not_called()
 
     def test_order_account_and_email_controls_are_absent(self):
