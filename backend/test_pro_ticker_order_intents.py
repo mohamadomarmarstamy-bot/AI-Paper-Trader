@@ -45,6 +45,8 @@ class OrderIntentTests(unittest.TestCase):
         self.assertFalse(intent['automatic_release_enabled']);self.assertTrue(plan['budget_reserved'])
         self.assertEqual(plan['draft_id'],self.draft['request_id']);self.assertEqual(plan['entry_grade'],self.draft['entry_grade'])
         self.assertEqual(plan['market_snapshot']['price'],10.5)
+        self.assertEqual(intent['audit_events'][0]['action'],'virtual_budget_reserved')
+        self.assertEqual(intent['audit_events'][0]['actor'],'authenticated-app-owner')
         snapshot=workspace_snapshot();self.assertEqual(snapshot['budget']['committed_cents'],2100)
         with closing(database.get_connection()) as conn:
             row=conn.execute('SELECT * FROM pro_ticker_paper_reservations').fetchone()
@@ -153,6 +155,7 @@ class OrderIntentTests(unittest.TestCase):
         intent=self.prepare()['intent'];result=cancel_prepared_intent(intent['id'],{'confirmed':True})
         self.assertFalse(result['intent']['budget_reserved']);self.assertEqual(result['intent']['status'],'canceled')
         self.assertEqual(result['intent']['virtual_funds_returned_cents'],2100)
+        self.assertEqual([e['action'] for e in result['intent']['audit_events']],['virtual_budget_reserved','owner_canceled_never_submitted'])
         self.assertEqual(workspace_snapshot()['budget']['committed_cents'],0)
         self.assertTrue(cancel_prepared_intent(intent['id'],{'confirmed':True})['duplicate'])
         retry=self.prepare();self.assertTrue(retry['duplicate']);self.assertEqual(retry['intent']['status'],'canceled')
@@ -188,6 +191,13 @@ class OrderIntentTests(unittest.TestCase):
         with self.assertRaises(Exception):cancel_prepared_intent(intent['id'],{'confirmed':True})
         self.assertEqual(list_order_intents()['intents'][0]['status'],'prepared')
         self.assertEqual(workspace_snapshot()['budget']['committed_cents'],2100)
+
+    def test_released_ledger_without_owner_release_proof_cannot_look_closed(self):
+        intent=self.prepare()['intent']
+        with closing(database.get_connection()) as conn:
+            conn.execute("UPDATE pro_ticker_paper_reservations SET status='released',broker_order_id='unverified-order'");conn.commit()
+        with self.assertRaises(IntentConflict):list_order_intents()
+        with self.assertRaises(IntentConflict):cancel_prepared_intent(intent['id'],{'confirmed':True})
 
     def test_http_owner_origin_content_type_and_provider_failure(self):
         app=FastAPI()

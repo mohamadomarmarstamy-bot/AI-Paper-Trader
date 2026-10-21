@@ -228,3 +228,31 @@ and desktop/mobile readiness behavior are tested with synthetic fixtures.
 5. Hosted persistence and representative database-export validation. New hosted
    deployments require explicit approval; production PAPER credentials cannot be
    reused for staging.
+
+## Allocation-to-accounting integration checkpoint
+
+Intent reads now reconcile their displayed state against the actual reservation
+ledger in a consistent read transaction. Verified broker links appear as linked,
+and released linked reservations appear closed only with an existing owner
+release event for that allocation. Mismatched reservation identity, quantity,
+client ID or unsupported release evidence fails closed. Broker-linked/closed
+intents never display the never-submitted cancellation action. Original draft
+and intent plans stay immutable; no broker submission service is enabled.
+
+A combined integration test drives authenticated HTTP manual grading, draft
+creation, allocation, workspace/history and explicit release approval. A trusted
+synthetic broker fixture separately exercises the existing entry/exit ownership
+links, partial fills, duplicate/stale protection, open-position release rejection,
+completed exits and exactly-once owner-approved release. It verifies the journal,
+virtual balance, unchanged entry grade and zero training-ready samples afterward.
+Browser fixtures cover linked/closed intent rendering on desktop/mobile.
+
+This is NOT a full execution end-to-end test: broker submission, protective order
+placement, scanner automation, actual fills/prices and live hosted persistence
+are not exercised or implemented by this checkpoint. Quote research remains
+separate from unavailable realized trading profit.
+
+Allocation inspection also exposes the persisted owner audit events and their
+server-recorded times. Read-only status changes do not fabricate new owner
+actions; the existing Budget release history remains the audit for a linked
+reservation's approved closure.

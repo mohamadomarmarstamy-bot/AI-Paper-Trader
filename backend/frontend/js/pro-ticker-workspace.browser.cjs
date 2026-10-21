@@ -140,6 +140,20 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.locator('#pt-signal-detail input[type="checkbox"]').check();await page.getByRole('button',{name:'Cancel unsubmitted allocation',exact:true}).click();
    await page.waitForFunction(()=>document.getElementById('pt-signal-detail').textContent.includes('Allocation canceled. Returned virtual funds are not trading profit'));
    assert.equal(savedSignal.order_intent.status,'canceled');assert.equal(data.budget.committed_cents,10000);
+   const canceledIntent=savedSignal.order_intent;
+   // Read-only fixture projections exercise how independent broker accounting
+   // is rendered. The browser does not create an order or release broker funds.
+   savedSignal.order_intent={...canceledIntent,status:'broker_linked',budget_reserved:true,order_submitted:true};
+   await page.evaluate(()=>window.loadProTickerSignals());await page.getByRole('button',{name:'Inspect AAPL review',exact:true}).click();
+   assert.match(await page.locator('#pt-signal-detail').innerText(),/A broker order is linked/);
+   assert.equal(await page.getByRole('button',{name:'Cancel unsubmitted allocation',exact:true}).count(),0);
+   await page.locator('#pt-tab-trading').click();await page.waitForFunction(()=>document.getElementById('pt-order-intents').textContent.includes('Broker order linked; reconcile fills'));
+   savedSignal.order_intent={...canceledIntent,status:'closed',budget_reserved:false,order_submitted:true};
+   await page.evaluate(()=>window.loadProTickerSignals());await page.waitForFunction(()=>document.getElementById('pt-order-intents').textContent.includes('Closed; owner-approved funds returned'));
+   await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-reconciled-intent.png',fullPage:true});
+   await page.locator('#pt-tab-signals').click();await page.getByRole('button',{name:'Inspect AAPL review',exact:true}).click();
+   assert.match(await page.locator('#pt-signal-detail').innerText(),/Allocation state: closed/);
+
 
    await page.getByRole('button',{name:'Check 24+ hour forward quote',exact:true}).click();await page.waitForFunction(()=>document.getElementById('pt-signal-status').textContent.includes('Wait until a fresh market quote'));assert.equal(savedSignal.forward_outcome,undefined);
    forwardDue=true;await page.getByRole('button',{name:'Check 24+ hour forward quote',exact:true}).click();await page.waitForFunction(()=>document.getElementById('pt-signal-status').textContent.includes('did not update an AI model'));

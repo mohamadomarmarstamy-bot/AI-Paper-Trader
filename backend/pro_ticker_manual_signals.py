@@ -83,6 +83,7 @@ def _record(row,now):
 
 def list_manual_signals():
     with closing(database.get_connection()) as conn:
+        conn.execute('BEGIN')
         exists=conn.execute("SELECT 1 FROM sqlite_master WHERE name='pro_ticker_manual_signal_reviews'").fetchone()
         rows=conn.execute('SELECT * FROM pro_ticker_manual_signal_reviews ORDER BY submitted_at DESC,request_id DESC LIMIT 100').fetchall() if exists else []
         count=conn.execute('SELECT COUNT(*) FROM pro_ticker_manual_signal_reviews').fetchone()[0] if exists else 0
@@ -138,6 +139,7 @@ def submit_manual_signal(payload, *, quote_fetcher, analyzer, clock=time.time):
 def list_result(row,now):
     from pro_ticker_signal_learning import outcomes_for_signals
     with closing(database.get_connection()) as conn:
+        conn.execute('BEGIN')
         outcome=outcomes_for_signals(conn,[row['request_id']]).get(row['request_id'])
         from pro_ticker_signal_proposals import proposals_for_signals
         proposal=proposals_for_signals(conn,[row['request_id']]).get(row['request_id'])

@@ -25,20 +25,46 @@ class IntentConflict(ValueError):
     pass
 
 
-def _record(row):
+def _record(conn,row):
     value=dict(row);plan=json.loads(value.pop('plan_json'))
-    return {**value, 'plan': plan, 'paper': True,
-            'order_submitted': True if row['status']=='submitted' else None if row['status'] in ('submitting','uncertain') else False, 'execution_enabled': False,
-            'budget_reserved': row['status'] != 'canceled', 'automatic_release_enabled': False,
-            'virtual_funds_returned_cents': plan['allocation_cents'] if row['status']=='canceled' else 0,
-            'reason': 'Virtual allocation only. Broker submission is disabled; no account, market-session, order/position or protection admission has been granted.'}
+    reservation=conn.execute('SELECT * FROM pro_ticker_paper_reservations WHERE id=?',(row['reservation_id'],)).fetchone()
+    if not reservation or reservation['symbol']!=plan['symbol'] or reservation['notional_cents']!=plan['allocation_cents'] or reservation['expected_shares']!=plan['shares'] or row['client_order_id']!=pro_ticker_client_order_id(reservation['id']):
+        raise IntentConflict('Intent and reservation evidence differ.')
+    status=row['status'];linked=bool(reservation['broker_order_id'])
+    if row['broker_order_id'] is not None and row['broker_order_id']!=reservation['broker_order_id']:
+        raise IntentConflict('Intent broker identity differs from reservation.')
+    if status=='submitted' and not linked:raise IntentConflict('Submitted intent lacks broker ownership link.')
+    if status=='prepared' and row['attempt_started_at'] is not None:status='uncertain'
+    if status=='canceled':
+        if reservation['status']!='released' or linked or row['attempt_started_at'] is not None or row['broker_order_id'] is not None:
+            raise IntentConflict('Canceled intent has conflicting submission evidence.')
+    elif linked:
+        if reservation['status'] in ('submitted','filled'):status='broker_linked'
+        elif reservation['status']=='failed':status='broker_terminal_unfilled'
+        elif reservation['status']=='released':
+            exists=conn.execute("SELECT 1 FROM sqlite_master WHERE name='pro_ticker_budget_release_events'").fetchone()
+            if not exists or not conn.execute('SELECT 1 FROM pro_ticker_budget_release_events WHERE reservation_id=? AND released_cents=?',(row['reservation_id'],plan['allocation_cents'])).fetchone():
+                raise IntentConflict('Released linked intent lacks manual release evidence.')
+            status='closed'
+        else:raise IntentConflict('Linked intent has inconsistent reservation state.')
+    elif reservation['status']!='reserved':
+        raise IntentConflict('Unsubmitted intent has inconsistent reservation state.')
+    reserved=reservation['status'] in ('reserved','submitted','filled')
+    audit=[{**dict(event),'evidence':json.loads(event['evidence_json'])} for event in conn.execute('SELECT id,action,recorded_at,actor,evidence_json FROM pro_ticker_order_intent_events WHERE intent_id=? ORDER BY id',(row['id'],))]
+    for event in audit:event.pop('evidence_json')
+    return {**value,'intent_status':row['status'],'status':status,'plan':plan,'paper':True,
+            'reservation_status':reservation['status'],'linked_broker_order_id':reservation['broker_order_id'],'audit_events':audit,
+            'order_submitted': True if linked else None if status in ('submitting','uncertain') else False,
+            'execution_enabled':False,'budget_reserved':reserved,'automatic_release_enabled':False,
+            'virtual_funds_returned_cents':plan['allocation_cents'] if status in ('canceled','closed') else 0,
+            'reason':'State reconciled with the reservation ledger. This workspace does not submit broker orders. Returned virtual funds are not trading profit.'}
 
 
 def intents_for_proposals(conn, ids):
     if not ids or not conn.execute("SELECT 1 FROM sqlite_master WHERE name='pro_ticker_order_intents'").fetchone():
         return {}
     rows=conn.execute('SELECT * FROM pro_ticker_order_intents WHERE proposal_id IN ('+','.join('?' for _ in ids)+')', ids)
-    return {r['proposal_id']: _record(r) for r in rows}
+    return {r['proposal_id']: _record(conn,r) for r in rows}
 
 
 def list_order_intents():
@@ -47,8 +73,9 @@ def list_order_intents():
         exists=conn.execute("SELECT 1 FROM sqlite_master WHERE name='pro_ticker_order_intents'").fetchone()
         rows=conn.execute('SELECT * FROM pro_ticker_order_intents ORDER BY created_at DESC,id DESC LIMIT 200').fetchall() if exists else []
         count=conn.execute('SELECT COUNT(*) FROM pro_ticker_order_intents').fetchone()[0] if exists else 0
+        records=[_record(conn,r) for r in rows]
     return {'paper':True,'execution_enabled':False,'automatic_release_enabled':False,
-            'intents':[_record(r) for r in rows],'total_count':count,'has_more':count>len(rows)}
+            'intents':records,'total_count':count,'has_more':count>len(rows)}
 
 
 def _audit(conn, intent_id, action, now, evidence):
@@ -68,7 +95,7 @@ def prepare_order_intent(payload, *, quote_fetcher, clock=None):
             if row:
                 if row['id']!=intent_id or row['proposal_id']!=proposal_id:
                     raise IntentConflict('Request or draft already has an allocation intent.')
-                return {'paper':True,'duplicate':True,'intent':_record(row)}
+                return {'paper':True,'duplicate':True,'intent':_record(conn,row)}
         prior=existing()
         if prior:return prior
         if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='pro_ticker_signal_proposals'").fetchone():
@@ -107,7 +134,7 @@ def prepare_order_intent(payload, *, quote_fetcher, clock=None):
                      (intent_id,proposal_id,reservation_id,pro_ticker_client_order_id(reservation_id),now,now,json.dumps(plan,allow_nan=False)))
         _audit(conn,intent_id,'virtual_budget_reserved',now,{'reservation_id':reservation_id,'notional_cents':plan['allocation_cents'],'broker_submission_enabled':False})
         if not quote_snapshot(raw,now=clock())['fresh']:raise ValueError('Quote expired while preparing allocation.')
-        result=_record(conn.execute('SELECT * FROM pro_ticker_order_intents WHERE id=?',(intent_id,)).fetchone())
+        result=_record(conn,conn.execute('SELECT * FROM pro_ticker_order_intents WHERE id=?',(intent_id,)).fetchone())
         conn.commit()
         return {'paper':True,'duplicate':False,'intent':result}
 
@@ -120,7 +147,7 @@ def cancel_prepared_intent(intent_id, payload):
         _init(conn);conn.executescript(_SCHEMA);conn.execute('BEGIN IMMEDIATE')
         row=conn.execute('SELECT * FROM pro_ticker_order_intents WHERE id=?',(intent_id,)).fetchone()
         if row is None:raise ValueError('Unknown order intent.')
-        if row['status']=='canceled':return {'paper':True,'duplicate':True,'intent':_record(row)}
+        if row['status']=='canceled':return {'paper':True,'duplicate':True,'intent':_record(conn,row)}
         if row['status']!='prepared' or row['attempt_started_at'] is not None or row['broker_order_id'] is not None:
             raise IntentConflict('Submission evidence requires independent broker reconciliation; funds remain reserved.')
         reservation=conn.execute('SELECT * FROM pro_ticker_paper_reservations WHERE id=?',(row['reservation_id'],)).fetchone()
@@ -137,7 +164,7 @@ def cancel_prepared_intent(intent_id, payload):
         conn.execute("UPDATE pro_ticker_paper_reservations SET status='released',updated_at=?,note='Owner canceled never-submitted Pro Ticker intent' WHERE id=?",(now,row['reservation_id']))
         conn.execute("UPDATE pro_ticker_order_intents SET status='canceled',updated_at=? WHERE id=?",(now,intent_id))
         _audit(conn,intent_id,'owner_canceled_never_submitted',now,{'reservation_id':row['reservation_id'],'virtual_funds_returned_cents':plan['allocation_cents'],'trading_profit':False,'submission_attempt_started':False})
-        result=_record(conn.execute('SELECT * FROM pro_ticker_order_intents WHERE id=?',(intent_id,)).fetchone());conn.commit()
+        result=_record(conn,conn.execute('SELECT * FROM pro_ticker_order_intents WHERE id=?',(intent_id,)).fetchone());conn.commit()
         return {'paper':True,'duplicate':False,'intent':result}
 
 

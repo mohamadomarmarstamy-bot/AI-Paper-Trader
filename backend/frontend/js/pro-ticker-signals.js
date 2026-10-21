@@ -39,7 +39,8 @@
         finally{exporting=false;exportButton.disabled=false;}
     });
     function validateIntent(intent,proposal){
-        if(!intent||intent.paper!==true||intent.execution_enabled!==false||intent.order_submitted!==false||intent.automatic_release_enabled!==false||!["prepared","canceled"].includes(intent.status)||intent.budget_reserved!==(intent.status==="prepared")||typeof intent.id!=="string"||typeof intent.reservation_id!=="string"||!intent.plan||intent.plan.order_submitted!==false||intent.plan.order_execution_enabled!==false||!Number.isSafeInteger(intent.plan.allocation_cents)||intent.plan.allocation_cents<1||!Number.isSafeInteger(intent.plan.shares)||intent.plan.shares<1||typeof intent.plan.symbol!=="string")throw Error("Invalid PAPER allocation evidence");
+        if(!intent||intent.paper!==true||intent.execution_enabled!==false||intent.automatic_release_enabled!==false||!["prepared","canceled","broker_linked","closed","broker_terminal_unfilled"].includes(intent.status)||intent.budget_reserved!==(["prepared","broker_linked"].includes(intent.status))||intent.order_submitted!==(["broker_linked","closed","broker_terminal_unfilled"].includes(intent.status))||typeof intent.id!=="string"||typeof intent.reservation_id!=="string"||!intent.plan||intent.plan.order_submitted!==false||intent.plan.order_execution_enabled!==false||!Number.isSafeInteger(intent.plan.allocation_cents)||intent.plan.allocation_cents<1||!Number.isSafeInteger(intent.plan.shares)||intent.plan.shares<1||typeof intent.plan.symbol!=="string")throw Error("Invalid PAPER allocation evidence");
+        if(intent.audit_events!==undefined&&(!Array.isArray(intent.audit_events)||intent.audit_events.some(event=>!event||!["virtual_budget_reserved","owner_canceled_never_submitted"].includes(event.action)||typeof event.actor!=="string"||!Number.isFinite(Date.parse(event.recorded_at)))))throw Error("Invalid allocation audit history");
         if(proposal&&(intent.proposal_id!==proposal.request_id||intent.plan.symbol!==proposal.symbol||intent.plan.shares!==proposal.shares||intent.plan.allocation_cents>proposal.allocation_cents))throw Error("Allocation does not match saved draft");
     }
     async function refreshIntents(){
@@ -48,15 +49,23 @@
             const response=await fetch("/auto-trader/pro-ticker/order-intents",{credentials:"same-origin",cache:"no-store"});if(!response.ok)throw Error("History request failed ("+response.status+").");
             const data=await response.json();if(data.paper!==true||data.execution_enabled!==false||data.automatic_release_enabled!==false||!Array.isArray(data.intents)||!Number.isSafeInteger(data.total_count)||data.total_count<data.intents.length||typeof data.has_more!=="boolean")throw Error("Invalid allocation history");
             data.intents.forEach(intent=>validateIntent(intent));if(current!==intentVersion)return;intentRows.replaceChildren();
-            for(const intent of data.intents){const tr=document.createElement("tr");for(const value of [date(intent.created_at),intent.plan.symbol,intent.plan.shares,"$"+(intent.plan.allocation_cents/100).toFixed(2),intent.status==="prepared"?"Virtual funds reserved":"Canceled; virtual funds returned","Disabled — no order"]){const td=document.createElement("td");td.textContent=String(value);tr.appendChild(td);}intentRows.appendChild(tr);}
+            for(const intent of data.intents){const tr=document.createElement("tr");for(const value of [date(intent.created_at),intent.plan.symbol,intent.plan.shares,"$"+(intent.plan.allocation_cents/100).toFixed(2),({prepared:"Virtual funds reserved",canceled:"Canceled; virtual funds returned",broker_linked:"Broker order linked; reconcile fills",closed:"Closed; owner-approved funds returned",broker_terminal_unfilled:"Broker terminal; no entry fill"})[intent.status],intent.order_submitted?"Broker order linked; submission disabled here":"Disabled — no order"]){const td=document.createElement("td");td.textContent=String(value);tr.appendChild(td);}intentRows.appendChild(tr);}
             intentStatus.textContent=data.total_count?"Saved "+data.total_count+" allocation intent(s). "+(data.has_more?"Latest 200 displayed. ":"")+"Virtual funds returned are not trading profits. Inspect the stock's saved review in Manual Signals to manage its allocation.":"No saved allocation intents. Inspect a saved BUY draft in Manual Signals to explicitly reserve virtual funds. Broker submission remains disabled.";
         }catch(error){if(current===intentVersion){intentRows.replaceChildren();intentStatus.textContent="Allocation history unavailable: "+error.message;}}
     }
     function allocationControls(review,node,selected){
         const proposal=review.proposal,intent=review.order_intent;
         if(intent)validateIntent(intent,proposal);
+        if(intent?.audit_events){
+            const audit=document.createElement("details"),summary=document.createElement("summary"),list=document.createElement("ul");summary.textContent="Allocation audit history";audit.append(summary,list);
+            if(!Array.isArray(intent.audit_events))throw Error("Invalid allocation audit history");
+            for(const event of intent.audit_events){const labels={virtual_budget_reserved:"Owner reserved virtual PAPER funds",owner_canceled_never_submitted:"Owner canceled an unsubmitted allocation; virtual funds returned (not profit)"};if(!event||!labels[event.action]||typeof event.actor!=="string"||!Number.isFinite(Date.parse(event.recorded_at)))throw Error("Invalid allocation audit event");const item=document.createElement("li");item.textContent=date(event.recorded_at)+" · "+labels[event.action]+" · "+event.actor;list.appendChild(item);}
+            node.appendChild(audit);
+        }
+
         const status=document.createElement("p");status.setAttribute("role","status");node.appendChild(status);
         if(intent?.status==="canceled"){status.textContent="Allocation canceled. Returned virtual funds are not trading profit. This intent cannot be submitted or reserved again.";return;}
+        if(intent&&intent.status!=="prepared"){status.textContent="Allocation state: "+intent.status.replaceAll("_"," ")+". Broker order ownership is recorded in the ledger. Use independent reconciliation and the existing owner release review; this is not a never-submitted cancellation. Returned virtual funds are not trading profit.";return;}
         const cancel=intent?.status==="prepared",label=document.createElement("label"),confirm=document.createElement("input"),button=document.createElement("button");confirm.type="checkbox";confirm.style.width="auto";
         label.append(confirm,document.createTextNode(cancel?" I approve canceling this never-submitted allocation and returning its virtual funds.":" I approve reserving up to $"+(proposal.allocation_cents/100).toFixed(2)+" of virtual PAPER funds. This does not place an order."));
         button.type="button";button.disabled=true;button.textContent=cancel?"Cancel unsubmitted allocation":"Reserve virtual funds (no order)";
@@ -110,7 +119,7 @@
             ["Volume relative to 20-day average",grade?.indicators?.volume_ratio],["Reasons",grade?.reasons?.join(" ")],
             ["Limitations",grade?.limitations?.join(" ")],
             ["Saved forward quote change (not trade profit)",review.forward_outcome?String(review.forward_outcome.return_percent)+"%":"Not evaluated"],
-            ["Execution","No order placed. Broker admission, execution and model training are not connected."]]){
+            ["Execution",review.order_intent?.order_submitted?"A broker order is linked in the ledger. This workspace cannot submit new orders. Model training remains disabled.":"No order placed. Broker admission, execution and model training are not connected."]]){
             const p=document.createElement("p"),b=document.createElement("strong");b.textContent=label+": ";p.append(b,document.createTextNode(value==null?"Unavailable":String(value)));node.appendChild(p);
         }
         const check=document.createElement("button");check.type="button";check.textContent="Check 24+ hour forward quote";
@@ -183,7 +192,7 @@
             el("history").replaceChildren();
             for(const review of data.signals){
                 const row=document.createElement("tr"),grade=review.entry_grade,snapshot=review.market_snapshot;
-                for(const value of [date(review.submitted_at),review.symbol,grade?.grade??"Unavailable",grade?.score??"Unavailable",snapshot?.status==="captured"?(snapshot.fresh?"Fresh at capture":"Stale at capture"):"Unavailable",review.status+" · no order"]){const td=document.createElement("td");td.textContent=String(value);row.appendChild(td);}
+                for(const value of [date(review.submitted_at),review.symbol,grade?.grade??"Unavailable",grade?.score??"Unavailable",snapshot?.status==="captured"?(snapshot.fresh?"Fresh at capture":"Stale at capture"):"Unavailable",review.status+(review.order_intent?.order_submitted?" · broker order linked":" · no order")]){const td=document.createElement("td");td.textContent=String(value);row.appendChild(td);}
                 const td=document.createElement("td"),button=document.createElement("button");button.type="button";button.textContent="Inspect "+review.symbol+" review";button.addEventListener("click",()=>detail(review));td.appendChild(button);row.appendChild(td);el("history").appendChild(row);
             }
             el("status").textContent=data.total_count?"Loaded "+data.signals.length+" saved review(s). "+(data.has_more?"Latest 100 displayed. ":"")+"No automatic PAPER orders or model updates.":"No saved signal reviews yet.";
