@@ -12,7 +12,7 @@ const fixture=()=>({paper:true,scope:'pro_ticker_strategy_ledger',generated_at:s
  scanner:{reason:'Saved research is not a live scan.'},performance:{reason:'Verified execution prices are unavailable.'}});
 
 test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed refresh', {timeout:90000},async()=>{
- let data=fixture(),fail=false,requests=[],browser,discoveries=0;
+ let data=fixture(),fail=false,requests=[],browser,discoveries=0,invalidSettings=false,settingsRevision=0,settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
  const raw=fs.readFileSync(path.join(frontend,'index.html'),'utf8');const start=raw.indexOf('<section id="pro-ticker-manual-section"');
  const section=raw.slice(start,raw.indexOf('</section>',start)+10).replace('class="app-section hidden"','class="app-section"').replace(' hidden>','>');
  const server=http.createServer(async(req,res)=>{
@@ -20,6 +20,16 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
   if(req.url==='/'){res.setHeader('Content-Type','text/html; charset=utf-8');res.end('<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head><body><main style="padding:16px;max-width:1100px;margin:auto">'+section+'</main><script src="/js/pro-ticker-workspace.js"></script><script>window.loadProTickerWorkspace()</script></body></html>');return;}
   if(req.url==='/style.css'){res.setHeader('Content-Type','text/css');res.end(fs.readFileSync(path.join(frontend,'style.css')));return;}
   if(req.url==='/js/pro-ticker-workspace.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(__dirname,'pro-ticker-workspace.js')));return;}
+  if(req.url==='/auto-trader/pro-ticker/settings'){
+   res.setHeader('Content-Type','application/json');
+   if(req.method==='PUT'){
+    assert.equal(req.headers.origin,origin);const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=JSON.parse(Buffer.concat(chunks).toString());
+    assert.deepEqual(Object.keys(body).sort(),['expected_revision','settings']);
+    if(body.expected_revision!==settingsRevision){res.statusCode=409;res.end(JSON.stringify({detail:'conflict'}));return;}
+    settingsValues=body.settings;settingsRevision++;
+   }
+   res.end(JSON.stringify({paper:true,scope:'pro_ticker_proposals_and_manual_discovery',order_execution_enabled:invalidSettings,automatic_release_enabled:false,revision:settingsRevision,settings:settingsValues,updated_at:settingsRevision?stamp:null}));return;
+  }
   if(req.url==='/auto-trader/pro-ticker/discovery'){
    if(req.method==='POST'){
     const chunks=[];for await(const chunk of req)chunks.push(chunk);assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString()),{});
@@ -30,7 +40,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
   if(req.url==='/auto-trader/pro-ticker/proposal'){
    assert.equal(req.method,'POST');const chunks=[];for await(const chunk of req)chunks.push(chunk);
    const body=JSON.parse(Buffer.concat(chunks).toString());assert.equal(body.symbol,'AAPL');assert.equal(body.shares,5);
-   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,hypothetical:true,order_submitted:false,order_execution_enabled:false,budget_reserved:false,within_virtual_budget:true,allocation_cents:5125,estimated_stop_risk_cents:103,available_virtual_cents:4990000,stop_price:'10.0450',take_profit_price:'10.6600',reason:'Operator estimate only.'}));return;
+   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,hypothetical:true,order_submitted:false,order_execution_enabled:false,budget_reserved:false,within_virtual_budget:true,settings_revision:settingsRevision,risk_limits_satisfied:settingsValues.max_allocation_cents>=5125&&settingsValues.max_stop_risk_cents>=103,risk_limit_reasons:settingsValues.max_allocation_cents<5125?['allocation_exceeds_pro_ticker_limit']:[],allocation_cents:5125,estimated_stop_risk_cents:103,available_virtual_cents:4990000,stop_price:'10.0450',take_profit_price:'10.6600',reason:'Operator estimate only.'}));return;
   }
   if(req.url==='/auto-trader/pro-ticker/workspace'){res.setHeader('Content-Type','application/json');res.statusCode=fail?503:200;res.end(JSON.stringify(fail?{detail:'unavailable'}:data));return;}
   res.statusCode=404;res.end();
@@ -39,7 +49,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
  try{
   browser=await chromium.launch({headless:true});fs.mkdirSync('.artifacts/pro-ticker-workspace',{recursive:true});
   for(const width of [1280,390]){
-   data=fixture();fail=false;requests=[];discoveries=0;
+   data=fixture();fail=false;requests=[];discoveries=0;invalidSettings=false;settingsRevision=0;settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
    const context=await browser.newContext({viewport:{width,height:1000},acceptDownloads:true});const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
    await page.goto(origin);await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('Ledger snapshot:'));
    assert.equal(await page.locator('[role=tab]').count(),8);assert.equal(await page.locator('[role=tabpanel]:visible').count(),1);
@@ -50,6 +60,19 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
     await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-'+key+'.png',fullPage:true});
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),true,key+' causes horizontal page overflow');
    }
+   await page.locator('#pt-tab-health').click();
+   await page.waitForFunction(()=>document.getElementById('pt-settings-status').textContent.includes('revision 0'));
+   await page.locator('#pt-settings-allocation').fill('40');await page.locator('#pt-settings-risk').fill('1');await page.locator('#pt-settings-articles').fill('2');
+   await page.locator('#pt-refresh').click();assert.equal(await page.locator('#pt-settings-allocation').inputValue(),'40');
+   await page.locator('#pt-settings-save').click();await page.waitForFunction(()=>document.getElementById('pt-settings-status').textContent.includes('revision 1'));
+   assert.equal(settingsValues.max_allocation_cents,4000);assert.equal(settingsValues.max_stop_risk_cents,100);assert.equal(settingsValues.discovery_article_limit,2);
+   await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-settings.png',fullPage:true});
+   settingsRevision=2;await page.locator('#pt-settings-risk').fill('0.50');await page.locator('#pt-settings-save').click();
+   await page.waitForFunction(()=>document.getElementById('pt-settings-status').textContent.includes('another session'));assert.equal(await page.locator('#pt-settings-save').isDisabled(),true);
+   await page.locator('#pt-settings-reload').click();await page.waitForFunction(()=>document.getElementById('pt-settings-status').textContent.includes('revision 2'));
+   assert.equal(await page.locator('#pt-settings-risk').inputValue(),'1.00');
+   invalidSettings=true;await page.locator('#pt-settings-reload').click();await page.waitForFunction(()=>document.getElementById('pt-settings-status').textContent.includes('safety flags'));assert.equal(await page.locator('#pt-settings-save').isDisabled(),true);
+   invalidSettings=false;await page.locator('#pt-settings-reload').click();await page.waitForFunction(()=>document.getElementById('pt-settings-status').textContent.includes('revision 2'));
    await page.locator('#pt-tab-scanner').click();assert.equal(await page.locator('#pt-candidates tr').count(),2);
    await page.locator('#pt-sort').selectOption('score');assert.match(await page.locator('#pt-candidates tr').first().innerText(),/AAPL/);
    await page.locator('#pt-search').fill('msft');assert.equal(await page.locator('#pt-candidates tr').count(),1);assert.match(await page.locator('#pt-candidates').innerText(),/MSFT/);
@@ -63,6 +86,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    for(const [id,value]of [['symbol','aapl'],['price','10.25'],['shares','5'],['stop','2'],['target','4']])await page.locator('#pt-proposal-'+id).fill(value);
    await page.locator('#pt-proposal-button').click();await page.waitForFunction(()=>document.getElementById('pt-proposal-result').textContent.includes('No funds reserved'));
    assert.match(await page.locator('#pt-proposal-result').innerText(),/51\.25/);
+   assert.match(await page.locator('#pt-proposal-result').innerText(),/BLOCKED by Pro Ticker proposal limits/);
    await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-proposal.png',fullPage:true});
    await page.locator('#pt-proposal-shares').fill('6');assert.match(await page.locator('#pt-proposal-result').innerText(),/Recalculate/);
    await page.locator('#pt-tab-journal').click();assert.equal(await page.locator('#pt-journal tr').count(),2);
@@ -71,7 +95,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.locator('#pt-tab-overview').focus();await page.keyboard.press('ArrowRight');assert.equal(await page.locator('#pt-tab-scanner').getAttribute('aria-selected'),'true');
    fail=true;await page.locator('#pt-refresh').click();await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('Unable to load'));assert.equal(await page.locator('#pt-metrics').innerText(),'');assert.match(await page.locator('#pt-journal').innerText(),/Data unavailable/);
    fail=false;data=fixture();data.paper=false;await page.locator('#pt-refresh').click();await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('safety flags'));assert.equal(await page.locator('#pt-metrics').innerText(),'');
-   assert.deepEqual(errors,[]);assert.ok(requests.every(([method,url])=>method==='GET'||method==='POST'&&['/auto-trader/pro-ticker/proposal','/auto-trader/pro-ticker/discovery'].includes(url)),'workspace must never place an order');await context.close();
+   assert.deepEqual(errors,[]);assert.ok(requests.every(([method,url])=>method==='GET'||method==='POST'&&['/auto-trader/pro-ticker/proposal','/auto-trader/pro-ticker/discovery'].includes(url)||method==='PUT'&&url==='/auto-trader/pro-ticker/settings'),'workspace must never place an order');await context.close();
   }
  }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
 });

@@ -6,6 +6,7 @@ import re
 import time
 import uuid
 import database
+from pro_ticker_settings import read_settings
 
 _SCHEMA = '''CREATE TABLE IF NOT EXISTS pro_ticker_workspace_discovery_runs (
  id TEXT PRIMARY KEY, status TEXT NOT NULL,
@@ -56,9 +57,12 @@ def run_discovery(*, discover=None, collect=None, clock=time.time):
         if active is not None:
             conn.commit()
             return {**_public(active,now), 'started': False}
-        conn.execute("INSERT INTO pro_ticker_workspace_discovery_runs(id,status,started_at,lease_until) VALUES (?,'running',?,?)", (run_id,_stamp(now),now+600))
+        settings = read_settings(conn)
+        article_limit = settings['settings']['discovery_article_limit']
+        configuration = {'settings_revision': settings['revision'], 'article_limit': article_limit}
+        conn.execute("INSERT INTO pro_ticker_workspace_discovery_runs(id,status,started_at,lease_until,result_json) VALUES (?,'running',?,?,?)", (run_id,_stamp(now),now+600,json.dumps(configuration)))
         conn.commit()
-    result = {'discovered': 0, 'saved': 0, 'skipped': 0, 'failed': 0, 'repeated_symbols': 0, 'candidates': [],
+    result = {**configuration, 'discovered': 0, 'saved': 0, 'skipped': 0, 'failed': 0, 'repeated_symbols': 0, 'candidates': [],
               'source': 'public_pro_ticker_articles', 'market_data_verified': False,
               'reason': 'Public article discovery only; no current market evaluation, email or orders.'}
     status = 'failed'
@@ -69,7 +73,7 @@ def run_discovery(*, discover=None, collect=None, clock=time.time):
             collect = collect or collect_pro_ticker_article
         # The legacy discovery function inspects article bodies before returning
         # links. Bound that work too, not only the later collection loop.
-        items = discover(start_page=1,max_pages=1,max_articles=5)
+        items = discover(start_page=1,max_pages=1,max_articles=article_limit)
         if not isinstance(items,list):
             raise ValueError('Invalid discovery results.')
         result['discovered'] = len(items)
@@ -80,7 +84,7 @@ def run_discovery(*, discover=None, collect=None, clock=time.time):
             known = {row[0] for row in conn.execute(f'SELECT article_url FROM pro_ticker_research WHERE article_url IN ({placeholders})',urls)} if exists and urls else set()
         seen_urls = set(); seen_symbols = set(); attempted = 0
         for item in items[:20]:
-            if attempted >= 5 or clock() - now >= 120:
+            if attempted >= article_limit or clock() - now >= 120:
                 result['reason'] = 'Bounded discovery window reached; run again explicitly for more research.'
                 break
             url = item.get('article_url') if isinstance(item,dict) else None

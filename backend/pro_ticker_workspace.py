@@ -39,13 +39,23 @@ def hypothetical_proposal(payload):
     if allocation <= 0:
         raise ValueError('Estimated allocation must be at least one cent.')
     budget = workspace_snapshot(limit=1)['budget']
+    from pro_ticker_settings import read_settings
+    settings = read_settings()
+    stop_risk = cents(price * shares * values['stop_loss_percent']/100)
+    reasons = []
+    if allocation > settings['settings']['max_allocation_cents']:
+        reasons.append('allocation_exceeds_pro_ticker_limit')
+    if stop_risk > settings['settings']['max_stop_risk_cents']:
+        reasons.append('estimated_stop_risk_exceeds_pro_ticker_limit')
     return {'paper': True, 'hypothetical': True, 'order_submitted': False,
             'order_execution_enabled': False, 'budget_reserved': False,
             'symbol': symbol, 'shares': shares, 'reference_price_source': 'operator_estimate',
             'allocation_cents': allocation,
             'stop_price': str((price * (1-values['stop_loss_percent']/100)).quantize(Decimal('.0001'))),
             'take_profit_price': str((price * (1+values['take_profit_percent']/100)).quantize(Decimal('.0001'))),
-            'estimated_stop_risk_cents': cents(price * shares * values['stop_loss_percent']/100),
+            'estimated_stop_risk_cents': stop_risk,
+            'settings_revision': settings['revision'],
+            'risk_limits_satisfied': not reasons, 'risk_limit_reasons': reasons,
             'available_virtual_cents': budget['available_cents'],
             'within_virtual_budget': allocation <= budget['available_cents'],
             'reason': 'Estimate only. Broker buying power, market freshness, ownership and protection are unverified. Slippage, gaps and fees can increase losses.'}
@@ -104,6 +114,34 @@ def workspace_snapshot(*, limit=200):
 
 def build_workspace_router(*, require_session):
     router = APIRouter()
+    @router.get('/auto-trader/pro-ticker/settings')
+    def settings(request: Request):
+        require_session(request)
+        from pro_ticker_settings import read_settings
+        try:
+            return read_settings()
+        except Exception:
+            raise HTTPException(503, 'Pro Ticker settings unavailable.') from None
+    @router.put('/auto-trader/pro-ticker/settings')
+    async def update_settings(request: Request):
+        require_session(request)
+        if request.headers.get('origin') != str(request.base_url).rstrip('/'):
+            raise HTTPException(403, 'Same-origin settings request required.')
+        if request.headers.get('content-type', '').split(';')[0].strip().lower() != 'application/json':
+            raise HTTPException(415, 'Expected JSON.')
+        if len(body := await request.body()) > 2048:
+            raise HTTPException(413, 'Settings request too large.')
+        from pro_ticker_settings import save_settings, SettingsConflict
+        from starlette.concurrency import run_in_threadpool
+        import json
+        try:
+            return await run_in_threadpool(save_settings, json.loads(body))
+        except SettingsConflict:
+            raise HTTPException(409, 'Settings changed. Reload before saving again.') from None
+        except ValueError:
+            raise HTTPException(422, 'Invalid Pro Ticker settings.') from None
+        except Exception:
+            raise HTTPException(503, 'Pro Ticker settings could not be saved.') from None
     @router.get('/auto-trader/pro-ticker/workspace')
     def workspace(request: Request):
         require_session(request)

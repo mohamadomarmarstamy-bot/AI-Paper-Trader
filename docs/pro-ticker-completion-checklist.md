@@ -29,7 +29,8 @@
 - [ ] Persist execution intent before network calls, resolve interrupted submissions by client order ID, and verify protective orders.
 - [ ] Connect entry/partial exit/complete exit reconciliation and release review end-to-end through HTTP/UI.
 - [ ] Keep automatic release disabled unless separately approved.
-- [ ] Add strategy-specific editable settings with authenticated same-origin safeguards.
+- [x] Versioned Pro Ticker proposal allocation/estimated-stop-risk limits and manual discovery size, with authenticated same-origin saves, optimistic concurrency and atomic audit records.
+- [ ] Execution/scanner strategy settings beyond hypothetical proposals and bounded manual discovery.
 - [ ] Link journal outcomes and forward research to measured strategy/regime comparisons.
 
 ## Validation and external blockers
@@ -62,3 +63,21 @@ unavailable. Candidate rows are historical saved research, not an operational
 independent scanner. Proposal calculations use operator estimates, are not
 broker-approved plans, and do not claim a stop will cap actual losses. No chart
 or measured strategy improvement is fabricated to fill missing integrations.
+
+## Pro Ticker proposal/research settings
+
+Settings are persisted separately from the original auto-trader settings. The
+maximum hypothetical allocation and estimated stop-risk limits are in integer
+cents; the discovery article limit is 1–5. Initial financial ceilings equal the
+existing configured virtual budget to preserve prior calculator behavior; they
+are not strategy recommendations. The owner can lower them from Settings &
+Health. Proposals report the saved revision and separate virtual-budget and
+proposal-risk checks. Passing either check never authorizes execution.
+
+Each save requires the current revision. A conflicting save returns HTTP 409
+without modifying settings or audit history. Interrupted audit writes roll back
+the settings change. After an uncertain response, reload the saved state before
+retrying. Browser refresh preserves unsaved edits; explicit reload discards them.
+Discovery captures its settings revision when it starts; changing settings does
+not alter a run in progress. These fields cannot enable live/PAPER execution,
+automatic discovery, or automatic budget release.

@@ -174,7 +174,67 @@
             el("discovery-status").textContent = "Discovery response unavailable: " + error.message + " Check persisted status before retrying; the server may still be working.";
         } finally { discovering = false; el("discover").disabled = false; }
     });
-    el("refresh").addEventListener("click",()=> { refresh(); loadDiscovery(); window.loadProTickerManualLab?.(); window.loadProTickerReleasePanel?.(); });
+    let settings = null, settingsVersion = 0, settingsDirty = false, savingSettings = false;
+    const settingsInputs = ["settings-allocation", "settings-risk", "settings-articles"];
+    function settingsControls(disabled) {
+        settingsInputs.forEach(id => { el(id).disabled = disabled; });
+        el("settings-save").disabled = disabled;
+    }
+    function validateSettings(data) {
+        if (data.paper !== true || data.scope !== "pro_ticker_proposals_and_manual_discovery" ||
+            data.order_execution_enabled !== false || data.automatic_release_enabled !== false ||
+            !Number.isSafeInteger(data.revision) || data.revision < 0) throw Error("Invalid settings safety flags or revision");
+        for (const [key, max] of [["max_allocation_cents",5000000],["max_stop_risk_cents",5000000],["discovery_article_limit",5]]) {
+            if (!Number.isSafeInteger(data.settings?.[key]) || data.settings[key]<1 || data.settings[key]>max) throw Error("Invalid setting value");
+        }
+        return data;
+    }
+    function showSettings(data) {
+        settings = validateSettings(data); settingsDirty = false;
+        el("settings-allocation").value = (data.settings.max_allocation_cents/100).toFixed(2);
+        el("settings-risk").value = (data.settings.max_stop_risk_cents/100).toFixed(2);
+        el("settings-articles").value = data.settings.discovery_article_limit;
+        settingsControls(false);
+        el("settings-status").textContent = "Loaded Pro Ticker settings revision " + data.revision +
+            (data.revision === 0 ? " (unmodified defaults; not strategy recommendations)." : ". Saved at " + date(data.updated_at) + ".") +
+            " Trading and automatic releases remain disabled.";
+    }
+    async function loadSettings(force = false) {
+        if (savingSettings || settingsDirty && !force) return;
+        const current = ++settingsVersion; settingsControls(true);
+        el("settings-status").textContent = "Loading Pro Ticker settings…";
+        try {
+            const response = await fetch("/auto-trader/pro-ticker/settings", {credentials:"same-origin",cache:"no-store"});
+            if (!response.ok) throw Error("Settings request failed (" + response.status + ").");
+            const data = await response.json();
+            if (current === settingsVersion) showSettings(data);
+        } catch (error) {
+            if (current === settingsVersion) { settings = null; settingsControls(true); el("settings-status").textContent = "Settings unavailable: " + error.message; }
+        }
+    }
+    el("settings-form").addEventListener("input", () => {
+        settingsDirty = true; el("settings-status").textContent = "Unsaved changes. Other sessions may have changed the saved limits.";
+    });
+    el("settings-reload").addEventListener("click", () => loadSettings(true));
+    el("settings-form").addEventListener("submit", async event => {
+        event.preventDefault(); if (!settings || savingSettings) return;
+        savingSettings = true; settingsVersion += 1; settingsControls(true); el("settings-reload").disabled = true;
+        el("settings-status").textContent = "Saving Pro Ticker settings…";
+        try {
+            const response = await fetch("/auto-trader/pro-ticker/settings", {method:"PUT",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+                expected_revision:settings.revision, settings:{
+                    max_allocation_cents:Math.round(Number(el("settings-allocation").value)*100),
+                    max_stop_risk_cents:Math.round(Number(el("settings-risk").value)*100),
+                    discovery_article_limit:Number(el("settings-articles").value)}})});
+            if (!response.ok) throw Error(response.status === 409 ? "Saved settings changed in another session. Reload before saving again." : "Settings save failed (" + response.status + "). Reload to verify the saved state before retrying.");
+            showSettings(await response.json());
+            proposalVersion += 1;
+            el("proposal-result").textContent = "Settings changed. Recalculate any hypothetical proposal against the saved limits.";
+        } catch (error) {
+            settings = null; settingsControls(true); el("settings-status").textContent = "Unable to save: " + error.message;
+        } finally { savingSettings = false; el("settings-reload").disabled = false; }
+    });
+    el("refresh").addEventListener("click",()=> { refresh(); loadDiscovery(); loadSettings(); window.loadProTickerManualLab?.(); window.loadProTickerReleasePanel?.(); });
     let calculating = false, proposalVersion = 0;
     el("proposal-form").addEventListener("input", () => {
         proposalVersion += 1;
@@ -198,6 +258,8 @@
             if (current !== proposalVersion) return;
             if (result.paper !== true || result.hypothetical !== true || result.order_submitted !== false ||
                 result.order_execution_enabled !== false || result.budget_reserved !== false ||
+                typeof result.risk_limits_satisfied !== "boolean" || !Array.isArray(result.risk_limit_reasons) ||
+                !Number.isSafeInteger(result.settings_revision) || result.settings_revision < 0 ||
                 typeof result.within_virtual_budget !== "boolean" || typeof result.reason !== "string" ||
                 ![result.allocation_cents,result.estimated_stop_risk_cents,result.available_virtual_cents].every(n=>Number.isSafeInteger(n)&&n>=0)) throw Error("Invalid proposal safety or amount data");
             el("proposal-result").textContent = "Hypothetical allocation: " + money(result.allocation_cents) +
@@ -205,6 +267,8 @@
                 ". Estimated stop risk: " + money(result.estimated_stop_risk_cents) +
                 ". Available virtual funds: " + money(result.available_virtual_cents) +
                 (result.within_virtual_budget ? ". Within virtual allocation limit. " : ". BLOCKED: exceeds virtual allocation limit. ") +
+                (result.risk_limits_satisfied ? "Within Pro Ticker proposal limits. " : "BLOCKED by Pro Ticker proposal limits: " + result.risk_limit_reasons.join(", ") + ". ") +
+                "Settings revision: " + result.settings_revision + ". " +
                 result.reason + " No funds reserved; no order placed.";
         } catch (error) {
             if (current === proposalVersion) el("proposal-result").textContent = "Unable to calculate: " + error.message;
@@ -220,5 +284,5 @@
         const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
         const link=document.createElement("a");link.href=url;link.download="pro-ticker-ledger-fills.csv";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
     });
-    render(); window.loadProTickerWorkspace=() => { loadDiscovery(); return refresh(); };
+    render(); window.loadProTickerWorkspace=() => { loadDiscovery(); loadSettings(); return refresh(); };
 })();
