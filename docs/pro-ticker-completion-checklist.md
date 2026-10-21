@@ -105,3 +105,22 @@ resolution, verified PAPER broker fills and protection, outcome attachment to
 those exact fills, loss-inclusive point-in-time learning data, and independently
 validated model evaluation. The manual grade does not enable automatic buying,
 change model parameters or claim to detect original Pro Ticker alerts.
+
+## Separate forward research for manual grades
+
+An operator may request a fresh quote check at least 24 elapsed hours after the
+stored grade completed. This is not a trading-day close or realized PAPER trade.
+The first verified fresh forward quote is stored separately; retries return the
+same result even if a later quote is more favorable. Original entry grades and
+reference snapshots remain unchanged. Stale, missing or future reference/forward
+quotes cannot produce an outcome.
+
+The Performance tab groups positive, negative and flat raw quote changes by grade
+and grading version, reports the evaluated denominator, and labels any limited
+500-review window. These returns exclude costs, slippage and corporate actions;
+manual selection of which reviews to evaluate can bias them. The reference quote
+precedes daily analysis and indicator as-of times are unknown. Training-ready
+samples therefore remain zero: this descriptive research neither updates an AI
+model nor changes automatic trading thresholds. Verified execution outcomes,
+point-in-time feature validation, loss-inclusive datasets and chronological
+out-of-sample evaluation are still required for adaptive signal detection.

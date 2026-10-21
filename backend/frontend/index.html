@@ -1230,7 +1230,7 @@
 <form id="pt-signal-form" class="pt-filters"><label>Stock symbol<input id="pt-signal-symbol" maxlength="10" pattern="[A-Za-z][A-Za-z0-9.\-]{0,9}" required autocomplete="off" placeholder="AAPL"></label><button type="submit" id="pt-signal-submit">Save &amp; grade stock</button><button type="button" id="pt-signal-refresh">Refresh saved reviews</button><button type="button" id="pt-signal-new">Start a new review</button></form>
 <p id="pt-signal-status" role="status" aria-live="polite">No reviews loaded.</p>
 <p>Grades A/B/C/D are versioned technical heuristics, not win probabilities or a trained AI forecast. Missing data is recorded as unavailable. Later trade outcomes must be measured separately before training.</p>
-<div class="pt-table"><table><thead><tr><th>Submitted</th><th>Symbol</th><th>Grade</th><th>Technical score</th><th>Quote status</th><th>Workflow</th><th>Evidence</th></tr></thead><tbody id="pt-signal-history"></tbody></table></div>
+<div class="pt-table"><table><thead><tr><th>Submitted</th><th>Symbol</th><th>Grade</th><th>Technical score (−6 to +6)</th><th>Quote status</th><th>Workflow</th><th>Evidence</th></tr></thead><tbody id="pt-signal-history"></tbody></table></div>
 <article id="pt-signal-detail"><p>Select a review to see its saved evidence and limitations.</p></article></div>
 <div class="panel pt-panel" role="tabpanel" id="pt-panel-research" aria-labelledby="pt-tab-research">
 <h3>Research detail</h3>
@@ -1285,6 +1285,8 @@
 <table><thead><tr><th scope="col">Recorded at</th><th scope="col">Symbol</th><th scope="col">Side</th><th scope="col">Shares</th><th scope="col">Broker order</th><th scope="col">Event</th></tr></thead><tbody id="pt-journal"></tbody></table></div></div>
 <div class="panel pt-panel" role="tabpanel" id="pt-panel-performance" aria-labelledby="pt-tab-performance">
 <h3>Performance and learning</h3>
+<h4>Manual signal forward research</h4><p id="pt-signal-learning" role="status">Forward research has not loaded. No model training is enabled.</p>
+<div class="pt-table"><table><thead><tr><th>Grade</th><th>Version</th><th>Samples</th><th>Positive</th><th>Negative</th><th>Mean forward quote change %</th></tr></thead><tbody id="pt-signal-learning-rows"></tbody></table></div>
 <p id="pt-performance-note"></p>
 <dl>
 <dt>Realized and unrealized P&L</dt>

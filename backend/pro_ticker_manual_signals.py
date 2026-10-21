@@ -86,8 +86,10 @@ def list_manual_signals():
         exists=conn.execute("SELECT 1 FROM sqlite_master WHERE name='pro_ticker_manual_signal_reviews'").fetchone()
         rows=conn.execute('SELECT * FROM pro_ticker_manual_signal_reviews ORDER BY submitted_at DESC,request_id DESC LIMIT 100').fetchall() if exists else []
         count=conn.execute('SELECT COUNT(*) FROM pro_ticker_manual_signal_reviews').fetchone()[0] if exists else 0
+        from pro_ticker_signal_learning import outcomes_for_signals
+        outcomes=outcomes_for_signals(conn,[r['request_id'] for r in rows])
     return {'paper':True,'orders_submitted':0,'automatic_execution_enabled':False,
-            'signals':[_record(r,time.time()) for r in rows],'total_count':count,'has_more':count>len(rows)}
+            'signals':[{**_record(r,time.time()),'forward_outcome':outcomes.get(r['request_id'])} for r in rows],'total_count':count,'has_more':count>len(rows)}
 
 
 def submit_manual_signal(payload, *, quote_fetcher, analyzer, clock=time.time):
@@ -130,13 +132,36 @@ def submit_manual_signal(payload, *, quote_fetcher, analyzer, clock=time.time):
 
 
 def list_result(row,now):
+    from pro_ticker_signal_learning import outcomes_for_signals
+    with closing(database.get_connection()) as conn:
+        outcome=outcomes_for_signals(conn,[row['request_id']]).get(row['request_id'])
     return {'paper':True,'orders_submitted':0,'automatic_execution_enabled':False,
-            'signal':_record(row,now),'execution_blocked_reason':'broker_execution_and_outcome_learning_not_connected'}
+            'signal':{**_record(row,now),'forward_outcome':outcome},'execution_blocked_reason':'broker_execution_and_outcome_learning_not_connected'}
 
 
 def build_manual_signal_router(*,require_session,quote_fetcher,analyzer):
     from starlette.concurrency import run_in_threadpool
     router=APIRouter()
+    @router.get('/auto-trader/pro-ticker/manual-signals/learning')
+    def learning(request:Request):
+        require_session(request)
+        from pro_ticker_signal_learning import learning_summary
+        try:return learning_summary()
+        except Exception:raise HTTPException(503,'Forward research summary unavailable.') from None
+    @router.post('/auto-trader/pro-ticker/manual-signals/{request_id}/forward-review')
+    async def forward(request_id:str,request:Request):
+        require_session(request)
+        if request.headers.get('origin')!=str(request.base_url).rstrip('/'):raise HTTPException(403,'Same-origin request required.')
+        if request.headers.get('content-type','').split(';')[0].strip().lower()!='application/json':raise HTTPException(415,'Expected JSON.')
+        body=await request.body()
+        if len(body)>2048:raise HTTPException(413,'Request too large.')
+        from pro_ticker_signal_learning import evaluate_forward_outcome,ForwardNotDue
+        try:
+            if json.loads(body)!={}:raise ValueError('No outcome data accepted from browser.')
+            return await run_in_threadpool(evaluate_forward_outcome,request_id,quote_fetcher=quote_fetcher)
+        except ForwardNotDue:raise HTTPException(409,'Forward quote must be at least 24 hours after grading completed.') from None
+        except ValueError:raise HTTPException(422,'Completed grade, fresh reference and a valid fresh forward quote are required. No browser-supplied outcome is accepted.') from None
+        except Exception:raise HTTPException(503,'Forward research evaluation unavailable. Refresh saved status before retrying.') from None
     @router.get('/auto-trader/pro-ticker/manual-signals')
     def history(request:Request):
         require_session(request)

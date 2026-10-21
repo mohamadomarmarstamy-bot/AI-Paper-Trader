@@ -16131,6 +16131,8 @@ def fetch_pro_ticker_manual_signal_quote(symbol):
     data = alpaca_market_data_request("GET", f"/v2/stocks/{symbol}/trades/latest", timeout=3.0)
     if not isinstance(data, dict) or not isinstance(data.get("trade"), dict):
         raise ValueError("Latest trade unavailable.")
+    if data.get("symbol") not in (None, symbol):
+        raise ValueError("Latest trade symbol mismatch.")
     return data["trade"]
 
 
