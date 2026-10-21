@@ -98,6 +98,29 @@ class IsolatedStagingTests(unittest.TestCase):
                 authenticated=True, headers={'Origin': 'https://evil.test'}, json=payload)
             self.assertEqual(response.status_code, 403)
 
+    def test_settings_require_signed_owner_and_persist_across_app_recreation(self):
+        app = self.app()
+        path = '/auto-trader/pro-ticker/settings'
+        payload = {'expected_revision': 0, 'settings': {
+            'max_allocation_cents': 10000, 'max_stop_risk_cents': 100,
+            'discovery_article_limit': 1}}
+        self.assertEqual(self.request(app, 'GET', path).status_code, 401)
+        self.assertEqual(self.request(app, 'PUT', path, json=payload,
+            headers={'Origin': 'https://staging.test'}).status_code, 401)
+        self.assertEqual(self.request(app, 'PUT', path, authenticated=True, json=payload,
+            headers={'Origin': 'https://other.test'}).status_code, 403)
+        with patch.object(self.main, 'alpaca_paper_request', side_effect=AssertionError('unexpected broker call')):
+            saved = self.request(app, 'PUT', path, authenticated=True, json=payload,
+                headers={'Origin': 'https://staging.test'})
+            self.assertEqual(saved.status_code, 200)
+            self.assertEqual(saved.json()['revision'], 1)
+            recreated = create_staging_app(_data_directory=self.root)
+            loaded = self.request(recreated, 'GET', path, authenticated=True)
+            self.assertEqual(loaded.json(), saved.json())
+            self.assertEqual(self.request(recreated, 'PUT', path, authenticated=True, json=payload,
+                headers={'Origin': 'https://staging.test'}).status_code, 409)
+            self.assertEqual(self.request(recreated, 'GET', '/auto-trader/settings', authenticated=True).status_code, 404)
+
     def test_order_account_and_email_controls_are_absent(self):
         app = self.app()
         with patch.object(self.main, 'alpaca_paper_request', side_effect=AssertionError('unexpected broker request')):
