@@ -47,7 +47,18 @@ def create_staging_app(*, _data_directory='/staging-data'):
 
     from pro_ticker_runtime import dedicated_paper_context
     execution_context=dedicated_paper_context()
-    app = FastAPI(title='Isolated AI PAPER Staging', docs_url=None, redoc_url=None, openapi_url=None)
+    from contextlib import asynccontextmanager
+    from pro_ticker_monitor_worker import start_monitor, stop_monitor, monitor_enabled
+
+    @asynccontextmanager
+    async def lifespan(app):
+        task = start_monitor(execution_context)
+        try:
+            yield
+        finally:
+            await stop_monitor(task)
+
+    app = FastAPI(title='Isolated AI PAPER Staging', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
     @app.middleware('http')
     async def same_origin_writes(request: Request, call_next):
@@ -60,7 +71,7 @@ def create_staging_app(*, _data_directory='/staging-data'):
     @app.get('/health')
     def health():
         return dict(status='healthy', paper=True, environment='isolated-staging',
-                    background_jobs_enabled=False, broker_order_submission_enabled=execution_context is not None and execution_context.owner_submission_enabled is True)
+                    background_jobs_enabled=monitor_enabled(execution_context), position_monitor_enabled=monitor_enabled(execution_context), broker_order_submission_enabled=execution_context is not None and execution_context.owner_submission_enabled is True)
 
     app.add_api_route('/login', main.app_login_page, methods=['GET'], response_class=HTMLResponse)
     app.add_api_route('/login', main.app_login_submit, methods=['POST'], response_class=HTMLResponse)
@@ -76,7 +87,7 @@ def create_staging_app(*, _data_directory='/staging-data'):
         return HTMLResponse('''<!doctype html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Isolated PAPER staging</title>
 <link rel="stylesheet" href="/style.css"></head><body><main style="padding:24px;max-width:1050px;margin:auto">
-<p role="note">Isolated PAPER staging. Broker order submissions and background trading are disabled.</p>'''
+<p role="note">Isolated PAPER staging. Automatic buying and budget release are disabled. Dedicated PAPER monitoring and owner submission depend on server configuration.</p>'''
             + section + '''</main><script src="/js/pro-ticker-manual.js"></script>
 <script src="/js/pro-ticker-release.js"></script><script src="/js/pro-ticker-workspace.js"></script><script src="/js/pro-ticker-signals.js"></script><script>
 window.loadProTickerManualLab(); window.loadProTickerReleasePanel(); window.loadProTickerWorkspace(); window.loadProTickerSignals();</script></body></html>''')

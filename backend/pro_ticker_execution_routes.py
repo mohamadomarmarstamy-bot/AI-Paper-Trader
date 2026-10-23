@@ -15,6 +15,13 @@ def build_paper_execution_router(*,require_session,context=None):
         require_session(request)
         from fastapi.responses import JSONResponse
         return JSONResponse(execution_status(context),headers={'Cache-Control':'no-store'})
+    @router.get(base+'/monitor-status')
+    def monitor_status(request:Request):
+        require_session(request)
+        from fastapi.responses import JSONResponse
+        from pro_ticker_monitor_worker import monitor_snapshot
+        return JSONResponse(monitor_snapshot(context=context),headers={'Cache-Control':'no-store'})
+
     async def body(request):
         require_session(request)
         if request.headers.get('origin')!=str(request.base_url).rstrip('/'):raise HTTPException(403,'Same-origin request required.')

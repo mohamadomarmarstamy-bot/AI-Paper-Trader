@@ -8,6 +8,8 @@
 - Dedicated-account owner-confirmed limit brackets, durable dispatch claims,
   at-most-once POST attempts, exact-client-ID recovery and reservation accounting.
 - Owner-triggered bracket entry/exit reconciliation and protection observations.
+- Opt-in unattended observation worker with durable claims, restart recovery,
+  sanitized failure status, and authenticated monitoring status in the trading UI.
 - Explicit manual release review/approval and idempotent budget return.
 - Individual broker activity execution journal with gross closed coverage and CSV;
   net fees/adjustments and research estimates are not interchangeable.
@@ -32,7 +34,7 @@ Original trader execution settings and production deployment are unchanged.
    export must remain unchanged; no representative export has been supplied.
 6. Validate bracket behavior, account activity pagination, partial fills and provider
    freshness against the dedicated account. Synthetic evidence is insufficient.
-7. Resolve first-release limits: no unattended Pro Ticker monitor scheduler, no
+7. Resolve first-release limits: unattended monitoring needs hosted validation, no
    application manual bracket cancel/close workflow, and no independent expanding
    scanner universe. Bracket entries can be unprotected while partially filled;
    protection is not certified after hours. These must be addressed or explicitly
@@ -76,3 +78,26 @@ Original trader execution settings and production deployment are unchanged.
   activities. Disabling new submissions is preferable to losing financial evidence.
 
 No merge or production deployment is authorized by this document.
+
+## Unattended monitoring (2026-10-23)
+
+Set `PRO_TICKER_POSITION_MONITOR_ENABLED=true` only in an explicitly identified
+PAPER environment with the existing dedicated account configuration. Default is
+off. This flag does not enable owner submission, autonomous buys or budget release.
+Both app lifespans use the worker; isolated staging does not start original trader
+jobs. Health reports the staging monitor flag and actual background-job state.
+
+Each pass observes up to eight attempted intents, oldest observations first,
+with a 30-second cooldown. SQLite claims prevent simultaneous scheduled work on
+the same intent for five minutes; abandoned claims expire after a crash.
+Existing cumulative fill bridges make retries idempotent. Errors replace previous
+protection status with unavailable; observations older than two minutes are stale.
+The authenticated `/auto-trader/pro-ticker/monitor-status` endpoint returns the
+latest 200 observations. This is a bounded observation window, not full history.
+Missing/partial/after-hours protection stays uncertified and requires operator
+review. The worker never sends repair, cancel, close or release operations.
+
+Migration: one additive `pro_ticker_monitor_observations` table, created when the
+worker first runs. Rollback: disable the flag and restart; the prior application
+ignores this additive table. Validate on a representative disposable database
+copy before production release. No hosted configuration was changed.

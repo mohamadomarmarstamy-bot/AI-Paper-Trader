@@ -1822,9 +1822,13 @@ async def lifespan(app: FastAPI):
         pro_ticker_scheduler_loop()
     )
 
+    from pro_ticker_monitor_worker import start_monitor, stop_monitor
+    from pro_ticker_runtime import dedicated_paper_context
+    position_monitor_task = start_monitor(dedicated_paper_context())
     try:
         yield
     finally:
+        await stop_monitor(position_monitor_task)
         refresh_task.cancel()
         auto_trade_task.cancel()
         health_watchdog_task.cancel()

@@ -40,6 +40,18 @@
     });
     const executionPanel=document.createElement("article"),executionTitle=document.createElement("h3"),executionStatus=document.createElement("p");
     executionPanel.id="pt-execution-evidence";executionTitle.textContent="PAPER broker admission & recovery";executionStatus.setAttribute("role","status");executionPanel.append(executionTitle,executionStatus);document.getElementById("pt-panel-trading")?.appendChild(executionPanel);
+    const monitorStatus=document.createElement("p");monitorStatus.id="pt-monitor-status";monitorStatus.setAttribute("role","status");executionPanel.appendChild(monitorStatus);
+    async function loadMonitorStatus(){
+        monitorStatus.textContent="Checking unattended PAPER monitoring…";
+        try{
+            const response=await fetch("/auto-trader/pro-ticker/monitor-status",{credentials:"same-origin",cache:"no-store"});
+            if(!response.ok)throw Error("Unavailable");
+            const data=await response.json();
+            if(data.paper!==true||typeof data.enabled!=="boolean"||data.order_submitted!==false||data.budget_released!==false||!Array.isArray(data.observations)||data.observations.some(row=>typeof row.stale!=="boolean"||typeof row.protection_verified!=="boolean"||!Number.isFinite(row.checked_at)||!["pending","unavailable","needs_review","protected","closed"].includes(row.state)))throw Error("Invalid monitoring evidence");
+            const attention=data.observations.filter(row=>row.stale||["unavailable","needs_review","pending"].includes(row.state)).length;
+            monitorStatus.textContent="Unattended PAPER monitoring: "+(data.enabled?"enabled":"disabled")+". Latest observation window: "+data.observations.length+" intents; "+attention+" stale or requiring review. No automatic buying or budget release. Refresh to update observations.";
+        }catch(error){monitorStatus.textContent="Unattended monitoring status unavailable. Refresh and inspect existing orders; protection is unverified.";}
+    }
     let executionState=null,executionRequest=null;
     async function loadExecutionStatus(){
         if(executionRequest)return executionRequest;
@@ -291,6 +303,7 @@
     async function refresh(){
         const current=++version;
         void loadExecutionStatus();
+        void loadMonitorStatus();
         void refreshIntents();
         void researchQuality(current);
         el("status").textContent="Loading saved signal reviews…";
