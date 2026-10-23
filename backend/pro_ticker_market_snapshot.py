@@ -40,8 +40,8 @@ def normalize_market_snapshot(payload, *, now=None, max_age_seconds=120):
     if moment.tzinfo is None:
         raise ValueError("Observation time must include timezone")
     moment = moment.astimezone(timezone.utc)
-    clock = now or datetime.now(timezone.utc)
-    if not isinstance(clock, datetime) or clock.tzinfo is None:
+    clock = datetime.now(timezone.utc) if now is None else now
+    if not isinstance(clock, datetime) or clock.tzinfo is None or clock.utcoffset() is None:
         raise ValueError("Clock must include timezone")
     age = (clock.astimezone(timezone.utc) - moment).total_seconds()
     if age < 0 or age > max_age_seconds:
