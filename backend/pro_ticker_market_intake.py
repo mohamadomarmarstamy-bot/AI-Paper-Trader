@@ -15,7 +15,7 @@ def collect_research_snapshots(symbols, *, fetch_snapshot, now=None, limit=20):
         raise ValueError("Read-only quote provider required")
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
         raise ValueError("Invalid candidate limit")
-    clock = now or datetime.now(timezone.utc)
+    clock = datetime.now(timezone.utc) if now is None else now
     if not isinstance(clock, datetime) or clock.tzinfo is None:
         raise ValueError("Timezone-aware clock required")
     unique = []
