@@ -125,7 +125,8 @@ jobs:
         run: python -m unittest discover -s backend -p 'test*.py' -v
 
   paper-release-browser:
-    runs-on: ubuntu-latest
+    # Playwright 1.58.2 does not support the Ubuntu 26.04 latest runner.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
