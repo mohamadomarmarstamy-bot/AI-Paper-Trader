@@ -2498,9 +2498,15 @@ def fetch_forward_research_bar(
         minutes=normalized_search_minutes
     )
 
+    # Translate only known Yahoo share-class aliases at this data boundary.
+    # Research records and order symbols retain their original identities.
+    alpaca_symbol = {
+        "BF-A": "BF.A", "BF-B": "BF.B",
+        "BRK-A": "BRK.A", "BRK-B": "BRK.B",
+    }.get(normalized_symbol, normalized_symbol)
     payload = alpaca_market_data_request(
         "GET",
-        f"/v2/stocks/{normalized_symbol}/bars",
+        f"/v2/stocks/{alpaca_symbol}/bars",
         params={
             "timeframe": "1Min",
             "start": (target_datetime - timedelta(minutes=1)).isoformat(),
