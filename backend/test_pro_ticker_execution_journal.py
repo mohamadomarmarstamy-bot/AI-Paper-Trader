@@ -10,7 +10,7 @@ import httpx
 from fastapi import FastAPI,HTTPException
 import database
 import test_pro_ticker_position_monitor as fixtures
-from pro_ticker_execution_journal import sync_execution_journal,execution_journal_snapshot
+from pro_ticker_execution_journal import sync_execution_journal,execution_journal_snapshot,gross_execution_metrics
 from pro_ticker_order_intents import IntentConflict
 from pro_ticker_workspace import workspace_snapshot
 from pro_ticker_paper_gateway import AlpacaPaperEvidenceGateway,PaperGatewayUnavailable
@@ -140,6 +140,8 @@ class VerifiedGrossOutcomeTests(unittest.TestCase):
         self.assertEqual(result['closed_priced_count'],1);self.assertEqual(result['gross_wins'],1)
         self.assertEqual(result['gross_losses'],0);self.assertEqual(result['gross_win_rate_percent'],100)
         self.assertEqual(result['gross_realized_usd'],'2.0')
+        self.assertEqual(result['gross_profit_usd'],'2.0');self.assertEqual(result['gross_loss_usd'],'0')
+        self.assertIsNone(result['gross_profit_factor']);self.assertEqual(result['average_gross_result_usd'],'2.000000')
         self.assertEqual(workspace_snapshot()['budget']['committed_cents'],2100)
         self.assertIsNone(result['fees']);self.assertIsNone(result['adjustments']);self.assertIsNone(result['net_pnl'])
         self.assertEqual(result['net_pnl_status'],'unavailable_cost_evidence')
@@ -148,11 +150,14 @@ class VerifiedGrossOutcomeTests(unittest.TestCase):
         result=self.complete('9.5')
         self.assertEqual(result['gross_losses'],1);self.assertEqual(result['gross_wins'],0)
         self.assertEqual(result['gross_realized_usd'],'-2.0');self.assertEqual(result['gross_win_rate_percent'],0)
+        self.assertEqual(result['gross_loss_usd'],'2.0');self.assertEqual(result['gross_profit_factor'],'0.000000')
+        self.assertEqual(result['average_gross_result_usd'],'-2.000000')
 
     def test_breakeven_is_neither_a_win_nor_a_loss(self):
         result=self.complete('10.5')
         self.assertEqual(result['gross_flat'],1);self.assertEqual(result['gross_wins']+result['gross_losses'],0)
         self.assertEqual(result['gross_realized_usd'],'0.0')
+        self.assertEqual(result['average_gross_result_usd'],'0.000000');self.assertIsNone(result['gross_profit_factor'])
 
 
 class CompleteExecutionExportTests(unittest.TestCase):
@@ -209,3 +214,20 @@ class CompleteExecutionExportTests(unittest.TestCase):
                 self.assertEqual(response.headers['Cache-Control'],'no-store')
                 self.assertEqual(len(list(csv.DictReader(io.StringIO(response.text)))),600)
         asyncio.run(run())
+
+
+class GrossExecutionMetricsTests(unittest.TestCase):
+    def test_mixed_results_include_breakeven_in_trade_average(self):
+        from decimal import Decimal
+        result=gross_execution_metrics([Decimal('5'),Decimal('-2'),Decimal('0')])
+        self.assertEqual(result,{'gross_profit_usd':'5','gross_loss_usd':'2',
+            'gross_profit_factor':'2.500000','average_gross_result_usd':'1.000000'})
+
+    def test_empty_and_no_loss_results_do_not_invent_profit_factor(self):
+        from decimal import Decimal
+        self.assertTrue(all(value is None for value in gross_execution_metrics([]).values()))
+        for outcomes in ([Decimal('3')],[Decimal('0')]):
+            self.assertIsNone(gross_execution_metrics(outcomes)['gross_profit_factor'])
+        result=gross_execution_metrics([Decimal('-3')])
+        self.assertEqual(result['gross_profit_factor'],'0.000000')
+        self.assertEqual(result['average_gross_result_usd'],'-3.000000')

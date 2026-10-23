@@ -86,13 +86,24 @@ def sync_execution_journal(intent_id,*,context,clock=time.time):
     return {'paper':True,'order_submitted':False,'budget_released':False,'intent_id':intent_id,'execution_count':len(records),'coverage_complete':True,'net_pnl':None,'reason':'Broker FILL prices/times preserved. No orders, share postings, budget release, fees or model updates.'}
 
 
+def gross_execution_metrics(outcomes):
+    """Closed, fully covered trade results only; no account equity or cost claims."""
+    profit=sum((value for value in outcomes if value>0),Decimal(0))
+    loss=-sum((value for value in outcomes if value<0),Decimal(0))
+    total=sum(outcomes,Decimal(0))
+    return {'gross_profit_usd':str(profit) if outcomes else None,
+            'gross_loss_usd':str(loss) if outcomes else None,
+            'gross_profit_factor':str((profit/loss).quantize(Decimal('.000001'))) if loss else None,
+            'average_gross_result_usd':str((total/len(outcomes)).quantize(Decimal('.000001'))) if outcomes else None}
+
+
 def execution_journal_snapshot():
     with closing(database.get_connection()) as conn:
         conn.execute('BEGIN')
         exists=conn.execute("SELECT 1 FROM sqlite_master WHERE name='pro_ticker_execution_journal'").fetchone()
         rows=[dict(row) for row in conn.execute('SELECT activity_id,intent_id,broker_order_id,symbol,side,shares,price,executed_at,recorded_at FROM pro_ticker_execution_journal ORDER BY executed_at DESC,activity_id DESC LIMIT 500')] if exists else []
         count=conn.execute('SELECT COUNT(*) FROM pro_ticker_execution_journal').fetchone()[0] if exists else 0
-        gross=Decimal(0);closed=0;wins=0;losses=0;flat=0
+        gross=Decimal(0);closed=0;wins=0;losses=0;flat=0;outcomes=[]
         if exists:
             for sync in conn.execute('SELECT * FROM pro_ticker_execution_sync'):
                 intent,orders,_=_ownership(conn,sync['intent_id']);coverage=json.loads(sync['coverage_json'])
@@ -101,12 +112,13 @@ def execution_journal_snapshot():
                 buys=sum(r['shares'] for r in events if r['side']=='buy');sells=sum(r['shares'] for r in events if r['side']=='sell')
                 if not 0<buys<=intent['plan']['shares'] or sells!=buys or sum(c['shares'] for c in coverage if c['side']=='buy')!=buys:continue
                 trade_gross=sum(Decimal(r['price'])*r['shares']*(1 if r['side']=='sell' else -1) for r in events)
-                gross+=trade_gross;closed+=1
+                gross+=trade_gross;closed+=1;outcomes.append(trade_gross)
                 if trade_gross>0:wins+=1
                 elif trade_gross<0:losses+=1
                 else:flat+=1
     return {'paper':True,'kind':'owned_broker_fill_activities','rows':rows,'total_count':count,'has_more':count>len(rows),
             'closed_priced_count':closed,'gross_realized_usd':str(gross) if closed else None,
+            **gross_execution_metrics(outcomes),
             'gross_wins':wins,'gross_losses':losses,'gross_flat':flat,'gross_win_rate_percent':round(100*wins/closed,2) if closed else None,
             'net_pnl':None,'fees':None,'adjustments':None,'net_pnl_status':'unavailable_cost_evidence','model_updated':False,'reason':'Gross closed covered executions only. Fees, corrections/corporate actions and net performance remain unverified. Research estimates are separate.'}
 

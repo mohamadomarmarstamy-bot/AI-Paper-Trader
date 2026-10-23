@@ -12,7 +12,7 @@ const fixture=()=>({paper:true,scope:'pro_ticker_strategy_ledger',generated_at:s
  scanner:{reason:'Saved research is not a live scan.'},performance:{reason:'Verified execution prices are unavailable.'}});
 
 test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed refresh', {timeout:90000},async()=>{
- let marketScan=null,marketScanPosts=0,pricedExecutions=[];
+ let marketScan=null,marketScanPosts=0,pricedExecutions=[],closedExecutionMetrics=false,invalidExecutionMetrics=false;
  let handoffRequests=[];
  let data=fixture(),fail=false,requests=[],browser,forwardDue=false,savedSignal=null,draftRequests=[],allocationRequests=[],admissionRequests=[],evidenceConfigured=false,ownerSubmissionConfigured=false,managementConfigured=false,managementRequests=0,submissionRequests=0,recoveryRequests=0,signalRequests=[],discoveries=0,invalidClosedPerformance=false,invalidDataset=false,invalidProposal=false,invalidSettings=false,settingsRevision=0,settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
  const raw=fs.readFileSync(path.join(frontend,'index.html'),'utf8');const start=raw.indexOf('<section id="pro-ticker-manual-section"');
@@ -56,7 +56,8 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    res.end([fields.join(','),...pricedExecutions.map(row=>fields.map(key=>row[key]).join(','))].join('\r\n'));return;
   }
   if(req.url==='/auto-trader/pro-ticker/execution-journal'){
-   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,kind:'owned_broker_fill_activities',rows:pricedExecutions,total_count:pricedExecutions.length,has_more:false,closed_priced_count:0,gross_wins:0,gross_losses:0,gross_flat:0,gross_win_rate_percent:null,gross_realized_usd:null,net_pnl:null,fees:null,model_updated:false}));return;
+   const journalRows=closedExecutionMetrics?[10,15,10,8,10,10].map((price,index)=>({activity_id:'gross-fixture::'+index,intent_id:'closed-fixture-'+Math.floor(index/2),broker_order_id:'order-fixture-'+index,symbol:'AAPL',side:index%2?'sell':'buy',shares:1,price:String(price),executed_at:stamp,recorded_at:stamp})):pricedExecutions;
+   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,kind:'owned_broker_fill_activities',rows:journalRows,total_count:journalRows.length,has_more:false,closed_priced_count:closedExecutionMetrics?3:0,gross_profit_usd:closedExecutionMetrics?'5':null,gross_loss_usd:closedExecutionMetrics?'2':null,gross_profit_factor:closedExecutionMetrics?'2.500000':null,average_gross_result_usd:invalidExecutionMetrics?'invalid':closedExecutionMetrics?'1.000000':null,gross_wins:closedExecutionMetrics?1:0,gross_losses:closedExecutionMetrics?1:0,gross_flat:closedExecutionMetrics?1:0,gross_win_rate_percent:closedExecutionMetrics?33.33:null,gross_realized_usd:closedExecutionMetrics?'3':null,net_pnl:null,fees:null,model_updated:false}));return;
   }
   if(req.url.startsWith('/auto-trader/pro-ticker/order-intents/')&&req.url.endsWith('/execution-sync')){
    assert.equal(req.method,'POST');assert.equal(req.headers.origin,origin);const chunks=[];for await(const chunk of req)chunks.push(chunk);assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString()),{});
@@ -288,7 +289,18 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.getByRole('button',{name:'Sync priced PAPER executions',exact:true}).click();await page.waitForFunction(()=>document.getElementById('pt-signal-detail').textContent.includes('Saved 1 owned broker FILL activities'));
    await page.locator('#pt-tab-journal').click();assert.match(await page.locator('#pt-priced-executions').innerText(),/synthetic-broker-order/);assert.match(await page.locator('#pt-priced-executions').innerText(),/No zero-profit result is inferred/);
    const [pricedDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Export full execution history (CSV)',exact:true}).click()]);const pricedCSV=fs.readFileSync(await pricedDownload.path(),'utf8');assert.match(pricedCSV,/executed_at/);assert.match(pricedCSV,/synthetic-activity::1/);
-   await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-priced-executions.png',fullPage:true});await page.locator('#pt-tab-signals').click();
+   await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-priced-executions.png',fullPage:true});
+   closedExecutionMetrics=true;await page.getByRole('button',{name:'Refresh priced execution journal',exact:true}).click();
+   await page.waitForFunction(()=>document.getElementById('pt-priced-executions').textContent.includes('gross profit factor: 2.500000'));
+   assert.match(await page.locator('#pt-priced-executions').innerText(),/average gross result per closed trade: \$1.000000/);
+   assert.match(await page.locator('#pt-priced-executions').innerText(),/net P&L remain unavailable/);
+   await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-execution-gross-metrics.png',fullPage:true});
+   invalidExecutionMetrics=true;await page.getByRole('button',{name:'Refresh priced execution journal',exact:true}).click();
+   await page.waitForFunction(()=>document.getElementById('pt-priced-executions').textContent.includes('Invalid execution gross metrics'));
+   assert.doesNotMatch(await page.locator('#pt-priced-executions').innerText(),/gross profit factor: 2.500000/);
+   invalidExecutionMetrics=false;closedExecutionMetrics=false;await page.getByRole('button',{name:'Refresh priced execution journal',exact:true}).click();
+   await page.waitForFunction(()=>document.getElementById('pt-priced-executions').textContent.includes('No zero-profit result is inferred'));
+   await page.locator('#pt-tab-signals').click();
 
 
    // Read-only fixture projections exercise how independent broker accounting

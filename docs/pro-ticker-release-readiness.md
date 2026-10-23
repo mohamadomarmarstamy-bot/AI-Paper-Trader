@@ -20,6 +20,17 @@ and mobile controls; synthetic fixture results are not actual account results.
 Automatic stock buying, automatic budget release and model retraining are disabled.
 Original trader execution settings and production deployment are unchanged.
 
+## Execution gross metrics
+
+The execution journal reports gross profit, gross loss magnitude, profit factor
+and average gross result per completely covered closed trade. Breakeven trades
+count in the average denominator. With no covered closed trades every metric is
+unavailable; with no losses profit factor is unavailable rather than infinite.
+These Decimal-based summaries exclude open/incomplete activity coverage and
+remain independent of virtual budget returns. Fees, adjustments, net performance,
+account equity curves and drawdown are still unverified. Browser responses with
+invalid metrics clear prior displayed performance.
+
 ## Verified staging checkpoint
 
 The October 23 staging deployment of `2bf1477` reached SUCCESS. Hosted health
