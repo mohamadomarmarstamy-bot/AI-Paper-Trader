@@ -33,3 +33,8 @@ class MarketSnapshotTests(unittest.TestCase):
     def test_accepts_boundary_age(self):
         data = {**self.payload(), "observed_at": (NOW-timedelta(seconds=120)).isoformat()}
         self.assertEqual(normalize_market_snapshot(data, now=NOW)["symbol"], "TEST")
+
+    def test_invalid_clock_is_rejected(self):
+        for clock in ("not-a-clock", datetime(2026, 10, 23, 14)):
+            with self.subTest(clock=clock), self.assertRaises(ValueError):
+                normalize_market_snapshot(self.payload(), now=clock)
