@@ -20,6 +20,29 @@ and mobile controls; synthetic fixture results are not actual account results.
 Automatic stock buying, automatic budget release and model retraining are disabled.
 Original trader execution settings and production deployment are unchanged.
 
+## Read-only market reference diagnostics
+
+Manual Signals includes an explicit **Check latest broker reference** action.
+The authenticated `GET /auto-trader/pro-ticker/market-reference?symbol=...`
+verifies the dedicated account and reads one symbol's latest broker trade. It
+does not save a research review, access the ledger, reserve funds or submit an
+order. Invalid, missing or future reference data cannot pass freshness. Failed
+checks replace previous success; an older in-flight result cannot appear for a
+different symbol. Responses are not cached and contain no account IDs or keys.
+
+The display reports age at the check, not continuing order eligibility. The
+existing limits remain 90 seconds for drafts/allocations and 30 seconds for
+submission admission. Each action independently fetches and revalidates evidence;
+passing this diagnostic authorizes nothing and does not replace other checks.
+
+The provider selects the default market-data feed according to the account's
+subscription. Alpaca Basic covers IEX rather than all exchanges; a symbol's latest
+eligible trade can therefore be older than the research scanner's Yahoo minute
+observation. Delayed SIP or a recent HTTP response is not a fresh trade. This
+feature does not switch providers, buy a subscription, replace broker evidence
+with research prices or extend freshness limits. See Alpaca's
+[market data FAQ](https://docs.alpaca.markets/us/docs/market-data-faq).
+
 ## Blocking release gates
 
 1. Inspect production deployment/logs, scanner, PAPER connectivity and actual order

@@ -14,6 +14,8 @@ from pro_ticker_order_intents import IntentConflict,_record
 from pro_ticker_settings import read_settings
 from pro_ticker_paper_gateway import PAPER_URL
 
+ADMISSION_REFERENCE_MAX_AGE_SECONDS = 30
+
 _SCHEMA='''CREATE TABLE IF NOT EXISTS pro_ticker_admission_reviews (
  id TEXT PRIMARY KEY,intent_id TEXT NOT NULL,created_at REAL NOT NULL,
  expires_at REAL NOT NULL,ledger_digest TEXT NOT NULL,review_json TEXT NOT NULL);'''
@@ -134,7 +136,7 @@ def review_paper_admission(intent_id,payload, *, context,clock=None):
     check('snapshot_fetch_fresh',lambda:0<=finished-started<=30)
     from pro_ticker_manual_signals import quote_snapshot
     quote=quote_snapshot(snapshot.get('quote'),now=finished)
-    check('current_trade_fresh',lambda:quote.get('fresh') is True and quote['age_seconds']<=30)
+    check('current_trade_fresh',lambda:quote.get('fresh') is True and quote['age_seconds']<=ADMISSION_REFERENCE_MAX_AGE_SECONDS)
     check('entry_within_reserved_ceiling',lambda:_number(quote['price'])*intent['plan']['shares']*100<=intent['plan']['allocation_cents'])
     with closing(database.get_connection()) as conn:
         conn.execute('BEGIN IMMEDIATE');current,settings,current_digest=_ledger(conn,intent_id)

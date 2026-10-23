@@ -370,3 +370,38 @@
     el("new").addEventListener("click",()=>{if(saving)return;requestId=null;el("symbol").value="";el("symbol").focus();el("status").textContent="Enter a stock for a new timestamped review.";});
     window.loadProTickerSignals=refresh;
 })();
+
+(() => {
+    const button=document.getElementById('pt-reference-check');
+    const status=document.getElementById('pt-reference-status');
+    const input=document.getElementById('pt-signal-symbol');
+    if(!button||!status||!input)return;
+    let version=0;
+    input.addEventListener('input',()=>{version++;status.textContent='Symbol changed. Check the latest broker reference again.';});
+    button.addEventListener('click',async()=>{
+        if(button.disabled)return;
+        const symbol=input.value.trim().toUpperCase();
+        if(!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(symbol)){status.textContent='Enter one valid stock symbol.';return;}
+        const current=++version;button.disabled=true;status.textContent='Checking latest broker trade for '+symbol+'…';
+        try{
+            const response=await fetch('/auto-trader/pro-ticker/market-reference?symbol='+encodeURIComponent(symbol),{credentials:'same-origin',cache:'no-store'});
+            if(!response.ok)throw Error('Broker reference unavailable ('+response.status+').');
+            const data=await response.json(),reference=data.reference;
+            if(data.paper!==true||data.account_verified!==true||data.reference_only!==true||data.order_execution_authorized!==false||data.symbol!==symbol||
+               data.allocation_max_age_seconds!==90||data.admission_max_age_seconds!==30||data.feed_selection!=='provider_default'||
+               typeof data.allocation_reference_fresh!=='boolean'||typeof data.admission_reference_fresh!=='boolean'||!reference||
+               reference.source!=='alpaca_latest_trade'||!['captured','unavailable'].includes(reference.status))throw Error('Unexpected broker reference response.');
+            if(reference.status==='captured'){
+                if(!Number.isFinite(reference.price)||reference.price<=0||!Number.isFinite(reference.age_seconds)||reference.age_seconds<0||!Number.isFinite(Date.parse(reference.market_timestamp))||
+                   reference.fresh!==(reference.age_seconds<=90)||data.allocation_reference_fresh!==reference.fresh||data.admission_reference_fresh!==(reference.age_seconds<=30))throw Error('Invalid broker reference evidence.');
+            }else if(reference.price!==null||reference.market_timestamp!==null||reference.fresh!==false||data.allocation_reference_fresh||data.admission_reference_fresh)throw Error('Unavailable reference cannot pass freshness.');
+            if(current!==version)return;
+            if(input.value.trim().toUpperCase()!==symbol){status.textContent='Symbol changed. Check the latest broker reference again.';return;}
+            status.textContent=reference.status==='captured'?
+                symbol+' latest broker trade: $'+reference.price.toFixed(4)+' · market time '+new Date(reference.market_timestamp).toLocaleString()+' · '+Math.ceil(reference.age_seconds)+' seconds old at check. Reference age for allocation: '+(data.allocation_reference_fresh?'passes':'STALE')+' (90-second limit); submission: '+(data.admission_reference_fresh?'passes':'STALE')+' (30-second limit). These are observations, not order approval.':
+                symbol+' broker reference unavailable or invalid. Freshness checks do not pass.';
+            status.textContent+=' No review saved, funds reserved, or order submitted. Every allocation and submission rechecks fresh evidence.';
+        }catch(error){if(current===version)status.textContent=error.message+' No reference verified; no funds reserved or order submitted.';}
+        finally{button.disabled=false;}
+    });
+})();

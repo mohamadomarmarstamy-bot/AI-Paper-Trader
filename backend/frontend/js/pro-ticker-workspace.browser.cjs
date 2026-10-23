@@ -23,6 +23,12 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
   if(req.url==='/style.css'){res.setHeader('Content-Type','text/css');res.end(fs.readFileSync(path.join(frontend,'style.css')));return;}
   if(req.url==='/js/pro-ticker-workspace.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(__dirname,'pro-ticker-workspace.js')));return;}
   if(req.url==='/js/pro-ticker-signals.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(__dirname,'pro-ticker-signals.js')));return;}
+  if(req.url.startsWith('/auto-trader/pro-ticker/market-reference?')){
+   assert.equal(req.method,'GET');assert.equal(new URL(req.url,origin).searchParams.get('symbol'),'AAPL');
+   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,account_verified:true,reference_only:true,order_execution_authorized:false,symbol:'AAPL',
+    reference:{source:'alpaca_latest_trade',status:'captured',price:10.5,market_timestamp:new Date().toISOString(),age_seconds:1,fresh:true},
+    allocation_reference_fresh:true,admission_reference_fresh:true,allocation_max_age_seconds:90,admission_max_age_seconds:30,feed_selection:'provider_default'}));return;
+  }
   if(req.url==='/auto-trader/pro-ticker/closed-performance'){
    const kind='closed_gross_estimate_from_terminal_broker_averages';
    const row=(symbol,pnl)=>({paper:true,kind,symbol,recorded_at:stamp,status:pnl===null?'unavailable':'priced',shares:pnl===null?null:2,gross_pnl_cents:pnl,training_eligible:false,net_pnl:null,fees:null});
@@ -178,7 +184,12 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
     await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-'+key+'.png',fullPage:true});
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),true,key+' causes horizontal page overflow');
    }
-   await page.locator('#pt-tab-signals').click();await page.locator('#pt-signal-symbol').fill('aapl');await page.locator('#pt-signal-submit').click();
+   await page.locator('#pt-tab-signals').click();await page.locator('#pt-signal-symbol').fill('aapl');
+   await page.getByRole('button',{name:'Check latest broker reference',exact:true}).click();
+   await page.waitForFunction(()=>document.getElementById('pt-reference-status').textContent.includes('AAPL latest broker trade'));
+   assert.match(await page.locator('#pt-reference-status').innerText(),/submission: passes/);assert.equal(signalRequests.length,0);
+   await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-broker-reference.png',fullPage:true});
+   await page.locator('#pt-signal-submit').click();
    await page.waitForFunction(()=>document.getElementById('pt-signal-status').textContent.includes('Review graded'));
    assert.equal(await page.locator('#pt-signal-history tr').count(),1);assert.match(await page.locator('#pt-signal-history').innerText(),/AAPL/);
    await page.getByRole('button',{name:'Inspect AAPL review',exact:true}).click();assert.match(await page.locator('#pt-signal-detail').innerText(),/Synthetic entry-time evidence/);

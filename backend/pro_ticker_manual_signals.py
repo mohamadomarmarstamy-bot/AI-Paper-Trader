@@ -14,6 +14,7 @@ import database
 from pro_ticker_manual_intake import parse_manual_symbols
 
 VERSION = 'pro_ticker_daily_technical_grade_v1'
+REFERENCE_MAX_AGE_SECONDS = 90
 _SCHEMA = '''CREATE TABLE IF NOT EXISTS pro_ticker_manual_signal_reviews (
  request_id TEXT PRIMARY KEY, symbol TEXT NOT NULL, submitted_at TEXT NOT NULL,
  lease_until REAL NOT NULL, status TEXT NOT NULL,
@@ -42,7 +43,7 @@ def quote_snapshot(raw, *, now):
     except (ValueError,OverflowError): return base
     if age<0: return base
     return {**base,'status':'captured','price':raw['p'],'market_timestamp':raw['t'],
-            'age_seconds':age,'fresh':age<=90}
+            'age_seconds':age,'fresh':age<=REFERENCE_MAX_AGE_SECONDS}
 
 
 def technical_grade(raw, symbol):

@@ -10,6 +10,20 @@ from pro_ticker_paper_gateway import PaperGatewayUnavailable
 
 def build_paper_execution_router(*,require_session,context=None):
     router=APIRouter();base='/auto-trader/pro-ticker'
+    @router.get(base+'/market-reference')
+    def market_reference(request:Request,symbol:str):
+        require_session(request)
+        import re
+        from fastapi.responses import JSONResponse
+        from pro_ticker_market_reference import market_reference_snapshot
+        if not re.fullmatch(r'[A-Z][A-Z0-9.\-]{0,9}',symbol):
+            raise HTTPException(422,'Provide one uppercase stock symbol.')
+        if execution_status(context)['admission_review_enabled'] is not True:
+            raise HTTPException(403,'Dedicated PAPER account is not configured.')
+        try:result=market_reference_snapshot(symbol,context=context)
+        except Exception:
+            raise HTTPException(503,'Broker reference unavailable. No funds reserved or order submitted.') from None
+        return JSONResponse(result,headers={'Cache-Control':'no-store'})
     @router.get(base+'/account-status')
     def account_status(request:Request):
         require_session(request)

@@ -1235,6 +1235,8 @@
 <h3>Manual Pro Ticker signals</h3>
 <p>Enter one stock to capture its submission-time reference and save a provisional daily technical grade. This is a manual observation, not proof of an original Pro Ticker alert. PAPER auto-buy remains blocked until the execution lifecycle is verified.</p>
 <form id="pt-signal-form" class="pt-filters"><label>Stock symbol<input id="pt-signal-symbol" maxlength="10" pattern="[A-Za-z][A-Za-z0-9.\-]{0,9}" required autocomplete="off" placeholder="AAPL"></label><button type="submit" id="pt-signal-submit">Save &amp; grade stock</button><button type="button" id="pt-signal-refresh">Refresh saved reviews</button><button type="button" id="pt-signal-new">Start a new review</button></form>
+<button id="pt-reference-check" type="button">Check latest broker reference</button>
+<p id="pt-reference-status" role="status" aria-live="polite">Enter a symbol to check its latest broker trade without saving another research review. Freshness alone does not approve an order.</p>
 <p id="pt-signal-status" role="status" aria-live="polite">No reviews loaded.</p>
 <p>Grades A/B/C/D are versioned technical heuristics, not win probabilities or a trained AI forecast. Missing data is recorded as unavailable. Later trade outcomes must be measured separately before training.</p>
 <div class="pt-table"><table><thead><tr><th>Submitted</th><th>Symbol</th><th>Grade</th><th>Technical score (−6 to +6)</th><th>Quote status</th><th>Workflow</th><th>Evidence</th></tr></thead><tbody id="pt-signal-history"></tbody></table></div>
