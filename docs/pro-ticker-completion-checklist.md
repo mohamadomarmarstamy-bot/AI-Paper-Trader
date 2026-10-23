@@ -410,3 +410,38 @@ is unavailable. No broker credentials are used by this scanner.
 
 Browser CI uses the version-matched Playwright container with preinstalled
 browsers, avoiding repeated distro dependency installation timeouts.
+
+## Bracket reconciliation and dedicated runtime composition
+
+An owner-triggered monitor now refreshes the exact saved entry and independently
+fetches the owned parent and both bracket children. It atomically records exit
+ownership/provenance and uses the existing cumulative fill bridge to post exits
+idempotently. Broker OCO quantity reductions are accepted only for an unfilled,
+previously verified child; every change is audited. Foreign attribution, stale
+exit fills, changed filled quantities, inconsistent children, and double-filled
+OCO quantities fail closed. Both children remain linked, including zero-fill
+siblings, so an open sibling blocks closure/release review. Monitoring never
+places/cancels orders or releases budget. Background scheduling and safe manual
+bracket cancellation/closing remain unfinished.
+
+A synthetic authenticated HTTP integration covers grade -> draft -> reserve ->
+explicit owner submission -> partial/full entry -> protection observation ->
+partial/full exit -> closure -> manual release approval -> journal/gross report.
+This is application integration with a mocked broker, not live-account validation.
+
+Runtime accepts only separately named dedicated-account configuration:
+`PRO_TICKER_PAPER_ACCOUNT_ID`, `PRO_TICKER_ORIGINAL_ACCOUNT_ID`,
+`PRO_TICKER_PAPER_KEY_ID`, `PRO_TICKER_PAPER_SECRET_KEY`, and exact
+`PRO_TICKER_DEDICATED_ACCOUNT_CONFIRMED=true`. Account IDs must differ; the key
+must differ from any original trader key in the process. Missing/invalid config
+keeps the gateway off. Owner dispatch additionally requires exact
+`PRO_TICKER_OWNER_PAPER_SUBMISSION_ENABLED=true`. No setting is enabled by this
+commit. Automatic trading/release remain disabled. Keys belong in deployment
+variables, never request bodies or git.
+
+Both main and staging compose this dedicated context. Pro Ticker's manual release
+reader also uses this account, never the original trader credential fallback.
+Staging refuses original trader broker credential names entirely; its health
+response reports the actual owner-submission gate. Original trader execution
+configuration is unchanged. A separately provisioned PAPER account and hosted
+validation remain required before enabling any real broker calls in staging.

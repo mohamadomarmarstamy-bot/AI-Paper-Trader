@@ -11,7 +11,10 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch,Mock
+from copy import deepcopy
+from pro_ticker_submission import PaperSubmissionContext
+from pro_ticker_paper_gateway import PAPER_URL
 import uuid
 import httpx
 from fastapi import FastAPI,HTTPException
@@ -37,12 +40,22 @@ class ManualWorkflowIntegrationTests(unittest.TestCase):
     def test_canceled_partial_exit_and_second_exit_preserve_loss_and_close_once(self):
         self.run_workflow(split_exits=True)
 
-    def run_workflow(self, *, split_exits):
+    def test_http_bracket_submission_entry_exit_monitoring_and_owner_release(self):
+        self.run_workflow(split_exits=False,dispatch=True)
+
+    def run_workflow(self, *, split_exits,dispatch=False):
         orders={};app=FastAPI()
         def auth(request):
             if request.headers.get('x-test-owner')!='yes':raise HTTPException(401)
         def quote(symbol):return {'p':10.5,'t':datetime.fromtimestamp(time.time()-1,timezone.utc).isoformat()}
-        app.include_router(build_manual_signal_router(require_session=auth,quote_fetcher=quote,analyzer=fixtures.analysis))
+        gateway=Mock();account_id=str(uuid.uuid4());gateway.paper=True;gateway.base_url=PAPER_URL;gateway.account_id=account_id
+        gateway.read_account.return_value={'id':account_id}
+        gateway.read_snapshot.side_effect=lambda symbol:{'account':{'id':account_id,'status':'ACTIVE','currency':'USD','buying_power':'1000','trading_blocked':False,'account_blocked':False,'trade_suspended_by_user':False},'clock':{'is_open':True,'timestamp':datetime.now(timezone.utc).isoformat()},'asset':{'symbol':symbol,'class':'us_equity','status':'active','tradable':True},'positions':[],'orders':[],'quote':quote(symbol)}
+        gateway.read_clock.side_effect=lambda:{'is_open':True,'timestamp':datetime.now(timezone.utc).isoformat()}
+        gateway.read_positions.return_value=[{'symbol':'AAPL','qty':'4'}];gateway.read_trade.side_effect=quote
+        gateway.read_order.side_effect=lambda id:deepcopy(orders[id])
+        context=PaperSubmissionContext(account_id,lambda:gateway,True,True) if dispatch else None
+        app.include_router(build_manual_signal_router(require_session=auth,quote_fetcher=quote,analyzer=fixtures.analysis,execution_context=context))
         app.include_router(build_workspace_router(require_session=auth))
         app.include_router(build_paper_release_router(require_session=auth,operator_enabled=lambda:True,
             make_paper_reader=lambda:lambda order_id:dict(orders[order_id])))
@@ -60,13 +73,21 @@ class ManualWorkflowIntegrationTests(unittest.TestCase):
                 intent=allocation.json()['intent'];reservation=intent['reservation_id']
                 self.assertEqual((await client.post(intents,json=allocation_payload)).json()['intent'],intent)
                 self.assertEqual((await client.get(workspace)).json()['budget']['committed_cents'],4200)
-                self.assertEqual((await client.post(intents+'/'+intent['id']+'/submit',json={})).status_code,403)
+                if not dispatch:self.assertEqual((await client.post(intents+'/'+intent['id']+'/submit',json={})).status_code,403)
 
                 # Trusted fixture replaces the absent broker dispatcher. No
                 # endpoint accepts browser-provided broker fills as evidence.
                 entry={'id':str(uuid.uuid4()),'client_order_id':intent['client_order_id'],'symbol':'AAPL','side':'buy','qty':'4','filled_qty':'0','status':'new'}
-                link_verified_paper_entry_order(reservation,entry)
                 orders[entry['id']]=entry
+                if dispatch:
+                    stop={'id':str(uuid.uuid4()),'client_order_id':'broker-native-stop','symbol':'AAPL','side':'sell','type':'stop','stop_price':'9.98','qty':'4','filled_qty':'0','status':'new'}
+                    target={'id':str(uuid.uuid4()),'client_order_id':'broker-native-target','symbol':'AAPL','side':'sell','type':'limit','limit_price':'11.55','qty':'4','filled_qty':'0','status':'new'}
+                    entry.update(order_class='bracket',legs=[stop,target]);orders[stop['id']]=stop;orders[target['id']]=target
+                    gateway.find_order.side_effect=lambda client_id:deepcopy(orders[entry['id']])
+                    submitted=await client.post(intents+'/'+intent['id']+'/submit',json={'confirmed':True})
+                    self.assertEqual(submitted.status_code,200);self.assertTrue(submitted.json()['resolved']);gateway.submit_bracket.assert_called_once()
+                    self.assertEqual((await client.post(intents+'/'+intent['id']+'/submit',json={'confirmed':True})).status_code,200);gateway.submit_bracket.assert_called_once()
+                else:link_verified_paper_entry_order(reservation,entry)
                 linked=(await client.get(intents)).json()['intents'][0]
                 self.assertEqual(linked['status'],'broker_linked');self.assertTrue(linked['order_submitted'])
                 self.assertEqual((await client.post(intents+'/'+intent['id']+'/cancel',json={'confirmed':True})).status_code,409)
@@ -74,16 +95,24 @@ class ManualWorkflowIntegrationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):account_linked_paper_entry_snapshot(reservation,bad)
                 for filled,status in [(1,'partially_filled'),(4,'filled'),(4,'filled')]:
                     entry={**entry,'filled_qty':str(filled),'status':status,'filled_avg_price':'10.5'};orders[entry['id']]=entry
-                    account_linked_paper_entry_snapshot(reservation,entry)
-                    record_verified_paper_order_state(reservation,entry['id'],status,filled_quantity=filled)
+                    if dispatch:
+                        monitored=await client.post(intents+'/'+intent['id']+'/monitor',json={});self.assertEqual(monitored.status_code,200,monitored.text)
+                        self.assertEqual(monitored.json()['protection_verified'],filled==4)
+                    else:
+                        account_linked_paper_entry_snapshot(reservation,entry)
+                        record_verified_paper_order_state(reservation,entry['id'],status,filled_quantity=filled)
                 current=(await client.get(workspace)).json();self.assertEqual(current['positions']['rows'][0]['shares'],4)
                 self.assertEqual(current['journal']['total'],2)
 
                 exit_id=str(uuid.uuid4());exit_order={'id':str(uuid.uuid4()),'client_order_id':pro_ticker_exit_client_order_id(reservation,exit_id),
                     'symbol':'AAPL','side':'sell','qty':'4','filled_qty':'0','status':'new'}
-                link_verified_paper_exit(reservation_id=reservation,symbol='AAPL',expected_shares=4,broker_order=exit_order,exit_id=exit_id)
+                if dispatch:exit_order=target
+                else:link_verified_paper_exit(reservation_id=reservation,symbol='AAPL',expected_shares=4,broker_order=exit_order,exit_id=exit_id)
                 exit_order={**exit_order,'filled_qty':'2','status':'partially_filled','filled_avg_price':'11'};orders[exit_order['id']]=exit_order
-                account_linked_paper_exit_snapshot(exit_order['id'],exit_order)
+                if dispatch:
+                    entry['legs'][1]=exit_order;entry['legs'][0]['qty']='2';orders[entry['id']]=entry
+                    monitored=await client.post(intents+'/'+intent['id']+'/monitor',json={});self.assertEqual(monitored.status_code,200,monitored.text);self.assertFalse(monitored.json()['closed'])
+                else:account_linked_paper_exit_snapshot(exit_order['id'],exit_order)
                 release_headers={**headers,'X-Pro-Ticker-Operator':'manual-release'};release='/auto-trader/pro-ticker-paper'
                 self.assertEqual((await client.post(release+'/release-review',json={'reservation_id':reservation},headers=release_headers)).status_code,409)
                 self.assertEqual((await client.get(workspace)).json()['budget']['committed_cents'],4200)
@@ -97,8 +126,13 @@ class ManualWorkflowIntegrationTests(unittest.TestCase):
                 else:
                     exit_order={**exit_order,'filled_qty':'4','status':'filled'}
                 orders[exit_order['id']]=exit_order
-                account_linked_paper_exit_snapshot(exit_order['id'],exit_order)
-                self.assertEqual(account_linked_paper_exit_snapshot(exit_order['id'],exit_order)['delta_shares'],0)
+                if dispatch:
+                    entry['legs'][1]=exit_order;entry['legs'][0]['status']='canceled';orders[entry['id']]=entry
+                    monitored=await client.post(intents+'/'+intent['id']+'/monitor',json={});self.assertEqual(monitored.status_code,200,monitored.text);self.assertTrue(monitored.json()['closed']);self.assertFalse(monitored.json()['budget_released'])
+                    replay=await client.post(intents+'/'+intent['id']+'/monitor',json={});self.assertEqual(replay.json()['posted_exit_shares'],0)
+                else:
+                    account_linked_paper_exit_snapshot(exit_order['id'],exit_order)
+                    self.assertEqual(account_linked_paper_exit_snapshot(exit_order['id'],exit_order)['delta_shares'],0)
                 current=(await client.get(workspace)).json();self.assertEqual(current['positions']['total'],0)
                 self.assertEqual(current['budget']['committed_cents'],4200)  # Closure is not approval.
                 prepared=await client.post(release+'/release-review',json={'reservation_id':reservation},headers=release_headers)

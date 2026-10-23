@@ -18,6 +18,8 @@ def validate_staging_config(*, data_directory='/staging-data'):
         raise RuntimeError('Staging requires its dedicated database path.')
     if str(directory) in {'/data', str(Path(__file__).resolve().parent)}:
         raise RuntimeError('Production database locations are forbidden for staging.')
+    if any(os.getenv(key) for key in ('ALPACA_API_KEY','ALPACA_SECRET_KEY','APCA_API_KEY_ID','APCA_API_SECRET_KEY')):
+        raise RuntimeError('Original trader brokerage credentials are forbidden in staging.')
     if os.getenv('AUTO_TRADER_START_ENABLED', '').lower() != 'false':
         raise RuntimeError('Automatic trading must be explicitly disabled for staging.')
     if len(os.getenv('APP_ACCESS_PASSWORD', '')) < 16 or len(os.getenv('APP_SESSION_SECRET', '')) < 32:
@@ -43,6 +45,8 @@ def create_staging_app(*, _data_directory='/staging-data'):
     from fastapi.staticfiles import StaticFiles
     from pro_ticker_release_routes import build_paper_release_router
 
+    from pro_ticker_runtime import dedicated_paper_context
+    execution_context=dedicated_paper_context()
     app = FastAPI(title='Isolated AI PAPER Staging', docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.middleware('http')
@@ -56,7 +60,7 @@ def create_staging_app(*, _data_directory='/staging-data'):
     @app.get('/health')
     def health():
         return dict(status='healthy', paper=True, environment='isolated-staging',
-                    background_jobs_enabled=False, broker_order_submission_enabled=False)
+                    background_jobs_enabled=False, broker_order_submission_enabled=execution_context is not None and execution_context.owner_submission_enabled is True)
 
     app.add_api_route('/login', main.app_login_page, methods=['GET'], response_class=HTMLResponse)
     app.add_api_route('/login', main.app_login_submit, methods=['POST'], response_class=HTMLResponse)
@@ -84,7 +88,7 @@ window.loadProTickerManualLab(); window.loadProTickerReleasePanel(); window.load
     app.add_api_route('/auto-trader/pro-ticker-paper-budget', main.pro_ticker_paper_budget, methods=['GET'])
     from pro_ticker_manual_signals import build_manual_signal_router
     app.include_router(build_manual_signal_router(require_session=main.require_app_session,
-        quote_fetcher=main.fetch_pro_ticker_manual_signal_quote, analyzer=lambda symbol: main.analyze_symbol(symbol)))
+        quote_fetcher=main.fetch_pro_ticker_manual_signal_quote, analyzer=lambda symbol: main.analyze_symbol(symbol),execution_context=execution_context))
     from pro_ticker_workspace import build_workspace_router
     app.include_router(build_workspace_router(require_session=main.require_app_session))
     app.include_router(build_paper_release_router(

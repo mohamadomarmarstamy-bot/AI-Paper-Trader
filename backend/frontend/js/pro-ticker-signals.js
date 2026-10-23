@@ -55,7 +55,7 @@
     function brokerEvidenceControls(review,node,selected){
         const intent=review.order_intent,box=document.createElement("article"),status=document.createElement("p"),admission=document.createElement("button"),recover=document.createElement("button");status.setAttribute("role","status");box.className="pt-broker-evidence";
         admission.type="button";admission.textContent="Review PAPER admission (no order)";admission.disabled=true;recover.type="button";recover.textContent="Find existing PAPER order (no new buy)";recover.disabled=true;
-        box.append(status,admission,recover);node.appendChild(box);protectionEvidenceControls(intent,box,selected);submissionControls(review,box,selected);let busy=false,reviewId=null;
+        box.append(status,admission,recover);node.appendChild(box);protectionEvidenceControls(intent,box,selected);submissionControls(review,box,selected);monitorControls(review,box,selected);let busy=false,reviewId=null;
         const canReview=()=>intent.status==="prepared"&&!intent.attempt_started_at;
         const canRecover=()=>!!intent.attempt_started_at&&["submitting","uncertain","broker_linked"].includes(intent.status);
         const enabled=()=>{admission.disabled=busy||executionState?.admission_review_enabled!==true||!canReview();recover.disabled=busy||executionState?.recovery_enabled!==true||!canRecover();};
@@ -122,6 +122,20 @@
                 el("status").textContent=data.resolved?"Owned PAPER order linked. Reconcile fills and independently inspect protection. No automatic budget release.":"PAPER submission is uncertain. Funds held; recover the saved order without another buy.";
             }catch(error){if(detailVersion===selected)status.textContent=error.message;await refreshIntents();}
             finally{busy=false;confirmed.checked=false;enabled();}
+        });
+    }
+    function monitorControls(review,box,selected){
+        const intent=review.order_intent,button=document.createElement("button"),status=document.createElement("p");button.type="button";button.textContent="Reconcile PAPER position & exits";button.disabled=true;status.setAttribute("role","status");box.append(button,status);
+        let busy=false;const enabled=()=>{button.disabled=busy||executionState?.admission_review_enabled!==true||!intent.attempt_started_at||!["broker_linked","submitting","uncertain"].includes(intent.status);};loadExecutionStatus().then(enabled);
+        button.addEventListener("click",async()=>{
+            if(button.disabled)return;busy=true;enabled();status.textContent="Verifying owned entry and independently fetching bracket exits…";
+            try{
+                const response=await fetch("/auto-trader/pro-ticker/order-intents/"+encodeURIComponent(intent.id)+"/monitor",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:"{}"});if(!response.ok)throw Error("Reconciliation unavailable ("+response.status+"). Funds stay held; refresh and retry existing-order reads.");
+                const data=await response.json();if(data.paper!==true||data.order_submitted!==false||data.budget_released!==false||data.automatic_release_enabled!==false||typeof data.resolved!=="boolean"||typeof data.closed!=="boolean"||typeof data.protection_verified!=="boolean"||data.intent?.id!==intent.id||!Array.isArray(data.legs)||data.legs.length>2||data.legs.some(leg=>!leg||typeof leg.id!=="string"||typeof leg.status!=="string"||!Number.isSafeInteger(leg.shares)||leg.shares<1||!Number.isSafeInteger(leg.filled_shares)||leg.filled_shares<0||leg.filled_shares>leg.shares))throw Error("Invalid reconciliation evidence");validateIntent(data.intent,review.proposal);
+                await window.loadProTickerWorkspace?.();await refreshIntents();if(detailVersion!==selected)return;
+                status.textContent=(data.closed?"Closure verified for this snapshot. Owner release approval is still required.":data.protection_verified?"Existing bracket protection observed for this regular-session snapshot.":"Position refreshed; protection is not certified for this snapshot.")+" No order placed or funds released. "+data.legs.map(leg=>leg.status+" "+leg.filled_shares+" / "+leg.shares+" shares").join("; ");
+            }catch(error){if(detailVersion===selected)status.textContent=error.message;}
+            finally{busy=false;enabled();}
         });
     }
     function validateIntent(intent,proposal){

@@ -50,7 +50,8 @@ class IsolatedStagingTests(unittest.TestCase):
     def test_required_configuration_fails_before_application_import(self):
         for update in ({'PAPER_STAGING_MODE': ''}, {'DATABASE_PATH': '/data/trader.db'},
                        {'AUTO_TRADER_START_ENABLED': 'true'}, {'AUTO_TRADER_START_ENABLED': ''},
-                       {'APP_SESSION_SECRET': ''}, {'APP_ACCESS_PASSWORD': 'short'}):
+                       {'APP_SESSION_SECRET': ''}, {'APP_ACCESS_PASSWORD': 'short'},
+                       {'ALPACA_API_KEY':'synthetic-original'}, {'APCA_API_KEY_ID':'synthetic-original'}):
             with self.subTest(update=update), patch.dict(os.environ, update):
                 with self.assertRaises(RuntimeError):
                     validate_staging_config(data_directory=self.root)

@@ -63,6 +63,10 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    savedSignal.order_intent={...savedSignal.order_intent,status:'broker_linked',order_submitted:true,attempt_started_at:stamp};
    res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,resolved:true,dispatch_attempted:true,order_resubmitted:false,budget_released:false,protection_verified:false,intent:savedSignal.order_intent}));return;
   }
+  if(req.url.startsWith('/auto-trader/pro-ticker/order-intents/')&&req.url.endsWith('/monitor')){
+   assert.equal(req.method,'POST');assert.equal(req.headers.origin,origin);const chunks=[];for await(const chunk of req)chunks.push(chunk);assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString()),{});
+   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,resolved:true,closed:false,protection_verified:true,order_submitted:false,budget_released:false,automatic_release_enabled:false,intent:savedSignal.order_intent,legs:[{id:'synthetic-stop',status:'new',shares:2,filled_shares:0},{id:'synthetic-target',status:'new',shares:2,filled_shares:0}]}));return;
+  }
   if(req.url.startsWith('/auto-trader/pro-ticker/order-intents/')&&req.url.endsWith('/recover')){
    assert.equal(req.method,'POST');assert.equal(req.headers.origin,origin);const chunks=[];for await(const chunk of req)chunks.push(chunk);assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString()),{});recoveryRequests++;
    if(recoveryRequests>1)savedSignal.order_intent={...savedSignal.order_intent,status:'broker_linked',order_submitted:true};
@@ -219,6 +223,8 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.waitForFunction(()=>document.getElementById('pt-signal-status').textContent.includes('Owned PAPER order linked'));
    assert.equal(submissionRequests,width===1280?1:2);assert.equal(await page.getByRole('button',{name:'Submit approved PAPER bracket',exact:true}).isDisabled(),true);
    await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-owner-paper-submission.png',fullPage:true});ownerSubmissionConfigured=false;
+   await page.getByRole('button',{name:'Reconcile PAPER position & exits',exact:true}).click();await page.waitForFunction(()=>document.getElementById('pt-signal-detail').textContent.includes('Existing bracket protection observed for this regular-session snapshot.'));
+   await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-position-monitor.png',fullPage:true});
 
    // Read-only fixture projections exercise how independent broker accounting
    // is rendered. The browser does not create an order or release broker funds.
@@ -301,7 +307,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.locator('#pt-tab-overview').focus();await page.keyboard.press('ArrowRight');assert.equal(await page.locator('#pt-tab-scanner').getAttribute('aria-selected'),'true');
    fail=true;await page.locator('#pt-refresh').click();await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('Unable to load'));assert.equal(await page.locator('#pt-metrics').innerText(),'');assert.match(await page.locator('#pt-journal').innerText(),/Data unavailable/);
    fail=false;data=fixture();data.paper=false;await page.locator('#pt-refresh').click();await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('safety flags'));assert.equal(await page.locator('#pt-metrics').innerText(),'');
-   assert.deepEqual(errors,[]);assert.ok(requests.every(([method,url])=>method==='GET'||method==='POST'&&['/auto-trader/pro-ticker/proposal','/auto-trader/pro-ticker/discovery','/auto-trader/pro-ticker/manual-signals','/auto-trader/pro-ticker/manual-signals/proposal','/auto-trader/pro-ticker/order-intents','/auto-trader/pro-ticker/market-scan'].includes(url)||method==='POST'&&url.startsWith('/auto-trader/pro-ticker/manual-signals/')&&url.endsWith('/forward-review')||method==='POST'&&url.startsWith('/auto-trader/pro-ticker/order-intents/')&&['/cancel','/admission-review','/recover','/protection-review','/submit'].some(suffix=>url.endsWith(suffix))||method==='PUT'&&url==='/auto-trader/pro-ticker/settings'),'workspace writes must use explicit authenticated controls');await context.close();
+   assert.deepEqual(errors,[]);assert.ok(requests.every(([method,url])=>method==='GET'||method==='POST'&&['/auto-trader/pro-ticker/proposal','/auto-trader/pro-ticker/discovery','/auto-trader/pro-ticker/manual-signals','/auto-trader/pro-ticker/manual-signals/proposal','/auto-trader/pro-ticker/order-intents','/auto-trader/pro-ticker/market-scan'].includes(url)||method==='POST'&&url.startsWith('/auto-trader/pro-ticker/manual-signals/')&&url.endsWith('/forward-review')||method==='POST'&&url.startsWith('/auto-trader/pro-ticker/order-intents/')&&['/cancel','/admission-review','/recover','/protection-review','/submit','/monitor'].some(suffix=>url.endsWith(suffix))||method==='PUT'&&url==='/auto-trader/pro-ticker/settings'),'workspace writes must use explicit authenticated controls');await context.close();
   }
  }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
 });

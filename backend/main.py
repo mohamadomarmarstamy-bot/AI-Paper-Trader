@@ -16117,17 +16117,18 @@ def build_pro_ticker_learning_analysis(
 
 
 def make_pro_ticker_manual_release_reader():
-    """Server-only authenticated GET reader pinned to Alpaca's PAPER host."""
-    from pro_ticker_alpaca_paper_reader import make_alpaca_paper_order_reader
-    credentials = get_alpaca_credentials()
-    if credentials is None:
-        raise RuntimeError("PAPER credentials unavailable.")
-    return make_alpaca_paper_order_reader(
-        key_id=credentials[0], secret_key=credentials[1], http_get=requests.get,
-    )
+    """Release reads the separately configured Pro Ticker PAPER account only."""
+    from pro_ticker_runtime import dedicated_release_reader
+    return dedicated_release_reader()
 
 
 def fetch_pro_ticker_manual_signal_quote(symbol):
+    from pro_ticker_runtime import dedicated_paper_context
+    dedicated=dedicated_paper_context()
+    if dedicated is not None:
+        return dedicated.gateway().read_trade(symbol)
+    if os.getenv("PRO_TICKER_DEDICATED_ACCOUNT_CONFIRMED") == "true":
+        raise ValueError("Dedicated PAPER market data configuration is invalid.")
     data = alpaca_market_data_request("GET", f"/v2/stocks/{symbol}/trades/latest", timeout=3.0)
     if not isinstance(data, dict) or not isinstance(data.get("trade"), dict):
         raise ValueError("Latest trade unavailable.")
@@ -16136,11 +16137,13 @@ def fetch_pro_ticker_manual_signal_quote(symbol):
     return data["trade"]
 
 
+from pro_ticker_runtime import dedicated_paper_context
 from pro_ticker_manual_signals import build_manual_signal_router
 app.include_router(build_manual_signal_router(
     require_session=require_app_session,
     quote_fetcher=fetch_pro_ticker_manual_signal_quote,
     analyzer=lambda symbol: analyze_symbol(symbol),
+    execution_context=dedicated_paper_context(),
 ))
 
 

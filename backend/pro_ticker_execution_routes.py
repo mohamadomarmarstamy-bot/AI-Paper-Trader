@@ -62,4 +62,14 @@ def build_paper_execution_router(*,require_session,context=None):
         except IntentConflict:raise HTTPException(409,'Admission or intent changed. Refresh; recover any prior attempt before proceeding.') from None
         except ValueError:raise HTTPException(422,'Explicit owner confirmation, dedicated PAPER gateway and valid bracket required.') from None
         except Exception:raise HTTPException(503,'Submission unconfirmed. Refresh saved intent and recover by client ID; do not create another buy.') from None
+    @router.post(base+'/order-intents/{intent_id}/monitor')
+    async def monitor(intent_id:str,request:Request):
+        payload=await body(request)
+        if payload!={}:raise HTTPException(422,'No browser-supplied broker evidence accepted.')
+        from pro_ticker_position_monitor import monitor_paper_position
+        try:return await run_in_threadpool(monitor_paper_position,intent_id,context=context)
+        except IntentConflict:raise HTTPException(409,'Conflicting position evidence. Funds remain held for manual review.') from None
+        except PaperGatewayUnavailable:raise HTTPException(503,'Dedicated PAPER monitoring request unavailable. Funds remain held.') from None
+        except ValueError:raise HTTPException(422,'Complete owned PAPER bracket evidence required.') from None
+        except Exception:raise HTTPException(503,'Position reconciliation unconfirmed. Retry reads existing orders; no new order or release.') from None
     return router
