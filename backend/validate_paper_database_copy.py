@@ -6,11 +6,33 @@ No source rows, account data or secrets are printed.
 """
 from contextlib import closing
 from pathlib import Path
+from collections import Counter
+import hashlib
 import json
 import sqlite3
 import subprocess
 import sys
 import tempfile
+
+
+def _quote(name):
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _row_fingerprints(conn, table, columns):
+    """Preserve duplicate rows and typed values without retaining private data."""
+    fingerprints = Counter()
+    query = 'SELECT ' + ','.join(map(_quote, columns)) + ' FROM ' + _quote(table)
+    for row in conn.execute(query):
+        digest = hashlib.sha256()
+        for value in row:
+            if isinstance(value, bytes):
+                encoded = b'blob:' + value
+            else:
+                encoded = (type(value).__name__ + ':' + repr(value)).encode('utf-8')
+            digest.update(str(len(encoded)).encode('ascii') + b':' + encoded)
+        fingerprints[digest.digest()] += 1
+    return fingerprints
 
 
 def _validate_working_copy():
@@ -23,10 +45,13 @@ def _validate_working_copy():
         reservations = None
         if 'pro_ticker_paper_reservations' in tables:
             reservations = [dict(row) for row in conn.execute('SELECT * FROM pro_ticker_paper_reservations ORDER BY id')]
-        counts = {}
+        snapshots = {}
         for table in tables:
-            quoted = '"' + table.replace('"', '""') + '"'
-            counts[table] = conn.execute('SELECT COUNT(*) FROM ' + quoted).fetchone()[0]
+            # SQLite may advance internal sequence counters for newly seeded rows.
+            if table.startswith('sqlite_'):
+                continue
+            columns = [row[1] for row in conn.execute('PRAGMA table_info(' + _quote(table) + ')')]
+            snapshots[table] = (columns, _row_fingerprints(conn, table, columns))
     database.initialize_database()
     budget = get_pro_ticker_budget()
     with closing(database.get_connection()) as conn:
@@ -42,13 +67,16 @@ def _validate_working_copy():
                                  if row['status'] in {'reserved', 'submitted', 'filled'})
             if round(budget['committed'] * 100) != expected_cents:
                 raise ValueError('Copy reservation budget changed.')
-        for table, before in counts.items():
-            quoted = '"' + table.replace('"', '""') + '"'
-            if conn.execute('SELECT COUNT(*) FROM ' + quoted).fetchone()[0] < before:
-                raise ValueError('Existing rows were lost during copy migration.')
+        for table, (columns, before) in snapshots.items():
+            after = _row_fingerprints(conn, table, columns)
+            if before - after:
+                raise ValueError('Existing data changed during copy migration.')
         if conn.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
             raise ValueError('Migrated copy integrity check failed.')
+        if conn.execute('PRAGMA foreign_key_check').fetchone() is not None:
+            raise ValueError('Migrated copy foreign-key check failed.')
     return dict(valid=True, integrity='ok', existing_rows_preserved=True,
+                existing_values_preserved=True, foreign_keys='ok',
                 reservation_accounting_preserved=True, source_modified=False,
                 validation_scope='disposable_copy_schema_and_accounting')
 

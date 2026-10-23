@@ -29,8 +29,9 @@ Original trader execution settings and production deployment are unchanged.
    No production deployment or actual entry/exit certification is claimed.
 2. Obtain a separate Alpaca PAPER account and confirm its identity differs from the
    original trader's account. Never use original account credentials in staging.
-3. Complete exact-commit CI and review screenshots, then deploy to the already
-   isolated staging service/volume. Verify authenticated APIs and configured gates.
+3. Exact-commit CI and isolated staging deployment passed for the implementation
+   milestone. Authenticated hosted APIs, screenshots and configured gates still
+   require review; health and anonymous rejection alone do not complete this gate.
 4. Save an identifiable owner record, restart isolated staging, and independently
    read the record afterward. A local app recreation is not hosted restart proof.
 5. Validate a representative exported database on a disposable copy. The original
@@ -45,7 +46,7 @@ Original trader execution settings and production deployment are unchanged.
 8. Net P&L, fees, corrections, corporate actions and broader risk-adjusted analytics
    remain unverified. Do not advertise research grades as AI win probabilities.
 
-## Staging deployment checklist (authorized, pending connection)
+## Staging deployment checklist (authorized)
 
 - Identify explicit staging project, environment and service IDs; inspect source,
   current deployment, volume and configuration without revealing variable values.
@@ -81,6 +82,21 @@ Original trader execution settings and production deployment are unchanged.
   activities. Disabling new submissions is preferable to losing financial evidence.
 
 No merge or production deployment is authorized by this document.
+
+## Consistent backup and migration evidence
+
+`backend/backup_paper_database.py` creates a consistent standalone snapshot using
+SQLite's backup API, including committed WAL contents and excluding uncommitted
+transactions. It uses private file permissions, bounds snapshot time and refuses
+to replace an existing backup. It never restores or dispatches broker operations.
+`backend/validate_paper_database_copy.py` validates only a disposable copy of an
+export: integrity, foreign keys, reservation accounting and original typed column
+values for every pre-existing row, including duplicates and blobs. Row counts
+alone are insufficient to prove preservation of order/fill evidence.
+
+Synthetic backup/migration tests cover these behaviors. They do not satisfy the
+representative deployed export or hosted restart gates above. Never restore an
+older snapshot over newer broker-attempt, ownership or fill evidence.
 
 ## Unattended monitoring (2026-10-23)
 

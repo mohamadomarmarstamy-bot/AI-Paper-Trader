@@ -35,12 +35,12 @@ paste them into chat. Use dedicated Alpaca PAPER credentials for subsequent
 broker validation, supplied securely. Do not reuse the actively trading
 production PAPER account to create test trades.
 
-The isolated factory registers only login, the research panel, research
-intake, budget reads and the guarded manual-release routes. It does not mount
-`main.app`, run its lifespan, restore its scheduler, start its background loops,
-expose its order controls, or expose live-account routes. Broker order submission
-is absent from this staging service. Research quotes and release evidence may
-make authenticated read-only PAPER/market-data requests.
+The isolated factory registers login, the research workspace and dedicated
+Pro Ticker routes. It does not mount `main.app`, run its lifespan, restore the
+original trader scheduler, expose its controls, or expose live-account routes.
+Dedicated PAPER submission, owner cancel/close and observation each require
+their own explicit configuration gates; they default off. Research quotes and
+release evidence may make authenticated read-only PAPER/market-data requests.
 
 ## Validation gates
 
@@ -50,19 +50,27 @@ make authenticated read-only PAPER/market-data requests.
 3. Test the enabled manual operator controls, cross-origin rejection and release
    history against the isolated database; verify production remains unchanged.
 4. With dedicated PAPER credentials, fetch actual linked broker orders and test
-   reconciliation. Creating real PAPER entry/exit fixtures requires a separate
-   controlled test runner and dedicated account; this staging web app cannot
-   submit those trades. Partial fills cannot be guaranteed on demand.
+   reconciliation. Creating actual PAPER entry/exit fixtures requires explicit
+   owner approval and the separate submission/management gates. Partial fills
+   cannot be guaranteed on demand.
 5. Obtain a consistent standalone backup of the deployed SQLite database
    (no WAL, rollback journal, or shared-memory sidecar beside the exported file). Run
    `python backend/validate_paper_database_copy.py /secure/export.sqlite3`.
+   To create that snapshot on the explicitly selected host, run
+   `python backend/backup_paper_database.py SOURCE NEW_BACKUP`. The SQLite backup
+   API includes committed WAL data, excludes uncommitted changes, uses private
+   output permissions, and refuses to overwrite an existing destination. It
+   does not restore files or invoke brokerage operations. Export the resulting
+   standalone file securely; never copy only a running database's main file.
    The validator opens the export immutably, migrates a disposable copy in an
-   isolated process, checks integrity and reservation accounting, and prints
-   only a sanitized result. Never overwrite staging or attach production storage.
+   isolated process, checks integrity, foreign keys, reservation accounting and
+   preservation of every existing row's original column values (including
+   duplicate rows and blobs). It prints only a sanitized result. Never overwrite
+   staging or attach production storage to a validation container.
 6. Review results before any merge or production rollout.
 
-Railway access and secure staging credentials are needed before the deployment
-can actually be created. A successful local test or GitHub Actions run is not a
+An authenticated owner session and a representative exported database are still
+needed to complete the hosted checks. A successful local test or GitHub Actions run is not a
 deployment, and a deployed healthcheck is not proof of a completed broker
 lifecycle. Report these gates separately.
 

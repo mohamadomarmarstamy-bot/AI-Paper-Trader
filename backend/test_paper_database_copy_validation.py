@@ -4,7 +4,9 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
-from validate_paper_database_copy import validate_database_backup
+from unittest.mock import patch
+import database
+from validate_paper_database_copy import validate_database_backup, _validate_working_copy
 
 
 class DatabaseCopyValidationTests(unittest.TestCase):
@@ -66,6 +68,42 @@ class DatabaseCopyValidationTests(unittest.TestCase):
                 self.assertEqual(self.source.read_bytes(), before)
                 self.assertEqual(sidecar.read_bytes(), b'private-interrupted-transaction')
                 sidecar.unlink()
+
+    def test_same_count_changed_order_evidence_is_rejected(self):
+        self.seed()
+        with sqlite3.connect(self.source) as conn:
+            conn.execute('CREATE TABLE broker_evidence (value TEXT, raw BLOB)')
+            conn.executemany('INSERT INTO broker_evidence VALUES (?, ?)',
+                             [('owned', b'\x00\xff'), ('owned', b'\x00\xff')])
+        initialize = database.initialize_database
+        def corrupt_migration():
+            initialize()
+            with sqlite3.connect(self.source) as conn:
+                conn.execute("UPDATE broker_evidence SET raw=X'00' WHERE rowid=1")
+        with patch.object(database, 'DATABASE_PATH', self.source), patch.object(database, 'initialize_database', side_effect=corrupt_migration):
+            with self.assertRaisesRegex(ValueError, 'Existing data changed'):
+                _validate_working_copy()
+
+    def test_migration_added_columns_do_not_change_existing_typed_evidence(self):
+        self.seed()
+        with sqlite3.connect(self.source) as conn:
+            conn.execute('CREATE TABLE broker_evidence ("quoted column" TEXT, raw BLOB)')
+            conn.executemany('INSERT INTO broker_evidence VALUES (?, ?)',
+                             [('private', b'\x00\xff'), ('private', b'\x00\xff'), (None, b'')])
+        result = validate_database_backup(self.source)
+        self.assertTrue(result['valid'], result)
+        self.assertTrue(result['existing_values_preserved'])
+        self.assertNotIn('private', str(result))
+
+    def test_foreign_key_violation_is_rejected_without_source_changes(self):
+        self.seed()
+        with sqlite3.connect(self.source) as conn:
+            conn.execute('CREATE TABLE parent_evidence (id INTEGER PRIMARY KEY)')
+            conn.execute('CREATE TABLE child_evidence (parent_id INTEGER REFERENCES parent_evidence(id))')
+            conn.execute('INSERT INTO child_evidence VALUES (99)')
+        before = self.source.read_bytes()
+        self.assertFalse(validate_database_backup(self.source)['valid'])
+        self.assertEqual(self.source.read_bytes(), before)
 
 
 if __name__ == '__main__':

@@ -93,6 +93,8 @@ jobs:
           python -m unittest discover -s backend -p 'test_pending_entry_skip.py' -v
           python -m unittest discover -s backend -p 'test_buy_asset_eligibility.py' -v
           python -m unittest discover -s backend -p 'test_reporting_metrics.py' -v
+      - name: Consistent database snapshot and disposable migration checks
+        run: python -m unittest discover -s backend -p 'test_paper_database*.py' -v
       - name: Frontend research DOM wiring smoke test
         run: |
           python -m unittest discover -s backend -p 'test_pro_ticker_frontend_integration.py' -v
