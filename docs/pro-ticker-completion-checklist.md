@@ -386,3 +386,27 @@ Synthetic HTTP/service tests exercise authorization, admission, dispatch,
 partial entry fills, restart-style recovery and failure boundaries. Browser
 fixtures exercise the explicit confirmation control, separate from the default
 configuration that cannot submit. These do not establish real broker readiness.
+
+## Integrated market research scanning
+
+The Scanner tab can scan eight entered symbols or rotate through saved research
+and manual-review symbols. Empty universes stay empty. The existing keyless Yahoo
+Finance dependency supplies timestamped minute closes and current regular-session
+volume, with 20 completed daily sessions as the average-volume denominator.
+Fractional average volume is preserved. This ratio is not time-adjusted RVOL.
+Data over 120 seconds old, future data, missing history and provider failures are
+rejected explicitly. Movement is measured against the last completed session;
+missing movement and research scores stay unavailable. Results rank relative
+volume, not AI confidence. A candidate can open Manual Signals for a separate
+technical grade, without creating an order.
+
+Owner authentication, same-origin bounded JSON, a persisted single-run lease,
+immutable request retries, provider error sanitization and persisted run/history
+are wired through the actual app/staging router. Interrupted workers cannot
+publish after lease expiry. Scanning is operator-triggered; independent universe
+expansion and background scheduling are still not implemented. Yahoo live-source
+coverage, hosted persistence and staging remain unverified while Railway OAuth
+is unavailable. No broker credentials are used by this scanner.
+
+Browser CI uses the version-matched Playwright container with preinstalled
+browsers, avoiding repeated distro dependency installation timeouts.

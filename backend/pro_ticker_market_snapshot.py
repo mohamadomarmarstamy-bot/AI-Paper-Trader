@@ -49,14 +49,22 @@ def normalize_market_snapshot(payload, *, now=None, max_age_seconds=120):
     price = _positive(payload.get("price"), "price")
     volume = _positive(payload.get("volume"), "volume", allow_zero=True)
     avg_volume = _positive(payload.get("average_volume"), "average volume")
-    if volume != volume.to_integral_value() or avg_volume != avg_volume.to_integral_value():
-        raise ValueError("Volumes must be whole shares")
+    if volume != volume.to_integral_value():
+        raise ValueError("Traded volume must be whole shares")
     source = payload.get("source")
     if not isinstance(source, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", source):
         raise ValueError("Invalid source")
+    movement=payload.get('price_change_percent')
+    if movement is not None:
+        if isinstance(movement,bool) or not isinstance(movement,(str,int,float)) or len(str(movement))>40:raise ValueError('Invalid movement')
+        try:movement=Decimal(str(movement))
+        except InvalidOperation:raise ValueError('Invalid movement') from None
+        if not movement.is_finite() or movement < -100 or movement>1000000:raise ValueError('Invalid movement')
     return {
         "symbol": symbol, "price": str(price), "volume": int(volume),
-        "average_volume": int(avg_volume),
+        "average_volume": str(avg_volume),
+        "price_change_percent": str(movement) if movement is not None else None,
+        "research_score": None,
         "relative_volume": str((volume / avg_volume).quantize(Decimal("0.001"))),
         "observed_at": moment.isoformat(), "source": source,
         "market_data_verified": False, "order_execution_authorized": False,

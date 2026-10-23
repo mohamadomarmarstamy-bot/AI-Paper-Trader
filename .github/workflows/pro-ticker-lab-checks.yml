@@ -125,8 +125,10 @@ jobs:
         run: python -m unittest discover -s backend -p 'test*.py' -v
 
   paper-release-browser:
-    # Playwright 1.58.2 does not support the Ubuntu 26.04 latest runner.
     runs-on: ubuntu-24.04
+    container:
+      image: mcr.microsoft.com/playwright:v1.58.2-noble
+      options: --ipc=host
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -135,8 +137,8 @@ jobs:
           node-version: '22'
       - name: Install pinned isolated browser test dependency
         run: npm install --no-save --ignore-scripts playwright@1.58.2
-      - name: Install headless Chromium
-        run: npx playwright install --with-deps chromium --only-shell
+      - name: Verify preinstalled Chromium
+        run: node -e "const {chromium}=require('playwright'); require('fs').accessSync(chromium.executablePath())"
       - name: PAPER release desktop and mobile browser smoke
         run: node --test backend/frontend/js/pro-ticker-release.browser.cjs backend/frontend/js/pro-ticker-workspace.browser.cjs
       - name: Keep PAPER release screenshots for review

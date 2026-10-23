@@ -206,4 +206,6 @@ def build_manual_signal_router(*,require_session,quote_fetcher,analyzer,executio
     router.include_router(build_research_dataset_router(require_session=require_session))
     from pro_ticker_execution_routes import build_paper_execution_router
     router.include_router(build_paper_execution_router(require_session=require_session,context=execution_context))
+    from pro_ticker_market_scanner import build_market_scanner_router
+    router.include_router(build_market_scanner_router(require_session=require_session))
     return router
