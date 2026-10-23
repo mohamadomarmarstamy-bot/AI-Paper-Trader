@@ -31,3 +31,9 @@ class MarketIntakeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             collect_research_snapshots(["AAA","../B"],fetch_snapshot=lambda s:called.append(s),now=NOW)
         self.assertEqual(called,[])
+
+    def test_invalid_clock_fails_before_provider_calls(self):
+        called=[]
+        with self.assertRaises(ValueError):
+            collect_research_snapshots(["AAA"],fetch_snapshot=lambda s:called.append(s),now="not-a-clock")
+        self.assertEqual(called,[])
