@@ -20,6 +20,21 @@ and mobile controls; synthetic fixture results are not actual account results.
 Automatic stock buying, automatic budget release and model retraining are disabled.
 Original trader execution settings and production deployment are unchanged.
 
+## Verified staging checkpoint
+
+The October 23 staging deployment of `2bf1477` reached SUCCESS. Hosted health
+reported all broker submission, position management and background monitoring
+flags disabled. The signed-owner reference button returned a captured OSUR trade
+aged 117 seconds and correctly failed both the 90-second allocation and 30-second
+submission limits. Refreshing saved reviews retained 18 records; the independent
+PAPER Workspace showed no allocation intents. This read-only check does not
+certify an entry/exit lifecycle. The regular session had ended before an order
+test could proceed.
+
+The complete backend suite passes 936 tests with pytest, including plain-function
+tests not collected by unittest. The full backend CI job now uses pytest; focused
+unittest and frontend/browser/container jobs retain their existing coverage.
+
 ## Read-only market reference diagnostics
 
 Manual Signals includes an explicit **Check latest broker reference** action.

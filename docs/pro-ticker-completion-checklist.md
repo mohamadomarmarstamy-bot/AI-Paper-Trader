@@ -69,13 +69,14 @@ does not imply server failure: refresh persisted status before retrying.
 Expired runs remain visible as interrupted; only an explicit retry starts new
 work. Empty source responses are not reported as proof of scanner health.
 
-The workspace shows a configured virtual allocation, not a dedicated brokerage
-account. Individual share fill events still lack execution prices. A separate
-closed report captures gross estimates from owner-reviewed terminal broker
-averages; net/open-position P&L and equity-level performance remain unavailable. Candidate rows are historical saved research, not an operational
-independent scanner. Proposal calculations use operator estimates, are not
-broker-approved plans, and do not claim a stop will cap actual losses. No chart
-or measured strategy improvement is fabricated to fill missing integrations.
+The workspace shows a configured virtual allocation, not broker account equity.
+The dedicated PAPER account is configured and read-only identity checks passed.
+Individually verified fill activities can retain execution prices and timestamps;
+actual broker activity coverage remains uncertified. The closed report captures
+gross estimates separately from unknown net/open-position P&L and equity-level
+performance. Independent discovery is operator-triggered; saved research remains
+historical evidence. Proposal calculations use operator estimates and cannot
+guarantee that a stop caps actual losses.
 
 ## Pro Ticker proposal/research settings
 
