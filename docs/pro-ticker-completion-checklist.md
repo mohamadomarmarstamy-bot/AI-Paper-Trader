@@ -41,7 +41,8 @@ See [release readiness](pro-ticker-release-readiness.md) for deployment gates.
 - [x] Keep automatic release disabled unless separately approved.
 - [x] Versioned Pro Ticker proposal allocation/estimated-stop-risk limits and manual discovery size, with authenticated same-origin saves, optimistic concurrency and atomic audit records.
 - [ ] Execution/scanner strategy settings beyond hypothetical proposals and bounded manual discovery.
-- [ ] Link journal outcomes and forward research to measured strategy/regime comparisons.
+- [x] Group completely covered execution outcomes by the frozen entry grade and version, with missing-provenance counts and explicit selection/cost limitations.
+- [ ] Point-in-time regime comparisons, validated strategy improvement and chronological out-of-sample learning.
 
 ## Validation and external blockers
 

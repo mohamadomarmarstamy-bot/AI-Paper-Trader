@@ -57,7 +57,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
   }
   if(req.url==='/auto-trader/pro-ticker/execution-journal'){
    const journalRows=closedExecutionMetrics?[10,15,10,8,10,10].map((price,index)=>({activity_id:'gross-fixture::'+index,intent_id:'closed-fixture-'+Math.floor(index/2),broker_order_id:'order-fixture-'+index,symbol:'AAPL',side:index%2?'sell':'buy',shares:1,price:String(price),executed_at:stamp,recorded_at:stamp})):pricedExecutions;
-   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,kind:'owned_broker_fill_activities',rows:journalRows,total_count:journalRows.length,has_more:false,closed_priced_count:closedExecutionMetrics?3:0,gross_profit_usd:closedExecutionMetrics?'5':null,gross_loss_usd:closedExecutionMetrics?'2':null,gross_profit_factor:closedExecutionMetrics?'2.500000':null,average_gross_result_usd:invalidExecutionMetrics?'invalid':closedExecutionMetrics?'1.000000':null,gross_wins:closedExecutionMetrics?1:0,gross_losses:closedExecutionMetrics?1:0,gross_flat:closedExecutionMetrics?1:0,gross_win_rate_percent:closedExecutionMetrics?33.33:null,gross_realized_usd:closedExecutionMetrics?'3':null,net_pnl:null,fees:null,model_updated:false}));return;
+   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,kind:'owned_broker_fill_activities',rows:journalRows,total_count:journalRows.length,has_more:false,grade_source:'saved_allocation_entry_grade',training_eligible:false,unattributed_closed_count:0,entry_grade_groups:closedExecutionMetrics?[{grade:'B',grade_version:'daily_fixture_v1',closed_count:3,gross_wins:1,gross_losses:1,gross_flat:1,gross_realized_usd:'3',gross_profit_usd:'5',gross_loss_usd:'2',gross_profit_factor:'2.500000',average_gross_result_usd:invalidExecutionMetrics?'invalid':'1.000000'}]:[],closed_priced_count:closedExecutionMetrics?3:0,gross_profit_usd:closedExecutionMetrics?'5':null,gross_loss_usd:closedExecutionMetrics?'2':null,gross_profit_factor:closedExecutionMetrics?'2.500000':null,average_gross_result_usd:invalidExecutionMetrics?'invalid':closedExecutionMetrics?'1.000000':null,gross_wins:closedExecutionMetrics?1:0,gross_losses:closedExecutionMetrics?1:0,gross_flat:closedExecutionMetrics?1:0,gross_win_rate_percent:closedExecutionMetrics?33.33:null,gross_realized_usd:closedExecutionMetrics?'3':null,net_pnl:null,fees:null,model_updated:false}));return;
   }
   if(req.url.startsWith('/auto-trader/pro-ticker/order-intents/')&&req.url.endsWith('/execution-sync')){
    assert.equal(req.method,'POST');assert.equal(req.headers.origin,origin);const chunks=[];for await(const chunk of req)chunks.push(chunk);assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString()),{});
@@ -295,6 +295,15 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    assert.match(await page.locator('#pt-priced-executions').innerText(),/average gross result per closed trade: \$1.000000/);
    assert.match(await page.locator('#pt-priced-executions').innerText(),/net P&L remain unavailable/);
    await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-execution-gross-metrics.png',fullPage:true});
+   await page.locator('#pt-tab-performance').click();await page.getByRole('button',{name:'Refresh execution grade outcomes',exact:true}).click();
+   await page.waitForFunction(()=>document.getElementById('pt-execution-grade-outcomes').textContent.includes('3 of 3 completely covered closed trades'));
+   assert.match(await page.locator('#pt-execution-grade-outcomes').innerText(),/daily_fixture_v1/);
+   assert.match(await page.locator('#pt-execution-grade-outcomes').innerText(),/model training stays disabled/);
+   await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-execution-grade-outcomes.png',fullPage:true});
+   invalidExecutionMetrics=true;await page.getByRole('button',{name:'Refresh execution grade outcomes',exact:true}).click();
+   await page.waitForFunction(()=>document.getElementById('pt-execution-grade-outcomes').textContent.includes('Invalid grouped execution metrics'));
+   assert.doesNotMatch(await page.locator('#pt-execution-grade-outcomes').innerText(),/daily_fixture_v1/);
+   await page.locator('#pt-tab-journal').click();
    invalidExecutionMetrics=true;await page.getByRole('button',{name:'Refresh priced execution journal',exact:true}).click();
    await page.waitForFunction(()=>document.getElementById('pt-priced-executions').textContent.includes('Invalid execution gross metrics'));
    assert.doesNotMatch(await page.locator('#pt-priced-executions').innerText(),/gross profit factor: 2.500000/);

@@ -10,7 +10,7 @@ import httpx
 from fastapi import FastAPI,HTTPException
 import database
 import test_pro_ticker_position_monitor as fixtures
-from pro_ticker_execution_journal import sync_execution_journal,execution_journal_snapshot,gross_execution_metrics
+from pro_ticker_execution_journal import sync_execution_journal,execution_journal_snapshot,gross_execution_metrics,grouped_execution_metrics
 from pro_ticker_order_intents import IntentConflict
 from pro_ticker_workspace import workspace_snapshot
 from pro_ticker_paper_gateway import AlpacaPaperEvidenceGateway,PaperGatewayUnavailable
@@ -145,6 +145,11 @@ class VerifiedGrossOutcomeTests(unittest.TestCase):
         self.assertEqual(workspace_snapshot()['budget']['committed_cents'],2100)
         self.assertIsNone(result['fees']);self.assertIsNone(result['adjustments']);self.assertIsNone(result['net_pnl'])
         self.assertEqual(result['net_pnl_status'],'unavailable_cost_evidence')
+        group=result['entry_grade_groups'][0]
+        self.assertEqual(group['grade'],self.intent['plan']['entry_grade']['grade'])
+        self.assertEqual(group['grade_version'],self.intent['plan']['entry_grade']['version'])
+        self.assertEqual(group['closed_count'],1);self.assertEqual(group['gross_realized_usd'],'2.0')
+        self.assertEqual(result['unattributed_closed_count'],0);self.assertFalse(result['training_eligible'])
 
     def test_priced_loser_uses_actual_execution_cost(self):
         result=self.complete('9.5')
@@ -231,3 +236,21 @@ class GrossExecutionMetricsTests(unittest.TestCase):
         result=gross_execution_metrics([Decimal('-3')])
         self.assertEqual(result['gross_profit_factor'],'0.000000')
         self.assertEqual(result['average_gross_result_usd'],'-3.000000')
+
+
+class GradeExecutionMetricsTests(unittest.TestCase):
+    def test_versions_remain_separate_and_unknown_grades_have_denominator(self):
+        from decimal import Decimal
+        grade=lambda version,label='A':{'status':'graded','version':version,'grade':label}
+        result=grouped_execution_metrics([(grade('v1'),Decimal('5')),(grade('v1'),Decimal('-2')),
+            (grade('v2'),Decimal('0')),(None,Decimal('9')),(grade(''),Decimal('-4'))])
+        self.assertEqual(result['unattributed_closed_count'],2)
+        self.assertEqual([(r['grade_version'],r['closed_count']) for r in result['entry_grade_groups']],[('v1',2),('v2',1)])
+        self.assertEqual(result['entry_grade_groups'][0]['gross_profit_factor'],'2.500000')
+        self.assertEqual(result['entry_grade_groups'][0]['average_gross_result_usd'],'1.500000')
+        self.assertEqual(result['entry_grade_groups'][1]['gross_flat'],1)
+        self.assertFalse(result['training_eligible'])
+
+    def test_empty_data_does_not_imply_grade_performance(self):
+        result=grouped_execution_metrics([])
+        self.assertEqual(result['entry_grade_groups'],[]);self.assertEqual(result['unattributed_closed_count'],0)

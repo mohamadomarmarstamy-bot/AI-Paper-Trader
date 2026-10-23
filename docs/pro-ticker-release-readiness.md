@@ -20,6 +20,17 @@ and mobile controls; synthetic fixture results are not actual account results.
 Automatic stock buying, automatic budget release and model retraining are disabled.
 Original trader execution settings and production deployment are unchanged.
 
+## Saved-grade execution comparisons
+
+Performance now groups completely covered closed execution outcomes by the frozen
+grade and grading version saved in each allocation plan. Missing or malformed
+grade provenance is counted explicitly outside those groups. Open and incomplete
+trades cannot enter the denominator. Groups report gross results, wins/losses/flat,
+profit factor and average result; no-loss profit factor stays unavailable. This
+selected, descriptive sample is not a prediction or a validated improvement.
+Indicator timing, regime, costs and chronological out-of-sample evaluation remain
+unverified. Training eligibility remains false and no execution policy changes.
+
 ## Execution gross metrics
 
 The execution journal reports gross profit, gross loss magnitude, profit factor

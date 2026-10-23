@@ -431,3 +431,29 @@
         } finally { button.disabled = false; }
     });
 })();
+
+(() => {
+    const panel=document.getElementById('pt-panel-performance');if(!panel)return;
+    const article=document.createElement('article'),title=document.createElement('h3'),note=document.createElement('p'),status=document.createElement('p'),refresh=document.createElement('button'),scroller=document.createElement('div'),table=document.createElement('table'),head=document.createElement('thead'),body=document.createElement('tbody');
+    article.id='pt-execution-grade-outcomes';title.textContent='Execution outcomes by saved entry grade';
+    note.textContent='Descriptive gross results from completely covered closed PAPER trades, grouped by the grade and version saved at allocation. This selected sample is not a prediction, an AI win probability or evidence of strategy improvement. Fees, regime and indicator timing remain unverified; model training stays disabled.';
+    status.setAttribute('role','status');refresh.type='button';refresh.textContent='Refresh execution grade outcomes';scroller.className='pt-table';
+    const header=document.createElement('tr');for(const label of ['Saved grade','Grading version','Closed trades','Gross wins / losses / flat','Gross result','Gross profit factor','Average gross result']){const th=document.createElement('th');th.textContent=label;header.appendChild(th);}head.appendChild(header);table.append(head,body);scroller.appendChild(table);article.append(title,note,status,refresh,scroller);panel.appendChild(article);
+    let version=0;
+    const count=value=>Number.isSafeInteger(value)&&value>=0;
+    const numeric=value=>typeof value==='string'&&/^-?\d+(\.\d+)?$/.test(value)&&Number.isFinite(Number(value));
+    async function load(){const current=++version;try{
+        const response=await fetch('/auto-trader/pro-ticker/execution-journal',{credentials:'same-origin',cache:'no-store'});if(!response.ok)throw Error('Execution report unavailable ('+response.status+').');const data=await response.json();
+        if(data.paper!==true||data.kind!=='owned_broker_fill_activities'||data.training_eligible!==false||data.model_updated!==false||data.net_pnl!==null||data.grade_source!=='saved_allocation_entry_grade'||!count(data.closed_priced_count)||!count(data.unattributed_closed_count)||!Array.isArray(data.entry_grade_groups))throw Error('Invalid grade outcome evidence.');
+        const keys=new Set();let grouped=0;
+        for(const row of data.entry_grade_groups){
+            if(!row||!['A','B','C','D'].includes(row.grade)||typeof row.grade_version!=='string'||!/^[A-Za-z0-9_.-]{1,120}$/.test(row.grade_version)||![row.closed_count,row.gross_wins,row.gross_losses,row.gross_flat].every(count)||row.closed_count===0||row.gross_wins+row.gross_losses+row.gross_flat!==row.closed_count||![row.gross_realized_usd,row.gross_profit_usd,row.gross_loss_usd,row.average_gross_result_usd].every(numeric)||Number(row.gross_profit_usd)<0||Number(row.gross_loss_usd)<0||(Number(row.gross_loss_usd)>0?!numeric(row.gross_profit_factor)||Number(row.gross_profit_factor)<0:row.gross_profit_factor!==null))throw Error('Invalid grouped execution metrics.');
+            const key=row.grade_version+':'+row.grade;if(keys.has(key))throw Error('Duplicate grade outcome group.');keys.add(key);grouped+=row.closed_count;
+        }
+        if(!Number.isSafeInteger(grouped)||grouped+data.unattributed_closed_count!==data.closed_priced_count)throw Error('Grade coverage denominator differs.');
+        if(current!==version)return;body.replaceChildren();
+        for(const row of data.entry_grade_groups){const tr=document.createElement('tr');for(const value of [row.grade,row.grade_version,row.closed_count,row.gross_wins+' / '+row.gross_losses+' / '+row.gross_flat,'$'+row.gross_realized_usd,row.gross_profit_factor===null?'Unavailable (no gross losses)':Number(row.gross_profit_factor).toFixed(2),'$'+Number(row.average_gross_result_usd).toFixed(2)]){const td=document.createElement('td');td.textContent=String(value);tr.appendChild(td);}body.appendChild(tr);}
+        status.textContent=data.closed_priced_count?grouped+' of '+data.closed_priced_count+' completely covered closed trades attributed to a saved grade; '+data.unattributed_closed_count+' lack valid grade provenance. Open or incomplete trades are excluded.':'No completely covered closed execution outcomes. Grade performance is unavailable; no zero result is inferred.';
+    }catch(error){if(current===version){body.replaceChildren();status.textContent='Execution grade outcomes unavailable: '+error.message;}}}
+    refresh.addEventListener('click',load);document.getElementById('pt-refresh')?.addEventListener('click',load);load();
+})();
