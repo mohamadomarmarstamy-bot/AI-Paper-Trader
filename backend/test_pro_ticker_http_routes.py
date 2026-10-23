@@ -58,7 +58,7 @@ class ProTickerResearchHTTPTests(unittest.TestCase):
     def request(self, method, path, **kwargs):
         async def send():
             transport = httpx.ASGITransport(app=self.app)
-            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver", headers={"Origin":"http://testserver"}) as client:
                 return await client.request(method, path, **kwargs)
         with patch.dict(sys.modules, {"pro_ticker_manual_intake": self.fake}):
             return asyncio.run(send())

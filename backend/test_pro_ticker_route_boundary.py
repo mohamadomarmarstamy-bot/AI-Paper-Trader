@@ -24,6 +24,8 @@ class RouteHTTPError(Exception):
 
 class FakeRequest:
     def __init__(self, payload=None, error=None):
+        self.headers = {"origin": "http://testserver"}
+        self.base_url = "http://testserver/"
         self.payload = payload
         self.error = error
 
@@ -39,6 +41,7 @@ def isolated_routes():
         "auto_trader_pro_ticker_manual_submissions",
         "list_auto_trader_pro_ticker_manual_submissions",
         "pro_ticker_paper_preview",
+        "require_pro_ticker_same_origin",
     }
     nodes = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names]
     for node in nodes:
@@ -54,6 +57,16 @@ def isolated_routes():
         "require_app_session": lambda request: (_ for _ in ()).throw(Denied()),
     }
     exec(compile(ast.fix_missing_locations(ast.Module(body=nodes, type_ignores=[])), str(SOURCE), "exec"), namespace)
+    # Adapt existing per-field fixtures to the dedicated gateway snapshot API.
+    # Real account isolation is exercised in test_pro_ticker_legacy_account_boundary.
+    from types import SimpleNamespace
+    def snapshot(symbol):
+        return {'positions':namespace['fetch_alpaca_paper_positions'](),
+                'orders':namespace['alpaca_paper_request']('GET','/v2/orders'),
+                'clock':namespace['fetch_alpaca_market_clock'](),
+                'account':namespace['alpaca_paper_request']('GET','/v2/account'),
+                'quote':namespace['alpaca_market_data_request']('GET','/v2/stocks/'+symbol+'/trades/latest').get('trade')}
+    namespace['make_pro_ticker_evidence_gateway']=lambda:SimpleNamespace(read_snapshot=snapshot)
     return namespace
 
 

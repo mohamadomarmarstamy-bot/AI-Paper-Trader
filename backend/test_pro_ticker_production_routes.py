@@ -88,12 +88,11 @@ class ProductionResearchRouteRegistrationTests(unittest.TestCase):
         self.assertFalse(invoked & forbidden, f"Order calls in preview: {invoked & forbidden}")
         broker_calls = [node for node in calls if isinstance(node.func, ast.Name)
                         and node.func.id == "alpaca_paper_request"]
-        self.assertTrue(broker_calls)
-        for node in broker_calls:
-            with self.subTest(line=node.lineno):
-                self.assertTrue(node.args)
-                self.assertIsInstance(node.args[0], ast.Constant)
-                self.assertEqual(node.args[0].value, "GET")
+        self.assertFalse(broker_calls, "Preview must not reuse original account helpers")
+        self.assertIn("make_pro_ticker_evidence_gateway", invoked)
+        attributes={node.func.attr for node in calls if isinstance(node.func,ast.Attribute)}
+        self.assertIn("read_snapshot", attributes)
+        self.assertFalse(attributes & {"submit_bracket","submit_owned_close","cancel_owned_order"})
 
 
     def test_production_preview_always_disables_execution_on_success_and_failure(self):

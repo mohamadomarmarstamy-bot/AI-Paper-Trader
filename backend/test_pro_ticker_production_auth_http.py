@@ -96,7 +96,7 @@ class ProductionAuthenticationHTTPTests(unittest.TestCase):
 
     def test_production_auth_accepts_signed_cookie_for_research_save(self):
         response = self.request("POST", cookies=self.signed_cookie(),
-                                json={"symbols": "AAPL"})
+                                headers={"Origin": "http://testserver"}, json={"symbols": "AAPL"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["orders_submitted"], 0)
 
@@ -145,6 +145,13 @@ class ProductionAuthenticationHTTPTests(unittest.TestCase):
         cookies = self.signed_cookie(int(time.time()) + 30)
         response = self.request("GET", cookies=cookies)
         self.assertEqual(response.status_code, 200)
+
+
+    def test_research_save_rejects_cross_origin_before_persistence(self):
+        for origin in ('https://other.invalid', ''):
+            response=self.request('POST',cookies=self.signed_cookie(),
+                headers={'Origin':origin},json={'symbols':'AAPL'})
+            self.assertEqual(response.status_code,403)
 
 
 if __name__ == "__main__":

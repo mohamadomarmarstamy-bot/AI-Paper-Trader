@@ -20,6 +20,17 @@ and mobile controls; synthetic fixture results are not actual account results.
 Automatic stock buying, automatic budget release and model retraining are disabled.
 Original trader execution settings and production deployment are unchanged.
 
+## Legacy production route isolation
+
+The older Pro Ticker preview/audit and entry-reconciliation wrappers now use an
+identity-verified dedicated PAPER gateway. Missing configuration or account
+mismatch cannot fall back to the original trader's helpers. Historical order
+previews reject full 500-row pages rather than claiming complete coverage. The
+older entry-reconciliation, research-save and preview POST routes also require
+a same-origin request. These changes affect Pro Ticker routes only; the original
+trader's broker helpers retain their existing behavior. Actual production-hosted
+and dedicated broker lifecycle validation remain outstanding.
+
 ## Saved-grade execution comparisons
 
 Performance now groups completely covered closed execution outcomes by the frozen

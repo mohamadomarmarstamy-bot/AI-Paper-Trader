@@ -42,7 +42,7 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
              patch.object(self.main, "APP_SESSION_SECRET", "isolated-operator-smoke-secret"), \
              patch.object(self.main, "get_alpaca_credentials") as credentials:
             async def run():
-                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.main.app), base_url="http://testserver") as client:
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.main.app), base_url="http://testserver", headers={"Origin":"http://testserver"}) as client:
                     anonymous = await client.get("/auto-trader/pro-ticker-paper/release-events")
                     client.cookies.set(self.main.APP_SESSION_COOKIE, self.main.create_app_session_token())
                     status = await client.get("/auto-trader/pro-ticker-paper/release-status")
@@ -69,7 +69,7 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
              patch.object(self.main, "APP_SESSION_SECRET", "isolated-operator-smoke-secret"), \
              patch.object(self.main, "get_alpaca_credentials") as credentials:
             async def run():
-                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.main.app), base_url="http://testserver") as client:
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.main.app), base_url="http://testserver", headers={"Origin":"http://testserver"}) as client:
                     client.cookies.set(self.main.APP_SESSION_COOKIE, self.main.create_app_session_token())
                     return await client.post("/auto-trader/pro-ticker-paper/release-review",
                         json={"reservation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "approved_by": "forged"},
@@ -109,7 +109,7 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
         async def run():
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=self.main.app),
-                base_url="http://testserver",
+                base_url="http://testserver", headers={"Origin":"http://testserver"},
             ) as client:
                 return [
                     await client.get("/auto-trader/pro-ticker-manual-submissions"),
@@ -130,7 +130,7 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
         async def run():
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=self.main.app),
-                base_url="http://testserver",
+                base_url="http://testserver", headers={"Origin":"http://testserver"},
             ) as client:
                 return await client.post("/auto-trader/pro-ticker-paper-preview",
                                          content=b"not-json",
@@ -149,7 +149,7 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
             async def run():
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=self.main.app),
-                    base_url="http://testserver",
+                    base_url="http://testserver", headers={"Origin":"http://testserver"},
                 ) as client:
                     return await client.get(
                         "/auto-trader/pro-ticker-manual-submissions?limit=10"
@@ -176,7 +176,7 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
             async def run():
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=self.main.app),
-                    base_url="http://testserver",
+                    base_url="http://testserver", headers={"Origin":"http://testserver"},
                 ) as client:
                     return await client.post(
                         "/auto-trader/pro-ticker-paper-preview",
@@ -198,7 +198,7 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
             async def run():
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=self.main.app),
-                    base_url="http://testserver",
+                    base_url="http://testserver", headers={"Origin":"http://testserver"},
                 ) as client:
                     return await client.post(
                         "/auto-trader/pro-ticker-manual-submissions",
@@ -223,7 +223,7 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
             async def run():
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=self.main.app),
-                    base_url="http://testserver",
+                    base_url="http://testserver", headers={"Origin":"http://testserver"},
                 ) as client:
                     return await client.post(
                         "/auto-trader/pro-ticker-manual-submissions",
@@ -245,7 +245,7 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
             async def run():
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=self.main.app),
-                    base_url="http://testserver",
+                    base_url="http://testserver", headers={"Origin":"http://testserver"},
                 ) as client:
                     saved = await client.post(
                         "/auto-trader/pro-ticker-manual-submissions",
@@ -280,7 +280,7 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
             async def save():
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=self.main.app),
-                    base_url="http://testserver",
+                    base_url="http://testserver", headers={"Origin":"http://testserver"},
                 ) as client:
                     return await client.post(
                         "/auto-trader/pro-ticker-manual-submissions",
@@ -310,7 +310,7 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
             async def read():
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=self.main.app),
-                    base_url="http://testserver",
+                    base_url="http://testserver", headers={"Origin":"http://testserver"},
                 ) as client:
                     return await client.get(
                         "/auto-trader/pro-ticker-manual-submissions?limit=100"
@@ -335,7 +335,7 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
             async def run():
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=self.main.app),
-                    base_url="http://testserver",
+                    base_url="http://testserver", headers={"Origin":"http://testserver"},
                     cookies={self.main.APP_SESSION_COOKIE: signed_token},
                 ) as client:
                     return await client.get(
@@ -360,7 +360,7 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
             async def run():
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=self.main.app),
-                    base_url="http://testserver",
+                    base_url="http://testserver", headers={"Origin":"http://testserver"},
                     cookies={self.main.APP_SESSION_COOKIE: bad_token},
                 ) as client:
                     return await client.get(
@@ -388,7 +388,7 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
             async def run():
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=self.main.app),
-                    base_url="http://testserver",
+                    base_url="http://testserver", headers={"Origin":"http://testserver"},
                     cookies={self.main.APP_SESSION_COOKIE: token},
                 ) as client:
                     return await client.post(
@@ -418,7 +418,7 @@ class ProductionAppImportSmokeTests(unittest.TestCase):
             async def run():
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=self.main.app),
-                    base_url="http://testserver",
+                    base_url="http://testserver", headers={"Origin":"http://testserver"},
                     cookies={self.main.APP_SESSION_COOKIE: token},
                 ) as client:
                     return await client.post(
@@ -453,7 +453,7 @@ async def check():
     token = main.create_app_session_token()
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app),
-        base_url="http://testserver",
+        base_url="http://testserver", headers={"Origin":"http://testserver"},
     ) as client:
         anonymous = await client.get(
             "/auto-trader/pro-ticker-manual-submissions?limit=500"
@@ -515,7 +515,7 @@ print("RESTART_RESULT:" + json.dumps(asyncio.run(check())))
             async def run():
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=self.main.app),
-                    base_url="http://testserver",
+                    base_url="http://testserver", headers={"Origin":"http://testserver"},
                     cookies={self.main.APP_SESSION_COOKIE: token},
                 ) as client:
                     return [
@@ -544,7 +544,7 @@ print("RESTART_RESULT:" + json.dumps(asyncio.run(check())))
             async def run():
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=self.main.app),
-                    base_url="http://testserver",
+                    base_url="http://testserver", headers={"Origin":"http://testserver"},
                 ) as client:
                     return await client.post(
                         "/auto-trader/pro-ticker-manual-submissions",
@@ -570,7 +570,7 @@ print("RESTART_RESULT:" + json.dumps(asyncio.run(check())))
             async def run():
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=self.main.app),
-                    base_url="http://testserver",
+                    base_url="http://testserver", headers={"Origin":"http://testserver"},
                     cookies={self.main.APP_SESSION_COOKIE: token},
                 ) as client:
                     saved = await client.post(
@@ -625,7 +625,7 @@ print("RESTART_RESULT:" + json.dumps(asyncio.run(check())))
             async def run():
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=self.main.app),
-                    base_url="http://testserver",
+                    base_url="http://testserver", headers={"Origin":"http://testserver"},
                     cookies={self.main.APP_SESSION_COOKIE: token},
                 ) as client:
                     saved = await client.post(
@@ -674,7 +674,7 @@ print("RESTART_RESULT:" + json.dumps(asyncio.run(check())))
             async def run():
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=self.main.app),
-                    base_url="http://testserver",
+                    base_url="http://testserver", headers={"Origin":"http://testserver"},
                     cookies={self.main.APP_SESSION_COOKIE: token},
                 ) as client:
                     return await client.post(

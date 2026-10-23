@@ -13,8 +13,9 @@ class PaperGatewayUnavailable(ValueError):
 class AlpacaPaperEvidenceGateway:
     """Caller supplies separately approved dedicated credentials and GET client.
 
-    No submit/cancel/replace method exists. Nothing in main or staging constructs
-    this adapter by default. Secrets are never included in returned evidence.
+    No submit/cancel/replace method exists on this read-only base adapter.
+    Dedicated runtime composition supplies credentials explicitly. Secrets are
+    never included in returned evidence.
     """
     paper=True
     base_url=PAPER_URL
@@ -78,6 +79,13 @@ class AlpacaPaperEvidenceGateway:
         if not isinstance(client_order_id,str) or not client_order_id.startswith('pt-'):raise ValueError('Reservation client order ID required.')
         _uuid(client_order_id[3:])
         return self._read('/v2/orders:by_client_order_id?client_order_id='+quote(client_order_id,safe=''),missing_allowed=True)
+
+    def read_orders(self):
+        """Bounded historical preview; never infer absence from a full page."""
+        orders=self._read('/v2/orders?status=all&limit=500&nested=true')
+        if not isinstance(orders,list) or len(orders)>=500:
+            raise PaperGatewayUnavailable('Complete bounded PAPER order snapshot unavailable.')
+        return orders
 
     def read_fill_activities(self,order_id):
         order_id=_uuid(order_id);rows=[];token=None;seen=set()
