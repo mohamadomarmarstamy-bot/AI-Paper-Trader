@@ -26,7 +26,7 @@ def normalize_market_snapshot(payload, *, now=None, max_age_seconds=120):
     if not isinstance(payload, dict):
         raise ValueError("Market snapshot must be an object")
     symbol = payload.get("symbol")
-    if not isinstance(symbol, str) or not re.fullmatch(r"[A-Z][A-Z0-9.\\-]{0,9}", symbol, flags=re.ASCII):
+    if not isinstance(symbol, str) or not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", symbol, flags=re.ASCII):
         raise ValueError("Invalid symbol")
     if isinstance(max_age_seconds, bool) or not isinstance(max_age_seconds, int) or not 1 <= max_age_seconds <= 600:
         raise ValueError("Invalid freshness window")
