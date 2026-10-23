@@ -360,3 +360,29 @@ staging factory still have no dedicated gateway configured.
 This does not complete actual order submission, autonomous scanning, validated
 model training, execution-level net analytics, or hosted persistence validation.
 Browser checks use synthetic responses; dedicated account validation remains open.
+
+## Owner-confirmed PAPER dispatch checkpoint
+
+A separately composed `PaperSubmissionContext` can enable an authenticated,
+same-origin owner-confirmed submission for a saved, reserved intent. Standard
+main/staging composition still provides no execution context or credentials.
+The gateway accepts only whole-share long limit GTC brackets on the fixed Alpaca
+PAPER host, checks the dedicated account, sends no redirects and never retries
+POST. The buy limit cannot exceed the reserved cost. Stops and targets round up
+to broker precision without widening approved estimated risk. Regular-session
+admission is freshly repeated before claiming the intent.
+
+The dispatch claim, timestamp and owner audit commit atomically before transport.
+Duplicate/concurrent calls, a crashed dispatcher, missing lookup or invalid
+response cannot send a second buy. Recovery uses the exact persisted client ID,
+independent account identity and order ownership/fill checks. Funds stay held
+when uncertain or zero-fill rejected; automatic release remains disabled.
+Partial bracket entry fills are explicitly not certified as protected. Existing
+protection inspection is required after full entry. Broker-native exits are
+requested, but application exit monitoring/reconciliation integration remains
+unfinished. No dedicated broker account has been tested.
+
+Synthetic HTTP/service tests exercise authorization, admission, dispatch,
+partial entry fills, restart-style recovery and failure boundaries. Browser
+fixtures exercise the explicit confirmation control, separate from the default
+configuration that cannot submit. These do not establish real broker readiness.

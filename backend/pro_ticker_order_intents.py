@@ -57,7 +57,7 @@ def _record(conn,row):
             'order_submitted': True if linked else None if status in ('submitting','uncertain') else False,
             'execution_enabled':False,'budget_reserved':reserved,'automatic_release_enabled':False,
             'virtual_funds_returned_cents':plan['allocation_cents'] if status in ('canceled','closed') else 0,
-            'reason':'State reconciled with the reservation ledger. This workspace does not submit broker orders. Returned virtual funds are not trading profit.'}
+            'reason':'State reconciled with the reservation ledger. Broker dispatch requires separate server configuration and explicit owner approval. Returned virtual funds are not trading profit.'}
 
 
 def intents_for_proposals(conn, ids):

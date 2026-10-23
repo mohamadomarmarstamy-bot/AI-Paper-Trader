@@ -60,7 +60,7 @@ class ManualWorkflowIntegrationTests(unittest.TestCase):
                 intent=allocation.json()['intent'];reservation=intent['reservation_id']
                 self.assertEqual((await client.post(intents,json=allocation_payload)).json()['intent'],intent)
                 self.assertEqual((await client.get(workspace)).json()['budget']['committed_cents'],4200)
-                self.assertEqual((await client.post(intents+'/'+intent['id']+'/submit',json={})).status_code,404)
+                self.assertEqual((await client.post(intents+'/'+intent['id']+'/submit',json={})).status_code,403)
 
                 # Trusted fixture replaces the absent broker dispatcher. No
                 # endpoint accepts browser-provided broker fills as evidence.

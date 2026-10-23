@@ -217,7 +217,7 @@ class OrderIntentTests(unittest.TestCase):
                 self.quote.side_effect=None
                 r=await c.post(path,json=self.payload,headers=headers);self.assertEqual(r.status_code,200)
                 intent_id=r.json()['intent']['id']
-                self.assertEqual((await c.post(path+'/'+intent_id+'/submit',json={},headers=headers)).status_code,404)
+                self.assertEqual((await c.post(path+'/'+intent_id+'/submit',json={},headers=headers)).status_code,403)
                 self.assertEqual((await c.post(path+'/'+intent_id+'/cancel',json={'confirmed':True},headers=headers)).status_code,200)
                 self.assertEqual((await c.get(path,headers=headers)).json()['total_count'],1)
         asyncio.run(run())

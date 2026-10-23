@@ -52,4 +52,14 @@ def build_paper_execution_router(*,require_session,context=None):
         except PaperGatewayUnavailable:raise HTTPException(503,'Dedicated PAPER protection evidence unavailable.') from None
         except ValueError:raise HTTPException(422,'Known intent and canonical review request ID required.') from None
         except Exception:raise HTTPException(503,'Protection review unavailable. No broker order was changed.') from None
+    @router.post(base+'/order-intents/{intent_id}/submit')
+    async def submit(intent_id:str,request:Request):
+        payload=await body(request)
+        from pro_ticker_submission import submit_paper_intent,PaperSubmissionContext
+        if not isinstance(context,PaperSubmissionContext) or context.owner_submission_enabled is not True:
+            raise HTTPException(403,'Dedicated owner PAPER submission is disabled.')
+        try:return await run_in_threadpool(submit_paper_intent,intent_id,payload,context=context)
+        except IntentConflict:raise HTTPException(409,'Admission or intent changed. Refresh; recover any prior attempt before proceeding.') from None
+        except ValueError:raise HTTPException(422,'Explicit owner confirmation, dedicated PAPER gateway and valid bracket required.') from None
+        except Exception:raise HTTPException(503,'Submission unconfirmed. Refresh saved intent and recover by client ID; do not create another buy.') from None
     return router

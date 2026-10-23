@@ -78,3 +78,35 @@ class AlpacaPaperEvidenceGateway:
         if not isinstance(client_order_id,str) or not client_order_id.startswith('pt-'):raise ValueError('Reservation client order ID required.')
         _uuid(client_order_id[3:])
         return self._read('/v2/orders:by_client_order_id?client_order_id='+quote(client_order_id,safe=''),missing_allowed=True)
+
+
+class AlpacaPaperOrderGateway(AlpacaPaperEvidenceGateway):
+    """Separate explicitly constructed PAPER write transport; no retry/fallback."""
+    def __init__(self, *, http_post, **kwargs):
+        super().__init__(**kwargs)
+        if not callable(http_post):raise ValueError('Dedicated POST transport required.')
+        self._post=http_post
+
+    def submit_bracket(self, payload):
+        # Accept only the narrow server-generated whole-share long bracket.
+        from decimal import Decimal
+        expected={'symbol','qty','side','type','limit_price','time_in_force','extended_hours','client_order_id','order_class','stop_loss','take_profit'}
+        import re
+        if not isinstance(payload,dict) or set(payload)!=expected or payload['side']!='buy' or payload['type']!='limit' or payload['order_class']!='bracket' or payload['time_in_force']!='gtc' or payload['extended_hours'] is not False:
+            raise ValueError('PAPER long limit bracket required.')
+        if not isinstance(payload['symbol'],str) or not re.fullmatch(r'[A-Z][A-Z0-9.\-]{0,9}',payload['symbol']):raise ValueError('Invalid symbol.')
+        if not isinstance(payload['qty'],str) or not re.fullmatch(r'[1-9][0-9]{0,8}',payload['qty']):raise ValueError('Whole shares required.')
+        if not isinstance(payload['client_order_id'],str) or not payload['client_order_id'].startswith('pt-'):raise ValueError('Owned client ID required.')
+        _uuid(payload['client_order_id'][3:])
+        try:
+            if set(payload['stop_loss'])!={'stop_price'} or set(payload['take_profit'])!={'limit_price'}:raise ValueError()
+            prices=[Decimal(str(payload['stop_loss']['stop_price'])),Decimal(str(payload['limit_price'])),Decimal(str(payload['take_profit']['limit_price']))]
+            if not all(p.is_finite() and 0<p<Decimal('1000000000') and p==p.quantize(Decimal('.01') if p>=1 else Decimal('.0001')) for p in prices) or not prices[0]<prices[1]<prices[2]:raise ValueError()
+        except Exception:raise ValueError('Valid bracket prices required.') from None
+        # Check dedicated account identity immediately before the only POST.
+        self.read_account()
+        try:
+            response=self._post(PAPER_URL+'/v2/orders',headers=self._headers,json=payload,timeout=3.0,allow_redirects=False)
+            if type(response.status_code) is not int or response.status_code not in (200,201):raise ValueError()
+            return response.json()
+        except Exception:raise PaperGatewayUnavailable('PAPER submission unconfirmed; recover by saved client ID.') from None

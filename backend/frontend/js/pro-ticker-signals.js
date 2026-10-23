@@ -47,7 +47,7 @@
             try{
                 const response=await fetch("/auto-trader/pro-ticker/execution-status",{credentials:"same-origin",cache:"no-store"});if(!response.ok)throw Error("Status request failed ("+response.status+").");
                 const data=await response.json();if(data.paper!==true||data.execution_enabled!==false||data.automatic_execution_enabled!==false||data.automatic_release_enabled!==false||data.account_verified!==false||typeof data.admission_review_enabled!=="boolean"||typeof data.recovery_enabled!=="boolean"||data.recovery_enabled!==data.admission_review_enabled)throw Error("Unexpected execution safety flags");
-                executionState=data;executionStatus.textContent=data.admission_review_enabled?"Read-only dedicated PAPER evidence and existing-order lookup are configured. Account identity must still pass each server review. New order submission and automatic release remain disabled.":"Dedicated PAPER evidence gateway is not configured or approved. Existing trader credentials are not reused. Admission, recovery and new-order submission are unavailable here.";return data;
+                executionState=data;executionStatus.textContent=data.owner_submission_enabled===true?"Owner-confirmed dedicated PAPER bracket submission is configured. Each order requires fresh server admission; automatic execution and automatic release are disabled.":data.admission_review_enabled?"Read-only dedicated PAPER evidence and existing-order lookup are configured. Account identity must still pass each server review. New order submission and automatic release remain disabled.":"Dedicated PAPER evidence gateway is not configured or approved. Existing trader credentials are not reused. Admission, recovery and new-order submission are unavailable here.";return data;
             }catch(error){executionState=null;executionStatus.textContent="PAPER evidence controls unavailable: "+error.message;return null;}
             finally{executionRequest=null;}
         })();return executionRequest;
@@ -55,7 +55,7 @@
     function brokerEvidenceControls(review,node,selected){
         const intent=review.order_intent,box=document.createElement("article"),status=document.createElement("p"),admission=document.createElement("button"),recover=document.createElement("button");status.setAttribute("role","status");box.className="pt-broker-evidence";
         admission.type="button";admission.textContent="Review PAPER admission (no order)";admission.disabled=true;recover.type="button";recover.textContent="Find existing PAPER order (no new buy)";recover.disabled=true;
-        box.append(status,admission,recover);node.appendChild(box);protectionEvidenceControls(intent,box,selected);let busy=false,reviewId=null;
+        box.append(status,admission,recover);node.appendChild(box);protectionEvidenceControls(intent,box,selected);submissionControls(review,box,selected);let busy=false,reviewId=null;
         const canReview=()=>intent.status==="prepared"&&!intent.attempt_started_at;
         const canRecover=()=>!!intent.attempt_started_at&&["submitting","uncertain","broker_linked"].includes(intent.status);
         const enabled=()=>{admission.disabled=busy||executionState?.admission_review_enabled!==true||!canReview();recover.disabled=busy||executionState?.recovery_enabled!==true||!canRecover();};
@@ -105,9 +105,28 @@
             finally{button.disabled=executionState?.protection_review_enabled!==true||intent.status!=="broker_linked";}
         });
     }
+    function submissionControls(review,box,selected){
+        const intent=review.order_intent,label=document.createElement("label"),confirmed=document.createElement("input"),button=document.createElement("button"),status=document.createElement("p");
+        confirmed.type="checkbox";label.append(confirmed,document.createTextNode(" I authorize this dedicated PAPER limit bracket. Partial entry fills may be unprotected until the entire entry fills. Stops do not guarantee a loss cap; extended hours are excluded."));
+        button.type="button";button.textContent="Submit approved PAPER bracket";button.disabled=true;status.setAttribute("role","status");box.append(label,button,status);
+        let busy=false,attempted=false;
+        const enabled=()=>{button.disabled=busy||attempted||!confirmed.checked||executionState?.owner_submission_enabled!==true||intent.status!=="prepared"||!!intent.attempt_started_at;};
+        confirmed.addEventListener("change",enabled);loadExecutionStatus().then(enabled);
+        button.addEventListener("click",async()=>{
+            if(button.disabled)return;busy=true;attempted=true;enabled();status.textContent="Submitting the approved PAPER intent. Do not create another buy if confirmation is interrupted…";
+            try{
+                const response=await fetch("/auto-trader/pro-ticker/order-intents/"+encodeURIComponent(intent.id)+"/submit",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({confirmed:true})});
+                if(!response.ok)throw Error("Confirmation unavailable ("+response.status+"). Refresh saved state and use existing-order recovery.");
+                const data=await response.json();if(data.paper!==true||typeof data.resolved!=="boolean"||typeof data.dispatch_attempted!=="boolean"||data.order_resubmitted!==false||data.budget_released!==false||data.protection_verified!==false||data.intent?.id!==intent.id)throw Error("Invalid PAPER confirmation; refresh saved state and recover the existing order.");validateIntent(data.intent,review.proposal);
+                await refresh();if(detailVersion===selected)detail({...review,order_intent:data.intent});await window.loadProTickerWorkspace?.();
+                el("status").textContent=data.resolved?"Owned PAPER order linked. Reconcile fills and independently inspect protection. No automatic budget release.":"PAPER submission is uncertain. Funds held; recover the saved order without another buy.";
+            }catch(error){if(detailVersion===selected)status.textContent=error.message;await refreshIntents();}
+            finally{busy=false;confirmed.checked=false;enabled();}
+        });
+    }
     function validateIntent(intent,proposal){
         if(!intent||intent.paper!==true||intent.execution_enabled!==false||intent.automatic_release_enabled!==false||!["prepared","canceled","broker_linked","closed","broker_terminal_unfilled","submitting","uncertain"].includes(intent.status)||intent.budget_reserved!==(["prepared","broker_linked","submitting","uncertain"].includes(intent.status))||intent.order_submitted!==(["submitting","uncertain"].includes(intent.status)?null:["broker_linked","closed","broker_terminal_unfilled"].includes(intent.status))||typeof intent.id!=="string"||typeof intent.reservation_id!=="string"||!intent.plan||intent.plan.order_submitted!==false||intent.plan.order_execution_enabled!==false||!Number.isSafeInteger(intent.plan.allocation_cents)||intent.plan.allocation_cents<1||!Number.isSafeInteger(intent.plan.shares)||intent.plan.shares<1||typeof intent.plan.symbol!=="string")throw Error("Invalid PAPER allocation evidence");
-        if(intent.audit_events!==undefined&&(!Array.isArray(intent.audit_events)||intent.audit_events.some(event=>!event||!["virtual_budget_reserved","owner_canceled_never_submitted","broker_lookup_unresolved","broker_order_recovered"].includes(event.action)||typeof event.actor!=="string"||!Number.isFinite(Date.parse(event.recorded_at)))))throw Error("Invalid allocation audit history");
+        if(intent.audit_events!==undefined&&(!Array.isArray(intent.audit_events)||intent.audit_events.some(event=>!event||!["virtual_budget_reserved","owner_canceled_never_submitted","broker_lookup_unresolved","broker_order_recovered","owner_paper_submission_started"].includes(event.action)||typeof event.actor!=="string"||!Number.isFinite(Date.parse(event.recorded_at)))))throw Error("Invalid allocation audit history");
         if(proposal&&(intent.proposal_id!==proposal.request_id||intent.plan.symbol!==proposal.symbol||intent.plan.shares!==proposal.shares||intent.plan.allocation_cents>proposal.allocation_cents))throw Error("Allocation does not match saved draft");
     }
     async function refreshIntents(){
@@ -126,7 +145,7 @@
         if(intent?.audit_events){
             const audit=document.createElement("details"),summary=document.createElement("summary"),list=document.createElement("ul");summary.textContent="Allocation audit history";audit.append(summary,list);
             if(!Array.isArray(intent.audit_events))throw Error("Invalid allocation audit history");
-            for(const event of intent.audit_events){const labels={virtual_budget_reserved:"Owner reserved virtual PAPER funds",owner_canceled_never_submitted:"Owner canceled an unsubmitted allocation; virtual funds returned (not profit)",broker_lookup_unresolved:"Broker lookup unresolved; funds held, no order resubmitted",broker_order_recovered:"Existing broker order recovered by client ID; no new order"};if(!event||!labels[event.action]||typeof event.actor!=="string"||!Number.isFinite(Date.parse(event.recorded_at)))throw Error("Invalid allocation audit event");const item=document.createElement("li");item.textContent=date(event.recorded_at)+" · "+labels[event.action]+" · "+event.actor;list.appendChild(item);}
+            for(const event of intent.audit_events){const labels={virtual_budget_reserved:"Owner reserved virtual PAPER funds",owner_canceled_never_submitted:"Owner canceled an unsubmitted allocation; virtual funds returned (not profit)",broker_lookup_unresolved:"Broker lookup unresolved; funds held, no order resubmitted",broker_order_recovered:"Existing broker order recovered by client ID; no new order",owner_paper_submission_started:"Owner approved PAPER dispatch; recover this intent if confirmation is interrupted"};if(!event||!labels[event.action]||typeof event.actor!=="string"||!Number.isFinite(Date.parse(event.recorded_at)))throw Error("Invalid allocation audit event");const item=document.createElement("li");item.textContent=date(event.recorded_at)+" · "+labels[event.action]+" · "+event.actor;list.appendChild(item);}
             node.appendChild(audit);
         }
 
@@ -187,7 +206,7 @@
             ["Volume relative to 20-day average",grade?.indicators?.volume_ratio],["Reasons",grade?.reasons?.join(" ")],
             ["Limitations",grade?.limitations?.join(" ")],
             ["Saved forward quote change (not trade profit)",review.forward_outcome?String(review.forward_outcome.return_percent)+"%":"Not evaluated"],
-            ["Execution",review.order_intent?.order_submitted===null?"Submission outcome is uncertain. Do not create another buy; reserved funds require independent recovery.":review.order_intent?.order_submitted?"A broker order is linked in the ledger. This workspace cannot submit new orders. Model training remains disabled.":"No order placed. Broker admission, execution and model training are not connected."]]){
+            ["Execution",review.order_intent?.order_submitted===null?"Submission outcome is uncertain. Do not create another buy; reserved funds require independent recovery.":review.order_intent?.order_submitted?"A broker order is linked in the ledger. Inspect fills and protection; model training remains disabled.":"No order placed. Dedicated PAPER execution requires separate configuration and owner approval. Model training is disabled."]]){
             const p=document.createElement("p"),b=document.createElement("strong");b.textContent=label+": ";p.append(b,document.createTextNode(value==null?"Unavailable":String(value)));node.appendChild(p);
         }
         const check=document.createElement("button");check.type="button";check.textContent="Check 24+ hour forward quote";

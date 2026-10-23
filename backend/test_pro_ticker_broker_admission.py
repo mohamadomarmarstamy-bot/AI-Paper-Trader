@@ -123,7 +123,7 @@ class BrokerAdmissionTests(unittest.TestCase):
                     self.assertEqual((await c.post(path,json=self.review_payload,headers={**headers,'Origin':'https://evil'})).status_code,403)
                     response=await c.post(path,json=self.review_payload,headers=headers)
                     self.assertEqual(response.status_code,200 if configured else 403)
-                    self.assertEqual((await c.post(path.replace('/admission-review','/submit'),json={},headers=headers)).status_code,404)
+                    self.assertEqual((await c.post(path.replace('/admission-review','/submit'),json={},headers=headers)).status_code,403)
                     if configured:
                         self.gateway.read_snapshot.side_effect=RuntimeError('secret-key')
                         response=await c.post(path,json={'request_id':str(uuid.uuid4())},headers=headers)

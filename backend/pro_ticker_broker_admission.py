@@ -44,6 +44,7 @@ def execution_status(context=None):
         try:context.validate();configured=True
         except Exception:pass
     return {'paper':True,'admission_review_enabled':configured,'recovery_enabled':configured,'protection_review_enabled':configured,
+            'owner_submission_enabled':configured and getattr(context,'owner_submission_enabled',False) is True,
             'execution_enabled':False,'automatic_execution_enabled':False,'automatic_release_enabled':False,
             'account_verified':False,'reason':'Read-only evidence/recovery configured. No broker submission path is enabled.' if configured else 'Dedicated PAPER gateway is not configured or approved. Original trader credentials are never reused.'}
 
