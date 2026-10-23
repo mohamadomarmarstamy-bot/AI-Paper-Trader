@@ -56,6 +56,11 @@ release evidence may make authenticated read-only PAPER/market-data requests.
 5. Obtain a consistent standalone backup of the deployed SQLite database
    (no WAL, rollback journal, or shared-memory sidecar beside the exported file). Run
    `python backend/validate_paper_database_copy.py /secure/export.sqlite3`.
+   Signed owners can open **Staging backup** on the isolated staging homepage
+   and select **Download staging database backup**. This same-origin POST
+   streams a private snapshot and cleans up the temporary server file even if
+   delivery is interrupted. Only one download runs at a time. The endpoint is
+   not registered by production and cannot restore data or select another path.
    To create that snapshot on the explicitly selected host, run
    `python backend/backup_paper_database.py SOURCE NEW_BACKUP`. The SQLite backup
    API includes committed WAL data, excludes uncommitted changes, uses private

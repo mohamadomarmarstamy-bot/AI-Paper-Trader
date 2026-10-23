@@ -41,9 +41,9 @@
 
 - [ ] Complete workflow must pass end-to-end tests; module coverage alone is insufficient.
 - [ ] Validate a representative standalone exported database on a disposable copy. No export has been supplied.
-- [ ] Verify a saved record through an actual hosted restart. Owner login value is redacted to the connector; do not reset it or expose it to obtain test access.
+- [x] Verify a saved research record through an actual hosted restart. Signed-owner save and independent readback retained the original timestamp, grade and score. Broker lifecycle persistence is a separate certification.
 - [ ] Dedicated Alpaca PAPER account validation. The owner currently has one actively used PAPER account; do not reuse it for staging tests.
-- [ ] New staging deployment requires explicit approval. Existing hosted staging remains pinned to its previously approved build; pushing the feature branch is not deployment approval.
+- [x] Isolated staging deployment and subsequent staging updates/restarts are authorized by the completion sprint. Production deployment and merge still require separate approval.
 - [ ] Full PR review and explicit merge approval. Keep PR #1 draft.
 
 ## Interpretation

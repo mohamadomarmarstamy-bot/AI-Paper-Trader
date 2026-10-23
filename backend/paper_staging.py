@@ -38,7 +38,7 @@ def create_staging_app(*, _data_directory='/staging-data'):
     The private directory override exists solely for disposable process tests.
     The deployed uvicorn factory calls this with the dedicated volume default.
     """
-    validate_staging_config(data_directory=_data_directory)
+    staging_database = validate_staging_config(data_directory=_data_directory)
     import main
     from fastapi import FastAPI, Request
     from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -78,6 +78,12 @@ def create_staging_app(*, _data_directory='/staging-data'):
     app.add_api_route('/login', main.app_login_page, methods=['GET'], response_class=HTMLResponse)
     app.add_api_route('/login', main.app_login_submit, methods=['POST'], response_class=HTMLResponse)
 
+    @app.post('/staging/database-backup')
+    def database_backup(request: Request):
+        main.require_app_session(request)
+        from paper_staging_backups import staging_backup_response
+        return staging_backup_response(staging_database)
+
     @app.get('/', response_class=HTMLResponse)
     def home(request: Request):
         if not main.request_has_valid_app_session(request):
@@ -89,7 +95,9 @@ def create_staging_app(*, _data_directory='/staging-data'):
         return HTMLResponse('''<!doctype html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Isolated PAPER staging</title>
 <link rel="stylesheet" href="/style.css"></head><body><main style="padding:24px;max-width:1050px;margin:auto">
-<p role="note">Isolated PAPER staging. Automatic buying and budget release are disabled. Dedicated PAPER monitoring and owner submission depend on server configuration.</p>'''
+<p role="note">Isolated PAPER staging. Automatic buying and budget release are disabled. Dedicated PAPER monitoring and owner submission depend on server configuration.</p>
+<details><summary>Staging backup</summary><p>Private snapshot for migration validation. Keep it secure; this does not restore data.</p>
+<form action="/staging/database-backup" method="post"><button type="submit">Download staging database backup</button></form></details>'''
             + section + '''</main><script src="/js/pro-ticker-manual.js"></script>
 <script src="/js/pro-ticker-release.js"></script><script src="/js/pro-ticker-workspace.js"></script><script src="/js/pro-ticker-signals.js"></script><script>
 window.loadProTickerManualLab(); window.loadProTickerReleasePanel(); window.loadProTickerWorkspace(); window.loadProTickerSignals();</script></body></html>''')

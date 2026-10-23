@@ -32,15 +32,16 @@ Original trader execution settings and production deployment are unchanged.
 3. Exact-commit CI and isolated staging deployment passed for the implementation
    milestone. Authenticated hosted APIs, screenshots and configured gates still
    require review; health and anonymous rejection alone do not complete this gate.
-4. Save an identifiable owner record, restart isolated staging, and independently
-   read the record afterward. A local app recreation is not hosted restart proof.
+4. Hosted owner login, a saved research review, service restart and independent
+   readback are now verified. The original timestamp, grade and technical score
+   survived. This completes research-record restart proof, not broker integration.
 5. Validate a representative exported database on a disposable copy. The original
    export must remain unchanged; no representative export has been supplied.
 6. Validate bracket behavior, account activity pagination, partial fills and provider
    freshness against the dedicated account. Synthetic evidence is insufficient.
 7. Unattended monitoring, owner cancel/close controls and bounded independent
    discovery are implemented. Dedicated-account certification and authenticated
-   hosted workflow/restart checks remain required. Bracket entries can be unprotected while partially filled;
+   hosted broker workflow checks remain required. Bracket entries can be unprotected while partially filled;
    protection is not certified after hours. These must be addressed or explicitly
    accepted as restricted operator-supervised scope before production approval.
 8. Net P&L, fees, corrections, corporate actions and broader risk-adjusted analytics
@@ -95,8 +96,16 @@ values for every pre-existing row, including duplicates and blobs. Row counts
 alone are insufficient to prove preservation of order/fill evidence.
 
 Synthetic backup/migration tests cover these behaviors. They do not satisfy the
-representative deployed export or hosted restart gates above. Never restore an
+representative deployed export gate; hosted restart evidence is recorded separately above. Never restore an
 older snapshot over newer broker-attempt, ownership or fill evidence.
+
+Isolated staging now includes an owner-authenticated, same-origin POST download
+at `/staging/database-backup`, accessible from its Staging backup control. The
+server chooses the database path; callers cannot supply paths or restore data.
+One private temporary snapshot is streamed at a time and removed after delivery
+or an interrupted connection. Authentication, no-store headers and sanitized
+failures apply. Production does not register this endpoint. The downloaded file
+still needs the disposable validator; download success alone is not migration proof.
 
 ## Unattended monitoring (2026-10-23)
 
@@ -176,7 +185,11 @@ On October 23 a keyless research-only live provider check returned 23 eligible
 movers from 250 screened rows; eight detailed checks yielded three accepted
 snapshots and five unavailable/filter failures. The check used a disposable DB
 and no broker credentials. Counts are one observation, not performance evidence.
-Hosted authenticated provider/restart validation remains outstanding.
+Hosted authenticated discovery also completed with six accepted detailed
+snapshots from eight checks and two explicit unavailable results. Twenty-six
+symbols were eligible in that bounded screen. The scanner-to-manual-grading
+handoff selected the stock without submitting a review or order. These are
+research-only observations; broker lifecycle certification remains outstanding.
 
 
 ## Execution accounting and complete history export

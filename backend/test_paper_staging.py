@@ -4,6 +4,7 @@ import importlib
 import os
 from pathlib import Path
 import tempfile
+import sqlite3
 import unittest
 from unittest.mock import patch
 
@@ -231,6 +232,86 @@ class IsolatedStagingTests(unittest.TestCase):
             data={'password': os.environ['APP_ACCESS_PASSWORD']},
             headers={'Origin': 'https://other.test', 'X-Forwarded-Proto': 'https'})
         self.assertEqual(blocked.status_code, 403)
+
+    def test_backup_requires_owner_and_same_origin_and_is_absent_from_production(self):
+        app = self.app()
+        path = '/staging/database-backup'
+        with patch('paper_staging_backups.backup_database', side_effect=AssertionError('unauthorized snapshot')) as backup:
+            self.assertEqual(self.request(app, 'POST', path, headers={'Origin':'https://staging.test'}).status_code, 401)
+            self.assertEqual(self.request(app, 'POST', path, authenticated=True, headers={'Origin':'https://other.test'}).status_code, 403)
+            self.assertEqual(self.request(app, 'POST', path, authenticated=True).status_code, 403)
+            self.assertEqual(self.request(app, 'GET', path, authenticated=True).status_code, 405)
+            backup.assert_not_called()
+        self.assertNotIn(path, [getattr(route, 'path', None) for route in self.main.app.routes])
+
+    def test_backup_download_preserves_wal_evidence_and_cleans_temporary_snapshot(self):
+        app = self.app()
+        import paper_staging_backups as backups
+        from backup_paper_database import backup_database
+        targets = []
+        def snapshot(source, destination):
+            targets.append(destination)
+            return backup_database(source, destination)
+        with sqlite3.connect(database.DATABASE_PATH) as conn:
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.execute('CREATE TABLE staging_owner_evidence (value TEXT)')
+            conn.execute("INSERT INTO staging_owner_evidence VALUES ('retained')")
+            conn.commit()
+            conn.execute("INSERT INTO staging_owner_evidence VALUES ('uncommitted')")
+            with patch.object(backups, 'backup_database', side_effect=snapshot), patch.object(self.main, 'alpaca_paper_request', side_effect=AssertionError('broker forbidden')):
+                response = self.request(app, 'POST', '/staging/database-backup', authenticated=True,
+                                        headers={'Origin':'https://staging.test'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers['cache-control'], 'no-store')
+        self.assertEqual(response.headers['x-content-type-options'], 'nosniff')
+        self.assertIn('attachment;', response.headers['content-disposition'])
+        self.assertTrue(response.content.startswith(b'SQLite format 3'))
+        target = self.root / 'download.sqlite3'
+        target.write_bytes(response.content)
+        with sqlite3.connect(target) as conn:
+            self.assertEqual(conn.execute('SELECT value FROM staging_owner_evidence').fetchall(), [('retained',)])
+        self.assertEqual(len(targets), 1)
+        self.assertFalse(targets[0].parent.exists())
+
+    def test_backup_failure_is_sanitized_and_allows_next_attempt(self):
+        app = self.app()
+        with patch('paper_staging_backups.backup_database', side_effect=RuntimeError('private-path-and-secret')):
+            for _ in range(2):
+                response = self.request(app, 'POST', '/staging/database-backup', authenticated=True,
+                                        headers={'Origin':'https://staging.test'})
+                self.assertEqual(response.status_code, 503)
+                self.assertNotIn('private-path', response.text)
+
+    def test_backup_busy_request_is_rejected_without_another_snapshot(self):
+        app = self.app()
+        import paper_staging_backups as backups
+        self.assertTrue(backups._download_slot.acquire(blocking=False))
+        try:
+            with patch.object(backups, 'backup_database', side_effect=AssertionError('concurrent snapshot')):
+                response = self.request(app, 'POST', '/staging/database-backup', authenticated=True,
+                                        headers={'Origin':'https://staging.test'})
+                self.assertEqual(response.status_code, 409)
+        finally:
+            backups._download_slot.release()
+
+    def test_interrupted_backup_delivery_cleans_file_and_releases_slot(self):
+        self.app()
+        database.initialize_database()
+        import paper_staging_backups as backups
+        response = backups.staging_backup_response(database.DATABASE_PATH)
+        target = Path(response.path)
+        async def run():
+            async def receive():
+                return {'type':'http.disconnect'}
+            async def send(message):
+                raise RuntimeError('connection interrupted')
+            await response({'type':'http','method':'POST','headers':[],
+                            'asgi':{'spec_version':'2.4'}}, receive, send)
+        with self.assertRaises(RuntimeError):
+            asyncio.run(run())
+        self.assertFalse(target.parent.exists())
+        self.assertTrue(backups._download_slot.acquire(blocking=False))
+        backups._download_slot.release()
 
     def test_cross_origin_login_and_research_writes_are_blocked(self):
         app = self.app()
