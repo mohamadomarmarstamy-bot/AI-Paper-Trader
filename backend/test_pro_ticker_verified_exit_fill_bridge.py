@@ -1,0 +1,201 @@
+"""Verified PAPER exit bridge tests using persisted ownership links."""
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import database
+from pro_ticker_test_db_helper import tracked_test_connections
+from pro_ticker_exit_links import link_verified_paper_exit
+from pro_ticker_verified_exit_fill_bridge import account_linked_paper_exit_snapshot
+from pro_ticker_position_ledger import (
+    post_verified_cumulative_paper_fill, list_pro_ticker_strategy_positions,
+)
+
+RESERVATION_ID = "12345678-1234-1234-1234-123456789abc"
+EXIT_ID = "abcdefab-1234-1234-1234-123456789abc"
+ENTRY_ORDER_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+EXIT_ORDER_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+
+class VerifiedExitBridgeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        patcher = patch.object(database, "DATABASE_PATH", Path(self.temp.name) / "test.db")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        tracker = tracked_test_connections()
+        tracker.__enter__()
+        self.addCleanup(tracker.__exit__, None, None, None)
+        import uuid
+        from pro_ticker_budget_ledger import (
+            reserve_pro_ticker_budget, set_paper_reservation_expected_shares,
+            link_verified_paper_entry_order, record_verified_paper_order_state,
+        )
+        with patch('pro_ticker_budget_ledger.uuid.uuid4', return_value=uuid.UUID(RESERVATION_ID)):
+            reserve_pro_ticker_budget('AAPL', 100)
+        set_paper_reservation_expected_shares(RESERVATION_ID, 5)
+        link_verified_paper_entry_order(RESERVATION_ID, {
+            'id': ENTRY_ORDER_ID, 'client_order_id': 'pt-' + RESERVATION_ID,
+            'symbol': 'AAPL', 'side': 'buy', 'qty': '5', 'status': 'filled', 'filled_qty': '5',
+        })
+        record_verified_paper_order_state(RESERVATION_ID, ENTRY_ORDER_ID, 'filled', filled_quantity=5)
+        self.reservation = {
+            "id": RESERVATION_ID, "symbol": "AAPL", "status": "filled",
+            "broker_order_id": ENTRY_ORDER_ID,
+        }
+        self.order = {
+            "id": EXIT_ORDER_ID, "client_order_id": "ptx-" + EXIT_ID,
+            "symbol": "AAPL", "side": "sell", "qty": "5",
+            "filled_qty": "2", "status": "partially_filled",
+        }
+        owner = patch("pro_ticker_exit_links.get_pro_ticker_reservation", return_value=self.reservation)
+        owner.start()
+        self.addCleanup(owner.stop)
+        reviewer = patch("pro_ticker_verified_exit_fill_bridge.get_pro_ticker_reservation", return_value=self.reservation)
+        reviewer.start()
+        self.addCleanup(reviewer.stop)
+        link_verified_paper_exit(
+            reservation_id=RESERVATION_ID, symbol="AAPL",
+            expected_shares=5, broker_order=self.order, exit_id=EXIT_ID,
+        )
+        post_verified_cumulative_paper_fill(
+            broker_order_id=ENTRY_ORDER_ID, symbol="AAPL", side="buy",
+            cumulative_filled_shares=5, ownership_verified=True, fill_verified=True,
+        )
+
+    def test_partial_replay_complete_and_stale(self):
+        first = account_linked_paper_exit_snapshot(EXIT_ORDER_ID, self.order)
+        self.assertEqual(first["delta_shares"], 2)
+        replay = account_linked_paper_exit_snapshot(EXIT_ORDER_ID, self.order)
+        self.assertFalse(replay["posted"])
+        complete = account_linked_paper_exit_snapshot(
+            EXIT_ORDER_ID, {**self.order, "filled_qty": "5", "status": "filled"},
+        )
+        self.assertEqual(complete["delta_shares"], 3)
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"], [])
+        stale = account_linked_paper_exit_snapshot(EXIT_ORDER_ID, self.order)
+        self.assertTrue(stale["stale_snapshot"])
+
+    def test_canceled_zero_fill_exit_is_idempotent_and_leaves_position_open(self):
+        canceled = {**self.order, "filled_qty": "0", "status": "canceled"}
+        first = account_linked_paper_exit_snapshot(EXIT_ORDER_ID, canceled)
+        replay = account_linked_paper_exit_snapshot(EXIT_ORDER_ID, canceled)
+        self.assertFalse(first["posted"])
+        self.assertFalse(replay["posted"])
+        self.assertEqual(first["delta_shares"], 0)
+        self.assertEqual(replay["delta_shares"], 0)
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 5)
+
+    def test_exit_overfill_rejected_without_position_mutation(self):
+        with self.assertRaises(ValueError):
+            account_linked_paper_exit_snapshot(
+                EXIT_ORDER_ID, {**self.order, "filled_qty": "6", "status": "filled"},
+            )
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 5)
+
+    def test_wrong_exit_symbol_rejected_without_position_mutation(self):
+        with self.assertRaises(ValueError):
+            account_linked_paper_exit_snapshot(
+                EXIT_ORDER_ID, {**self.order, "symbol": "MSFT"},
+            )
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 5)
+
+    def test_delayed_exit_snapshots_converge_to_full_close(self):
+        first = account_linked_paper_exit_snapshot(
+            EXIT_ORDER_ID, {**self.order, "filled_qty": "4"},
+        )
+        self.assertEqual(first["delta_shares"], 4)
+        stale = account_linked_paper_exit_snapshot(
+            EXIT_ORDER_ID, {**self.order, "filled_qty": "1"},
+        )
+        self.assertTrue(stale["stale_snapshot"])
+        self.assertEqual(stale["delta_shares"], 0)
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 1)
+        complete = account_linked_paper_exit_snapshot(
+            EXIT_ORDER_ID, {**self.order, "filled_qty": "5", "status": "filled"},
+        )
+        self.assertEqual(complete["delta_shares"], 1)
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"], [])
+        replay = account_linked_paper_exit_snapshot(
+            EXIT_ORDER_ID, {**self.order, "filled_qty": "5", "status": "filled"},
+        )
+        self.assertFalse(replay["posted"])
+
+    def test_canceled_partial_exit_preserves_filled_shares(self):
+        canceled = {**self.order, "filled_qty": "2", "status": "canceled"}
+        first = account_linked_paper_exit_snapshot(EXIT_ORDER_ID, canceled)
+        self.assertEqual(first["delta_shares"], 2)
+        replay = account_linked_paper_exit_snapshot(EXIT_ORDER_ID, canceled)
+        self.assertFalse(replay["posted"])
+        stale = account_linked_paper_exit_snapshot(
+            EXIT_ORDER_ID, {**self.order, "filled_qty": "0", "status": "new"},
+        )
+        self.assertTrue(stale["stale_snapshot"])
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 3)
+
+    def test_conflicting_exit_side_rejected_after_partial_fill(self):
+        first = account_linked_paper_exit_snapshot(EXIT_ORDER_ID, self.order)
+        self.assertEqual(first["delta_shares"], 2)
+        with self.assertRaises(ValueError):
+            account_linked_paper_exit_snapshot(
+                EXIT_ORDER_ID, {**self.order, "side": "buy", "filled_qty": "5"},
+            )
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 3)
+
+    def test_conflicting_exit_quantity_rejected_after_partial_fill(self):
+        first = account_linked_paper_exit_snapshot(EXIT_ORDER_ID, self.order)
+        self.assertEqual(first["delta_shares"], 2)
+        with self.assertRaises(ValueError):
+            account_linked_paper_exit_snapshot(
+                EXIT_ORDER_ID, {**self.order, "qty": "6", "filled_qty": "5"},
+            )
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 3)
+
+    def test_malformed_exit_fill_quantities_never_mutate_position(self):
+        for value in ("NaN", "Infinity", "-1", "6", "1.5", None, True):
+            with self.subTest(filled_qty=value), self.assertRaises(ValueError):
+                account_linked_paper_exit_snapshot(
+                    EXIT_ORDER_ID, {**self.order, "filled_qty": value},
+                )
+            self.assertEqual(
+                list_pro_ticker_strategy_positions()["positions"][0]["shares"], 5,
+            )
+        self.assertEqual(
+            account_linked_paper_exit_snapshot(EXIT_ORDER_ID, self.order)["delta_shares"], 2,
+        )
+
+    def test_inconsistent_filled_exit_status_cannot_close_position(self):
+        with self.assertRaises(ValueError):
+            account_linked_paper_exit_snapshot(
+                EXIT_ORDER_ID, {**self.order, "status": "filled", "filled_qty": "4"},
+            )
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 5)
+        completed = account_linked_paper_exit_snapshot(
+            EXIT_ORDER_ID, {**self.order, "status": "filled", "filled_qty": "5"},
+        )
+        self.assertEqual(completed["delta_shares"], 5)
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"], [])
+
+    def test_wrong_client_order_rejected_without_post(self):
+        with self.assertRaisesRegex(ValueError, "client_order_id_mismatch"):
+            account_linked_paper_exit_snapshot(
+                EXIT_ORDER_ID, {**self.order, "client_order_id": "unrelated"},
+            )
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 5)
+
+    def test_noncanonical_order_id_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Canonical"):
+            account_linked_paper_exit_snapshot(" " + EXIT_ORDER_ID, self.order)
+        self.assertEqual(list_pro_ticker_strategy_positions()["positions"][0]["shares"], 5)
+
+    def test_unlinked_order_rejected(self):
+        with self.assertRaisesRegex(ValueError, "ownership link missing"):
+            account_linked_paper_exit_snapshot(
+                "cccccccc-cccc-4ccc-8ccc-cccccccccccc", self.order,
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()

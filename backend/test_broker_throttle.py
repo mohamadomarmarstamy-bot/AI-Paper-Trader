@@ -44,6 +44,9 @@ def functions(**overrides):
           'clean_symbol': lambda s: str(s or '').strip().upper(), 'safe_float': lambda x: float(x) if x is not None else None,
           'clean_error_message': str, 'math': math, 'uuid': uuid, 'datetime': datetime, 'timezone': timezone,
           'AUTO_TRADER_STOP_LOSS_PERCENT': 2, 'AUTO_TRADER_TAKE_PROFIT_PERCENT': 4,
+          'get_auto_trader_setting': lambda key: {
+              'stop_loss_percent': 2, 'take_profit_percent': 4,
+          }[key],
           'AUTO_TRADER_INACTIVE_PROTECTION_COOLDOWN_SECONDS': 6 * 60 * 60,
           '_auto_trader_inactive_protection_until': {},
           'time': SimpleNamespace(sleep=lambda s: None), 'add_auto_trader_log': lambda *a, **kw: None}
