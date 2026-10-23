@@ -237,6 +237,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.locator('#pt-tab-scanner').click();await page.getByRole('button',{name:'Discover US market movers',exact:true}).click();
    await page.waitForFunction(()=>document.getElementById('pt-market-status').textContent.includes('Yahoo discovery: 22 eligible symbols'));
    assert.match(await page.locator('#pt-market-scanner').innerText(),/NEWMOVER/);assert.match(await page.locator('#pt-market-scanner').innerText(),/not current intraday/);
+   assert.equal(await page.locator('#pt-market-scanner tbody tr').first().locator('td').nth(5).evaluate(cell=>cell.scrollWidth<=cell.clientWidth+1),true,'saved grade and timestamp must fit inside their cell');
    await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-independent-discovery.png',fullPage:true});
    // Scanner assignments do not emit input events. New symbols must not reuse
    // the previous review's identity; failed retries of that symbol still do.

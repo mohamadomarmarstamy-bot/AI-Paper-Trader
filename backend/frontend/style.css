@@ -4840,7 +4840,7 @@ body.jarvis-drawer-open {
 #pro-ticker-manual-section .pt-table { max-width:100%; overflow-x:auto; margin:20px 0; border:1px solid var(--pt-line); border-radius:10px; scrollbar-color:#334155 #0c1423; }
 #pro-ticker-manual-section table { width:100%; border-collapse:collapse; font-size:11px; font-variant-numeric:tabular-nums; }
 #pro-ticker-manual-section th { padding:12px 14px; background:#0b1424; color:#8296b4; font-size:9px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; text-align:left; white-space:nowrap; }
-#pro-ticker-manual-section td { padding:15px 14px; color:#c1cfe3; border-top:1px solid rgba(148,163,184,.1); vertical-align:middle; line-height:1.6; min-width:75px; max-width:250px; }
+#pro-ticker-manual-section td { padding:15px 14px; color:#c1cfe3; border-top:1px solid rgba(148,163,184,.1); vertical-align:middle; line-height:1.6; min-width:75px; max-width:250px; white-space:normal; overflow-wrap:anywhere; }
 #pro-ticker-manual-section tbody tr:hover { background:rgba(96,165,250,.035); }
 #pro-ticker-manual-section td[colspan] { padding:34px 20px; text-align:center; color:#8193ae; font-size:12px; }
 #pro-ticker-manual-section .pt-symbol { font-weight:800; color:#e2eeff; letter-spacing:.035em; }
