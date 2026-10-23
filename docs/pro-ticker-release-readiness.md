@@ -27,11 +27,13 @@ Original trader execution settings and production deployment are unchanged.
    Railway access is restored. Both hosted health endpoints returned 200; a
    production BF-B research-symbol error was confirmed and fixed on the branch.
    No production deployment or actual entry/exit certification is claimed.
-2. Obtain a separate Alpaca PAPER account and confirm its identity differs from the
-   original trader's account. Never use original account credentials in staging.
-3. Exact-commit CI and isolated staging deployment passed for the implementation
-   milestone. Authenticated hosted APIs, screenshots and configured gates still
-   require review; health and anonymous rejection alone do not complete this gate.
+2. Separate Alpaca PAPER account setup is complete. The account identities differ,
+   and authenticated hosted read-only verification checked the configured account's
+   identity and active, unblocked USD readiness. Never reuse original credentials.
+3. Exact-commit CI, isolated staging deployment, signed-owner UI review, independent
+   discovery and read-only account verification passed. Health reports broker
+   submission, position management and background monitoring disabled. This is
+   connection/research validation, not an actual broker order lifecycle pass.
 4. Hosted owner login, a saved research review, service restart and independent
    readback are now verified. The original timestamp, grade and technical score
    survived. This completes research-record restart proof, not broker integration.

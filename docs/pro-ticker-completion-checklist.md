@@ -1,5 +1,11 @@
 # Pro Ticker completion and validation checklist
 
+Current checkpoint: October 23, 2026. The checklists through **Validation and
+external blockers** describe current completion. Later implementation notes are
+historical milestones; references there to missing broker adapters, execution
+prices, independent discovery or dedicated account setup have been superseded.
+See [release readiness](pro-ticker-release-readiness.md) for deployment gates.
+
 ## Implemented in the dedicated workspace
 
 - [x] Reuse the existing Pro Ticker navigation entry and section; nine accessible tabs.
@@ -22,16 +28,16 @@
 
 ## Highest-priority remaining integration
 
-- [ ] Dedicated discovery job with persisted run status, errors, fresh quote/indicator snapshots and candidate diversity.
+- [x] Operator-triggered independent mover discovery, rotating bounded batches, persisted status, timestamps and explicit failures. Automatic scanning remains disabled.
 - [ ] AI research evaluation with provenance, bullish/bearish evidence, regime and supported news sources.
-- [ ] Persist verified execution prices, actual execution timestamps and reservation attribution in the fill journal.
+- [x] Persist individually verified execution prices, broker timestamps and reservation attribution; complete streamed execution CSV export. Actual broker activity coverage remains uncertified.
 - [ ] Compute realized P/L, unrealized marks, equity series, drawdown and cost-adjusted metrics only from verified priced data.
 - [x] Wire saved BUY drafts to explicit owner-approved atomic reservations and durable client-order-ID intents.
-- [ ] Independently checked broker admission and authorized PAPER submission; no submit endpoint is enabled.
+- [x] Independently checked broker admission and explicitly owner-approved PAPER submission are implemented and tested with mocked broker evidence. Hosted submission remains disabled.
 - [x] Persist immutable planned shares, reservation-specific client order ID, allocation intent and owner audit together.
-- [ ] Resolve interrupted broker submissions by client order ID and verify protective orders before enabling execution.
+- [x] Exact-client-ID submission recovery and protective-order inspection are implemented. Real broker certification is still required.
 - [x] Combined authenticated HTTP/accounting fixture covers manual grading -> draft -> allocation -> verified partial fills -> partial/canceled exits -> owner release -> gross reporting.
-- [ ] Complete application execution through HTTP/UI: broker dispatch and protective orders are still absent from that fixture.
+- [x] Connected authenticated HTTP and desktop/mobile UI fixtures cover owner dispatch, fills, protective-order observation, management, reconciliation and manual release. Broker responses are mocked.
 - [x] Keep automatic release disabled unless separately approved.
 - [x] Versioned Pro Ticker proposal allocation/estimated-stop-risk limits and manual discovery size, with authenticated same-origin saves, optimistic concurrency and atomic audit records.
 - [ ] Execution/scanner strategy settings beyond hypothetical proposals and bounded manual discovery.
@@ -39,10 +45,12 @@
 
 ## Validation and external blockers
 
-- [ ] Complete workflow must pass end-to-end tests; module coverage alone is insufficient.
+- [x] Complete mocked workflow passes HTTP/UI integration checks; module coverage alone is not the evidence for this item.
+- [ ] Actual dedicated-account bracket entry, protection, cancellation, close, recovery and execution activity certification. A BUY research grade and fresh quote are required; a rejected candidate is not a completed order test.
 - [ ] Validate a representative standalone exported database on a disposable copy. No export has been supplied.
 - [x] Verify a saved research record through an actual hosted restart. Signed-owner save and independent readback retained the original timestamp, grade and score. Broker lifecycle persistence is a separate certification.
-- [ ] Dedicated Alpaca PAPER account validation. The owner currently has one actively used PAPER account; do not reuse it for staging tests.
+- [x] Separate dedicated PAPER account configured; authenticated hosted read-only verification checked expected account identity and active, unblocked USD readiness. Original account credentials are not reused.
+- [x] Actual isolated-staging database snapshot passed disposable-copy integrity, original-value, foreign-key and reservation checks. This research-only sample does not satisfy representative production-data validation above.
 - [x] Isolated staging deployment and subsequent staging updates/restarts are authorized by the completion sprint. Production deployment and merge still require separate approval.
 - [ ] Full PR review and explicit merge approval. Keep PR #1 draft.
 

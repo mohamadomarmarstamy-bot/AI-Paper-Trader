@@ -213,15 +213,20 @@ class IndependentDiscoveryTests(unittest.TestCase):
         asyncio.run(check())
 
     def test_saved_daily_grade_is_separate_from_fresh_market_ranking(self):
-        import json
-        with closing(database.get_connection()) as conn:
-            conn.execute('CREATE TABLE pro_ticker_manual_signal_reviews(symbol TEXT,request_id TEXT,status TEXT,completed_at TEXT,grade_json TEXT)')
-            conn.execute('INSERT INTO pro_ticker_manual_signal_reviews VALUES (?,?,?,?,?)',('NEW',str(uuid.uuid4()),'completed',datetime.fromtimestamp(self.now-3600,timezone.utc).isoformat(),json.dumps({'version':'pro_ticker_daily_technical_grade_v1','status':'graded','grade':'B','score':3})))
-            conn.commit()
+        from pro_ticker_manual_signals import submit_manual_signal
+        from test_pro_ticker_manual_signals import analysis
+        # Persist through the actual writer: its record status is 'graded',
+        # not the artificial 'completed' state used by the old fixture.
+        reviewed=self.now-3600
+        saved=submit_manual_signal({'symbol':'NEW','request_id':str(uuid.uuid4())},
+            quote_fetcher=lambda symbol:{'p':10.5,'t':datetime.fromtimestamp(reviewed-1,timezone.utc).isoformat()},
+            analyzer=lambda symbol:analysis(symbol,score=3),clock=lambda:reviewed)
+        self.assertEqual(saved['signal']['status'],'graded')
         result=self.discover()
         self.assertIsNone(result['run']['candidates'][0]['research_score'])
         self.assertEqual(result['saved_daily_grades']['NEW']['grade'],'B')
         self.assertEqual(result['saved_daily_grades']['NEW']['kind'],'saved_daily_technical_not_intraday')
+        self.assertEqual(result['saved_daily_grades']['NEW']['recorded_at'],saved['signal']['completed_at'])
         self.assertEqual(scanner_status(clock=self.clock)['saved_daily_grades'],result['saved_daily_grades'])
 
     @unittest.skipUnless(importlib.util.find_spec('yfinance'),'Production provider dependency required')

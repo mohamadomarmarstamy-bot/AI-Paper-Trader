@@ -89,7 +89,7 @@ def _saved_daily_grades(symbols):
     with closing(database.get_connection()) as conn:
         columns={r['name'] for r in conn.execute('PRAGMA table_info(pro_ticker_manual_signal_reviews)')}
         if not {'symbol','request_id','status','completed_at','grade_json'}.issubset(columns):return grades
-        rows=conn.execute("SELECT symbol,completed_at,grade_json FROM pro_ticker_manual_signal_reviews WHERE status='completed' AND symbol IN ("+','.join('?' for _ in symbols)+") ORDER BY completed_at DESC,request_id DESC LIMIT 1000",symbols)
+        rows=conn.execute("SELECT symbol,completed_at,grade_json FROM pro_ticker_manual_signal_reviews WHERE status='graded' AND symbol IN ("+','.join('?' for _ in symbols)+") ORDER BY completed_at DESC,request_id DESC LIMIT 1000",symbols)
         for record in rows:
             if record['symbol'] in grades:continue
             try:

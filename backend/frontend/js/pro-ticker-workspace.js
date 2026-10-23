@@ -138,7 +138,7 @@
             (snapshot.scanner.unattributed_research_records ? " Research records without an identified symbol: " + snapshot.scanner.unattributed_research_records + ". They are excluded from candidates." : "") +
             (discovery && typeof discovery.status === "string" ? " Last public discovery: " + discovery.status + (discovery.run?.finished_at ? " (" + date(discovery.run.finished_at) + ")" : "") + ". This is not a live market scan." : "") : "Scanner data unavailable.";
         el("performance-note").textContent=snapshot ? snapshot.performance.reason : "Performance data unavailable.";
-        el("health").textContent=snapshot ? "Database: readable. Broker: not checked. Automatic discovery: disabled. Order submission: disabled. Automatic release: disabled. No background jobs are started by this workspace." : "System health unavailable.";
+        el("health").textContent=snapshot ? "Database: readable. Broker positions and orders: not reconciled by this ledger snapshot. Automatic discovery: disabled. Order submission requires separate server configuration and owner approval. Automatic release: disabled. No background jobs are started by this workspace." : "System health unavailable.";
         el("research-detail").replaceChildren();
         el("research-detail").textContent="Select a saved candidate in Scanner to inspect its evidence.";
         candidates(); journal();
