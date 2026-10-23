@@ -133,3 +133,28 @@ release-review and execution-journal reconciliation. Closed partial entries use
 actual filled shares in priced gross reports. No fees or net profit are invented.
 Rollback leaves the additive table intact; disable management/monitor flags before
 rolling application code back. Never drop ownership records for an active order.
+
+
+## Independent market discovery
+
+The Scanner tab now has a separate Discover US market movers action. It queries
+one Yahoo US equity screen (up to 250 rows, no market-cap floor), locally filters
+canonical US equity symbols, price >= $0.25, average volume >= 50,000, movement
+>= 5%, cumulative/full-day volume ratio >= 1.5 and provider timestamps <= 120s old.
+It deduplicates/ranks the returned universe and rotates eight detailed Yahoo
+minute/daily history checks per run. Detailed 20-session volume/movement/price
+and timestamp checks must still pass. This is a bounded provider window, not
+coverage of every listed stock or proof of brokerage tradability.
+
+Existing manual/saved-symbol scans remain available. Discovery failures persist
+as failures, never silently fall back to saved names, and never fabricate an
+empty successful universe. Observations/results survive reload. Saved daily
+technical grades are separate from fresh quote/ranking data and clearly dated;
+missing grades stay unavailable, with the existing explicit grading handoff.
+No discovery request submits any order or enables automatic scanning/trading.
+
+On October 23 a keyless research-only live provider check returned 23 eligible
+movers from 250 screened rows; eight detailed checks yielded three accepted
+snapshots and five unavailable/filter failures. The check used a disposable DB
+and no broker credentials. Counts are one observation, not performance evidence.
+Hosted authenticated provider/restart validation remains outstanding.

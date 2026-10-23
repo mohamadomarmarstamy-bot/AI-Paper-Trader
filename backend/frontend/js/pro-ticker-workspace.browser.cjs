@@ -38,8 +38,8 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
   if(req.url==='/auto-trader/pro-ticker/market-scan'){
    res.setHeader('Content-Type','application/json');
    if(req.method==='POST'){
-    assert.equal(req.headers.origin,origin);const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=JSON.parse(Buffer.concat(chunks).toString());assert.deepEqual(body.symbols,['AAPL','BAD']);marketScanPosts++;
-    marketScan={paper:true,research_only:true,order_execution_authorized:false,automatic_scanning_enabled:false,status:'completed',run:{id:body.request_id,symbols:body.symbols,started_at:stamp,finished_at:new Date().toISOString(),requested:2,accepted:1,failed:1,research_only:true,order_execution_authorized:false,candidates:[{symbol:'AAPL',price:'10.50',price_change_percent:'5',volume:300,average_volume:'100.5',relative_volume:'2.985',observed_at:new Date().toISOString(),source:'synthetic_fixture',research_score:null,market_data_verified:false,order_execution_authorized:false,research_only:true}],failures:[{symbol:'BAD',reason:'Quote unavailable or invalid'}]}};
+    assert.equal(req.headers.origin,origin);const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=JSON.parse(Buffer.concat(chunks).toString());if(body.mode==='discover')assert.deepEqual(body.symbols,[]);else assert.deepEqual(body.symbols,['AAPL','BAD']);marketScanPosts++;const independent=body.mode==='discover',scanSymbols=independent?['NEWMOVER']:body.symbols;
+    marketScan={paper:true,research_only:true,order_execution_authorized:false,automatic_scanning_enabled:false,status:'completed',run:{id:body.request_id,symbols:scanSymbols,universe_source:independent?'yahoo_us_equity_movers':'operator_symbols',universe_count:independent?22:2,started_at:stamp,finished_at:new Date().toISOString(),requested:scanSymbols.length,accepted:1,failed:independent?0:1,research_only:true,order_execution_authorized:false,candidates:[{symbol:scanSymbols[0],price:'10.50',price_change_percent:'5',volume:300,average_volume:'100.5',relative_volume:'2.985',observed_at:new Date().toISOString(),source:'synthetic_fixture',research_score:null,market_data_verified:false,order_execution_authorized:false,research_only:true}],failures:independent?[]:[{symbol:'BAD',reason:'Quote unavailable or invalid'}]},saved_daily_grades:independent?{NEWMOVER:{grade:'B',score:3,recorded_at:stamp,kind:'saved_daily_technical_not_intraday'}}:{}};
    }
    res.end(JSON.stringify(marketScan||{paper:true,research_only:true,order_execution_authorized:false,automatic_scanning_enabled:false,status:'not_run',run:null}));return;
   }
@@ -226,6 +226,11 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.getByRole('button',{name:'Refresh saved market scan',exact:true}).click();await page.waitForFunction(()=>document.getElementById('pt-market-status').textContent.includes('BAD: Quote unavailable or invalid'));
    await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-market-scanner.png',fullPage:true});
    await page.getByRole('button',{name:'Grade AAPL',exact:true}).click();assert.equal(await page.locator('#pt-signal-symbol').inputValue(),'AAPL');
+   await page.locator('#pt-tab-scanner').click();await page.getByRole('button',{name:'Discover US market movers',exact:true}).click();
+   await page.waitForFunction(()=>document.getElementById('pt-market-status').textContent.includes('Yahoo discovery: 22 eligible symbols'));
+   assert.match(await page.locator('#pt-market-scanner').innerText(),/NEWMOVER/);assert.match(await page.locator('#pt-market-scanner').innerText(),/not current intraday/);
+   await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-independent-discovery.png',fullPage:true});await page.locator('#pt-tab-signals').click();
+
 
    // Separate synthetic owner-dispatch scenario. Default configuration never
    // permits this POST and checking the explicit approval is required.
