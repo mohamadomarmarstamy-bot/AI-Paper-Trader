@@ -179,6 +179,20 @@ def manage_paper_position(intent_id,payload,*,context):
             return inspect_position_management(intent_id,context=context)
         if fill['filled_shares']==0:
             if _position_qty(gateway,intent['plan']['symbol'])!=0:raise IntentConflict('Unattributed broker shares require review.')
+            refs=parent.get('legs')
+            if not isinstance(refs,list) or len(refs)>2:raise IntentConflict('Explicit unfilled child evidence required.')
+            ids=[_uuid(ref.get('id')) if isinstance(ref,dict) else None for ref in refs]
+            if None in ids or len(set(ids))!=len(ids) or parent['id'] in ids:raise ValueError('Distinct unfilled children required.')
+            clients=set()
+            for ref,id in zip(refs,ids):
+                child=gateway.read_order(id);qty=_number(ref.get('qty'))
+                if not isinstance(child,dict) or any(ref.get(key)!=child.get(key) for key in ('id','client_order_id','symbol','side','qty','filled_qty','status')):raise ValueError('Unfilled child snapshots differ.')
+                client=child.get('client_order_id')
+                if qty!=int(qty) or not 0<qty<=intent['plan']['shares'] or not isinstance(client,str) or not client or client in clients or client==intent['client_order_id']:raise ValueError('Unfilled child identity differs.')
+                clients.add(client)
+                checked=assess_paper_order_fill(expected_order_id=id,expected_symbol=intent['plan']['symbol'],expected_side='sell',expected_shares=int(qty),broker_order=child)
+                if not checked['verified'] or checked['filled_shares']!=0:raise IntentConflict('Unfilled bracket child has conflicting fills.')
+                if not checked['terminal'] and _mark(intent_id,owner,'cancel:'+id):gateway.cancel_owned_order(id)
             return inspect_position_management(intent_id,context=context)
         from pro_ticker_position_monitor import monitor_paper_position
         result=monitor_paper_position(intent_id,context=context)

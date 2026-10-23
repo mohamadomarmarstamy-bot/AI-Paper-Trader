@@ -43,8 +43,13 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    }
    res.end(JSON.stringify(marketScan||{paper:true,research_only:true,order_execution_authorized:false,automatic_scanning_enabled:false,status:'not_run',run:null}));return;
   }
+  if(req.url==='/auto-trader/pro-ticker/execution-journal.csv'){
+   res.setHeader('Content-Type','text/csv; charset=utf-8');res.setHeader('X-Execution-Total-Count',String(pricedExecutions.length));
+   const fields=['activity_id','intent_id','broker_order_id','executed_at','recorded_at','symbol','side','shares','price'];
+   res.end([fields.join(','),...pricedExecutions.map(row=>fields.map(key=>row[key]).join(','))].join('\r\n'));return;
+  }
   if(req.url==='/auto-trader/pro-ticker/execution-journal'){
-   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,kind:'owned_broker_fill_activities',rows:pricedExecutions,total_count:pricedExecutions.length,has_more:false,closed_priced_count:0,gross_realized_usd:null,net_pnl:null,fees:null,model_updated:false}));return;
+   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,kind:'owned_broker_fill_activities',rows:pricedExecutions,total_count:pricedExecutions.length,has_more:false,closed_priced_count:0,gross_wins:0,gross_losses:0,gross_flat:0,gross_win_rate_percent:null,gross_realized_usd:null,net_pnl:null,fees:null,model_updated:false}));return;
   }
   if(req.url.startsWith('/auto-trader/pro-ticker/order-intents/')&&req.url.endsWith('/execution-sync')){
    assert.equal(req.method,'POST');assert.equal(req.headers.origin,origin);const chunks=[];for await(const chunk of req)chunks.push(chunk);assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString()),{});
@@ -260,7 +265,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
 
    await page.getByRole('button',{name:'Sync priced PAPER executions',exact:true}).click();await page.waitForFunction(()=>document.getElementById('pt-signal-detail').textContent.includes('Saved 1 owned broker FILL activities'));
    await page.locator('#pt-tab-journal').click();assert.match(await page.locator('#pt-priced-executions').innerText(),/synthetic-broker-order/);assert.match(await page.locator('#pt-priced-executions').innerText(),/No zero-profit result is inferred/);
-   const [pricedDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Export priced executions (CSV)',exact:true}).click()]);const pricedCSV=fs.readFileSync(await pricedDownload.path(),'utf8');assert.match(pricedCSV,/executed_at/);assert.match(pricedCSV,/synthetic-activity::1/);
+   const [pricedDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Export full execution history (CSV)',exact:true}).click()]);const pricedCSV=fs.readFileSync(await pricedDownload.path(),'utf8');assert.match(pricedCSV,/executed_at/);assert.match(pricedCSV,/synthetic-activity::1/);
    await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-priced-executions.png',fullPage:true});await page.locator('#pt-tab-signals').click();
 
 

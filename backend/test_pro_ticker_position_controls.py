@@ -220,6 +220,22 @@ class PositionControlsTests(unittest.TestCase):
         release_manually_approved_paper_budget(review['review_id'],fetch_paper_order=self.gateway.read_order)
         priced=execution_journal_snapshot();self.assertEqual(priced['closed_priced_count'],1);self.assertEqual(priced['gross_realized_usd'],'1')
 
+    def test_zero_fill_close_cleans_up_owned_children_without_submitting_a_sell(self):
+        import test_pro_ticker_submission_recovery as pending
+        pending.SubmissionRecoveryTests.setUp(self)
+        self.context=PaperManagementContext(self.context.expected_account_id,lambda:self.gateway,True,False,True)
+        parent=self.gateway.find_order.return_value
+        children=[{'id':str(uuid.uuid4()),'client_order_id':'zero-'+str(i),'symbol':'AAPL','side':'sell','qty':'2','filled_qty':'0','status':'held'} for i in range(2)]
+        parent.update(filled_qty='0',status='canceled',order_class='bracket',legs=children)
+        self.gateway.read_order.side_effect=lambda id:deepcopy(parent if id==parent['id'] else next(c for c in children if c['id']==id))
+        self.gateway.read_clock.side_effect=lambda:{'is_open':True,'timestamp':datetime.now(timezone.utc).isoformat()}
+        self.gateway.read_positions.return_value=[]
+        self.gateway.cancel_owned_order.side_effect=lambda id:next(c for c in children if c['id']==id).update(status='canceled')
+        result=self.manage()
+        self.assertTrue(result['entry_cancellation_confirmed']);self.assertFalse(result['close_dispatch_attempted'])
+        self.assertEqual(result['remaining_shares'],0);self.assertEqual(self.gateway.cancel_owned_order.call_count,2)
+        self.gateway.submit_owned_close.assert_not_called()
+
     def test_manual_exit_provenance_rejects_foreign_order(self):
         self.advance_close();self.close_order['client_order_id']='foreign'
         with self.assertRaises(ValueError):monitor_paper_position(self.intent['id'],context=self.context)

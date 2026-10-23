@@ -4,7 +4,8 @@
 
 - Dedicated workspace, owner-entered grading, persisted research and proposals.
 - Rotating, operator-triggered market scans of saved/entered symbols using the
-  existing keyless Yahoo dependency. Stale/missing data is explicit.
+  existing keyless Yahoo dependency, plus independent bounded US equity mover
+  discovery and saved daily-grade display. Stale/missing data is explicit.
 - Dedicated-account owner-confirmed limit brackets, durable dispatch claims,
   at-most-once POST attempts, exact-client-ID recovery and reservation accounting.
 - Owner-triggered bracket entry/exit reconciliation and protection observations.
@@ -23,7 +24,9 @@ Original trader execution settings and production deployment are unchanged.
 
 1. Inspect production deployment/logs, scanner, PAPER connectivity and actual order
    monitoring. Local full-app startup/regression checks do not prove hosted health.
-   Railway OAuth currently requires reconnection; no production diagnosis is claimed.
+   Railway access is restored. Both hosted health endpoints returned 200; a
+   production BF-B research-symbol error was confirmed and fixed on the branch.
+   No production deployment or actual entry/exit certification is claimed.
 2. Obtain a separate Alpaca PAPER account and confirm its identity differs from the
    original trader's account. Never use original account credentials in staging.
 3. Complete exact-commit CI and review screenshots, then deploy to the already
@@ -34,9 +37,9 @@ Original trader execution settings and production deployment are unchanged.
    export must remain unchanged; no representative export has been supplied.
 6. Validate bracket behavior, account activity pagination, partial fills and provider
    freshness against the dedicated account. Synthetic evidence is insufficient.
-7. Resolve first-release limits: unattended monitoring needs hosted validation, no
-   application manual bracket cancel/close workflow, and no independent expanding
-   scanner universe. Bracket entries can be unprotected while partially filled;
+7. Unattended monitoring, owner cancel/close controls and bounded independent
+   discovery are implemented. Dedicated-account certification and authenticated
+   hosted workflow/restart checks remain required. Bracket entries can be unprotected while partially filled;
    protection is not certified after hours. These must be addressed or explicitly
    accepted as restricted operator-supervised scope before production approval.
 8. Net P&L, fees, corrections, corporate actions and broader risk-adjusted analytics
@@ -158,3 +161,25 @@ movers from 250 screened rows; eight detailed checks yielded three accepted
 snapshots and five unavailable/filter failures. The check used a disposable DB
 and no broker credentials. Counts are one observation, not performance evidence.
 Hosted authenticated provider/restart validation remains outstanding.
+
+
+## Execution accounting and complete history export
+
+Fully covered terminal entry/exit FILL activities now count as a completed gross
+trade when actual buys equal sells, independently of when its virtual allocation
+is returned. Counts distinguish gross wins, losses and breakevens; missing costs
+keep fees, adjustments and net P&L null/unavailable. Canceled partial entries use
+actual filled quantities. No missing-price record is assigned zero profit.
+
+The authenticated execution-journal.csv export streams every stored activity
+from a single read-only SQLite snapshot in 500-row chunks, with a total-count
+header and spreadsheet formula escaping. The UI's 500-row display window no
+longer limits the full export. Export does not fetch or modify broker orders.
+
+Confirmed zero-fill bracket cancellations have a separate owner-approved release
+path: canonical entry ownership, zero accounted entry fills, zero strategy balance,
+explicit child references and independently terminal zero-fill children are all
+required. A late fill, missing child, pending cancellation, changed approval or
+unresolved sell blocks release. Every release still requires a separate owner
+attestation and atomic evidence recheck. Unfilled cancellations are classified
+not_traded and excluded from trade/win/breakeven/gross-profit statistics.

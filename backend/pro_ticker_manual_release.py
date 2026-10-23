@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS pro_ticker_budget_release_events (
     released_at TEXT NOT NULL
 );
 """
-_SCHEMA += _PERFORMANCE_SCHEMA
+from pro_ticker_exit_links import _SCHEMA as _EXIT_SCHEMA
+_SCHEMA += _PERFORMANCE_SCHEMA + _EXIT_SCHEMA
 _BASE = dict(paper=True, verified=False, preview_only=True,
              release_authorized=False, budget_released=False, database_updated=False,
              broker_origin_authenticated=False)
@@ -79,11 +80,12 @@ def _ledger(conn, reservation_id):
     position = conn.execute(
         'SELECT * FROM pro_ticker_strategy_positions WHERE symbol = ?', (symbol,),
     ).fetchone()
-    if position is None or position['shares'] != 0:
+    zero_candidate=reservation['status']=='submitted' and not links and not any(row['broker_order_id']==reservation['broker_order_id'] for row in fills)
+    if (position is None and not zero_candidate) or (position is not None and position['shares']!=0):
         raise ValueError('PAPER strategy position is open or missing.')
     symbol_balance = sum(row['shares'] if row['side'] == 'buy' else -row['shares']
                          for row in fills if row['symbol'] == symbol)
-    if symbol_balance != position['shares']:
+    if symbol_balance != (position['shares'] if position else 0):
         raise ValueError('PAPER symbol fill balance conflicts with position ledger.')
     duplicate_entry = conn.execute(
         'SELECT COUNT(*) FROM pro_ticker_paper_reservations WHERE broker_order_id = ?',
@@ -92,7 +94,24 @@ def _ledger(conn, reservation_id):
     if duplicate_entry != 1:
         raise ValueError('PAPER entry ownership is ambiguous.')
     return dict(reservation=dict(reservation), links=[dict(row) for row in links],
-                fills=[dict(row) for row in fills], position=dict(position))
+                fills=[dict(row) for row in fills], position=dict(position) if position else None)
+
+
+def _zero_terminal_entry(ledger, entry):
+    from pro_ticker_fill_verification import assess_paper_order_fill
+    reservation=ledger['reservation']
+    result=assess_paper_order_fill(expected_order_id=reservation['broker_order_id'],expected_symbol=reservation['symbol'],expected_side='buy',expected_shares=reservation['expected_shares'],broker_order=entry)
+    return (result['verified'] and result['terminal'] and result['filled_shares']==0
+            and result['broker_status'] in ('canceled','expired','rejected')
+            and entry.get('client_order_id')=='pt-'+reservation['id'] and entry.get('order_class')=='bracket')
+
+
+def _zero_child_refs(entry):
+    refs=entry.get('legs')
+    if not isinstance(refs,list) or len(refs)>2:raise ValueError('Explicit terminal bracket-child evidence required.')
+    ids=[_uuid(ref.get('id')) if isinstance(ref,dict) else None for ref in refs]
+    if None in ids or len(set(ids))!=len(ids) or entry['id'] in ids:raise ValueError('Distinct bracket child IDs required.')
+    return dict(zip(ids,refs))
 
 
 def _fetch(ledger, reader):
@@ -100,6 +119,10 @@ def _fetch(ledger, reader):
         raise ValueError('Trusted PAPER order reader required.')
     entry = reader(ledger['reservation']['broker_order_id'])
     exits = {link['broker_order_id']: reader(link['broker_order_id']) for link in ledger['links']}
+    if _zero_terminal_entry(ledger,entry):
+        for id in _zero_child_refs(entry):
+            if id in exits:raise ValueError('Unfilled cancellation has conflicting exit links.')
+            exits[id]=reader(id)
     error = validate_paper_snapshot_inputs(entry, exits)
     if error:
         raise ValueError('PAPER release snapshot invalid: ' + error)
@@ -122,6 +145,27 @@ def _digest(ledger, entry, exits):
 
 
 def _verify(conn, reservation_id, entry, exits):
+    ledger=_ledger(conn,reservation_id)
+    if _zero_terminal_entry(ledger,entry):
+        from pro_ticker_fill_verification import assess_paper_order_fill
+        from pro_ticker_broker_admission import _number
+        if ledger['reservation']['status']!='submitted' or ledger['links'] or any(row['broker_order_id']==entry['id'] for row in ledger['fills']):raise ValueError('Unfilled cancellation has accounted fills or conflicting links.')
+        refs=_zero_child_refs(entry)
+        if set(exits)!=set(refs):raise ValueError('Incomplete unfilled child evidence.')
+        clients=set()
+        for id,ref in refs.items():
+            child=exits[id];qty=_number(ref.get('qty'))
+            if qty!=qty.to_integral_value() or not 0<qty<=ledger['reservation']['expected_shares']:raise ValueError('Invalid unfilled child quantity.')
+            if not isinstance(child,dict) or any(ref.get(key)!=child.get(key) for key in ('id','client_order_id','symbol','side','qty','filled_qty','status')):raise ValueError('Unfilled child snapshots differ.')
+            client=child.get('client_order_id')
+            if not isinstance(client,str) or not client or client==entry['client_order_id'] or client in clients:raise ValueError('Distinct unfilled child client identity required.')
+            clients.add(client)
+            result=assess_paper_order_fill(expected_order_id=id,expected_symbol=ledger['reservation']['symbol'],expected_side='sell',expected_shares=int(qty),broker_order=child)
+            if not result['verified'] or not result['terminal'] or result['filled_shares']!=0:raise ValueError('Unfilled child is open or has fills.')
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE name='pro_ticker_position_actions'").fetchone():
+            action=conn.execute('SELECT attempts_json FROM pro_ticker_position_actions WHERE intent_id IN (SELECT id FROM pro_ticker_order_intents WHERE reservation_id=?)',(reservation_id,)).fetchone()
+            if action and 'close' in json.loads(action['attempts_json']):raise ValueError('Outstanding close attempt requires review.')
+        return
     result = _audit_snapshot(conn, reservation_id, entry, exits, _BASE)
     if result.get('verified') is not True:
         raise ValueError('PAPER closure evidence blocked: ' + result['reason'])
@@ -158,6 +202,7 @@ def prepare_manual_paper_release(reservation_id, *, fetch_paper_order):
             'evidence_digest': digest, 'expires_at': now + 300,
             'symbol': current['reservation']['symbol'],
             'reserved_cents': current['reservation']['notional_cents'],
+            'release_kind':'unfilled_cancellation' if _zero_terminal_entry(current,entry) else 'closed_trade',
             'filled_entry_shares': int(float(entry['filled_qty'])),
             'filled_exit_shares': sum(int(float(order['filled_qty'])) for order in exits.values()),
             'entry_order_id': current['reservation']['broker_order_id'],
@@ -235,8 +280,8 @@ def release_manually_approved_paper_budget(review_id, *, fetch_paper_order):
         cents = current['reservation']['notional_cents']
         conn.execute('INSERT INTO pro_ticker_budget_release_events VALUES (?, ?, ?, ?, ?, ?)',
                      (live['reservation_id'], review_id, digest, live['approved_by'], cents, now))
-        changed = conn.execute("UPDATE pro_ticker_paper_reservations SET status = 'released', updated_at = ? WHERE id = ? AND status = 'filled'",
-                               (now, live['reservation_id'])).rowcount
+        changed = conn.execute("UPDATE pro_ticker_paper_reservations SET status = 'released', updated_at = ? WHERE id = ? AND status = ?",
+                               (now, live['reservation_id'],current['reservation']['status'])).rowcount
         if changed != 1:
             raise ValueError('PAPER reservation is no longer releasable.')
         conn.execute('UPDATE pro_ticker_manual_release_reviews SET consumed_at = ? WHERE id = ?', (time.time(), review_id))

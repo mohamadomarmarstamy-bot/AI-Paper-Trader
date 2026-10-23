@@ -143,3 +143,17 @@ test("successful release with failed history refresh reports partial success", a
     assert.match(ui.get("status").textContent, /funds returned, but history could not refresh/);
     assert.equal(ui.get("confirm").disabled, true);
 });
+
+test("confirmed unfilled cancellation still needs separate owner approval", async () => {
+    const ui=setup(url=>url.endsWith('/release-review')?{...review(),release_kind:'unfilled_cancellation',filled_entry_shares:0,filled_exit_shares:0,exit_order_ids:[]}:fetcher(url));
+    await prepare(ui);
+    assert.match(ui.get('review').textContent,/no trade or profit/);
+    assert.equal(ui.get('confirm').disabled,true);
+    ui.get('attest').checked=true;ui.get('attest').handlers.change();
+    assert.equal(ui.get('confirm').disabled,false);
+});
+
+test("zero-share release without an explicit cancellation classification fails closed",async()=>{
+    const ui=setup(url=>url.endsWith('/release-review')?{...review(),filled_entry_shares:0,filled_exit_shares:0,exit_order_ids:[]}:fetcher(url));
+    await prepare(ui);assert.equal(ui.get('confirm').disabled,true);assert.equal(ui.get('attest').disabled,true);
+});

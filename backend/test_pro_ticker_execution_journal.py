@@ -75,7 +75,7 @@ class ExecutionJournalTests(unittest.TestCase):
         self.legs[1].update(filled_qty='2',status='filled',filled_avg_price='11.5');self.legs[0]['status']='canceled'
         fixtures.PositionMonitorTests.monitor(self)
         self.activities[self.legs[1]['id']]=[self.activity(self.legs[1],2,'11.5',2)]
-        self.sync();self.assertEqual(execution_journal_snapshot()['closed_priced_count'],0)
+        self.sync();self.assertEqual(execution_journal_snapshot()['closed_priced_count'],1)
         from pro_ticker_manual_release import prepare_manual_paper_release,approve_manual_paper_release,release_manually_approved_paper_budget
         def reader(id):return deepcopy(self.parent if id==self.parent['id'] else next(row for row in self.legs if row['id']==id))
         review=prepare_manual_paper_release(self.intent['reservation_id'],fetch_paper_order=reader)
@@ -119,3 +119,93 @@ class ExecutionPaginationTests(unittest.TestCase):
         self.assertEqual(get.call_count,2)
         get.return_value=Mock(status_code='200',json=lambda:[])
         with self.assertRaises(PaperGatewayUnavailable):self.gateway(get).read_fill_activities(str(uuid.uuid4()))
+
+
+class VerifiedGrossOutcomeTests(unittest.TestCase):
+    setUp=ExecutionJournalTests.setUp
+    make_draft=ExecutionJournalTests.make_draft
+    prepare=ExecutionJournalTests.prepare
+    activity=ExecutionJournalTests.activity
+    sync=ExecutionJournalTests.sync
+
+    def complete(self,price):
+        exit_order=self.legs[0]
+        exit_order.update(filled_qty='2',status='filled');self.legs[1]['status']='canceled'
+        fixtures.PositionMonitorTests.monitor(self)
+        self.activities[exit_order['id']]=[self.activity(exit_order,2,price,2)]
+        self.sync();return execution_journal_snapshot()
+
+    def test_priced_winner_counts_before_budget_return(self):
+        result=self.complete('11.5')
+        self.assertEqual(result['closed_priced_count'],1);self.assertEqual(result['gross_wins'],1)
+        self.assertEqual(result['gross_losses'],0);self.assertEqual(result['gross_win_rate_percent'],100)
+        self.assertEqual(result['gross_realized_usd'],'2.0')
+        self.assertEqual(workspace_snapshot()['budget']['committed_cents'],2100)
+        self.assertIsNone(result['fees']);self.assertIsNone(result['adjustments']);self.assertIsNone(result['net_pnl'])
+        self.assertEqual(result['net_pnl_status'],'unavailable_cost_evidence')
+
+    def test_priced_loser_uses_actual_execution_cost(self):
+        result=self.complete('9.5')
+        self.assertEqual(result['gross_losses'],1);self.assertEqual(result['gross_wins'],0)
+        self.assertEqual(result['gross_realized_usd'],'-2.0');self.assertEqual(result['gross_win_rate_percent'],0)
+
+    def test_breakeven_is_neither_a_win_nor_a_loss(self):
+        result=self.complete('10.5')
+        self.assertEqual(result['gross_flat'],1);self.assertEqual(result['gross_wins']+result['gross_losses'],0)
+        self.assertEqual(result['gross_realized_usd'],'0.0')
+
+
+class CompleteExecutionExportTests(unittest.TestCase):
+    def setUp(self):
+        from pathlib import Path
+        import tempfile
+        from unittest.mock import patch
+        from pro_ticker_execution_journal import SCHEMA
+        temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
+        patcher=patch.object(database,'DATABASE_PATH',Path(temp.name)/'export.db');patcher.start();self.addCleanup(patcher.stop)
+        with closing(database.get_connection()) as conn:conn.executescript(SCHEMA);conn.commit()
+
+    def insert(self,count,offset=0):
+        with closing(database.get_connection()) as conn:
+            conn.executemany('INSERT INTO pro_ticker_execution_journal VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                [('activity::'+str(i),'intent','reservation','order','AAPL','buy',1,'10','2026-10-23T14:00:00+00:00','2026-10-23T14:00:01+00:00','synthetic') for i in range(offset,offset+count)])
+            conn.commit()
+
+    def test_full_export_is_not_limited_to_the_500_row_ui_window(self):
+        import csv,io
+        from pro_ticker_execution_journal import prepare_execution_journal_export
+        self.insert(1201)
+        count,stream,close=prepare_execution_journal_export()
+        chunks=list(stream);close()
+        rows=list(csv.DictReader(io.StringIO(''.join(chunks))))
+        self.assertEqual(count,1201);self.assertEqual(len(rows),1201)
+        self.assertEqual(len({row['activity_id'] for row in rows}),1201)
+        self.assertEqual(len(chunks),4)
+
+    def test_export_uses_one_snapshot_and_escapes_spreadsheet_formulas(self):
+        import csv,io
+        from pro_ticker_execution_journal import prepare_execution_journal_export
+        with closing(database.get_connection()) as conn:conn.execute('PRAGMA journal_mode=WAL')
+        self.insert(2)
+        with closing(database.get_connection()) as conn:conn.execute("UPDATE pro_ticker_execution_journal SET activity_id='=formula' WHERE activity_id='activity::0'");conn.commit()
+        count,stream,close=prepare_execution_journal_export()
+        self.insert(1,offset=2)
+        rows=list(csv.DictReader(io.StringIO(''.join(stream))));close()
+        self.assertEqual(count,2);self.assertEqual(len(rows),2)
+        self.assertIn("'=formula",[row['activity_id'] for row in rows])
+
+    def test_export_route_requires_owner_and_returns_full_count(self):
+        import csv,io
+        self.insert(600)
+        def owner(request):
+            if request.headers.get('X-Owner')!='yes':raise HTTPException(401)
+        app=FastAPI();app.include_router(build_paper_execution_router(require_session=owner))
+        async def run():
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='https://test') as client:
+                path='/auto-trader/pro-ticker/execution-journal.csv'
+                self.assertEqual((await client.get(path)).status_code,401)
+                response=await client.get(path,headers={'X-Owner':'yes'})
+                self.assertEqual(response.status_code,200);self.assertEqual(response.headers['X-Execution-Total-Count'],'600')
+                self.assertEqual(response.headers['Cache-Control'],'no-store')
+                self.assertEqual(len(list(csv.DictReader(io.StringIO(response.text)))),600)
+        asyncio.run(run())

@@ -64,7 +64,7 @@
             enabled = settings.manual_release_enabled;
             form.hidden = !enabled;
             status.textContent = enabled
-                ? "Review closed PAPER reservations to return their reserved funds. Each release requires your verification."
+                ? "Review closed PAPER trades or confirmed unfilled cancellations to return their reserved funds. Each release requires your verification."
                 : "Manual release controls are disabled. Release history remains available.";
             if (!history.events.length) status.textContent += " No virtual budget releases yet.";
             updateButtons();
@@ -94,21 +94,22 @@
         status.textContent = "Checking linked PAPER orders and recorded fills...";
         try {
             const data = await request("/release-review", { reservation_id: id });
+            const unfilled=data.release_kind==="unfilled_cancellation";
             if (current !== version) return false;
             if (data.paper !== true || data.reservation_id !== id || data.budget_released !== false || !uuid.test(data.review_id) ||
                 typeof data.evidence_digest !== "string" || !/^[a-f0-9]{64}$/.test(data.evidence_digest) ||
                 typeof data.expires_at !== "number" || data.expires_at * 1000 <= Date.now() ||
                 typeof data.symbol !== "string" || !/^[A-Z][A-Z0-9.\-]{0,9}$/.test(data.symbol) ||
                 !Number.isSafeInteger(data.reserved_cents) || data.reserved_cents <= 0 ||
-                !Number.isSafeInteger(data.filled_entry_shares) || data.filled_entry_shares <= 0 ||
+                !Number.isSafeInteger(data.filled_entry_shares) || data.filled_entry_shares < 0 || (!unfilled && data.filled_entry_shares === 0) || (unfilled && data.filled_entry_shares !== 0) ||
                 data.filled_exit_shares !== data.filled_entry_shares ||
                 !uuid.test(data.entry_order_id) || !Array.isArray(data.exit_order_ids) ||
-                !data.exit_order_ids.length || data.exit_order_ids.some(value => !uuid.test(value))) {
+                (!unfilled && !data.exit_order_ids.length) || data.exit_order_ids.some(value => !uuid.test(value))) {
                 throw new Error("Unexpected PAPER review. Prepare a fresh review.");
             }
             review = data;
             summary.textContent = data.symbol + ": return $" + (data.reserved_cents / 100).toFixed(2) +
-                " of reserved funds; " + data.filled_entry_shares + " entry shares and " + data.filled_exit_shares +
+                " of reserved funds; "+(unfilled?"confirmed unfilled cancellation (no trade or profit); ":"")+data.filled_entry_shares + " entry shares and " + data.filled_exit_shares +
                 " exited shares. Entry order: " + data.entry_order_id + ". Exit orders: " + data.exit_order_ids.join(", ") +
                 ". Evidence: " + data.evidence_digest + ". Review expires in five minutes.";
             attest.disabled = false;

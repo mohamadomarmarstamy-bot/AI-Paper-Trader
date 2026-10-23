@@ -298,3 +298,61 @@ class ManualPaperReleaseTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class UnfilledCancellationReleaseTests(unittest.TestCase):
+    def setUp(self):
+        import test_pro_ticker_submission_recovery as pending
+        from pro_ticker_submission_recovery import recover_paper_submission
+        self.make_draft=pending.SubmissionRecoveryTests.make_draft.__get__(self)
+        self.prepare_intent=pending.SubmissionRecoveryTests.prepare.__get__(self)
+        # The shared fixture expects prepare to create an allocation intent.
+        self.prepare=self.prepare_intent
+        pending.SubmissionRecoveryTests.setUp(self)
+        del self.prepare
+        self.entry=self.gateway.find_order.return_value
+        self.entry.update(filled_qty='0',status='canceled',order_class='bracket',legs=[])
+        recover_paper_submission(self.intent['id'],context=self.context)
+        self.reservation_id=self.intent['reservation_id']
+        self.reader=Mock(side_effect=lambda id:self.entry.copy())
+
+    def review(self):return release.prepare_manual_paper_release(self.reservation_id,fetch_paper_order=self.reader)
+    def approve(self,review):return release.approve_manual_paper_release(review['review_id'],evidence_digest=review['evidence_digest'],approved_by='owner',independent_paper_provenance_confirmed=True)
+    def apply(self,review):return release.release_manually_approved_paper_budget(review['review_id'],fetch_paper_order=self.reader)
+
+    def test_unfilled_cancellation_releases_only_after_independent_owner_review(self):
+        from pro_ticker_closed_performance import closed_performance_snapshot
+        review=self.review();self.assertEqual(review['release_kind'],'unfilled_cancellation')
+        self.assertEqual(review['filled_entry_shares'],0);self.assertEqual(review['exit_order_ids'],[])
+        self.assertFalse(review['budget_released'])
+        with self.assertRaises(ValueError):self.apply(review)
+        self.approve(review);self.assertTrue(self.apply(review)['budget_released'])
+        self.assertTrue(self.apply(review)['already_released'])
+        self.assertEqual(get_pro_ticker_budget()['committed'],0)
+        result=closed_performance_snapshot()
+        self.assertEqual(result['unfilled_cancellations_count'],1);self.assertEqual(result['closed_reservations_count'],0)
+        self.assertEqual(result['gross_flat'],0);self.assertIsNone(result['gross_pnl_cents'])
+
+    def test_pending_cancel_or_missing_nested_child_evidence_cannot_release(self):
+        self.entry['status']='pending_cancel'
+        with self.assertRaises(ValueError):self.review()
+        self.entry['status']='canceled';self.entry.pop('legs')
+        with self.assertRaises(ValueError):self.review()
+
+    def test_late_fill_invalidates_zero_fill_approval(self):
+        review=self.review();self.approve(review)
+        self.entry['filled_qty']='1'
+        with self.assertRaises(ValueError):self.apply(review)
+        self.assertEqual(get_pro_ticker_reservation(self.reservation_id)['status'],'submitted')
+        self.assertEqual(get_pro_ticker_budget()['committed'],21)
+
+    def test_unfilled_children_must_be_independently_terminal_and_unchanged(self):
+        import uuid
+        child={'id':str(uuid.uuid4()),'client_order_id':'unfilled-child','symbol':'AAPL','side':'sell','qty':'2','filled_qty':'0','status':'pending_cancel'}
+        self.entry['legs']=[child]
+        self.reader.side_effect=lambda id:self.entry.copy() if id==self.entry['id'] else child.copy()
+        with self.assertRaises(ValueError):self.review()
+        child['status']='canceled';review=self.review();self.approve(review)
+        child['status']='new'
+        with self.assertRaises(ValueError):self.apply(review)
+        self.assertEqual(get_pro_ticker_budget()['committed'],21)

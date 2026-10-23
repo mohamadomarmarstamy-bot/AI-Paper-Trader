@@ -109,6 +109,19 @@ def build_paper_execution_router(*,require_session,context=None):
         from fastapi.responses import JSONResponse
         try:return JSONResponse(execution_journal_snapshot(),headers={'Cache-Control':'no-store'})
         except Exception:raise HTTPException(503,'Priced execution journal unavailable.') from None
+    @router.get(base+'/execution-journal.csv')
+    def full_execution_export(request:Request):
+        require_session(request)
+        from fastapi.responses import StreamingResponse
+        from starlette.background import BackgroundTask
+        from pro_ticker_execution_journal import prepare_execution_journal_export
+        try:
+            count,stream,close=prepare_execution_journal_export()
+            return StreamingResponse(stream,media_type='text/csv',headers={'Cache-Control':'no-store',
+                'Content-Disposition':'attachment; filename="pro-ticker-execution-history.csv"',
+                'X-Execution-Total-Count':str(count)},background=BackgroundTask(close))
+        except Exception:raise HTTPException(503,'Execution history export unavailable.') from None
+
     @router.post(base+'/order-intents/{intent_id}/execution-sync')
     async def execution_sync(intent_id:str,request:Request):
         payload=await body(request)
