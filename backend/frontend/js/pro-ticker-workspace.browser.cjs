@@ -168,7 +168,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.getByRole('button',{name:'Inspect AAPL review',exact:true}).click();assert.equal(await page.locator('#pt-signal-detail form').count(),0);assert.match(await page.locator('#pt-signal-detail').innerText(),/draft itself does not reserve funds or place an order/);
    await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-saved-draft.png',fullPage:true});
    assert.equal(await page.getByRole('button',{name:'Reserve virtual funds (no order)',exact:true}).isDisabled(),true);
-   await page.locator('#pt-signal-detail input[type="checkbox"]').check();await page.getByRole('button',{name:'Reserve virtual funds (no order)',exact:true}).click();
+   await page.getByLabel(/I approve reserving up to/).check();await page.getByRole('button',{name:'Reserve virtual funds (no order)',exact:true}).click();
    await page.waitForFunction(()=>document.getElementById('pt-signal-detail').textContent.includes('Allocation update unconfirmed'));
    await page.getByRole('button',{name:'Reserve virtual funds (no order)',exact:true}).click();
    await page.waitForFunction(()=>document.getElementById('pt-signal-detail').textContent.includes('Virtual funds reserved: $21.00'));
@@ -184,7 +184,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    assert.equal(admissionRequests.length,2);assert.equal(admissionRequests[0].request_id,admissionRequests[1].request_id);
    await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-admission-review.png',fullPage:true});
    assert.equal(await page.getByRole('button',{name:'Cancel unsubmitted allocation',exact:true}).isDisabled(),true);
-   await page.locator('#pt-signal-detail input[type="checkbox"]').check();await page.getByRole('button',{name:'Cancel unsubmitted allocation',exact:true}).click();
+   await page.getByLabel(/I approve canceling this never-submitted allocation/).check();await page.getByRole('button',{name:'Cancel unsubmitted allocation',exact:true}).click();
    await page.waitForFunction(()=>document.getElementById('pt-signal-detail').textContent.includes('Allocation canceled. Returned virtual funds are not trading profit'));
    assert.equal(savedSignal.order_intent.status,'canceled');assert.equal(data.budget.committed_cents,10000);
    const canceledIntent=savedSignal.order_intent;
