@@ -56,13 +56,13 @@ def assess_paper_order_fill(
     terminal = status in {"filled", "canceled", "expired", "rejected"}
     recognized = terminal or status in {
         "new", "accepted", "pending_new", "pending_cancel",
-        "partially_filled", "accepted_for_bidding", "stopped",
+        "partially_filled", "accepted_for_bidding", "stopped", "held",
     }
     if not recognized:
         return {**base, "reason": "unknown_broker_status"}
     if status == "filled" and filled_qty != order_qty:
         return {**base, "reason": "inconsistent_filled_status"}
-    if status in {"new", "accepted", "pending_new", "rejected"} and filled_qty > 0:
+    if status in {"new", "accepted", "pending_new", "rejected", "held"} and filled_qty > 0:
         return {**base, "reason": "inconsistent_pending_status"}
     return {
         **base, "verified": True, "reason": "verified_paper_order",

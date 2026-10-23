@@ -41,3 +41,11 @@ class DedicatedRuntimeTests(unittest.TestCase):
         gateway=Mock();context=Mock();context.gateway.return_value=gateway
         with patch('pro_ticker_runtime.dedicated_paper_context',return_value=context):
             reader=dedicated_release_reader();self.assertEqual(reader,gateway.read_order);gateway.read_account.assert_called_once()
+
+
+    def test_management_is_a_separate_default_off_gate(self):
+        context=dedicated_paper_context(environ=self.env)
+        self.assertFalse(execution_status(context)['owner_management_enabled'])
+        enabled=dedicated_paper_context(environ={**self.env,'PRO_TICKER_OWNER_PAPER_MANAGEMENT_ENABLED':'true'})
+        self.assertTrue(execution_status(enabled)['owner_management_enabled'])
+        self.assertFalse(execution_status(enabled)['owner_submission_enabled'])

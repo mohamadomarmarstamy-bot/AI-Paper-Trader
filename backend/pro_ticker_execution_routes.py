@@ -79,6 +79,29 @@ def build_paper_execution_router(*,require_session,context=None):
         except PaperGatewayUnavailable:raise HTTPException(503,'Dedicated PAPER monitoring request unavailable. Funds remain held.') from None
         except ValueError:raise HTTPException(422,'Complete owned PAPER bracket evidence required.') from None
         except Exception:raise HTTPException(503,'Position reconciliation unconfirmed. Retry reads existing orders; no new order or release.') from None
+    @router.post(base+'/order-intents/{intent_id}/manage')
+    async def manage(intent_id:str,request:Request):
+        payload=await body(request)
+        if getattr(context,'owner_management_enabled',False) is not True:
+            raise HTTPException(403,'Owner PAPER position management is disabled.')
+        from pro_ticker_position_controls import manage_paper_position
+        try:return await run_in_threadpool(manage_paper_position,intent_id,payload,context=context)
+        except IntentConflict:raise HTTPException(409,'Management evidence changed or another request is active. Inspect existing orders; funds remain held.') from None
+        except PaperGatewayUnavailable:raise HTTPException(503,'PAPER management is unconfirmed. Inspect saved state; do not create another close.') from None
+        except ValueError:raise HTTPException(422,'Explicit owner confirmation and complete owned PAPER evidence required.') from None
+        except Exception:raise HTTPException(503,'Management unconfirmed. Recover saved operation; do not create another close.') from None
+
+    @router.post(base+'/order-intents/{intent_id}/manage-recover')
+    async def manage_recover(intent_id:str,request:Request):
+        payload=await body(request)
+        if payload!={}:raise HTTPException(422,'No browser-supplied broker evidence accepted.')
+        from pro_ticker_position_controls import inspect_position_management
+        try:return await run_in_threadpool(inspect_position_management,intent_id,context=context)
+        except IntentConflict:raise HTTPException(409,'Management evidence conflicts. Funds remain held for review.') from None
+        except PaperGatewayUnavailable:raise HTTPException(503,'PAPER management evidence unavailable; no broker mutation was requested.') from None
+        except ValueError:raise HTTPException(422,'Complete owned PAPER management evidence required.') from None
+        except Exception:raise HTTPException(503,'Management status unavailable. No broker mutation requested by recovery.') from None
+
     @router.get(base+'/execution-journal')
     def execution_journal(request:Request):
         require_session(request)

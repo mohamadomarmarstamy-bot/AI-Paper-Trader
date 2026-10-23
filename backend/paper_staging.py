@@ -71,7 +71,9 @@ def create_staging_app(*, _data_directory='/staging-data'):
     @app.get('/health')
     def health():
         return dict(status='healthy', paper=True, environment='isolated-staging',
-                    background_jobs_enabled=monitor_enabled(execution_context), position_monitor_enabled=monitor_enabled(execution_context), broker_order_submission_enabled=execution_context is not None and execution_context.owner_submission_enabled is True)
+                    background_jobs_enabled=monitor_enabled(execution_context), position_monitor_enabled=monitor_enabled(execution_context),
+                    broker_position_management_enabled=execution_context is not None and getattr(execution_context,'owner_management_enabled',False) is True,
+                    broker_order_submission_enabled=execution_context is not None and (execution_context.owner_submission_enabled is True or getattr(execution_context,'owner_management_enabled',False) is True))
 
     app.add_api_route('/login', main.app_login_page, methods=['GET'], response_class=HTMLResponse)
     app.add_api_route('/login', main.app_login_submit, methods=['POST'], response_class=HTMLResponse)

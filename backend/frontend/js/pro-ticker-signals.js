@@ -67,7 +67,7 @@
     function brokerEvidenceControls(review,node,selected){
         const intent=review.order_intent,box=document.createElement("article"),status=document.createElement("p"),admission=document.createElement("button"),recover=document.createElement("button");status.setAttribute("role","status");box.className="pt-broker-evidence";
         admission.type="button";admission.textContent="Review PAPER admission (no order)";admission.disabled=true;recover.type="button";recover.textContent="Find existing PAPER order (no new buy)";recover.disabled=true;
-        box.append(status,admission,recover);node.appendChild(box);protectionEvidenceControls(intent,box,selected);submissionControls(review,box,selected);monitorControls(review,box,selected);pricedExecutionControls(intent,box,selected);let busy=false,reviewId=null;
+        box.append(status,admission,recover);node.appendChild(box);protectionEvidenceControls(intent,box,selected);submissionControls(review,box,selected);monitorControls(review,box,selected);managementControls(intent,box,selected);pricedExecutionControls(intent,box,selected);let busy=false,reviewId=null;
         const canReview=()=>intent.status==="prepared"&&!intent.attempt_started_at;
         const canRecover=()=>!!intent.attempt_started_at&&["submitting","uncertain","broker_linked"].includes(intent.status);
         const enabled=()=>{admission.disabled=busy||executionState?.admission_review_enabled!==true||!canReview();recover.disabled=busy||executionState?.recovery_enabled!==true||!canRecover();};
@@ -143,12 +143,38 @@
             if(button.disabled)return;busy=true;enabled();status.textContent="Verifying owned entry and independently fetching bracket exits…";
             try{
                 const response=await fetch("/auto-trader/pro-ticker/order-intents/"+encodeURIComponent(intent.id)+"/monitor",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:"{}"});if(!response.ok)throw Error("Reconciliation unavailable ("+response.status+"). Funds stay held; refresh and retry existing-order reads.");
-                const data=await response.json();if(data.paper!==true||data.order_submitted!==false||data.budget_released!==false||data.automatic_release_enabled!==false||typeof data.resolved!=="boolean"||typeof data.closed!=="boolean"||typeof data.protection_verified!=="boolean"||data.intent?.id!==intent.id||!Array.isArray(data.legs)||data.legs.length>2||data.legs.some(leg=>!leg||typeof leg.id!=="string"||typeof leg.status!=="string"||!Number.isSafeInteger(leg.shares)||leg.shares<1||!Number.isSafeInteger(leg.filled_shares)||leg.filled_shares<0||leg.filled_shares>leg.shares))throw Error("Invalid reconciliation evidence");validateIntent(data.intent,review.proposal);
+                const data=await response.json();if(data.paper!==true||data.order_submitted!==false||data.budget_released!==false||data.automatic_release_enabled!==false||typeof data.resolved!=="boolean"||typeof data.closed!=="boolean"||typeof data.protection_verified!=="boolean"||data.intent?.id!==intent.id||!Array.isArray(data.legs)||data.legs.length>3||data.legs.some(leg=>!leg||typeof leg.id!=="string"||typeof leg.status!=="string"||!Number.isSafeInteger(leg.shares)||leg.shares<1||!Number.isSafeInteger(leg.filled_shares)||leg.filled_shares<0||leg.filled_shares>leg.shares))throw Error("Invalid reconciliation evidence");validateIntent(data.intent,review.proposal);
                 await window.loadProTickerWorkspace?.();await refreshIntents();if(detailVersion!==selected)return;
                 status.textContent=(data.closed?"Closure verified for this snapshot. Owner release approval is still required.":data.protection_verified?"Existing bracket protection observed for this regular-session snapshot.":"Position refreshed; protection is not certified for this snapshot.")+" No order placed or funds released. "+data.legs.map(leg=>leg.status+" "+leg.filled_shares+" / "+leg.shares+" shares").join("; ");
             }catch(error){if(detailVersion===selected)status.textContent=error.message;}
             finally{busy=false;enabled();}
         });
+    }
+    function managementControls(intent,box,selected){
+        const panel=document.createElement("article"),title=document.createElement("h4"),note=document.createElement("p"),status=document.createElement("p"),cancelLabel=document.createElement("label"),cancelCheck=document.createElement("input"),closeLabel=document.createElement("label"),closeCheck=document.createElement("input"),cancel=document.createElement("button"),close=document.createElement("button"),inspect=document.createElement("button");
+        title.textContent="Manage owned PAPER orders";
+        note.textContent="Canceling an entry leaves already-filled shares open. Closing cancels existing exits before one regular-session market sell. Pending cancellation is not confirmation. Partial or rejected closes need review; virtual funds remain held.";
+        cancelCheck.type=closeCheck.type="checkbox";cancelLabel.append(cancelCheck,document.createTextNode(" I approve canceling this intent's pending PAPER entry."));closeLabel.append(closeCheck,document.createTextNode(" I approve canceling this intent's pending orders and closing its remaining owned PAPER shares."));
+        cancel.type=close.type=inspect.type="button";cancel.textContent="Cancel pending PAPER entry";close.textContent="Close owned PAPER position / resume";inspect.textContent="Inspect saved PAPER management";status.setAttribute("role","status");
+        panel.append(title,note,cancelLabel,cancel,closeLabel,close,inspect,status);box.appendChild(panel);let busy=false;
+        const enabled=()=>{const active=!!intent.attempt_started_at&&["broker_linked","submitting","uncertain"].includes(intent.status);cancel.disabled=busy||!active||executionState?.owner_management_enabled!==true||!cancelCheck.checked;close.disabled=busy||!active||executionState?.owner_management_enabled!==true||!closeCheck.checked;inspect.disabled=busy||!active||executionState?.recovery_enabled!==true;};
+        cancelCheck.addEventListener("change",enabled);closeCheck.addEventListener("change",enabled);loadExecutionStatus().then(enabled);enabled();
+        async function act(action){
+            if(busy||(action==="close"?close.disabled:action==="cancel_entry"?cancel.disabled:inspect.disabled))return;
+            busy=true;enabled();status.textContent=action?"Verifying owned orders and recording the approved PAPER action…":"Inspecting saved broker state without sending a new order or cancellation…";
+            try{
+                const path="/auto-trader/pro-ticker/order-intents/"+encodeURIComponent(intent.id)+(action?"/manage":"/manage-recover");
+                const response=await fetch(path,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify(action?{action,confirmed:true}:{})});
+                if(!response.ok)throw Error("Management unconfirmed ("+response.status+"). Inspect saved management before trying to continue.");
+                const data=await response.json();
+                if(data.paper!==true||data.budget_released!==false||data.automatic_release_enabled!==false||data.intent_id!==intent.id||typeof data.position_closed!=="boolean"||typeof data.entry_cancellation_confirmed!=="boolean"||typeof data.close_dispatch_attempted!=="boolean"||!Number.isSafeInteger(data.remaining_shares)||data.remaining_shares<0||typeof data.state!=="string")throw Error("Invalid management evidence; inspect existing broker orders.");
+                if(detailVersion!==selected)return;
+                status.textContent="Broker state: "+data.state+". Entry cancellation "+(data.entry_cancellation_confirmed?"confirmed":"not confirmed")+"; remaining owned shares: "+data.remaining_shares+". "+(data.position_closed?"Position closure verified; separate release approval is still required.":"Position is not confirmed closed. Inspect or explicitly resume the saved action.");
+                await window.loadProTickerWorkspace?.();await refreshIntents();
+            }catch(error){if(detailVersion===selected)status.textContent=error.message;}
+            finally{busy=false;cancelCheck.checked=closeCheck.checked=false;enabled();}
+        }
+        cancel.addEventListener("click",()=>act("cancel_entry"));close.addEventListener("click",()=>act("close"));inspect.addEventListener("click",()=>act(null));
     }
     function pricedExecutionControls(intent,box,selected){
         const button=document.createElement("button"),status=document.createElement("p");button.type="button";button.textContent="Sync priced PAPER executions";button.disabled=true;status.setAttribute("role","status");box.append(button,status);let busy=false;

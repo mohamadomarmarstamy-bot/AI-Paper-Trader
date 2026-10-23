@@ -39,7 +39,7 @@ def monitor_paper_position(intent_id,*,context):
     entry_post=account_linked_paper_entry_snapshot(intent['reservation_id'],parent)
     if parent_fill['filled_shares'] and not entry_post.get('stale_snapshot'):
         record_verified_paper_order_state(intent['reservation_id'],entry_id,parent_fill['broker_status'],filled_quantity=parent_fill['filled_shares'])
-    if parent_fill['broker_status']!='filled' or parent_fill['filled_shares']!=plan['shares']:
+    if not (parent_fill['filled_shares']>0 and parent_fill['terminal'] and parent_fill['broker_status'] in ('filled','canceled','expired')):
         return {**base,'resolved':True,'closed':False,'protection_verified':False,'intent':intent,'legs':[],
                 'reason':'Entry incomplete. Partial bracket entry fills are not certified as protected; funds remain held.'}
     references=parent.get('legs')
@@ -61,7 +61,10 @@ def monitor_paper_position(intent_id,*,context):
     stop=next(child for child in children if child['type']=='stop');target=next(child for child in children if child['type']=='limit')
     if not (_number(stop['stop_price'])>=_number(plan['stop_price']) and _number(target['limit_price'])>=_number(plan['take_profit_price']) and _number(stop['stop_price'])<_number(target['limit_price'])):
         raise ValueError('Exit levels differ from approved protection.')
-    if sum(fill['filled_shares'] for fill in fills)>plan['shares']:raise IntentConflict('Bracket fills exceed the owned entry. Manual review required.')
+    if sum(fill['filled_shares'] for fill in fills)>parent_fill['filled_shares']:raise IntentConflict('Bracket fills exceed the owned entry. Manual review required.')
+    from pro_ticker_position_controls import owned_manual_exit, saved_action
+    manual_exit=owned_manual_exit(intent,context=context)
+    manual_ids=[manual_exit['id']] if manual_exit else []
     now=datetime.now(timezone.utc).isoformat()
     with closing(database.get_connection()) as conn:
         conn.executescript(EXIT_SCHEMA+SCHEMA);conn.execute('BEGIN IMMEDIATE')
@@ -69,7 +72,7 @@ def monitor_paper_position(intent_id,*,context):
         if current['status']!='broker_linked' or current['linked_broker_order_id']!=entry_id or current['plan']!=plan:raise IntentConflict('Reservation changed during monitoring.')
         # Never mix a manually attributed exit with a newly inferred bracket.
         links=conn.execute('SELECT * FROM pro_ticker_paper_exit_links WHERE reservation_id=?',(intent['reservation_id'],)).fetchall()
-        if any(link['broker_order_id'] not in ids for link in links):raise IntentConflict('Other exit links require independent combined reconciliation.')
+        if any(link['broker_order_id'] not in ids+manual_ids for link in links):raise IntentConflict('Other exit links require independent combined reconciliation.')
         for child,fill in zip(children,fills):
             previous=conn.execute('SELECT * FROM pro_ticker_paper_exit_links WHERE broker_order_id=?',(child['id'],)).fetchone()
             prior_proof=conn.execute('SELECT * FROM pro_ticker_bracket_exit_provenance WHERE broker_order_id=?',(child['id'],)).fetchone()
@@ -93,15 +96,25 @@ def monitor_paper_position(intent_id,*,context):
         conn.commit()
     from pro_ticker_verified_exit_fill_bridge import account_linked_paper_exit_snapshot
     posted_exits=sum(account_linked_paper_exit_snapshot(child['id'],child)['delta_shares'] for child in children)
+    all_exits=list(children)
+    if manual_exit:
+        posted_exits+=account_linked_paper_exit_snapshot(manual_exit['id'],manual_exit)['delta_shares']
+        all_exits.append(manual_exit)
+
     from pro_ticker_broker_snapshot_audit import audit_linked_paper_broker_snapshots
-    closure=audit_linked_paper_broker_snapshots(intent['reservation_id'],parent,{child['id']:child for child in children})
+    closure=audit_linked_paper_broker_snapshots(intent['reservation_id'],parent,{child['id']:child for child in all_exits})
     protection=False
-    if not any(fill['filled_shares'] for fill in fills):
+    if manual_exit is None and parent_fill['filled_shares']==plan['shares'] and parent_fill['broker_status']=='filled' and not any(fill['filled_shares'] for fill in fills):
         from pro_ticker_protection_review import review_paper_protection
         observed=review_paper_protection(intent_id,{'request_id':str(uuid.uuid4())},context=context)
         protection=observed['protection_orders_verified']
     with closing(database.get_connection()) as conn:
         conn.execute('BEGIN');intent=_record(conn,conn.execute('SELECT * FROM pro_ticker_order_intents WHERE id=?',(intent_id,)).fetchone())
-    return {**base,'resolved':True,'closed':closure['verified'] is True,'protection_verified':protection,
-            'posted_exit_shares':posted_exits,'intent':intent,'legs':[{'id':child['id'],'status':child['status'],'shares':int(_number(child['qty'])),'filled_shares':fill['filled_shares']} for child,fill in zip(children,fills)],
+    action=saved_action(intent_id)
+    unresolved_close=bool(action and 'close' in json.loads(action['attempts_json']) and manual_exit is None)
+    if manual_exit:
+        manual_fill=assess_paper_order_fill(expected_order_id=manual_exit['id'],expected_symbol=plan['symbol'],expected_side='sell',expected_shares=action['close_shares'],broker_order=manual_exit)
+        fills.append(manual_fill)
+    return {**base,'resolved':True,'closed':closure['verified'] is True and not unresolved_close,'protection_verified':protection,
+            'posted_exit_shares':posted_exits,'intent':intent,'legs':[{'id':child['id'],'status':child['status'],'shares':int(_number(child['qty'])),'filled_shares':fill['filled_shares']} for child,fill in zip(all_exits,fills)],
             'reason':'Closure evidence matches linked accounting; owner release approval is still required.' if closure['verified'] else 'Entry/exit accounting refreshed. Partial exits or after-hours protection are not certified. Funds remain held.'}

@@ -2,9 +2,15 @@
 import os
 from pro_ticker_signal_proposals import _uuid
 from pro_ticker_submission import PaperSubmissionContext
+from dataclasses import dataclass
 
 
-def dedicated_paper_context(*,environ=None,http_get=None,http_post=None):
+@dataclass(frozen=True)
+class PaperManagementContext(PaperSubmissionContext):
+    owner_management_enabled: bool = False
+
+
+def dedicated_paper_context(*,environ=None,http_get=None,http_post=None,http_delete=None):
     env=os.environ if environ is None else environ
     if env.get('PRO_TICKER_DEDICATED_ACCOUNT_CONFIRMED')!='true':return None
     try:
@@ -18,8 +24,8 @@ def dedicated_paper_context(*,environ=None,http_get=None,http_post=None):
     def gateway():
         import requests
         from pro_ticker_paper_gateway import AlpacaPaperOrderGateway
-        return AlpacaPaperOrderGateway(account_id=account,key_id=key,secret_key=secret,http_get=http_get or requests.get,http_post=http_post or requests.post)
-    return PaperSubmissionContext(account,gateway,True,env.get('PRO_TICKER_OWNER_PAPER_SUBMISSION_ENABLED')=='true')
+        return AlpacaPaperOrderGateway(account_id=account,key_id=key,secret_key=secret,http_get=http_get or requests.get,http_post=http_post or requests.post,http_delete=http_delete or requests.delete)
+    return PaperManagementContext(account,gateway,True,env.get('PRO_TICKER_OWNER_PAPER_SUBMISSION_ENABLED')=='true',env.get('PRO_TICKER_OWNER_PAPER_MANAGEMENT_ENABLED')=='true')
 
 
 def dedicated_release_reader():

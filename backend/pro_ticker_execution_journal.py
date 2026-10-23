@@ -99,7 +99,7 @@ def execution_journal_snapshot():
                 if intent['status']!='closed' or {c['broker_order_id'] for c in coverage}!=set(orders) or not all(c['terminal'] for c in coverage):continue
                 events=conn.execute('SELECT * FROM pro_ticker_execution_journal WHERE intent_id=?',(intent['id'],)).fetchall()
                 buys=sum(r['shares'] for r in events if r['side']=='buy');sells=sum(r['shares'] for r in events if r['side']=='sell')
-                if buys!=intent['plan']['shares'] or sells!=buys:continue
+                if not 0<buys<=intent['plan']['shares'] or sells!=buys or sum(c['shares'] for c in coverage if c['side']=='buy')!=buys:continue
                 gross+=sum(Decimal(r['price'])*r['shares']*(1 if r['side']=='sell' else -1) for r in events);closed+=1
     return {'paper':True,'kind':'owned_broker_fill_activities','rows':rows,'total_count':count,'has_more':count>len(rows),
             'closed_priced_count':closed,'gross_realized_usd':str(gross) if closed else None,

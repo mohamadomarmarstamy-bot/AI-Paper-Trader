@@ -101,3 +101,35 @@ Migration: one additive `pro_ticker_monitor_observations` table, created when th
 worker first runs. Rollback: disable the flag and restart; the prior application
 ignores this additive table. Validate on a representative disposable database
 copy before production release. No hosted configuration was changed.
+
+## Owner cancel/close controls
+
+`PRO_TICKER_OWNER_PAPER_MANAGEMENT_ENABLED=true` separately enables authenticated,
+same-origin owner controls on the dedicated PAPER account. It does not enable
+new buys, autonomous management, or budget release. Runtime/default staging
+configuration leaves it off. Each action requires its own browser approval.
+
+The control cancels only the intent's exact pending parent and provenance-linked
+bracket exits. A successful DELETE is not cancellation proof: fresh order reads
+must establish terminal status. Closing requires a fresh regular-session clock,
+terminal entry and exits, cumulative fill reconciliation, exact agreement between
+owned shares and broker position, and a complete collision-free open-order read.
+The only new sell is a whole-share DAY market request marked sell_to_close with
+its own durable ptx client ID. Actual equity support for this field must be checked
+against the dedicated PAPER account before enabling the feature.
+
+SQLite claims and persisted dispatch markers precede each network mutation.
+Recovery only reads the saved identity, verifies ownership, links/account fills,
+and checks closure. Lost responses never cause another POST/DELETE. If interrupted
+between the marker and dispatch, or if a close is rejected/canceled with shares
+remaining, the one-attempt workflow deliberately stops for review. It must not be
+advertised as automatic repair or arbitrary retry. Partial entry cancellation
+retains filled shares and all budget; closing a partial entry additionally needs
+complete bracket-child evidence. After-hours closes are unavailable.
+
+The additive `pro_ticker_position_actions` table stores claims, attempted IDs,
+account fingerprint and close ownership. Manual exits join existing share-ledger,
+release-review and execution-journal reconciliation. Closed partial entries use
+actual filled shares in priced gross reports. No fees or net profit are invented.
+Rollback leaves the additive table intact; disable management/monitor flags before
+rolling application code back. Never drop ownership records for an active order.

@@ -97,10 +97,11 @@ class AlpacaPaperEvidenceGateway:
 
 class AlpacaPaperOrderGateway(AlpacaPaperEvidenceGateway):
     """Separate explicitly constructed PAPER write transport; no retry/fallback."""
-    def __init__(self, *, http_post, **kwargs):
+    def __init__(self, *, http_post, http_delete=None, **kwargs):
         super().__init__(**kwargs)
         if not callable(http_post):raise ValueError('Dedicated POST transport required.')
         self._post=http_post
+        self._delete=http_delete
 
     def submit_bracket(self, payload):
         # Accept only the narrow server-generated whole-share long bracket.
@@ -125,3 +126,39 @@ class AlpacaPaperOrderGateway(AlpacaPaperEvidenceGateway):
             if type(response.status_code) is not int or response.status_code not in (200,201):raise ValueError()
             return response.json()
         except Exception:raise PaperGatewayUnavailable('PAPER submission unconfirmed; recover by saved client ID.') from None
+
+
+    def cancel_owned_order(self, order_id):
+        order_id=_uuid(order_id)
+        if not callable(self._delete):raise ValueError('Dedicated DELETE transport required.')
+        self.read_account()
+        try:
+            response=self._delete(PAPER_URL+'/v2/orders/'+order_id,headers=self._headers,timeout=3.0,allow_redirects=False)
+            if type(response.status_code) is not int or response.status_code not in (204,422):raise ValueError()
+            # Neither acceptance nor a noncancelable response confirms cancellation.
+            return {'request_accepted':response.status_code==204,'cancellation_confirmed':False}
+        except Exception:raise PaperGatewayUnavailable('PAPER cancellation unconfirmed; inspect the existing order.') from None
+
+    def find_exit_order(self, client_order_id):
+        if not isinstance(client_order_id,str) or not client_order_id.startswith('ptx-'):raise ValueError('Owned exit client ID required.')
+        _uuid(client_order_id[4:])
+        return self._read('/v2/orders:by_client_order_id?client_order_id='+quote(client_order_id,safe=''),missing_allowed=True)
+
+    def read_open_orders(self):
+        return self._read('/v2/orders?status=open&limit=500&nested=true')
+
+    def submit_owned_close(self, payload):
+        import re
+        fields={'symbol','qty','side','type','time_in_force','extended_hours','client_order_id','position_intent'}
+        if not isinstance(payload,dict) or set(payload)!=fields or payload['side']!='sell' or payload['type']!='market' or payload['time_in_force']!='day' or payload['extended_hours'] is not False or payload['position_intent']!='sell_to_close':
+            raise ValueError('Whole-share PAPER close request required.')
+        if not isinstance(payload['symbol'],str) or not re.fullmatch(r'[A-Z][A-Z0-9.\-]{0,9}',payload['symbol']):raise ValueError('Canonical symbol required.')
+        if not isinstance(payload['qty'],str) or not re.fullmatch(r'[1-9][0-9]{0,8}',payload['qty']):raise ValueError('Whole shares required.')
+        client=payload['client_order_id']
+        if not isinstance(client,str) or not client.startswith('ptx-'):raise ValueError('Owned exit identity required.')
+        _uuid(client[4:]);self.read_account()
+        try:
+            response=self._post(PAPER_URL+'/v2/orders',headers=self._headers,json=payload,timeout=3.0,allow_redirects=False)
+            if type(response.status_code) is not int or response.status_code not in (200,201):raise ValueError()
+            return response.json()
+        except Exception:raise PaperGatewayUnavailable('PAPER close unconfirmed; recover the saved exit identity.') from None
