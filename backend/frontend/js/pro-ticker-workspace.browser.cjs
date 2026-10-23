@@ -13,6 +13,7 @@ const fixture=()=>({paper:true,scope:'pro_ticker_strategy_ledger',generated_at:s
 
 test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed refresh', {timeout:90000},async()=>{
  let marketScan=null,marketScanPosts=0,pricedExecutions=[];
+ let handoffRequests=[];
  let data=fixture(),fail=false,requests=[],browser,forwardDue=false,savedSignal=null,draftRequests=[],allocationRequests=[],admissionRequests=[],evidenceConfigured=false,ownerSubmissionConfigured=false,managementConfigured=false,managementRequests=0,submissionRequests=0,recoveryRequests=0,signalRequests=[],discoveries=0,invalidClosedPerformance=false,invalidDataset=false,invalidProposal=false,invalidSettings=false,settingsRevision=0,settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
  const raw=fs.readFileSync(path.join(frontend,'index.html'),'utf8');const start=raw.indexOf('<section id="pro-ticker-manual-section"');
  const section=raw.slice(start,raw.indexOf('</section>',start)+10).replace('class="app-section hidden"','class="app-section"').replace(' hidden>','>');
@@ -128,7 +129,9 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    res.setHeader('Content-Type','application/json');
    if(req.method==='POST'){
     const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=JSON.parse(Buffer.concat(chunks).toString());
-    assert.deepEqual(Object.keys(body).sort(),['request_id','symbol']);assert.equal(body.symbol,'AAPL');signalRequests.push(body);
+    assert.deepEqual(Object.keys(body).sort(),['request_id','symbol']);
+    if(body.symbol==='NEWMOVER'){handoffRequests.push(body);res.statusCode=503;res.end(JSON.stringify({detail:'Synthetic provider failure'}));return;}
+    assert.equal(body.symbol,'AAPL');signalRequests.push(body);
     const duplicate=!!savedSignal;
     savedSignal=savedSignal||{request_id:body.request_id,symbol:'AAPL',submitted_at:stamp,completed_at:stamp,status:'graded',market_snapshot:{status:'captured',price:10.5,market_timestamp:stamp,fresh:true},entry_grade:{version:'pro_ticker_daily_technical_grade_v1',status:'graded',grade:'A',score:4,confidence:85,signal:'BUY',training_eligible:false,indicators:{rsi:55},reasons:['Synthetic entry-time evidence.'],limitations:['Not a win probability.']}};
     res.end(JSON.stringify({paper:true,orders_submitted:0,automatic_execution_enabled:false,signal:savedSignal,duplicate}));return;
@@ -234,7 +237,14 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.locator('#pt-tab-scanner').click();await page.getByRole('button',{name:'Discover US market movers',exact:true}).click();
    await page.waitForFunction(()=>document.getElementById('pt-market-status').textContent.includes('Yahoo discovery: 22 eligible symbols'));
    assert.match(await page.locator('#pt-market-scanner').innerText(),/NEWMOVER/);assert.match(await page.locator('#pt-market-scanner').innerText(),/not current intraday/);
-   await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-independent-discovery.png',fullPage:true});await page.locator('#pt-tab-signals').click();
+   await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-independent-discovery.png',fullPage:true});
+   // Scanner assignments do not emit input events. New symbols must not reuse
+   // the previous review's identity; failed retries of that symbol still do.
+   handoffRequests=[];await page.getByRole('button',{name:'Grade NEWMOVER',exact:true}).click();
+   await page.locator('#pt-signal-submit').click();await page.waitForFunction(()=>document.getElementById('pt-signal-status').textContent.includes('Unable to confirm review'));
+   await page.locator('#pt-signal-submit').click();await page.waitForFunction(()=>!document.getElementById('pt-signal-submit').disabled);
+   assert.equal(handoffRequests.length,2);assert.notEqual(handoffRequests[0].request_id,signalRequests[0].request_id);
+   assert.equal(handoffRequests[0].request_id,handoffRequests[1].request_id);
 
 
    // Separate synthetic owner-dispatch scenario. Default configuration never

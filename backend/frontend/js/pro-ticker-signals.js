@@ -2,7 +2,7 @@
 (() => {
     const form=document.getElementById("pt-signal-form"); if(!form)return;
     const el=id=>document.getElementById("pt-signal-"+id), endpoint="/auto-trader/pro-ticker/manual-signals";
-    let requestId=null,saving=false,version=0,detailVersion=0;
+    let requestId=null,requestSymbol=null,saving=false,version=0,detailVersion=0;
     const draftIntents=new Map();
     const allocationIds=new Map();
     let intentVersion=0;
@@ -354,8 +354,12 @@
         event.preventDefault();if(saving)return;saving=true;version++;el("submit").disabled=true;el("symbol").disabled=true;
         el("status").textContent="Capturing reference data and grading the stock. This does not submit a PAPER order…";
         try{
+            const symbol=el("symbol").value.trim().toUpperCase();
+            // Scanner handoffs assign .value without an input event. Preserve
+            // retries only for the same symbol, never another research request.
+            if(requestSymbol!==symbol){requestId=null;requestSymbol=symbol;}
             requestId=requestId||crypto.randomUUID();
-            const response=await fetch(endpoint,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbol:el("symbol").value.trim().toUpperCase(),request_id:requestId})});
+            const response=await fetch(endpoint,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbol,request_id:requestId})});
             if(!response.ok)throw Error("Review request failed ("+response.status+"). Refresh saved status before retrying.");
             const data=await response.json();flags(data);const review=record(data.signal);
             const loaded=await refresh();detail(review);el("status").textContent="Review "+review.status+" for "+review.symbol+". No PAPER order placed; no model training performed."+(loaded?"":" History refresh failed; the confirmed review is shown below.");
