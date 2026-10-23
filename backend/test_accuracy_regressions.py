@@ -77,6 +77,18 @@ def research_functions(**overrides):
 
 
 class ScannerOutcomeAccuracyTests(unittest.TestCase):
+    def test_research_share_class_aliases_are_only_translated_at_data_boundary(self):
+        from unittest.mock import Mock
+        for symbol,expected in [('BF-B','BF.B'),('BF-A','BF.A'),('BRK-B','BRK.B'),('BRK-A','BRK.A'),
+                                ('BF.B','BF.B'),('BRK.B','BRK.B'),('AAPL','AAPL'),('OTHER-W','OTHER-W')]:
+            with self.subTest(symbol=symbol):
+                request=Mock(return_value={'bars':[{'t':'2026-09-25T14:14:00Z','c':10.1234}]})
+                ns=research_functions(alpaca_market_data_request=request)
+                result=ns['fetch_forward_research_bar'](symbol,'2026-09-25T14:15:00Z')
+                self.assertEqual(request.call_args.args,('GET',f'/v2/stocks/{expected}/bars'))
+                self.assertEqual(result['symbol'],symbol)
+                self.assertEqual(result['price'],10.1234)
+
     def test_close_timestamp_is_one_minute_after_bar_start(self):
         ns = research_functions(alpaca_market_data_request=lambda *a, **kw:
                                 {'bars': [{'t': '2026-09-25T14:14:00Z', 'c': 10.1234}]})
