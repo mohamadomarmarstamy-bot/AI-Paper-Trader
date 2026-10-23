@@ -79,6 +79,21 @@ class AlpacaPaperEvidenceGateway:
         _uuid(client_order_id[3:])
         return self._read('/v2/orders:by_client_order_id?client_order_id='+quote(client_order_id,safe=''),missing_allowed=True)
 
+    def read_fill_activities(self,order_id):
+        order_id=_uuid(order_id);rows=[];token=None;seen=set()
+        for _ in range(5):
+            path='/v2/account/activities/FILL?order_id='+order_id+'&direction=asc&page_size=100'
+            if token:path+='&page_token='+quote(token,safe='')
+            page=self._read(path)
+            if not isinstance(page,list) or len(page)>100:raise PaperGatewayUnavailable('Invalid PAPER execution page.')
+            rows.extend(page)
+            if len(page)<100:return rows
+            token=page[-1].get('id') if isinstance(page[-1],dict) else None
+            import re
+            if not isinstance(token,str) or not re.fullmatch(r'[A-Za-z0-9:_\-]{1,180}',token) or token in seen:raise PaperGatewayUnavailable('Invalid PAPER execution pagination.')
+            seen.add(token)
+        raise PaperGatewayUnavailable('PAPER execution history exceeds the bounded page window.')
+
 
 class AlpacaPaperOrderGateway(AlpacaPaperEvidenceGateway):
     """Separate explicitly constructed PAPER write transport; no retry/fallback."""

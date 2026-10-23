@@ -445,3 +445,27 @@ Staging refuses original trader broker credential names entirely; its health
 response reports the actual owner-submission gate. Original trader execution
 configuration is unchanged. A separately provisioned PAPER account and hosted
 validation remain required before enabling any real broker calls in staging.
+
+## Individual broker execution journal
+
+An explicit owner read-only sync retrieves bounded, order-filtered Alpaca FILL
+activity pages from the dedicated account. Every activity must match a linked
+order's symbol, side, broker UUID and independently checked filled quantity.
+Execution IDs, per-fill prices, quantities and broker execution times are stored
+immutably in one transaction, separate from the cumulative share-posting ledger.
+Activity gaps, duplicates, future/naive timestamps, changed activities, stale
+coverage, wrong ownership or share-ledger disagreements fail closed. Unchanged
+retries do not duplicate records. No order or budget release occurs.
+
+Trade Journal now shows these individual execution prices/times, a symbol filter,
+a limited-window CSV export and coverage counts. Closed gross results are computed
+with Decimal only for fully covered owner-reconciled reservations; returned virtual
+funds are never income. Net P&L/fees/corporate actions/trade corrections remain
+unverified, not zero. Existing terminal-average estimates and research reports
+remain clearly separate. This endpoint does not train an AI model.
+
+The synthetic HTTP lifecycle now includes execution-history sync and journal/gross
+report refresh after explicit release. Real account activities and data-provider
+coverage still require dedicated-account validation. Implementation references:
+[Alpaca FILL activities](https://docs.alpaca.markets/us/docs/account-activities) and
+[order-filtered activity pagination](https://docs.alpaca.markets/us/reference/getaccountactivitiesbyactivitytype-1).

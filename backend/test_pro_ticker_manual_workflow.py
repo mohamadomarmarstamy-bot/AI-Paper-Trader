@@ -157,5 +157,20 @@ class ManualWorkflowIntegrationTests(unittest.TestCase):
                 self.assertEqual((await client.get(release+'/release-events')).json()['total_count'],1)
                 priced=(await client.get('/auto-trader/pro-ticker/closed-performance')).json()
                 self.assertEqual(priced['priced_count'],1);self.assertEqual(priced['gross_pnl_cents'],-200 if split_exits else 200)
+                if dispatch:
+                    activities={}
+                    for order in orders.values():
+                        if int(order['filled_qty'])==0:activities[order['id']]=[];continue
+                        parts=[1,3] if order['side']=='buy' else [2,2];cum=0;activities[order['id']]=[]
+                        for qty in parts:
+                            cum+=qty;activities[order['id']].append({'id':'execution::'+str(uuid.uuid4()),'activity_type':'FILL','type':'partial_fill' if cum<4 else 'fill','order_id':order['id'],'symbol':'AAPL','side':order['side'],'qty':str(qty),'cum_qty':str(cum),'price':order['filled_avg_price'],'transaction_time':datetime.now(timezone.utc).isoformat()})
+                    gateway.read_fill_activities.side_effect=lambda id:deepcopy(activities[id])
+                    sync=await client.post(intents+'/'+intent['id']+'/execution-sync',json={});self.assertEqual(sync.status_code,200,sync.text)
+                    executions=(await client.get('/auto-trader/pro-ticker/execution-journal')).json()
+                    self.assertEqual(executions['total_count'],4);self.assertEqual(executions['closed_priced_count'],1)
+                    self.assertEqual(float(executions['gross_realized_usd']),2.0);self.assertIsNone(executions['net_pnl'])
+                    self.assertEqual((await client.post(intents+'/'+intent['id']+'/execution-sync',json={})).status_code,200)
+                    self.assertEqual((await client.get('/auto-trader/pro-ticker/execution-journal')).json(),executions)
+
                 self.assertIsNone(priced['net_pnl']);self.assertEqual(priced['recorded_count'],1)
         asyncio.run(run())

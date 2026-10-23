@@ -72,4 +72,21 @@ def build_paper_execution_router(*,require_session,context=None):
         except PaperGatewayUnavailable:raise HTTPException(503,'Dedicated PAPER monitoring request unavailable. Funds remain held.') from None
         except ValueError:raise HTTPException(422,'Complete owned PAPER bracket evidence required.') from None
         except Exception:raise HTTPException(503,'Position reconciliation unconfirmed. Retry reads existing orders; no new order or release.') from None
+    @router.get(base+'/execution-journal')
+    def execution_journal(request:Request):
+        require_session(request)
+        from pro_ticker_execution_journal import execution_journal_snapshot
+        from fastapi.responses import JSONResponse
+        try:return JSONResponse(execution_journal_snapshot(),headers={'Cache-Control':'no-store'})
+        except Exception:raise HTTPException(503,'Priced execution journal unavailable.') from None
+    @router.post(base+'/order-intents/{intent_id}/execution-sync')
+    async def execution_sync(intent_id:str,request:Request):
+        payload=await body(request)
+        if payload!={}:raise HTTPException(422,'No browser-supplied execution evidence accepted.')
+        from pro_ticker_execution_journal import sync_execution_journal
+        try:return await run_in_threadpool(sync_execution_journal,intent_id,context=context)
+        except IntentConflict:raise HTTPException(409,'Execution coverage or ownership changed. Reconcile the existing position and retry.') from None
+        except PaperGatewayUnavailable:raise HTTPException(503,'Dedicated PAPER execution history unavailable.') from None
+        except ValueError:raise HTTPException(422,'Complete owned execution evidence required.') from None
+        except Exception:raise HTTPException(503,'Execution sync unconfirmed. No order or budget release occurred.') from None
     return router

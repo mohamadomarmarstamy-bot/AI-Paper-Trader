@@ -55,7 +55,7 @@
     function brokerEvidenceControls(review,node,selected){
         const intent=review.order_intent,box=document.createElement("article"),status=document.createElement("p"),admission=document.createElement("button"),recover=document.createElement("button");status.setAttribute("role","status");box.className="pt-broker-evidence";
         admission.type="button";admission.textContent="Review PAPER admission (no order)";admission.disabled=true;recover.type="button";recover.textContent="Find existing PAPER order (no new buy)";recover.disabled=true;
-        box.append(status,admission,recover);node.appendChild(box);protectionEvidenceControls(intent,box,selected);submissionControls(review,box,selected);monitorControls(review,box,selected);let busy=false,reviewId=null;
+        box.append(status,admission,recover);node.appendChild(box);protectionEvidenceControls(intent,box,selected);submissionControls(review,box,selected);monitorControls(review,box,selected);pricedExecutionControls(intent,box,selected);let busy=false,reviewId=null;
         const canReview=()=>intent.status==="prepared"&&!intent.attempt_started_at;
         const canRecover=()=>!!intent.attempt_started_at&&["submitting","uncertain","broker_linked"].includes(intent.status);
         const enabled=()=>{admission.disabled=busy||executionState?.admission_review_enabled!==true||!canReview();recover.disabled=busy||executionState?.recovery_enabled!==true||!canRecover();};
@@ -136,6 +136,14 @@
                 status.textContent=(data.closed?"Closure verified for this snapshot. Owner release approval is still required.":data.protection_verified?"Existing bracket protection observed for this regular-session snapshot.":"Position refreshed; protection is not certified for this snapshot.")+" No order placed or funds released. "+data.legs.map(leg=>leg.status+" "+leg.filled_shares+" / "+leg.shares+" shares").join("; ");
             }catch(error){if(detailVersion===selected)status.textContent=error.message;}
             finally{busy=false;enabled();}
+        });
+    }
+    function pricedExecutionControls(intent,box,selected){
+        const button=document.createElement("button"),status=document.createElement("p");button.type="button";button.textContent="Sync priced PAPER executions";button.disabled=true;status.setAttribute("role","status");box.append(button,status);let busy=false;
+        const enabled=()=>{button.disabled=busy||executionState?.admission_review_enabled!==true||!["broker_linked","closed"].includes(intent.status);};loadExecutionStatus().then(enabled);
+        button.addEventListener("click",async()=>{if(button.disabled)return;busy=true;enabled();status.textContent="Checking owned broker execution activities…";
+            try{const response=await fetch("/auto-trader/pro-ticker/order-intents/"+encodeURIComponent(intent.id)+"/execution-sync",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:"{}"});if(!response.ok)throw Error("Execution sync unavailable ("+response.status+"). Reconcile fills and retry; no order was sent.");const data=await response.json();if(data.paper!==true||data.order_submitted!==false||data.budget_released!==false||data.coverage_complete!==true||data.net_pnl!==null||data.intent_id!==intent.id||!Number.isSafeInteger(data.execution_count)||data.execution_count<0)throw Error("Invalid execution sync evidence");await window.loadProTickerExecutions?.();if(detailVersion===selected)status.textContent="Saved "+data.execution_count+" owned broker FILL activities. View verified prices/times in Trade Journal. No order, share posting or release occurred.";
+            }catch(error){if(detailVersion===selected)status.textContent=error.message;}finally{busy=false;enabled();}
         });
     }
     function validateIntent(intent,proposal){

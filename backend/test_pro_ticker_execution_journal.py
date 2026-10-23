@@ -1,0 +1,121 @@
+"""Execution prices/times require account, order, activity and share agreement."""
+import asyncio
+from contextlib import closing
+from copy import deepcopy
+from datetime import datetime,timezone,timedelta
+import unittest
+from unittest.mock import Mock
+import uuid
+import httpx
+from fastapi import FastAPI,HTTPException
+import database
+import test_pro_ticker_position_monitor as fixtures
+from pro_ticker_execution_journal import sync_execution_journal,execution_journal_snapshot
+from pro_ticker_order_intents import IntentConflict
+from pro_ticker_workspace import workspace_snapshot
+from pro_ticker_paper_gateway import AlpacaPaperEvidenceGateway,PaperGatewayUnavailable
+from pro_ticker_execution_routes import build_paper_execution_router
+
+
+class ExecutionJournalTests(unittest.TestCase):
+    make_draft=fixtures.PositionMonitorTests.make_draft
+    prepare=fixtures.PositionMonitorTests.prepare
+
+    def setUp(self):
+        fixtures.PositionMonitorTests.setUp(self)
+        fixtures.PositionMonitorTests.monitor(self)
+        self.activities={self.parent['id']:[self.activity(self.parent,1,'10',1),self.activity(self.parent,1,'11',2)],self.legs[0]['id']:[],self.legs[1]['id']:[]}
+        self.gateway.read_fill_activities.side_effect=lambda id:deepcopy(self.activities[id])
+
+    def activity(self,order,qty,price,cum):
+        return {'id':'execution::'+str(uuid.uuid4()),'activity_type':'FILL','type':'fill',
+            'order_id':order['id'],'symbol':'AAPL','side':order['side'],'qty':str(qty),'cum_qty':str(cum),'price':price,
+            'transaction_time':datetime.now(timezone.utc).isoformat()}
+
+    def sync(self):return sync_execution_journal(self.intent['id'],context=self.context)
+
+    def test_exact_activity_prices_and_execution_times_are_immutable_and_retry_safe(self):
+        before=workspace_snapshot();self.assertEqual(self.sync()['execution_count'],2)
+        first=execution_journal_snapshot();self.assertEqual(first['total_count'],2)
+        self.assertEqual({r['price'] for r in first['rows']},{'10','11'})
+        self.assertIsNone(first['gross_realized_usd']);self.assertIsNone(first['net_pnl']);self.assertIsNone(first['fees'])
+        self.sync();self.assertEqual(execution_journal_snapshot(),first)
+        after=workspace_snapshot()
+        for key in ('budget','positions','journal'):self.assertEqual(before[key],after[key])
+        self.gateway.submit_bracket.assert_not_called()
+
+    def test_missing_activity_coverage_never_becomes_zero_profit(self):
+        self.activities[self.parent['id']].pop()
+        with self.assertRaises(IntentConflict):self.sync()
+        self.assertEqual(execution_journal_snapshot()['total_count'],0)
+        self.assertIsNone(execution_journal_snapshot()['gross_realized_usd'])
+
+    def test_foreign_or_malformed_activities_are_rejected_atomically(self):
+        original=deepcopy(self.activities[self.parent['id']][0])
+        for change in ({'symbol':'MSFT'},{'side':'sell'},{'order_id':str(uuid.uuid4())},{'qty':'0.5'},
+                       {'price':'NaN'},{'price':True},{'cum_qty':'2'},{'activity_type':'FEE'},
+                       {'transaction_time':datetime.now(timezone.utc).replace(tzinfo=None).isoformat()},
+                       {'transaction_time':(datetime.now(timezone.utc)+timedelta(days=1)).isoformat()}):
+            self.activities[self.parent['id']][0]={**original,**change}
+            with self.subTest(change=change),self.assertRaises(ValueError):self.sync()
+            self.assertEqual(execution_journal_snapshot()['total_count'],0)
+
+    def test_reused_activity_id_cannot_rewrite_a_price(self):
+        self.sync();self.activities[self.parent['id']][0]['price']='99'
+        with self.assertRaises(IntentConflict):self.sync()
+        self.assertEqual({r['price'] for r in execution_journal_snapshot()['rows']},{'10','11'})
+
+    def test_posted_share_mismatch_rolls_back_all_new_execution_records(self):
+        with closing(database.get_connection()) as conn:
+            conn.execute('UPDATE pro_ticker_strategy_fill_events SET shares=1');conn.commit()
+        with self.assertRaises(IntentConflict):self.sync()
+        self.assertEqual(execution_journal_snapshot()['total_count'],0)
+
+    def test_complete_closed_activities_compute_gross_without_counting_returned_budget(self):
+        self.legs[1].update(filled_qty='2',status='filled',filled_avg_price='11.5');self.legs[0]['status']='canceled'
+        fixtures.PositionMonitorTests.monitor(self)
+        self.activities[self.legs[1]['id']]=[self.activity(self.legs[1],2,'11.5',2)]
+        self.sync();self.assertEqual(execution_journal_snapshot()['closed_priced_count'],0)
+        from pro_ticker_manual_release import prepare_manual_paper_release,approve_manual_paper_release,release_manually_approved_paper_budget
+        def reader(id):return deepcopy(self.parent if id==self.parent['id'] else next(row for row in self.legs if row['id']==id))
+        review=prepare_manual_paper_release(self.intent['reservation_id'],fetch_paper_order=reader)
+        approve_manual_paper_release(review['review_id'],evidence_digest=review['evidence_digest'],approved_by='owner',independent_paper_provenance_confirmed=True)
+        release_manually_approved_paper_budget(review['review_id'],fetch_paper_order=reader)
+        result=execution_journal_snapshot();self.assertEqual(result['closed_priced_count'],1);self.assertEqual(result['gross_realized_usd'],'2.0')
+        self.assertIsNone(result['net_pnl']);self.assertEqual(workspace_snapshot()['budget']['committed_cents'],0)
+        self.sync();self.assertEqual(execution_journal_snapshot(),result)
+
+    def test_http_owner_origin_default_off_and_browser_evidence_rejection(self):
+        def owner(request):
+            if request.headers.get('X-Owner')!='yes':raise HTTPException(401)
+        app=FastAPI();app.include_router(build_paper_execution_router(require_session=owner,context=self.context))
+        disabled=FastAPI();disabled.include_router(build_paper_execution_router(require_session=owner))
+        async def run():
+            path='/auto-trader/pro-ticker/order-intents/'+self.intent['id']+'/execution-sync';headers={'X-Owner':'yes','Origin':'https://test'}
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='https://test') as client:
+                self.assertEqual((await client.get('/auto-trader/pro-ticker/execution-journal')).status_code,401)
+                self.assertEqual((await client.post(path,json={},headers={**headers,'Origin':'https://evil'})).status_code,403)
+                self.assertEqual((await client.post(path,json={'activities':[]},headers=headers)).status_code,422)
+                result=await client.post(path,json={},headers=headers);self.assertEqual(result.status_code,200)
+                history=await client.get('/auto-trader/pro-ticker/execution-journal',headers=headers);self.assertEqual(history.json()['total_count'],2)
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=disabled),base_url='https://test') as client:self.assertEqual((await client.post(path,json={},headers=headers)).status_code,403)
+        asyncio.run(run())
+
+
+class ExecutionPaginationTests(unittest.TestCase):
+    def gateway(self,get):return AlpacaPaperEvidenceGateway(account_id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',key_id='synthetic',secret_key='synthetic',http_get=get)
+
+    def test_order_filtered_bounded_get_pagination(self):
+        first=[{'id':'execution::'+str(i)} for i in range(100)]
+        get=Mock(side_effect=[Mock(status_code=200,json=lambda:first),Mock(status_code=200,json=lambda:[])])
+        order=str(uuid.uuid4());self.assertEqual(self.gateway(get).read_fill_activities(order),first)
+        self.assertIn('order_id='+order,get.call_args_list[0].args[0]);self.assertIn('page_token=execution%3A%3A99',get.call_args_list[1].args[0])
+        self.assertTrue(all(c.kwargs['allow_redirects'] is False for c in get.call_args_list))
+
+    def test_repeated_page_or_malformed_status_cannot_claim_complete_history(self):
+        page=[{'id':'execution::'+str(i)} for i in range(100)]
+        get=Mock(return_value=Mock(status_code=200,json=lambda:page))
+        with self.assertRaises(PaperGatewayUnavailable):self.gateway(get).read_fill_activities(str(uuid.uuid4()))
+        self.assertEqual(get.call_count,2)
+        get.return_value=Mock(status_code='200',json=lambda:[])
+        with self.assertRaises(PaperGatewayUnavailable):self.gateway(get).read_fill_activities(str(uuid.uuid4()))
