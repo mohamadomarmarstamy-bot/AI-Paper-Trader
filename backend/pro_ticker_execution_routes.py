@@ -43,4 +43,13 @@ def build_paper_execution_router(*,require_session,context=None):
         except PaperGatewayUnavailable:raise HTTPException(503,'Dedicated PAPER lookup unavailable. No order was resubmitted.') from None
         except ValueError:raise HTTPException(422,'Recorded attempt and exact dedicated PAPER order evidence required.') from None
         except Exception:raise HTTPException(503,'Recovery unconfirmed. Refresh saved state; no order was resubmitted.') from None
+    @router.post(base+'/order-intents/{intent_id}/protection-review')
+    async def protection(intent_id:str,request:Request):
+        payload=await body(request)
+        from pro_ticker_protection_review import review_paper_protection
+        try:return await run_in_threadpool(review_paper_protection,intent_id,payload,context=context)
+        except IntentConflict:raise HTTPException(409,'Owned active entry and unchanged ledger required. Refresh saved state.') from None
+        except PaperGatewayUnavailable:raise HTTPException(503,'Dedicated PAPER protection evidence unavailable.') from None
+        except ValueError:raise HTTPException(422,'Known intent and canonical review request ID required.') from None
+        except Exception:raise HTTPException(503,'Protection review unavailable. No broker order was changed.') from None
     return router

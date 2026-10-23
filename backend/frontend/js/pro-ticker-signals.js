@@ -55,7 +55,7 @@
     function brokerEvidenceControls(review,node,selected){
         const intent=review.order_intent,box=document.createElement("article"),status=document.createElement("p"),admission=document.createElement("button"),recover=document.createElement("button");status.setAttribute("role","status");box.className="pt-broker-evidence";
         admission.type="button";admission.textContent="Review PAPER admission (no order)";admission.disabled=true;recover.type="button";recover.textContent="Find existing PAPER order (no new buy)";recover.disabled=true;
-        box.append(status,admission,recover);node.appendChild(box);let busy=false,reviewId=null;
+        box.append(status,admission,recover);node.appendChild(box);protectionEvidenceControls(intent,box,selected);let busy=false,reviewId=null;
         const canReview=()=>intent.status==="prepared"&&!intent.attempt_started_at;
         const canRecover=()=>!!intent.attempt_started_at&&["submitting","uncertain","broker_linked"].includes(intent.status);
         const enabled=()=>{admission.disabled=busy||executionState?.admission_review_enabled!==true||!canReview();recover.disabled=busy||executionState?.recovery_enabled!==true||!canRecover();};
@@ -83,6 +83,26 @@
                 el("status").textContent=data.resolved?"Existing PAPER order recovered; no new buy sent. Protection still requires independent verification.":"No matching order found. Funds remain reserved; no new buy or budget release was authorized.";
             }catch(error){status.textContent="Recovery unavailable: "+error.message;}
             finally{busy=false;enabled();}
+        });
+    }
+    function protectionEvidenceControls(intent,box,selected){
+        const button=document.createElement("button"),status=document.createElement("p");
+        button.type="button";button.textContent="Inspect existing PAPER protection";button.disabled=true;status.setAttribute("role","status");box.append(button,status);
+        loadExecutionStatus().then(state=>{button.disabled=state?.protection_review_enabled!==true||intent.status!=="broker_linked";});
+        let requestId=null,expiryTimer=null;
+        button.addEventListener("click",async()=>{
+            if(button.disabled)return;clearTimeout(expiryTimer);button.disabled=true;requestId=requestId||crypto.randomUUID();status.textContent="Independently checking existing exit orders…";
+            try{
+                const response=await fetch("/auto-trader/pro-ticker/order-intents/"+encodeURIComponent(intent.id)+"/protection-review",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({request_id:requestId})});
+                if(!response.ok)throw Error("Inspection unavailable ("+response.status+"). Retry retains the review ID.");
+                const data=await response.json(),codes=["dedicated_paper_account","owned_bracket_entry","entry_fully_filled","entry_fills_accounted_without_exit","broker_position_matches","regular_market_open","two_independently_fetched_legs","leg_snapshots_match_parent","active_owned_sell_legs","stop_and_target_order_types","stop_and_target_within_plan","actual_entry_cost_and_stop_risk","fresh_trade_between_exit_levels","bounded_fetch_duration","ledger_unchanged_during_review","fresh_at_review_commit"];
+                if(data.paper!==true||data.preview_only!==true||data.execution_enabled!==false||data.order_submitted!==false||data.budget_released!==false||data.loss_cap_guaranteed!==false||data.intent_id!==intent.id||data.review_id!==requestId||typeof data.expired!=="boolean"||typeof data.ledger_unchanged!=="boolean"||!Number.isFinite(data.expires_at)||!Array.isArray(data.checks)||data.checks.length!==codes.length||new Set(data.checks.map(c=>c?.code)).size!==codes.length||data.checks.some(c=>!codes.includes(c?.code)||typeof c.passed!=="boolean")||data.checks_passed!==data.checks.every(c=>c.passed)||data.protection_orders_verified!==(data.checks_passed&&!data.expired&&data.ledger_unchanged))throw Error("Invalid protection evidence");
+                if(detailVersion!==selected)return;
+                const list=document.createElement("ul");for(const check of data.checks){const item=document.createElement("li");item.textContent=(check.passed?"Passed: ":"Blocked: ")+check.code.replaceAll("_"," ");list.appendChild(item);}
+                status.replaceChildren(document.createTextNode((data.protection_orders_verified?"Existing exit orders observed. ":"Protection could not be verified. ")+"No order was changed. Stops do not guarantee a loss cap; partial fills and after-hours protection are not certified."),list);
+                const remaining=Math.max(0,data.expires_at*1000-Date.now());expiryTimer=setTimeout(()=>{if(detailVersion===selected)status.textContent="Protection observation expired. Inspect again for current evidence; no order was changed.";},Math.min(remaining,30000));requestId=null;
+            }catch(error){if(detailVersion===selected)status.textContent=error.message;}
+            finally{button.disabled=executionState?.protection_review_enabled!==true||intent.status!=="broker_linked";}
         });
     }
     function validateIntent(intent,proposal){

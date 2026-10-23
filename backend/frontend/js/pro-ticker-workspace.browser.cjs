@@ -35,7 +35,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,version:'pro_ticker_research_evidence_v1',kind:'forward_quote_return_not_trade_pnl',training_enabled:invalidDataset,model_updated:false,training_ready_samples:0,total_count:count,window_count:count,graded_count:count,evaluated_count:evaluated,unevaluated_count:count-evaluated,has_more:false}));return;
   }
   if(req.url==='/auto-trader/pro-ticker/execution-status'){
-   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,admission_review_enabled:evidenceConfigured,recovery_enabled:evidenceConfigured,execution_enabled:false,automatic_execution_enabled:false,automatic_release_enabled:false,account_verified:false}));return;
+   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,admission_review_enabled:evidenceConfigured,recovery_enabled:evidenceConfigured,protection_review_enabled:evidenceConfigured,execution_enabled:false,automatic_execution_enabled:false,automatic_release_enabled:false,account_verified:false}));return;
   }
   if(req.url.startsWith('/auto-trader/pro-ticker/order-intents/')&&req.url.endsWith('/admission-review')){
    assert.equal(req.method,'POST');assert.equal(req.headers.origin,origin);const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=JSON.parse(Buffer.concat(chunks).toString());assert.deepEqual(Object.keys(body),['request_id']);admissionRequests.push(body);
@@ -43,6 +43,11 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    assert.equal(body.request_id,admissionRequests[0].request_id);
    const codes=['dedicated_paper_account','account_active_and_unblocked','broker_buying_power','regular_market_open','active_tradable_equity','broker_position_clear','broker_orders_clear','snapshot_fetch_fresh','current_trade_fresh','entry_within_reserved_ceiling','ledger_unchanged_during_review','current_allocation_limit','current_stop_risk_limit','fresh_at_review_commit'];
    res.end(JSON.stringify({paper:true,preview_only:true,review_id:body.request_id,intent_id:savedSignal.order_intent.id,execution_enabled:false,order_submitted:false,automatic_release_enabled:false,eligible_for_manual_submission:false,checks_passed:true,checks:codes.map(code=>({code,passed:true})),submission_blockers:['submission_not_enabled','protective_orders_not_verified'],expired:false,ledger_unchanged:true}));return;
+  }
+  if(req.url.startsWith('/auto-trader/pro-ticker/order-intents/')&&req.url.endsWith('/protection-review')){
+   assert.equal(req.method,'POST');assert.equal(req.headers.origin,origin);const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=JSON.parse(Buffer.concat(chunks).toString());assert.deepEqual(Object.keys(body),['request_id']);
+   const codes=['dedicated_paper_account','owned_bracket_entry','entry_fully_filled','entry_fills_accounted_without_exit','broker_position_matches','regular_market_open','two_independently_fetched_legs','leg_snapshots_match_parent','active_owned_sell_legs','stop_and_target_order_types','stop_and_target_within_plan','actual_entry_cost_and_stop_risk','fresh_trade_between_exit_levels','bounded_fetch_duration','ledger_unchanged_during_review','fresh_at_review_commit'];
+   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,preview_only:true,review_id:body.request_id,intent_id:savedSignal.order_intent.id,execution_enabled:false,order_submitted:false,budget_released:false,loss_cap_guaranteed:false,checks_passed:true,checks:codes.map(code=>({code,passed:true})),expired:false,ledger_unchanged:true,protection_orders_verified:true,expires_at:Date.now()/1000+30}));return;
   }
   if(req.url.startsWith('/auto-trader/pro-ticker/order-intents/')&&req.url.endsWith('/recover')){
    assert.equal(req.method,'POST');assert.equal(req.headers.origin,origin);const chunks=[];for await(const chunk of req)chunks.push(chunk);assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString()),{});recoveryRequests++;
@@ -179,6 +184,10 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.getByRole('button',{name:'Find existing PAPER order (no new buy)',exact:true}).click();await page.waitForFunction(()=>document.getElementById('pt-signal-status').textContent.includes('Existing PAPER order recovered; no new buy sent'));
    assert.equal(recoveryRequests,2);assert.equal(savedSignal.order_intent.status,'broker_linked');
    await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-recovered-intent.png',fullPage:true});
+   await page.getByRole('button',{name:'Inspect existing PAPER protection',exact:true}).click();
+   await page.waitForFunction(()=>document.getElementById('pt-signal-detail').textContent.includes('Existing exit orders observed.'));
+   assert.match(await page.locator('#pt-signal-detail').innerText(),/Stops do not guarantee a loss cap/);
+   await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-protection-review.png',fullPage:true});
 
    // Read-only fixture projections exercise how independent broker accounting
    // is rendered. The browser does not create an order or release broker funds.
@@ -261,7 +270,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.locator('#pt-tab-overview').focus();await page.keyboard.press('ArrowRight');assert.equal(await page.locator('#pt-tab-scanner').getAttribute('aria-selected'),'true');
    fail=true;await page.locator('#pt-refresh').click();await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('Unable to load'));assert.equal(await page.locator('#pt-metrics').innerText(),'');assert.match(await page.locator('#pt-journal').innerText(),/Data unavailable/);
    fail=false;data=fixture();data.paper=false;await page.locator('#pt-refresh').click();await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('safety flags'));assert.equal(await page.locator('#pt-metrics').innerText(),'');
-   assert.deepEqual(errors,[]);assert.ok(requests.every(([method,url])=>method==='GET'||method==='POST'&&['/auto-trader/pro-ticker/proposal','/auto-trader/pro-ticker/discovery','/auto-trader/pro-ticker/manual-signals','/auto-trader/pro-ticker/manual-signals/proposal','/auto-trader/pro-ticker/order-intents'].includes(url)||method==='POST'&&url.startsWith('/auto-trader/pro-ticker/manual-signals/')&&url.endsWith('/forward-review')||method==='POST'&&url.startsWith('/auto-trader/pro-ticker/order-intents/')&&['/cancel','/admission-review','/recover'].some(suffix=>url.endsWith(suffix))||method==='PUT'&&url==='/auto-trader/pro-ticker/settings'),'workspace must never place an order');await context.close();
+   assert.deepEqual(errors,[]);assert.ok(requests.every(([method,url])=>method==='GET'||method==='POST'&&['/auto-trader/pro-ticker/proposal','/auto-trader/pro-ticker/discovery','/auto-trader/pro-ticker/manual-signals','/auto-trader/pro-ticker/manual-signals/proposal','/auto-trader/pro-ticker/order-intents'].includes(url)||method==='POST'&&url.startsWith('/auto-trader/pro-ticker/manual-signals/')&&url.endsWith('/forward-review')||method==='POST'&&url.startsWith('/auto-trader/pro-ticker/order-intents/')&&['/cancel','/admission-review','/recover','/protection-review'].some(suffix=>url.endsWith(suffix))||method==='PUT'&&url==='/auto-trader/pro-ticker/settings'),'workspace must never place an order');await context.close();
   }
  }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
 });

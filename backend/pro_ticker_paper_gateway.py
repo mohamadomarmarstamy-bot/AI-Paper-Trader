@@ -57,6 +57,23 @@ class AlpacaPaperEvidenceGateway:
         if not isinstance(trade,dict) or trade.get('symbol') not in (None,symbol):raise PaperGatewayUnavailable('Market evidence symbol mismatch.')
         return {'account':account,'clock':clock,'asset':asset,'positions':positions,'orders':orders,'quote':trade.get('trade')}
 
+    def read_order(self,order_id):
+        order_id=_uuid(order_id)
+        value=self._read('/v2/orders/'+order_id+'?nested=true')
+        if not isinstance(value,dict) or value.get('id')!=order_id:raise PaperGatewayUnavailable('PAPER order identity mismatch.')
+        return value
+
+    def read_clock(self):return self._read('/v2/clock')
+
+    def read_positions(self):return self._read('/v2/positions')
+
+    def read_trade(self,symbol):
+        import re
+        if not isinstance(symbol,str) or not re.fullmatch(r'[A-Z][A-Z0-9.\-]{0,9}',symbol):raise ValueError('Canonical symbol required.')
+        value=self._read('/v2/stocks/'+quote(symbol,safe='')+'/trades/latest',data=True)
+        if not isinstance(value,dict) or value.get('symbol') not in (None,symbol):raise PaperGatewayUnavailable('Market evidence symbol mismatch.')
+        return value.get('trade')
+
     def find_order(self,client_order_id):
         if not isinstance(client_order_id,str) or not client_order_id.startswith('pt-'):raise ValueError('Reservation client order ID required.')
         _uuid(client_order_id[3:])

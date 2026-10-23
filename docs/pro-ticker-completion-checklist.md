@@ -344,3 +344,19 @@ blocked pending approval/configuration and dedicated-account validation.
 Implementation references: Alpaca [order tracking](https://docs.alpaca.markets/us/docs/working-with-orders),
 [order lifecycle and buying power](https://docs.alpaca.markets/us/docs/orders-at-alpaca),
 and [PAPER account retrieval](https://docs.alpaca.markets/us/reference/getaccount-1).
+
+### Existing bracket protection inspection (in development)
+
+A default-off owner endpoint and UI control inspect existing PAPER bracket exits
+without submitting, replacing, canceling or linking an order. The service verifies
+the owned parent, independently fetched children, complete entry accounting,
+matching broker position, fresh regular-session clock/trade, active stop/target
+quantities and the original cost/risk limits. Partial entries/exits and after-hours
+coverage deliberately fail certification. Saved observations expire after 30
+seconds and are invalidated by ledger changes. No observation guarantees a stop
+execution price, authorizes another order, or releases funds. The normal app and
+staging factory still have no dedicated gateway configured.
+
+This does not complete actual order submission, autonomous scanning, validated
+model training, execution-level net analytics, or hosted persistence validation.
+Browser checks use synthetic responses; dedicated account validation remains open.
