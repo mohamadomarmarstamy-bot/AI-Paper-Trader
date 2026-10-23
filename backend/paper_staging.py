@@ -94,9 +94,10 @@ def create_staging_app(*, _data_directory='/staging-data'):
         section = section.replace('class="app-section hidden"', 'class="app-section"', 1).replace(' hidden>', '>', 1)
         return HTMLResponse('''<!doctype html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Isolated PAPER staging</title>
-<link rel="stylesheet" href="/style.css"></head><body><main style="padding:24px;max-width:1050px;margin:auto">
-<p role="note">Isolated PAPER staging. Automatic buying and budget release are disabled. Dedicated PAPER monitoring and owner submission depend on server configuration.</p>
-<details><summary>Staging backup</summary><p>Private snapshot for migration validation. Keep it secure; this does not restore data.</p>
+<link rel="stylesheet" href="/style.css"></head><body><main class="paper-staging-shell">
+<header class="paper-staging-brand"><strong><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 18l6-6 4 3 8-11M15 4h6v6"/></svg>AI PAPER TRADER</strong><span>ISOLATED STAGING</span></header>
+<p role="note" class="paper-staging-note">Isolated PAPER staging. Automatic buying and budget release are disabled. Dedicated PAPER monitoring and owner submission depend on server configuration.</p>
+<details class="paper-staging-backup"><summary>Staging backup</summary><p>Private snapshot for migration validation. Keep it secure; this does not restore data.</p>
 <form action="/staging/database-backup" method="post"><button type="submit">Download staging database backup</button></form></details>'''
             + section + '''</main><script src="/js/pro-ticker-manual.js"></script>
 <script src="/js/pro-ticker-release.js"></script><script src="/js/pro-ticker-workspace.js"></script><script src="/js/pro-ticker-signals.js"></script><script>
