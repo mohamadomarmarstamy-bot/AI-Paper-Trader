@@ -4,9 +4,9 @@ Provider integration is deliberately injected. No credentials, network calls,
 broker orders, database writes, or trading permissions are supplied here.
 """
 import re
+from decimal import Decimal
 from datetime import datetime, timezone
 from pro_ticker_market_snapshot import normalize_market_snapshot
-from pro_ticker_research_ranking import rank_research_candidates
 
 def collect_research_snapshots(symbols, *, fetch_snapshot, now=None, limit=20):
     if not isinstance(symbols, list) or len(symbols) > 100:
@@ -37,7 +37,7 @@ def collect_research_snapshots(symbols, *, fetch_snapshot, now=None, limit=20):
         except Exception:
             failures.append({"symbol": symbol, "reason": "Quote unavailable or invalid"})
     # Ranking must use the same supplied clock, not an independently advanced one.
-    ranked = sorted(valid, key=lambda row: (-__import__("decimal").Decimal(row["relative_volume"]), row["symbol"]))
+    ranked = sorted(valid, key=lambda row: (-Decimal(row["relative_volume"]), row["symbol"]))
     return {
         "paper": True, "research_only": True, "order_execution_authorized": False,
         "provider_configured": True, "requested": len(unique), "accepted": len(valid),
