@@ -406,3 +406,23 @@
         finally{exporting=false;download.disabled=!rows.length;}
     });refresh.addEventListener("click",load);filter.addEventListener("input",render);document.getElementById("pt-refresh")?.addEventListener("click",load);window.loadProTickerExecutions=load;load();
 })();
+(() => {
+    const button = document.getElementById('pt-account-check');
+    const status = document.getElementById('pt-account-status');
+    if (!button || !status) return;
+    button.addEventListener('click', async () => {
+        button.disabled = true;
+        status.textContent = 'Checking dedicated PAPER account…';
+        try {
+            const response = await fetch('/auto-trader/pro-ticker/account-status', {credentials: 'same-origin', cache: 'no-store'});
+            if (!response.ok) throw Error('Connection could not be verified (' + response.status + ').');
+            const data = await response.json();
+            if (data.paper !== true || data.account_verified !== true || data.order_execution_authorized !== false) throw Error('Unexpected verification response.');
+            status.textContent = 'Dedicated PAPER account identity verified. ' +
+                (data.account_active && data.currency_usd && data.trading_unblocked ? 'Account is active, USD, and unblocked. ' : 'Account readiness needs review. ') +
+                'No order was submitted. Checked ' + new Date().toLocaleTimeString() + '.';
+        } catch (error) {
+            status.textContent = error.message + ' No order was submitted.';
+        } finally { button.disabled = false; }
+    });
+})();

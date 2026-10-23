@@ -10,6 +10,25 @@ from pro_ticker_paper_gateway import PaperGatewayUnavailable
 
 def build_paper_execution_router(*,require_session,context=None):
     router=APIRouter();base='/auto-trader/pro-ticker'
+    @router.get(base+'/account-status')
+    def account_status(request:Request):
+        require_session(request)
+        from fastapi.responses import JSONResponse
+        if execution_status(context)['admission_review_enabled'] is not True:
+            raise HTTPException(403,'Dedicated PAPER account is not configured.')
+        try:
+            account=context.gateway().read_account()
+            if not isinstance(account,dict) or account.get('id')!=context.expected_account_id:
+                raise ValueError('Account identity mismatch.')
+            # Never return credentials, account identifiers or arbitrary broker fields.
+            result={'paper':True,'account_verified':True,'order_execution_authorized':False,
+                    'account_active':account.get('status')=='ACTIVE',
+                    'currency_usd':account.get('currency')=='USD',
+                    'trading_unblocked':all(account.get(key) is False for key in
+                        ('trading_blocked','account_blocked','trade_suspended_by_user'))}
+        except Exception:
+            raise HTTPException(503,'Dedicated PAPER connection could not be verified. No order was submitted.') from None
+        return JSONResponse(result,headers={'Cache-Control':'no-store'})
     @router.get(base+'/execution-status')
     def status(request:Request):
         require_session(request)
