@@ -2505,9 +2505,16 @@ def fetch_forward_research_bar(
         minutes=normalized_search_minutes
     )
 
+    # These share classes use dashes in the Yahoo research universe and dots
+    # in Alpaca. Keep the persisted research symbol unchanged; translate only
+    # this data request, never an order or an arbitrary hyphenated instrument.
+    alpaca_symbol = {
+        "BF-A": "BF.A", "BF-B": "BF.B",
+        "BRK-A": "BRK.A", "BRK-B": "BRK.B",
+    }.get(normalized_symbol, normalized_symbol)
     payload = alpaca_market_data_request(
         "GET",
-        f"/v2/stocks/{normalized_symbol}/bars",
+        f"/v2/stocks/{alpaca_symbol}/bars",
         params={
             "timeframe": "1Min",
             "start": (target_datetime - timedelta(minutes=1)).isoformat(),
