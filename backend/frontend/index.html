@@ -99,6 +99,7 @@
                     <span id="notification-badge" class="notification-badge hidden" aria-label="Unread notifications">0</span>
                 </button>
                 <button type="button" class="nav-button" data-section="scanner-section" aria-controls="scanner-section"><span aria-hidden="true">🔎</span><span>Scanner</span></button>
+                <button type="button" class="nav-button" data-section="pro-ticker-manual-section" aria-controls="pro-ticker-manual-section"><span aria-hidden="true">🧪</span><span>Pro Ticker</span></button>
                 <button type="button" class="nav-button" data-section="strategy-section" aria-controls="strategy-section"><span aria-hidden="true">🤖</span><span>Research Lab</span></button>
                 <button type="button" class="nav-button" data-section="jarvis-section" aria-controls="jarvis-section"><span aria-hidden="true">&#129302;</span><span>Jarvis</span></button>
                 <button type="button" class="nav-button" data-section="profile-section" aria-controls="profile-section"><span aria-hidden="true">&#128100;</span><span>Profile</span></button>
@@ -1185,7 +1186,178 @@
                 </section>
 
 
-<section
+<section id="pro-ticker-manual-section" class="app-section hidden" aria-labelledby="pro-ticker-manual-title" hidden>
+
+<div class="pt-hero">
+<div class="pt-hero-copy"><p class="panel-kicker">MOMENTUM RESEARCH &amp; PAPER EXECUTION</p>
+<h2 id="pro-ticker-manual-title">Pro Ticker<span class="pt-title-accent">.</span></h2>
+<p>Find momentum. Build conviction. Track every decision.</p>
+<span class="pt-hero-caption">Your dedicated research and simulated accounting workspace.</span></div>
+<div class="pt-hero-context"><span class="pt-environment-badge"><span aria-hidden="true"></span>PAPER ONLY</span>
+<span>Research with discipline.</span><small>Owner-controlled execution &amp; reconciliation</small></div></div>
+<div class="pt-toolbar">
+<button id="pt-refresh" type="button" class="primary-button">Refresh workspace</button>
+<p id="pt-status" role="status" aria-live="polite">Workspace has not loaded.</p></div>
+<div class="pt-workspace-layout"><div class="pt-navigation">
+<p class="pt-nav-caption">WORKSPACE</p>
+<div class="pt-tabs" role="tablist" aria-label="Pro Ticker workspace" aria-orientation="vertical">
+<button type="button" role="tab" id="pt-tab-overview" aria-controls="pt-panel-overview" aria-selected="false" data-pt-tab="overview"><svg class="pt-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z"/></svg>Overview</button>
+<button type="button" role="tab" id="pt-tab-scanner" aria-controls="pt-panel-scanner" aria-selected="false" data-pt-tab="scanner"><svg class="pt-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 21l-5-5 M18 10a8 8 0 1 1-16 0a8 8 0 1 1 16 0 M6 10h3l2-4 2 8 2-4h3"/></svg>Scanner</button>
+<button type="button" role="tab" id="pt-tab-signals" aria-controls="pt-panel-signals" aria-selected="false" data-pt-tab="signals"><svg class="pt-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l5-5 4 3 7-10 M14 5h6v6"/></svg>Manual Signals</button><button type="button" role="tab" id="pt-tab-research" aria-controls="pt-panel-research" aria-selected="false" data-pt-tab="research"><svg class="pt-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h6l2 2 2-2h6v16h-6l-2 2-2-2H4z M12 6v16 M7 9h2 M15 9h2 M7 13h2 M15 13h2"/></svg>Research Lab</button>
+<button type="button" role="tab" id="pt-tab-trading" aria-controls="pt-panel-trading" aria-selected="false" data-pt-tab="trading"><svg class="pt-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16v14H4z M9 7V3h6v4 M4 12h16 M10 12v3h4v-3"/></svg>PAPER Workspace</button>
+<button type="button" role="tab" id="pt-tab-journal" aria-controls="pt-panel-journal" aria-selected="false" data-pt-tab="journal"><svg class="pt-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3h14v18H5z M9 7h6 M9 11h6 M9 15h4"/></svg>Trade Journal</button>
+<button type="button" role="tab" id="pt-tab-performance" aria-controls="pt-panel-performance" aria-selected="false" data-pt-tab="performance"><svg class="pt-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 3v17h17 M8 16v-4 M13 16V8 M18 16V4"/></svg>Performance</button>
+<button type="button" role="tab" id="pt-tab-budget" aria-controls="pt-panel-budget" aria-selected="false" data-pt-tab="budget"><svg class="pt-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h17v14H3z M3 6V4h14v2 M16 11h5v5h-5z"/></svg>Budget & Reconciliation</button>
+<button type="button" role="tab" id="pt-tab-health" aria-controls="pt-panel-health" aria-selected="false" data-pt-tab="health"><svg class="pt-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>Settings &amp; Health</button></div>
+<div class="pt-nav-note"><span class="pt-note-icon" aria-hidden="true">P</span><div><strong>Paper, with purpose</strong><p>Research evidence and trading results stay separate.</p></div></div></div><div class="pt-content">
+<div class="panel pt-panel" role="tabpanel" id="pt-panel-overview" aria-labelledby="pt-tab-overview">
+<h3>Your strategy at a glance</h3>
+<p>Virtual allocation within Pro Ticker. This is not a separate broker account or your account equity.</p>
+<div id="pt-metrics" class="pt-metrics"></div>
+<h3>Attributed open positions</h3>
+<div class="pt-table">
+<table><thead><tr><th scope="col">Symbol</th><th scope="col">Verified shares</th><th scope="col">Ledger updated</th></tr></thead><tbody id="pt-positions"></tbody></table></div>
+<p>Prices, unrealized P&L and broker protection are unavailable until independently verified.</p></div>
+<div class="panel pt-panel" role="tabpanel" id="pt-panel-scanner" aria-labelledby="pt-tab-scanner">
+<h3>Candidate research explorer</h3>
+<p>Discover public Pro Ticker articles on demand. This does not run a live market scanner, send emails, or submit trades.</p>
+<button id="pt-discover" type="button" class="primary-button">Discover public research</button>
+<p id="pt-discovery-status" role="status" aria-live="polite">Discovery status has not loaded.</p>
+<p id="pt-scanner-note"></p>
+<div class="pt-filters">
+<label>Search symbol or research<input id="pt-search" type="search" maxlength="100"></label>
+<label>Direction<select id="pt-direction"><option value="">All</option><option value="long">Long / bullish</option><option value="short">Short / bearish</option></select></label>
+<label>Sort<select id="pt-sort"><option value="recent">Most recent</option><option value="score">Recorded score</option><option value="symbol">Symbol</option></select></label></div>
+<p id="pt-candidate-count" role="status"></p>
+<div class="pt-table">
+<table><thead><tr><th scope="col">Symbol</th><th scope="col">Recorded score</th><th scope="col">Confidence</th><th scope="col">Direction</th><th scope="col">Updated</th><th scope="col">Research</th></tr></thead><tbody id="pt-candidates"></tbody></table></div></div>
+<div class="panel pt-panel" role="tabpanel" id="pt-panel-signals" aria-labelledby="pt-tab-signals">
+<h3>Manual Pro Ticker signals</h3>
+<p>Enter one stock to capture its submission-time reference and save a provisional daily technical grade. This is a manual observation, not proof of an original Pro Ticker alert. PAPER auto-buy remains blocked until the execution lifecycle is verified.</p>
+<form id="pt-signal-form" class="pt-filters"><label>Stock symbol<input id="pt-signal-symbol" maxlength="10" pattern="[A-Za-z][A-Za-z0-9.\-]{0,9}" required autocomplete="off" placeholder="AAPL"></label><button type="submit" id="pt-signal-submit">Save &amp; grade stock</button><button type="button" id="pt-signal-refresh">Refresh saved reviews</button><button type="button" id="pt-signal-new">Start a new review</button></form>
+<button id="pt-reference-check" type="button">Check latest broker reference</button>
+<p id="pt-reference-status" role="status" aria-live="polite">Enter a symbol to check its latest broker trade without saving another research review. Freshness alone does not approve an order.</p>
+<p id="pt-signal-status" role="status" aria-live="polite">No reviews loaded.</p>
+<p>Grades A/B/C/D are versioned technical heuristics, not win probabilities or a trained AI forecast. Missing data is recorded as unavailable. Later trade outcomes must be measured separately before training.</p>
+<div class="pt-table"><table><thead><tr><th>Submitted</th><th>Symbol</th><th>Grade</th><th>Technical score (−6 to +6)</th><th>Quote status</th><th>Workflow</th><th>Evidence</th></tr></thead><tbody id="pt-signal-history"></tbody></table></div>
+<article id="pt-signal-detail"><p>Select a review to see its saved evidence and limitations.</p></article></div>
+<div class="panel pt-panel" role="tabpanel" id="pt-panel-research" aria-labelledby="pt-tab-research">
+<h3>Research detail</h3>
+<article id="pt-research-detail">
+<p>Select a saved candidate in Scanner to inspect its evidence.</p></article>
+<h3>Bulk research symbol intake (ungraded)</h3>
+<div class="panel" style="padding:1.5rem">
+
+<form id="pro-ticker-manual-form">
+
+<label for="pro-ticker-manual-symbols">Stock symbols (comma, space, or newline separated)</label>
+                            <textarea id="pro-ticker-manual-symbols" rows="4" maxlength="1200" required placeholder="AAPL, MSFT, NVDA" style="display:block;width:100%;margin:0.75rem 0;padding:0.75rem"></textarea>
+
+<button type="submit" class="primary-button">Save Research Symbols</button>
+                        </form>
+
+<p id="pro-ticker-manual-status" role="status" aria-live="polite">Research only — no automatic PAPER orders.</p>
+
+<h3>Recent manual observations</h3>
+
+<div style="overflow-x:auto">
+
+<table><thead><tr><th>Symbol</th><th>Latest trade price</th><th>Trade timestamp</th><th>Submitted at</th><th>Status</th></tr></thead>
+                            <tbody id="pro-ticker-manual-history"></tbody></table>
+                        </div>
+                    </div>
+</div>
+<div class="panel pt-panel" role="tabpanel" id="pt-panel-trading" aria-labelledby="pt-tab-trading">
+<h3>PAPER execution and position management</h3>
+<p>Order submission is disabled pending verified reconciliation and dedicated PAPER broker validation. Reservations below are allocations, not evidence of fills.</p>
+<form id="pt-proposal-form" class="pt-filters">
+<label>Symbol<input id="pt-proposal-symbol" required pattern="[A-Za-z][A-Za-z0-9.\-]{0,9}" maxlength="10"></label>
+<label>Hypothetical reference price<input id="pt-proposal-price" type="number" min="0.0001" max="1000000" step="0.0001" required></label>
+<label>Whole shares<input id="pt-proposal-shares" type="number" min="1" max="100000" step="1" required></label>
+<label>Stop-loss %<input id="pt-proposal-stop" type="number" min="0.01" max="99" step="0.01" required></label>
+<label>Take-profit %<input id="pt-proposal-target" type="number" min="0.01" max="99" step="0.01" required></label>
+<button type="submit" id="pt-proposal-button">Calculate hypothetical proposal</button></form>
+<p id="pt-proposal-result" role="status" aria-live="polite">Enter your own estimates. This calculator does not reserve money or place orders.</p>
+<button type="button" disabled>Submit PAPER order — unavailable</button>
+<p>Stop-loss, take-profit and broker protection status: unverified. No position-close control is enabled here.</p>
+<div class="pt-table">
+<table><thead><tr><th scope="col">Symbol</th><th scope="col">Reservation status</th><th scope="col">Allocation</th><th scope="col">Linked entry order</th></tr></thead><tbody id="pt-orders"></tbody></table></div></div>
+<div class="panel pt-panel" role="tabpanel" id="pt-panel-journal" aria-labelledby="pt-tab-journal">
+<h3>Verified strategy fill journal</h3>
+<p>Only Pro Ticker share-ledger events appear here. Recorded time is the posting time, not the broker execution time. Execution prices, reasons and realized P&L are not yet captured by this ledger.</p>
+<div class="pt-filters">
+<label>Symbol<input id="pt-journal-symbol" type="search" maxlength="10"></label>
+<label>From date<input id="pt-journal-from" type="date"></label>
+<label>Through date<input id="pt-journal-to" type="date"></label>
+<button id="pt-export" type="button">Export displayed fills (CSV)</button></div>
+<div class="pt-table">
+<table><thead><tr><th scope="col">Recorded at</th><th scope="col">Symbol</th><th scope="col">Side</th><th scope="col">Shares</th><th scope="col">Broker order</th><th scope="col">Event</th></tr></thead><tbody id="pt-journal"></tbody></table></div></div>
+<div class="panel pt-panel" role="tabpanel" id="pt-panel-performance" aria-labelledby="pt-tab-performance">
+<h3>Performance and learning</h3>
+<h4>Manual signal forward research</h4><p id="pt-signal-learning" role="status">Forward research has not loaded. No model training is enabled.</p>
+<div class="pt-table"><table><thead><tr><th>Grade</th><th>Version</th><th>Samples</th><th>Positive</th><th>Negative</th><th>Mean forward quote change %</th></tr></thead><tbody id="pt-signal-learning-rows"></tbody></table></div>
+<p id="pt-performance-note"></p>
+<dl>
+<dt>Realized and unrealized P&L</dt>
+<dd>Unavailable</dd>
+<dt>Win rate, profit factor and drawdown</dt>
+<dd>Unavailable</dd>
+<dt>Strategy/regime comparisons and equity chart</dt>
+<dd>Require priced completed trades and dated equity observations.</dd></dl>
+<p>No measured improvement or backtest result is claimed. Returned virtual allocations are never counted as profit.</p></div>
+<div class="panel pt-panel" role="tabpanel" id="pt-panel-budget" aria-labelledby="pt-tab-budget">
+<h3>Virtual allocations</h3>
+<p>Reserved, submitted and filled allocations consume the budget until safely released. This does not measure Alpaca buying power.</p>
+<div class="pt-table">
+<table><thead><tr><th scope="col">Reservation</th><th scope="col">Symbol</th><th scope="col">Allocation</th><th scope="col">Status</th><th scope="col">Updated</th></tr></thead><tbody id="pt-reservations"></tbody></table></div>
+<div class="panel" style="padding:1.5rem">
+
+<h3>PAPER virtual budget releases</h3>
+
+<p>Returned reserved funds are separate from realized trading profit.</p>
+
+<p id="pro-ticker-release-status" role="status" aria-live="polite">Load the lab to view release history.</p>
+
+<form id="pro-ticker-release-form" hidden>
+
+<label for="pro-ticker-release-reservation">Closed reservation UUID</label>
+                            <input id="pro-ticker-release-reservation" type="text" maxlength="36" required style="display:block;width:100%;margin:0.75rem 0;padding:0.75rem">
+
+<button id="pro-ticker-release-prepare" type="submit" class="primary-button" disabled>Review closed PAPER reservation</button>
+
+<p id="pro-ticker-release-review" style="overflow-wrap:anywhere"></p>
+
+<label class="pro-ticker-release-attestation"><input id="pro-ticker-release-attest" type="checkbox" disabled><span>I independently checked these orders in my PAPER account and verified that the position is fully closed.</span></label>
+
+<button id="pro-ticker-release-confirm" type="button" class="primary-button" disabled>Confirm return of virtual funds</button>
+                        </form>
+
+<div style="overflow-x:auto">
+
+<table><thead><tr><th>Symbol</th><th>Virtual funds returned</th><th>Released at</th><th>Reservation</th></tr></thead>
+                            <tbody id="pro-ticker-release-events"></tbody></table>
+                        </div>
+                    </div>
+                </div>
+<div class="panel pt-panel" role="tabpanel" id="pt-panel-health" aria-labelledby="pt-tab-health">
+<h3>Settings and system health</h3>
+<div id="pt-health"></div>
+<button id="pt-account-check" type="button">Verify dedicated PAPER connection</button>
+<p id="pt-account-status" role="status" aria-live="polite">Connection has not been checked. Verification only reads account information.</p>
+<p>These settings apply only to Pro Ticker hypothetical proposals and manual public discovery. They do not enable trading or alter the existing auto-trader. Estimated stop risk is not a guaranteed maximum loss.</p>
+<form id="pt-settings-form" class="pt-filters">
+<label>Maximum hypothetical allocation ($)<input id="pt-settings-allocation" type="number" min="0.01" max="50000" step="0.01" required disabled></label>
+<label>Maximum estimated stop risk ($)<input id="pt-settings-risk" type="number" min="0.01" max="50000" step="0.01" required disabled></label>
+<label>Articles per discovery run<input id="pt-settings-articles" type="number" min="1" max="5" step="1" required disabled></label>
+<button id="pt-settings-save" type="submit" disabled>Save Pro Ticker settings</button>
+<button id="pt-settings-reload" type="button">Reload saved settings</button></form>
+<p id="pt-settings-status" role="status" aria-live="polite">Settings have not loaded.</p>
+<h3>Validation boundaries</h3>
+<ul>
+<li>Automatic discovery and PAPER execution integration are unfinished.</li>
+<li>Dedicated broker lifecycle certification remains required before enabling execution.</li>
+<li>Automatic virtual budget release is disabled.</li></ul></div></div></div></section>
+                <section
                     id="strategy-section"
                     class="strategy-section app-section hidden"
                     aria-labelledby="strategy-title"
@@ -1910,6 +2082,10 @@
     <script src="js/search.js"></script>
     <script src="js/watchlist.js"></script>
     <script src="js/portfolio.js"></script>
+    <script src="js/pro-ticker-manual.js"></script>
+    <script src="js/pro-ticker-release.js"></script>
+    <script src="js/pro-ticker-workspace.js?v=forward-v1"></script>
+    <script src="js/pro-ticker-signals.js?v=forward-v1"></script>
     <script src="js/strategy.js"></script>
     <script src="js/jarvis.js"></script>
     <script src="js/profile.js"></script>
@@ -2014,6 +2190,10 @@ document.addEventListener(
 
                 if (sectionId === "performance-section") {
                     window.setTimeout(() => window.loadPortfolioChart?.(), 80);
+                }
+
+                if (sectionId === "pro-ticker-manual-section") {
+                    window.setTimeout(() => { window.loadProTickerManualLab?.(); window.loadProTickerReleasePanel?.(); window.loadProTickerWorkspace?.(); window.loadProTickerSignals?.(); }, 80);
                 }
 
                 if (sectionId === "scanner-section") {

@@ -41,17 +41,25 @@ USER_AGENT = (
 def _fetch_public_html(
     url: str,
 ) -> str:
-    response = requests.get(
-        url,
-        headers={
-            "User-Agent": USER_AGENT,
-            "Accept": (
-                "text/html,"
-                "application/xhtml+xml"
-            ),
-        },
-        timeout=PRO_TICKER_TIMEOUT_SECONDS,
-    )
+    # Validate every hop rather than following a public page's redirect to an
+    # unrelated host. This collector has no reason to request private services.
+    for hop in range(4):
+        parsed = urlparse(url)
+        if (parsed.scheme not in {'https', 'http'} or parsed.hostname not in PRO_TICKER_HOSTS
+                or parsed.username or parsed.password or parsed.port not in {None, 80, 443}):
+            raise ValueError('Unsupported public research source.')
+        response = requests.get(
+            url, headers={'User-Agent': USER_AGENT, 'Accept': 'text/html,application/xhtml+xml'},
+            timeout=PRO_TICKER_TIMEOUT_SECONDS, allow_redirects=False,
+        )
+        if response.status_code in {301, 302, 303, 307, 308}:
+            location = response.headers.get('Location')
+            if not location or hop == 3:
+                raise ValueError('Invalid public research redirect.')
+            response.close()
+            url = urljoin(url, location)
+            continue
+        break
 
     response.raise_for_status()
 

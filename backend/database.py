@@ -32,7 +32,7 @@ DEFAULT_STARTING_CASH = 100_000.0
 SQLITE_TIMEOUT_SECONDS = 30
 
 
-def get_connection() -> sqlite3.Connection:
+def get_connection(*, check_same_thread: bool = True) -> sqlite3.Connection:
     """
     Create and configure a SQLite database connection.
 
@@ -41,6 +41,7 @@ def get_connection() -> sqlite3.Connection:
     connection = sqlite3.connect(
         DATABASE_PATH,
         timeout=SQLITE_TIMEOUT_SECONDS,
+        check_same_thread=check_same_thread,
     )
 
     connection.row_factory = sqlite3.Row

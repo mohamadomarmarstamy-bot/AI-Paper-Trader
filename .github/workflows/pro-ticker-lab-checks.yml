@@ -1,0 +1,235 @@
+name: Pro Ticker Lab checks
+
+on:
+  push:
+    branches:
+      - feature/pro-ticker-lab
+  pull_request:
+
+jobs:
+  intake-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install isolated HTTP test dependencies
+        run: python -m pip install 'fastapi>=0.115,<1.0' 'httpx>=0.27,<1.0' 'requests>=2.32,<3'
+      - name: Python syntax check (all Pro Ticker modules and tests)
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          files = (
+              sorted(Path("backend").glob("pro_ticker_*.py"))
+              + sorted(Path("backend").glob("test_pro_ticker_*.py"))
+              + [Path("backend/main.py")]
+          )
+
+          if not files:
+              raise SystemExit("No Python files found")
+
+          for file in files:
+              ast.parse(
+                  file.read_text(encoding="utf-8-sig"),
+                  filename=str(file),
+              )
+
+          print(f"Successfully checked {len(files)} Python files")
+          PY
+      - name: Manual research intake unit tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_manual_intake.py -v
+      - name: PAPER order admission policy unit tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_paper_policy.py -v
+      - name: Virtual PAPER budget ledger unit tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_budget_ledger.py -v
+      - name: PAPER reconciliation review unit tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_reconciliation_review.py -v
+      - name: PAPER order ownership unit tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_order_ownership.py -v
+      - name: PAPER entry planning unit tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_execution_plan.py -v
+      - name: PAPER exit planning unit tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_exit_plan.py -v
+      - name: PAPER broker fill verification unit tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_fill_verification.py -v
+      - name: PAPER snapshot reconciliation integration tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_snapshot_review.py -v
+      - name: PAPER strategy exit attribution unit tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_exit_attribution.py -v
+      - name: PAPER position accounting unit tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_position_accounting.py -v
+      - name: PAPER position ledger integration tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_position_ledger.py -v
+      - name: PAPER shared broker position audit tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_position_audit.py -v
+      - name: PAPER fill posting preview tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_fill_posting_preview.py -v
+      - name: PAPER reservation order linking tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_order_linking.py -v
+      - name: Verified PAPER entry fill bridge tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_verified_fill_bridge.py -v
+      - name: End-to-end PAPER fill ledger lifecycle tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_paper_fill_lifecycle.py -v
+      - name: PAPER virtual allocation audit tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_virtual_allocation_audit.py -v
+      - name: Combined PAPER broker and allocation audit tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_combined_paper_audit.py -v
+      - name: Exact PAPER reservation lookup tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_reservation_lookup.py -v
+      - name: Verified PAPER exit ownership link tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_exit_links.py -v
+      - name: Verified PAPER exit fill preview tests
+        run: python -m unittest discover -s backend -p test_pro_ticker_verified_exit_review.py -v
+      - name: All Pro Ticker Lab tests (including new broker audit tests)
+        run: python -m unittest discover -s backend -p 'test_pro_ticker_*.py' -v
+      - name: Existing application regression tests (dependency-light)
+        run: |
+          python -m unittest discover -s backend -p 'test_broker_throttle.py' -v
+          python -m unittest discover -s backend -p 'test_entry_cooldown.py' -v
+          python -m unittest discover -s backend -p 'test_entry_quality.py' -v
+          python -m unittest discover -s backend -p 'test_pending_entry_skip.py' -v
+          python -m unittest discover -s backend -p 'test_buy_asset_eligibility.py' -v
+          python -m unittest discover -s backend -p 'test_reporting_metrics.py' -v
+      - name: Consistent database snapshot and disposable migration checks
+        run: python -m unittest discover -s backend -p 'test_paper_database*.py' -v
+      - name: Frontend research DOM wiring smoke test
+        run: |
+          python -m unittest discover -s backend -p 'test_pro_ticker_frontend_integration.py' -v
+      - name: Frontend research runtime DOM tests
+        run: node --test backend/frontend/js/pro-ticker-*.test.cjs
+      - name: Frontend JavaScript syntax check
+        run: |
+          node --check backend/frontend/js/pro-ticker-manual.js
+          node --check backend/frontend/js/pro-ticker-release.js
+
+
+  full-app-import-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      ALPACA_API_KEY: ""
+      ALPACA_SECRET_KEY: ""
+      ALPACA_API_KEY_ID: ""
+      ALPACA_SECRET_KEY_ID: ""
+      APP_ACCESS_PASSWORD: ""
+      APP_SESSION_SECRET: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install production backend and HTTP smoke-test dependencies
+        run: python -m pip install -r backend/requirements.txt 'httpx>=0.27,<1.0' 'pytest>=8,<9'
+      - name: Complete backend regression suite with isolated production app smoke
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+          DATABASE_PATH: /tmp/pro-ticker-ci-tests.db
+          AUTO_TRADER_START_ENABLED: 'false'
+        run: python -m pytest backend -q
+
+  paper-release-browser:
+    runs-on: ubuntu-24.04
+    container:
+      image: mcr.microsoft.com/playwright:v1.58.2-noble
+      options: --ipc=host
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned isolated browser test dependency
+        run: npm install --no-save --ignore-scripts playwright@1.58.2
+      - name: Verify preinstalled Chromium
+        run: node -e "const {chromium}=require('playwright'); require('fs').accessSync(chromium.executablePath())"
+      - name: PAPER release desktop and mobile browser smoke
+        run: node --test backend/frontend/js/pro-ticker-release.browser.cjs backend/frontend/js/pro-ticker-workspace.browser.cjs
+      - name: Keep PAPER release screenshots for review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-release-browser-screenshots
+          path: |
+            .artifacts/paper-release/
+            .artifacts/pro-ticker-workspace/
+          if-no-files-found: ignore
+
+  isolated-staging-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build staging-only container
+        run: docker build --file Dockerfile.paper-staging --tag paper-staging:ci .
+      - name: Boot isolated staging with synthetic owner credentials
+        run: |
+          mkdir -p "$RUNNER_TEMP/paper-staging-data"
+          docker run --detach --name paper-staging-ci \
+            --publish 127.0.0.1:18080:8000 \
+            --mount "type=bind,src=$RUNNER_TEMP/paper-staging-data,dst=/staging-data" \
+            --env PAPER_STAGING_MODE=true \
+            --env DATABASE_PATH=/staging-data/trader.db \
+            --env AUTO_TRADER_START_ENABLED=false \
+            --env PRO_TICKER_MANUAL_RELEASE_ENABLED=true \
+            --env APP_ACCESS_PASSWORD=ci-staging-password-not-real \
+            --env APP_SESSION_SECRET=ci-staging-session-secret-not-real-at-least-32 \
+            paper-staging:ci
+      - name: Validate staging health, route isolation and persistence
+        run: |
+          python - <<'PY'
+          import json
+          import time
+          import urllib.error
+          import urllib.request
+
+          base = 'http://127.0.0.1:18080'
+          deadline = time.monotonic() + 60
+          while True:
+              try:
+                  with urllib.request.urlopen(base + '/health', timeout=2) as response:
+                      health = json.load(response)
+                  break
+              except (OSError, urllib.error.URLError):
+                  if time.monotonic() >= deadline:
+                      raise
+                  time.sleep(1)
+          assert health['environment'] == 'isolated-staging'
+          assert health['paper'] is True
+          assert health['background_jobs_enabled'] is False
+          assert health['broker_order_submission_enabled'] is False
+          checks = [
+              ('GET', '/auto-trader/pro-ticker-paper/release-events', 401),
+              ('GET', '/account/live', 404),
+              ('POST', '/auto-trader/positions/close-all', 404),
+              ('POST', '/auto-trader/report/test-email', 404),
+          ]
+          for method, path, expected in checks:
+              request = urllib.request.Request(base + path, method=method, headers={'Origin': base})
+              try:
+                  urllib.request.urlopen(request, timeout=3)
+                  raise AssertionError('Unexpected exposed staging route: ' + path)
+              except urllib.error.HTTPError as error:
+                  assert error.code == expected, (path, error.code)
+          # Simulate the HTTPS edge reaching the container over HTTP.
+          import urllib.parse
+          login = urllib.request.Request(base + '/login',
+              data=urllib.parse.urlencode({'password': 'ci-staging-password-not-real'}).encode(),
+              headers={'Origin': base.replace('http:', 'https:'), 'X-Forwarded-Proto': 'https'},
+              method='POST')
+          with urllib.request.urlopen(login, timeout=3) as response:
+              assert response.status == 200
+              assert 'Secure' in response.headers['Set-Cookie']
+          print('Isolated staging HTTP boundaries and HTTPS proxy login verified')
+          PY
+          docker exec paper-staging-ci python -c "from pathlib import Path; import sqlite3; assert Path('/staging-data/trader.db').is_file(); assert not Path('/app/backend/trader.db').exists(); assert not Path('/data/trader.db').exists(); c=sqlite3.connect('/staging-data/trader.db'); c.execute('CREATE TABLE staging_ci_marker (value TEXT)'); c.execute(\"INSERT INTO staging_ci_marker VALUES ('retained')\"); c.commit(); c.close()"
+          docker restart paper-staging-ci
+          docker exec paper-staging-ci python -c "import sqlite3; c=sqlite3.connect('/staging-data/trader.db'); assert c.execute('SELECT value FROM staging_ci_marker').fetchone()[0] == 'retained'; c.close(); print('Separate volume persistence verified')"
+      - name: Show failed container startup logs
+        if: failure()
+        run: docker logs paper-staging-ci || true
+      - name: Remove disposable staging container
+        if: always()
+        run: docker rm --force paper-staging-ci || true
