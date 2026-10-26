@@ -1,5 +1,21 @@
 # PAPER release preparation — approval is still blocked
 
+## October 26 review checkpoint
+
+The [evidence and analytics record](pro-ticker-evidence-analytics.md) supersedes
+historical limitations and test counts below where explicitly verified. Signed-in
+hosted research/equity workflows, staging restart persistence and user-executed
+representative production-copy schema/accounting checks have passed. The final
+accounting review unifies journal/analytics exit coverage, verifies per-order
+priced cost-basis coverage and rechecks freshness after a database-lock wait.
+No schema/migration or trading-setting change is introduced by those fixes.
+
+Actual PAPER order certification remains deferred while trading is paused.
+Verified net costs, intraday path/spread analysis and prospective strategy
+validation remain unavailable. This is not completion of the full standalone
+feature; accepting deferred scope and approving a merge/release remain owner
+choices. Keep this PR draft and production unchanged.
+
 ## Current scope
 
 - Dedicated workspace, owner-entered grading, persisted research and proposals.

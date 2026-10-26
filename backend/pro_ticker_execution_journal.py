@@ -125,18 +125,18 @@ def execution_journal_snapshot():
         rows=[dict(row) for row in conn.execute('SELECT activity_id,intent_id,broker_order_id,symbol,side,shares,price,executed_at,recorded_at FROM pro_ticker_execution_journal ORDER BY executed_at DESC,activity_id DESC LIMIT 500')] if exists else []
         count=conn.execute('SELECT COUNT(*) FROM pro_ticker_execution_journal').fetchone()[0] if exists else 0
         gross=Decimal(0);closed=0;wins=0;losses=0;flat=0;outcomes=[];graded_outcomes=[]
-        if exists:
-            for sync in conn.execute('SELECT * FROM pro_ticker_execution_sync'):
-                intent,orders,_=_ownership(conn,sync['intent_id']);coverage=json.loads(sync['coverage_json'])
-                if intent['status'] not in ('broker_linked','closed') or {c['broker_order_id'] for c in coverage}!=set(orders) or not all(c['terminal'] for c in coverage):continue
-                events=conn.execute('SELECT * FROM pro_ticker_execution_journal WHERE intent_id=?',(intent['id'],)).fetchall()
-                buys=sum(r['shares'] for r in events if r['side']=='buy');sells=sum(r['shares'] for r in events if r['side']=='sell')
-                if not 0<buys<=intent['plan']['shares'] or sells!=buys or sum(c['shares'] for c in coverage if c['side']=='buy')!=buys:continue
-                trade_gross=sum(Decimal(r['price'])*r['shares']*(1 if r['side']=='sell' else -1) for r in events)
-                gross+=trade_gross;closed+=1;outcomes.append(trade_gross);graded_outcomes.append((intent['plan'].get('entry_grade'),trade_gross))
-                if trade_gross>0:wins+=1
-                elif trade_gross<0:losses+=1
-                else:flat+=1
+        # Use the same order, priced-fill and posted-share coverage checks as
+        # analytics so the two views cannot disagree about a completed outcome.
+        # Imported at call time because analytics also reuses journal utilities.
+        from pro_ticker_performance_analytics import covered_trades
+        trades,_=covered_trades(conn)
+        for trade in trades:
+            trade_gross=Decimal(trade['gross_pnl_usd'])
+            gross+=trade_gross;closed+=1;outcomes.append(trade_gross)
+            graded_outcomes.append((trade['grade'],trade_gross))
+            if trade_gross>0:wins+=1
+            elif trade_gross<0:losses+=1
+            else:flat+=1
     return {'paper':True,'kind':'owned_broker_fill_activities','rows':rows,'total_count':count,'has_more':count>len(rows),
             'closed_priced_count':closed,'gross_realized_usd':str(gross) if closed else None,
             **gross_execution_metrics(outcomes),

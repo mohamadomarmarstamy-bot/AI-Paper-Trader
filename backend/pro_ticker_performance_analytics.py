@@ -168,6 +168,17 @@ def capture_equity(*, context, clock=time.time):
             if position.get('side')!='long' or symbol not in owned or qty!=owned[symbol]:
                 raise ValueError('Owned broker quantity mismatch.')
             events=[dict(r) for r in conn.execute('SELECT * FROM pro_ticker_execution_journal WHERE symbol=? AND account_fingerprint=? ORDER BY executed_at,activity_id',(symbol,fingerprint))] if 'pro_ticker_execution_journal' in tables else []
+            posted={(r['broker_order_id'],r['side']):r['total_shares'] for r in conn.execute(
+                'SELECT broker_order_id,side,SUM(shares) AS total_shares FROM pro_ticker_strategy_fill_events WHERE symbol=? GROUP BY broker_order_id,side',
+                (symbol,))} if 'pro_ticker_strategy_fill_events' in tables else {}
+            priced={}
+            for event in events:
+                key=(event['broker_order_id'],event['side'])
+                if type(event['shares']) is not int or event['shares']<=0 or _money(event['price'])<=0:
+                    raise ValueError('Valid priced execution increments required.')
+                priced[key]=priced.get(key,0)+event['shares']
+            if posted!=priced:
+                raise ValueError('Every owned posted fill requires matching priced execution coverage.')
             for event in events:
                 intent,orders,_=_ownership(conn,event['intent_id'])
                 if event['broker_order_id'] not in orders or orders[event['broker_order_id']]['side']!=event['side'] or intent['plan']['symbol']!=symbol:
@@ -204,5 +215,13 @@ def capture_equity(*, context, clock=time.time):
         if ledger_state(conn)!=state:raise ValueError('Accounting changed while marks were fetched; retry observation.')
         fingerprints={r[0] for r in conn.execute('SELECT DISTINCT account_fingerprint FROM pro_ticker_equity_observations')}
         if fingerprints and fingerprints!={fingerprint}:raise ValueError('Equity history belongs to another account.')
+        # A busy writer or a slow ledger recheck can exhaust the evidence window.
+        # Recheck immediately before insertion, after acquiring the write lock.
+        committed_at=clock()
+        if not 0<=committed_at-started<=30 or any(
+                not 0<=committed_at-_stamp(mark['market_timestamp']).timestamp()<=90 for mark in marks):
+            raise ValueError('Valuation expired while waiting to commit.')
+        observed=datetime.fromtimestamp(committed_at,timezone.utc).isoformat()
+        result['observed_at']=observed
         conn.execute('INSERT INTO pro_ticker_equity_observations VALUES (?,?,?,?,?)',(observed,fingerprint,str(equity),str(cash),json.dumps(result,allow_nan=False)));conn.commit()
     return {'paper':True,'order_submitted':False,'budget_released':False,'observation':result}

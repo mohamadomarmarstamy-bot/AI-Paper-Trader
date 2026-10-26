@@ -63,8 +63,11 @@ An explicit same-origin, owner-authenticated POST to
 `/auto-trader/pro-ticker/performance-analytics/capture` accepts only `{}`. It reads
 the configured dedicated PAPER account, checks every broker holding against the
 owned strategy ledger, reconstructs weighted-average cost from attributed priced
-executions and captures fresh marks. A ledger fingerprint recheck prevents a
-concurrent accounting change from producing a saved mixed-state valuation. Market
+executions and captures fresh marks. Per-order/side priced executions must match every posted fill; matching net
+shares alone cannot establish cost basis when an exit and re-entry are unsynced.
+A ledger fingerprint recheck prevents a concurrent accounting change from
+producing a saved mixed-state valuation. Evidence age is checked again after
+acquiring the database write lock, immediately before saving. Market
 reads occur outside the database read transaction. No orders or releases occur.
 
 Observation history is stored in one new additive table,
@@ -91,12 +94,20 @@ from execution P/L. False-breakout paths, spread impact and optimal-exit analysi
 remain unavailable without verified intraday/bid-ask evidence. No model training,
 parameter search, predictive accuracy or automatic strategy deployment occurs.
 
-## Validation still required
+## Verified validation and remaining requirements
 
-- Actual hosted authenticated collection/readback and restart persistence for
-  these new endpoints (the connector exposes names, not owner credentials).
-- A representative production backup on a disposable copy. The reported Windows
-  backup is not present in this workspace; it has not been accessed or modified.
+- Hosted owner-authenticated research save, evidence replay, equity observation,
+  date/cohort filtering and independent readback passed. After explicit user
+  approval, only staging was restarted; saved research and equity survived.
+- An actual staging snapshot passed disposable-copy integrity, foreign-key,
+  original-value and reservation checks; its source checksum remained unchanged.
+- The user ran the ebe9720 validator against the existing 602,501,120-byte Windows
+  production-backup copy ending in ` (1).sqlite3`. The supplied output reported
+  valid/integrity/foreign-key checks passing, existing rows/values and reservation
+  accounting preserved, and source_modified=false. This is user-executed evidence;
+  comparison with the Railway source checksum remains unverified. The original
+  backup and its sidecar were left in place. The accounting-report fixes introduce
+  no schema or migration change, so this validation remains applicable.
 - Real provider entitlements/data coverage, verified fees/adjustments, cash flows
   and intraday paths where currently unavailable.
 - Actual supervised PAPER order certification, deferred while trading is paused.

@@ -66,6 +66,22 @@ class AnalyticsTests(unittest.TestCase):
         with self.assertRaises(ValueError):capture_equity(context=context,clock=lambda:now+2)
         self.assertEqual(len(analytics_snapshot()['equity_observations']),2)
 
+    def test_write_lock_wait_cannot_save_expired_account_evidence(self):
+        context,gateway=self.context()
+        now=datetime(2026,10,26,15,tzinfo=timezone.utc).timestamp()
+        clock={'now':now};original_connection=database.get_connection
+        class DelayedConnection:
+            def __init__(self):self.connection=original_connection()
+            def __getattr__(self,name):return getattr(self.connection,name)
+            def execute(self,sql,*args):
+                result=self.connection.execute(sql,*args)
+                if sql=='BEGIN IMMEDIATE':clock['now']=now+31
+                return result
+        with patch.object(database,'get_connection',side_effect=DelayedConnection):
+            with self.assertRaises(ValueError):capture_equity(context=context,clock=lambda:clock['now'])
+        self.assertEqual(analytics_snapshot()['equity_observations'],[])
+        gateway.submit_bracket.assert_not_called()
+
     def test_foreign_holding_or_missing_cost_basis_does_not_save_valuation(self):
         context,gateway=self.context();gateway.read_positions.return_value=[{'symbol':'TEST','qty':'1','side':'long'}]
         with self.assertRaises(ValueError):capture_equity(context=context)
@@ -104,6 +120,8 @@ class AnalyticsExecutionTests(unittest.TestCase):
             import json
             conn.execute('UPDATE pro_ticker_execution_sync SET coverage_json=?',(json.dumps(coverage),));conn.commit()
         self.assertEqual(analytics_snapshot()['closed_count'],0)
+        from pro_ticker_execution_journal import execution_journal_snapshot
+        self.assertEqual(execution_journal_snapshot()['closed_priced_count'],0)
 
     def test_open_marks_require_owned_fills_and_fresh_quote(self):
         self.sync()
@@ -119,6 +137,25 @@ class AnalyticsExecutionTests(unittest.TestCase):
         self.gateway.read_trade.return_value['t']='2000-01-01T00:00:00Z'
         with self.assertRaises(ValueError):capture_equity(context=self.context,clock=lambda:now+1)
         self.assertEqual(len(analytics_snapshot()['equity_observations']),1)
+
+    def test_missing_exit_and_reentry_prices_cannot_reuse_an_old_cost_basis(self):
+        import uuid
+        self.sync()
+        # Missing opposite-side price records can leave the same net shares.
+        # Net quantity agreement alone does not prove a complete cost basis.
+        with closing(database.get_connection()) as conn:
+            for event,order,side in [('unsynced-exit',self.legs[1]['id'],'sell'),
+                                      ('unsynced-reentry',str(uuid.uuid4()),'buy')]:
+                conn.execute('INSERT INTO pro_ticker_strategy_fill_events VALUES (?,?,?,?,?,?)',
+                             (event,order,'AAPL',side,2,datetime.now(timezone.utc).isoformat()))
+            conn.commit()
+        self.gateway.read_account.side_effect=None
+        self.gateway.read_account.return_value={'id':self.context.expected_account_id,'currency':'USD','equity':'100000','cash':'99979'}
+        self.gateway.read_positions.return_value=[{'symbol':'AAPL','qty':'2','side':'long'}]
+        self.gateway.read_trade.side_effect=None
+        self.gateway.read_trade.return_value={'p':12,'t':datetime.now(timezone.utc).isoformat()}
+        with self.assertRaises(ValueError):capture_equity(context=self.context)
+        self.assertEqual(analytics_snapshot()['equity_observations'],[])
 
     def test_changed_accounting_during_network_mark_is_not_committed(self):
         self.sync()
