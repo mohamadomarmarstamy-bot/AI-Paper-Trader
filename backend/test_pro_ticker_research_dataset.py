@@ -65,7 +65,10 @@ class ResearchDatasetTests(unittest.TestCase):
         for field in ['future_return','realized_profit','reported_high','return_percent','observed_price']:
             self.assertNotIn(field,features)
         self.assertEqual(data['rows'][0]['future_outcome']['return_percent'],20)
-        self.assertNotIn('999',json.dumps(data))
+        # UUIDs/timestamps can contain these digits; inspect the actual feature
+        # values rather than searching unrelated serialized metadata.
+        self.assertNotIn(999,features.values())
+        self.assertNotIn(1234,features.values())
 
     def test_reference_and_grade_remain_immutable_after_later_evaluation(self):
         self.review();before=research_dataset()['rows'][0]
