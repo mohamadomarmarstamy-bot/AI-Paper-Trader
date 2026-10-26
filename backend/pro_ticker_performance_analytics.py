@@ -114,6 +114,9 @@ def analytics_snapshot(*, start=None, end=None):
     with closing(database.get_connection()) as conn:
         conn.execute('BEGIN')
         trades,incomplete=covered_trades(conn)
+        from pro_ticker_cost_evidence import cash_evidence_snapshot
+        summary=summarize_trades(trades,start=start,end=end)
+        costs=cash_evidence_snapshot(connection=conn,trades=summary['rows'])
         exists=conn.execute("SELECT 1 FROM sqlite_master WHERE name='pro_ticker_equity_observations'").fetchone()
         observations=[json.loads(r[0]) for r in conn.execute('SELECT payload_json FROM pro_ticker_equity_observations ORDER BY observed_at')] if exists else []
     if start:observations=[r for r in observations if _stamp(r['observed_at'])>=_stamp(start)]
@@ -123,8 +126,8 @@ def analytics_snapshot(*, start=None, end=None):
         value=_money(row['equity_usd']);peak=value if peak is None else max(peak,value);drawdown=max(drawdown,peak-value)
     return {'version':VERSION,'paper':True,'research_only':True,'order_execution_authorized':False,
             'model_updated':False,'automatic_strategy_changes':False,'start':start,'end_exclusive':end,
-            **summarize_trades(trades,start=start,end=end),'incomplete_sync_count':incomplete,
-            'net_pnl_usd':None,'fees_usd':None,'adjustments_usd':None,'cost_status':'unavailable_verified_cost_evidence',
+            **summary,'incomplete_sync_count':incomplete,
+            'cash_evidence':costs,'net_pnl_usd':None,'fees_usd':None,'adjustments_usd':None,'cost_status':'unavailable_verified_cost_evidence',
             'equity_observations':observations,'observed_equity_drawdown_usd':str(drawdown) if observations else None,
             'equity_limitations':'Dedicated broker equity snapshots only; external cash flows and adjustments are unverified. This raw observed decline is not a cash-flow-adjusted strategy return or an intraday maximum drawdown.',
             'limitations':['Closed fully covered executions only; an unsynced trade is not a confirmed outcome.',

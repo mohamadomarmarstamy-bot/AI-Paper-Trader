@@ -12,7 +12,7 @@ const fixture=()=>({paper:true,scope:'pro_ticker_strategy_ledger',generated_at:s
  scanner:{reason:'Saved research is not a live scan.'},performance:{reason:'Verified execution prices are unavailable.'}});
 
 test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed refresh', {timeout:90000},async()=>{
- let marketScan=null,marketScanPosts=0,pricedExecutions=[],closedExecutionMetrics=false,invalidExecutionMetrics=false,invalidAnalytics=false;
+ let marketScan=null,marketScanPosts=0,pricedExecutions=[],closedExecutionMetrics=false,invalidExecutionMetrics=false,invalidAnalytics=false,invalidCash=false;
  let handoffRequests=[];
  let data=fixture(),fail=false,requests=[],browser,forwardDue=false,savedSignal=null,draftRequests=[],allocationRequests=[],admissionRequests=[],evidenceConfigured=false,ownerSubmissionConfigured=false,managementConfigured=false,managementRequests=0,submissionRequests=0,recoveryRequests=0,signalRequests=[],discoveries=0,invalidClosedPerformance=false,invalidDataset=false,invalidProposal=false,invalidSettings=false,settingsRevision=0,settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
  const raw=fs.readFileSync(path.join(frontend,'index.html'),'utf8');const start=raw.indexOf('<section id="pro-ticker-manual-section"');
@@ -28,6 +28,14 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,account_verified:true,reference_only:true,order_execution_authorized:false,symbol:'AAPL',
     reference:{source:'alpaca_latest_trade',status:'captured',price:10.5,market_timestamp:new Date().toISOString(),age_seconds:1,fresh:true},
     allocation_reference_fresh:true,admission_reference_fresh:true,allocation_max_age_seconds:90,admission_max_age_seconds:30,feed_selection:'provider_default'}));return;
+  }
+  if(req.url.startsWith('/auto-trader/pro-ticker/cash-evidence')){
+   res.setHeader('Content-Type','application/json');
+   if(req.method==='POST'){
+    assert.equal(req.headers.origin,origin);const chunks=[];for await(const chunk of req)chunks.push(chunk);assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString()),{});
+    res.end(JSON.stringify({version:'pro_ticker_cash_evidence_v1',paper:true,order_submitted:false,budget_released:false,net_pnl_usd:null,observed_activity_count:1,new_activity_count:0}));return;
+   }
+   res.end(JSON.stringify({version:'pro_ticker_cash_evidence_v1',scope:'dedicated_account_cash_history_not_trade_pnl',paper:true,order_execution_authorized:false,model_updated:false,cost_coverage_final:false,net_pnl_usd:invalidCash?'50000':null,total_count:1,unattributed_count:1,last_observed_at:stamp,rows:[{activity_id:'cash::1',activity_type:'CSD',net_amount_usd:'50000',effective_date:'2026-10-26',symbol:null,category:'external_cash_flow',attribution_status:'unattributed'}],closed_trade_known_costs:[]}));return;
   }
   if(req.url.startsWith('/auto-trader/pro-ticker/performance-analytics')){
    res.setHeader('Content-Type','application/json');res.end(JSON.stringify({version:'pro_ticker_performance_v1',paper:true,order_execution_authorized:false,model_updated:false,automatic_strategy_changes:false,net_pnl_usd:invalidAnalytics?'9':null,fees_usd:null,adjustments_usd:null,closed_count:1,incomplete_sync_count:0,gross_realized_usd:'3',observed_equity_drawdown_usd:null,
@@ -307,6 +315,12 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.waitForFunction(()=>document.getElementById('pt-performance-analytics').textContent.includes('Invalid analytics evidence'));
    assert.doesNotMatch(await page.locator('#pt-performance-analytics').innerText(),/Gross realized: \$3/);
    invalidAnalytics=false;
+   await page.getByRole('button',{name:'Sync read-only PAPER cash evidence',exact:true}).click();
+   await page.waitForFunction(()=>document.getElementById('pt-cash-evidence').textContent.includes('1 saved account cash activities'));
+   assert.match(await page.locator('#pt-cash-evidence').innerText(),/external_cash_flow/);
+   invalidCash=true;await page.getByRole('button',{name:'Refresh saved cash evidence',exact:true}).click();
+   await page.waitForFunction(()=>document.getElementById('pt-cash-evidence').textContent.includes('Invalid cash evidence'));
+   assert.doesNotMatch(await page.locator('#pt-cash-evidence').innerText(),/external_cash_flow/);invalidCash=false;
    await page.locator('#pt-tab-performance').click();await page.getByRole('button',{name:'Refresh execution grade outcomes',exact:true}).click();
    await page.waitForFunction(()=>document.getElementById('pt-execution-grade-outcomes').textContent.includes('3 of 3 completely covered closed trades'));
    assert.match(await page.locator('#pt-execution-grade-outcomes').innerText(),/daily_fixture_v1/);

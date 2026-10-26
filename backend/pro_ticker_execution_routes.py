@@ -157,6 +157,22 @@ def build_paper_execution_router(*,require_session,context=None):
         except ValueError:raise HTTPException(422,'Fresh dedicated account, owned position and complete execution evidence required.') from None
         except Exception:raise HTTPException(503,'PAPER equity observation unavailable. No order submitted.') from None
 
+    @router.get(base+'/cash-evidence')
+    def cash_evidence(request:Request):
+        require_session(request)
+        from fastapi.responses import JSONResponse
+        from pro_ticker_cost_evidence import cash_evidence_snapshot
+        try:return JSONResponse(cash_evidence_snapshot(),headers={'Cache-Control':'no-store'})
+        except Exception:raise HTTPException(503,'Cash evidence unavailable.') from None
+    @router.post(base+'/cash-evidence/sync')
+    async def cash_sync(request:Request):
+        payload=await body(request)
+        if payload!={}:raise HTTPException(422,'No browser-supplied cash evidence or attribution accepted.')
+        from pro_ticker_cost_evidence import sync_cash_evidence
+        try:return await run_in_threadpool(sync_cash_evidence,context=context)
+        except ValueError:raise HTTPException(422,'Complete unchanged dedicated PAPER cash evidence required.') from None
+        except Exception:raise HTTPException(503,'Cash evidence sync unavailable. No order or release occurred.') from None
+
     @router.get(base+'/execution-journal')
     def execution_journal(request:Request):
         require_session(request)

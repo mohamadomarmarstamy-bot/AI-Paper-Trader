@@ -55,9 +55,10 @@ unattributed; grading version is never relabeled as strategy version. Entry
 execution averages can be compared with the saved allocation reference. Exit
 averages and planned protection levels are evidence, not an optimal-exit claim.
 
-Fees, adjustments and net results remain unavailable because verified cost
-attribution is not supported by the current FILL-only journal. No assumed zero
-fees, fee estimates or returned virtual allocations enter profit calculations.
+Final net results and complete fee/adjustment totals remain unavailable without
+broker evidence of final coverage. The separate cash ledger below now reports
+known order-linked costs where supported. No assumed zero fees, fee estimates or
+returned virtual allocations enter profit calculations.
 
 An explicit same-origin, owner-authenticated POST to
 `/auto-trader/pro-ticker/performance-analytics/capture` accepts only `{}`. It reads
@@ -132,3 +133,36 @@ parameter search, predictive accuracy or automatic strategy deployment occurs.
    a live database with an older backup or run down-migrations automatically.
    A database restore requires separate approval and reconciliation of subsequent
    records; preserve the failed-state database for investigation.
+
+## Dedicated cash activity evidence
+
+`GET /auto-trader/pro-ticker/cash-evidence` reports saved cash evidence. An explicit
+owner-authenticated, same-origin `POST /cash-evidence/sync` under that Pro Ticker
+base accepts only `{}` and reads the dedicated PAPER account. The gateway verifies
+identity and fetches non-trade activity in at most five 100-row pages. A full last
+page, duplicate IDs, wrong account/currency, changed records, disappeared saved
+records or expired evidence fail closed. No account settings, orders, fills,
+positions, budgets or release approvals are changed.
+
+The additive `pro_ticker_cash_activities` and `pro_ticker_cash_syncs` tables retain
+normalized immutable broker records and observation digests. Descriptions and
+arbitrary provider/browser fields are not retained. Reported signs are preserved:
+FEE/PTC/PTR/DIVFEE amounts are known costs/rebates, CSD/CSW/ACATC/TRANS are external
+cash flows, and income/other adjustments are separately classified. Unsupported
+crypto denomination cannot be represented as USD cost evidence.
+
+An activity can affect a covered trade's **gross after known costs** only when its
+explicit broker order UUID matches exactly one owned entry/exit and any supplied
+symbol agrees. Symbol/date/amount similarity never creates attribution. Deposits,
+withdrawals and unlinked cash adjustments never become trade profit. Account cash
+history is labeled all-history, while trade-cost rows respect the trade report's
+closing-time filters.
+
+`gross_after_known_costs_usd` is partial cost evidence, not certified net P/L.
+Empty history is not proof of zero fees. A complete fetched page window is not a
+broker guarantee that later fees/corrections are final. Net results and final cost
+coverage therefore remain explicitly unavailable. Changed existing activity IDs
+require independent correction review rather than silently rewriting history.
+
+References: [Alpaca account activities](https://docs.alpaca.markets/us/docs/account-activities)
+and [Trading API activity retrieval](https://docs.alpaca.markets/us/v1.4.2/reference/getaccountactivities-2).

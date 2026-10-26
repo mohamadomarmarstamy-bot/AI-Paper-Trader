@@ -97,6 +97,25 @@ class AlpacaPaperEvidenceGateway:
             raise PaperGatewayUnavailable('Complete bounded PAPER order snapshot unavailable.')
         return orders
 
+    def read_nontrade_activities(self):
+        """Bounded account cash history; no assumption of final fee settlement."""
+        import re
+        self.read_account();rows=[];ids=set();token=None
+        for _ in range(5):
+            path='/v2/account/activities?category=non_trade_activity&direction=asc&page_size=100'
+            if token:path+='&page_token='+quote(token,safe='')
+            page=self._read(path)
+            if not isinstance(page,list) or len(page)>100:raise PaperGatewayUnavailable('Invalid cash activity page.')
+            for row in page:
+                identifier=row.get('id') if isinstance(row,dict) else None
+                if not isinstance(identifier,str) or not re.fullmatch(r'[A-Za-z0-9:_\-]{1,180}',identifier) or identifier in ids:
+                    raise PaperGatewayUnavailable('Duplicate or invalid cash activity page.')
+                ids.add(identifier)
+            rows.extend(page)
+            if len(page)<100:return rows
+            token=page[-1]['id']
+        raise PaperGatewayUnavailable('Complete cash history exceeds the bounded page window.')
+
     def read_fill_activities(self,order_id):
         order_id=_uuid(order_id);rows=[];token=None;seen=set()
         for _ in range(5):
