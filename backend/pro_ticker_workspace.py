@@ -1,4 +1,5 @@
 """Read-only, strategy-scoped workspace snapshot. Never query shared trade P/L."""
+from pro_ticker_http_security import require_same_origin
 from contextlib import closing
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
@@ -142,8 +143,7 @@ def build_workspace_router(*, require_session):
     @router.put('/auto-trader/pro-ticker/settings')
     async def update_settings(request: Request):
         require_session(request)
-        if request.headers.get('origin') != str(request.base_url).rstrip('/'):
-            raise HTTPException(403, 'Same-origin settings request required.')
+        require_same_origin(request)
         if request.headers.get('content-type', '').split(';')[0].strip().lower() != 'application/json':
             raise HTTPException(415, 'Expected JSON.')
         if len(body := await request.body()) > 2048:
@@ -169,8 +169,7 @@ def build_workspace_router(*, require_session):
     @router.post('/auto-trader/pro-ticker/proposal')
     async def proposal(request: Request):
         require_session(request)
-        if request.headers.get('origin') != str(request.base_url).rstrip('/'):
-            raise HTTPException(403, 'Same-origin proposal request required.')
+        require_same_origin(request)
         if request.headers.get('content-type', '').split(';')[0].strip().lower() != 'application/json':
             raise HTTPException(415, 'Expected JSON.')
         try:
@@ -192,8 +191,7 @@ def build_workspace_router(*, require_session):
     @router.post('/auto-trader/pro-ticker/discovery')
     async def discover(request: Request):
         require_session(request)
-        if request.headers.get('origin') != str(request.base_url).rstrip('/'):
-            raise HTTPException(403, 'Same-origin discovery request required.')
+        require_same_origin(request)
         if request.headers.get('content-type', '').split(';')[0].strip().lower() != 'application/json':
             raise HTTPException(415, 'Expected JSON.')
         try:

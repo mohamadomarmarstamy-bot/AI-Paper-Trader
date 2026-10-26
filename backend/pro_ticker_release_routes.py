@@ -3,6 +3,7 @@
 The application uses one owner password, not a multi-user role model. The
 server supplies the owner identity; the request cannot choose an approver.
 """
+from pro_ticker_http_security import require_same_origin
 import json
 from fastapi import APIRouter, HTTPException, Query, Request
 from starlette.concurrency import run_in_threadpool
@@ -22,9 +23,7 @@ def build_paper_release_router(*, require_session, operator_enabled, make_paper_
             raise HTTPException(status_code=403, detail='Manual PAPER release controls are disabled.')
         # Cookies alone must not authorize a cross-site write, including when
         # another application origin is otherwise allowed by global CORS.
-        expected_origin = request.base_url.scheme + '://' + request.base_url.netloc
-        if request.headers.get('origin') != expected_origin:
-            raise HTTPException(status_code=403, detail='Same-origin operator request required.')
+        require_same_origin(request)
         if request.headers.get('x-pro-ticker-operator') != 'manual-release':
             raise HTTPException(status_code=403, detail='Explicit operator request required.')
         if request.headers.get('content-type', '').split(';', 1)[0].strip().lower() != 'application/json':

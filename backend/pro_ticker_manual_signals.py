@@ -3,6 +3,7 @@
 These provisional grades reuse the existing daily technical analysis; they are
 not an AI profit forecast, proof of a Pro Ticker alert, or execution permission.
 """
+from pro_ticker_http_security import require_same_origin
 from contextlib import closing
 from datetime import datetime, timezone
 import json
@@ -161,7 +162,7 @@ def build_manual_signal_router(*,require_session,quote_fetcher,analyzer,executio
     @router.post('/auto-trader/pro-ticker/manual-signals/proposal')
     async def proposal(request:Request):
         require_session(request)
-        if request.headers.get('origin')!=str(request.base_url).rstrip('/'):raise HTTPException(403,'Same-origin request required.')
+        require_same_origin(request)
         if request.headers.get('content-type','').split(';')[0].strip().lower()!='application/json':raise HTTPException(415,'Expected JSON.')
         body=await request.body()
         if len(body)>2048:raise HTTPException(413,'Request too large.')
@@ -179,7 +180,7 @@ def build_manual_signal_router(*,require_session,quote_fetcher,analyzer,executio
     @router.post('/auto-trader/pro-ticker/manual-signals/{request_id}/forward-review')
     async def forward(request_id:str,request:Request):
         require_session(request)
-        if request.headers.get('origin')!=str(request.base_url).rstrip('/'):raise HTTPException(403,'Same-origin request required.')
+        require_same_origin(request)
         if request.headers.get('content-type','').split(';')[0].strip().lower()!='application/json':raise HTTPException(415,'Expected JSON.')
         body=await request.body()
         if len(body)>2048:raise HTTPException(413,'Request too large.')
@@ -218,7 +219,7 @@ def build_manual_signal_router(*,require_session,quote_fetcher,analyzer,executio
     @router.post('/auto-trader/pro-ticker/manual-signals')
     async def submit(request:Request):
         require_session(request)
-        if request.headers.get('origin')!=str(request.base_url).rstrip('/'):raise HTTPException(403,'Same-origin request required.')
+        require_same_origin(request)
         if request.headers.get('content-type','').split(';')[0].strip().lower()!='application/json':raise HTTPException(415,'Expected JSON.')
         body=await request.body()
         if len(body)>2048:raise HTTPException(413,'Request too large.')

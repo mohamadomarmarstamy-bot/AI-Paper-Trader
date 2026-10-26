@@ -1,4 +1,5 @@
 """Authenticated read-only admission/recovery controls. No submit endpoint."""
+from pro_ticker_http_security import require_same_origin
 import json
 from fastapi import APIRouter,Request,HTTPException
 from starlette.concurrency import run_in_threadpool
@@ -57,7 +58,7 @@ def build_paper_execution_router(*,require_session,context=None):
 
     async def body(request):
         require_session(request)
-        if request.headers.get('origin')!=str(request.base_url).rstrip('/'):raise HTTPException(403,'Same-origin request required.')
+        require_same_origin(request)
         if request.headers.get('content-type','').split(';')[0].strip().lower()!='application/json':raise HTTPException(415,'Expected JSON.')
         raw=await request.body()
         if len(raw)>2048:raise HTTPException(413,'Request too large.')
