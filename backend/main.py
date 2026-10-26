@@ -16167,10 +16167,12 @@ def fetch_pro_ticker_manual_signal_quote(symbol):
 
 from pro_ticker_runtime import dedicated_paper_context
 from pro_ticker_manual_signals import build_manual_signal_router
+from pro_ticker_research_evidence import capture_research
 app.include_router(build_manual_signal_router(
     require_session=require_app_session,
     quote_fetcher=fetch_pro_ticker_manual_signal_quote,
     analyzer=lambda symbol: analyze_symbol(symbol),
+    research_collector=capture_research,
     execution_context=dedicated_paper_context(),
 ))
 

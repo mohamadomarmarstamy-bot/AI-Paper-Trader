@@ -98,7 +98,7 @@ def list_manual_signals():
             'signals':[{**_record(r,time.time()),'forward_outcome':outcomes.get(r['request_id']),'proposal':proposals.get(r['request_id']),'order_intent':intents.get(proposals.get(r['request_id'],{}).get('request_id'))} for r in rows],'total_count':count,'has_more':count>len(rows)}
 
 
-def submit_manual_signal(payload, *, quote_fetcher, analyzer, clock=time.time):
+def submit_manual_signal(payload, *, quote_fetcher, analyzer, clock=time.time, research_collector=None):
     if not isinstance(payload,dict) or set(payload)!={'symbol','request_id'}:raise ValueError('Provide symbol and request ID only.')
     symbols=parse_manual_symbols(payload['symbol'])
     if len(symbols)!=1:raise ValueError('One stock is required.')
@@ -127,6 +127,11 @@ def submit_manual_signal(payload, *, quote_fetcher, analyzer, clock=time.time):
     except Exception: snapshot=quote_snapshot(None,now=clock())
     try: grade=technical_grade(analyzer(symbol),symbol)
     except Exception: grade=technical_grade(None,symbol)
+    if research_collector is not None:
+        try:
+            grade['research_context'] = research_collector(symbol, snapshot)
+        except Exception:
+            grade['research_context'] = {'status': 'unavailable', 'reason': 'Research evidence collection failed.', 'research_only': True}
     finished=clock()
     with closing(database.get_connection()) as conn:
         conn.execute('BEGIN IMMEDIATE')
@@ -150,7 +155,7 @@ def list_result(row,now):
             'signal':{**_record(row,now),'forward_outcome':outcome,'proposal':proposal,'order_intent':intent},'execution_blocked_reason':'broker_execution_and_outcome_learning_not_connected'}
 
 
-def build_manual_signal_router(*,require_session,quote_fetcher,analyzer,execution_context=None):
+def build_manual_signal_router(*,require_session,quote_fetcher,analyzer,execution_context=None,research_collector=None):
     from starlette.concurrency import run_in_threadpool
     router=APIRouter()
     @router.post('/auto-trader/pro-ticker/manual-signals/proposal')
@@ -185,6 +190,26 @@ def build_manual_signal_router(*,require_session,quote_fetcher,analyzer,executio
         except ForwardNotDue:raise HTTPException(409,'Forward quote must be at least 24 hours after grading completed.') from None
         except ValueError:raise HTTPException(422,'Completed grade, fresh reference and a valid fresh forward quote are required. No browser-supplied outcome is accepted.') from None
         except Exception:raise HTTPException(503,'Forward research evaluation unavailable. Refresh saved status before retrying.') from None
+    @router.get('/auto-trader/pro-ticker/manual-signals/{request_id}/research-context')
+    def saved_context(request_id:str,request:Request):
+        require_session(request)
+        from pro_ticker_signal_proposals import _uuid
+        from pro_ticker_research_evidence import research_report
+        from fastapi.responses import JSONResponse
+        try:_uuid(request_id)
+        except ValueError:raise HTTPException(422,'Canonical review ID required.') from None
+        try:
+            with closing(database.get_connection()) as conn:
+                exists=conn.execute("SELECT 1 FROM sqlite_master WHERE name='pro_ticker_manual_signal_reviews'").fetchone()
+                row=conn.execute('SELECT grade_json FROM pro_ticker_manual_signal_reviews WHERE request_id=?',(request_id,)).fetchone() if exists else None
+            context=json.loads(row['grade_json']).get('research_context') if row and row['grade_json'] else None
+            if not isinstance(context,dict) or 'evidence' not in context:
+                raise HTTPException(404,'Saved research evidence unavailable for this review.')
+            result=research_report(context['evidence'])
+            if result!=context['report']:raise ValueError('Saved evidence/report differs.')
+            return JSONResponse({'paper':True,'report':result,'evidence':context['evidence'],'replayed':True},headers={'Cache-Control':'no-store'})
+        except HTTPException:raise
+        except Exception:raise HTTPException(503,'Saved research evidence could not be verified.') from None
     @router.get('/auto-trader/pro-ticker/manual-signals')
     def history(request:Request):
         require_session(request)
@@ -197,7 +222,7 @@ def build_manual_signal_router(*,require_session,quote_fetcher,analyzer,executio
         if request.headers.get('content-type','').split(';')[0].strip().lower()!='application/json':raise HTTPException(415,'Expected JSON.')
         body=await request.body()
         if len(body)>2048:raise HTTPException(413,'Request too large.')
-        try:return await run_in_threadpool(submit_manual_signal,json.loads(body),quote_fetcher=quote_fetcher,analyzer=analyzer)
+        try:return await run_in_threadpool(submit_manual_signal,json.loads(body),quote_fetcher=quote_fetcher,analyzer=analyzer,research_collector=research_collector)
         except SignalConflict:raise HTTPException(409,'Stock review already pending or request ID reused. Refresh saved status.') from None
         except ValueError:raise HTTPException(422,'Provide one valid symbol and canonical request ID.') from None
         except Exception:raise HTTPException(503,'Signal review unavailable. Refresh saved status before retrying.') from None

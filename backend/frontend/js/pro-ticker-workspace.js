@@ -457,3 +457,49 @@
     }catch(error){if(current===version){body.replaceChildren();status.textContent='Execution grade outcomes unavailable: '+error.message;}}}
     refresh.addEventListener('click',load);document.getElementById('pt-refresh')?.addEventListener('click',load);load();
 })();
+
+(() => {
+    const panel=document.getElementById('pt-panel-performance');if(!panel)return;
+    const article=document.createElement('article'),title=document.createElement('h3'),form=document.createElement('form'),status=document.createElement('p'),summary=document.createElement('p'),results=document.createElement('div');
+    article.id='pt-performance-analytics';title.textContent='Execution analytics & chronological evaluation';status.setAttribute('role','status');
+    const fields={};
+    for(const [key,label] of [['start','From (UTC)'],['end','Until, exclusive (UTC)'],['split_at','Evaluation split (UTC)']]){
+        const wrapper=document.createElement('label'),input=document.createElement('input');wrapper.textContent=label+' ';input.type='datetime-local';input.name=key;input.step='1';fields[key]=input;wrapper.appendChild(input);form.appendChild(wrapper);
+    }
+    const refresh=document.createElement('button'),capture=document.createElement('button');refresh.type='submit';refresh.textContent='Refresh execution analytics';capture.type='button';capture.textContent='Save read-only PAPER equity observation';
+    form.appendChild(refresh);article.append(title,form,capture,status,summary,results);panel.appendChild(article);
+    let version=0,busy=false;
+    const number=value=>typeof value==='string'&&/^-?\d+(\.\d+)?$/.test(value)&&Number.isFinite(Number(value));
+    const count=value=>Number.isSafeInteger(value)&&value>=0;
+    function table(headers,rows){const scroller=document.createElement('div'),table=document.createElement('table'),head=document.createElement('thead'),body=document.createElement('tbody'),header=document.createElement('tr');scroller.className='pt-table';
+        for(const value of headers){const th=document.createElement('th');th.textContent=value;header.appendChild(th);}head.appendChild(header);
+        for(const values of rows){const tr=document.createElement('tr');for(const value of values){const td=document.createElement('td');td.textContent=value==null?'Unavailable':String(value);tr.appendChild(td);}body.appendChild(tr);}table.append(head,body);scroller.appendChild(table);return scroller;
+    }
+    async function load(){const current=++version;status.textContent='Loading execution analytics…';summary.textContent='';results.replaceChildren();try{
+        const query=new URLSearchParams();for(const [key,input] of Object.entries(fields)){if(input.value)query.set(key,input.value+'Z');}
+        const response=await fetch('/auto-trader/pro-ticker/performance-analytics'+(query.size?'?'+query.toString():''),{credentials:'same-origin',cache:'no-store'});
+        if(!response.ok)throw Error('Report unavailable ('+response.status+').');const data=await response.json(),evaluation=data.strategy_evaluation;
+        if(data.version!=='pro_ticker_performance_v1'||data.paper!==true||data.order_execution_authorized!==false||data.model_updated!==false||data.automatic_strategy_changes!==false||data.net_pnl_usd!==null||data.fees_usd!==null||data.adjustments_usd!==null||!count(data.closed_count)||!count(data.incomplete_sync_count)||!Array.isArray(data.daily)||!Array.isArray(data.groups)||!Array.isArray(data.equity_observations)||!evaluation||evaluation.training_enabled!==false||evaluation.automatic_strategy_changes!==false||evaluation.model_updated!==false||evaluation.risk_limits_changed!==false||!count(evaluation.development?.samples)||!count(evaluation.holdout?.samples))throw Error('Invalid analytics evidence.');
+        if((data.closed_count?!number(data.gross_realized_usd):data.gross_realized_usd!==null)||(data.observed_equity_drawdown_usd!==null&&!number(data.observed_equity_drawdown_usd)))throw Error('Invalid analytics totals.');
+        if(data.daily.some(row=>!/^\d{4}-\d{2}-\d{2}$/.test(row.date)||![row.gross_realized_usd,row.cumulative_gross_realized_usd,row.gross_realized_drawdown_usd].every(number))||data.groups.some(row=>!count(row.samples)||typeof row.dimension!=='string'||typeof row.label!=='string'||!number(row.gross_realized_usd))||data.equity_observations.some(row=>!Number.isFinite(Date.parse(row.observed_at))||!number(row.equity_usd)||!number(row.cash_usd)||!Array.isArray(row.positions)||row.positions.some(p=>typeof p.symbol!=='string'||!count(p.shares)||![p.market_value_usd,p.cost_basis_usd,p.gross_unrealized_usd].every(number)||p.net_unrealized_usd!==null)))throw Error('Invalid analytics rows.');
+        if(current!==version)return;
+        summary.textContent=data.closed_count+' covered closed trades; '+data.incomplete_sync_count+' incomplete synced intents excluded. Gross realized: '+(data.gross_realized_usd===null?'Unavailable':'$'+data.gross_realized_usd)+'. Net P/L, fees and adjustments: unavailable without verified cost evidence. Returned allocations are not profits.';
+        results.appendChild(table(['Date (New York)','Gross realized USD','Cumulative gross USD','Daily realized drawdown USD'],data.daily.map(r=>[r.date,r.gross_realized_usd,r.cumulative_gross_realized_usd,r.gross_realized_drawdown_usd])));
+        results.appendChild(table(['Comparison','Saved label','Samples','Gross result USD'],data.groups.map(r=>[r.dimension,r.label,r.samples,r.gross_realized_usd])));
+        results.appendChild(table(['Observation','Dedicated account equity USD','Cash USD','Owned open marks'],data.equity_observations.map(r=>[new Date(r.observed_at).toLocaleString(),r.equity_usd,r.cash_usd,r.positions.map(p=>p.symbol+': gross unrealized $'+p.gross_unrealized_usd).join('; ')||'No open holdings'])));
+        const cohortRows=[];
+        for(const [name,cohort] of [['Development',evaluation.development],['Holdout',evaluation.holdout]]){
+            if(!Array.isArray(cohort.groups)||cohort.groups.some(g=>typeof g.dimension!=='string'||typeof g.label!=='string'||!count(g.samples)||!number(g.gross_realized_usd)))throw Error('Invalid chronological cohort evidence.');
+            for(const group of cohort.groups)cohortRows.push([name,group.dimension,group.label,group.samples,group.gross_realized_usd]);
+        }
+        results.appendChild(table(['Cohort','Comparison','Saved label','Samples','Gross result USD'],cohortRows));
+        status.textContent='Daily drawdown excludes open excursions. Broker equity observations are not adjusted for external cash flows. '+(evaluation.status==='unavailable_split_required'?'Choose a chronological split to inspect separate development and holdout cohorts.':'Retrospective split: '+evaluation.development.samples+' development / '+evaluation.holdout.samples+' holdout; '+evaluation.split_spanning_excluded+' spanning trades excluded. This is not prospective validation.')+' Strategy changes require separate approval; no retraining or risk changes occur.';
+    }catch(error){if(current===version){summary.textContent='';results.replaceChildren();status.textContent='Execution analytics unavailable: '+error.message;}}}
+    form.addEventListener('submit',event=>{event.preventDefault();void load();});
+    capture.addEventListener('click',async()=>{if(busy)return;busy=true;capture.disabled=true;try{
+        status.textContent='Reading the dedicated PAPER account and owned execution evidence…';
+        const response=await fetch('/auto-trader/pro-ticker/performance-analytics/capture',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:'{}'});
+        if(!response.ok)throw Error('Observation unavailable ('+response.status+').');const data=await response.json();if(data.paper!==true||data.order_submitted!==false||data.budget_released!==false)throw Error('Invalid read-only observation.');await load();
+    }catch(error){status.textContent='Equity observation not saved: '+error.message;}finally{busy=false;capture.disabled=false;}});
+    document.getElementById('pt-refresh')?.addEventListener('click',load);void load();
+})();

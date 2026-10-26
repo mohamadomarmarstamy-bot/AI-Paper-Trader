@@ -109,8 +109,9 @@ window.loadProTickerManualLab(); window.loadProTickerReleasePanel(); window.load
     app.add_api_route('/auto-trader/pro-ticker-manual-submissions', main.auto_trader_pro_ticker_manual_submissions, methods=['POST'])
     app.add_api_route('/auto-trader/pro-ticker-paper-budget', main.pro_ticker_paper_budget, methods=['GET'])
     from pro_ticker_manual_signals import build_manual_signal_router
+    from pro_ticker_research_evidence import capture_research
     app.include_router(build_manual_signal_router(require_session=main.require_app_session,
-        quote_fetcher=main.fetch_pro_ticker_manual_signal_quote, analyzer=lambda symbol: main.analyze_symbol(symbol),execution_context=execution_context))
+        quote_fetcher=main.fetch_pro_ticker_manual_signal_quote, analyzer=lambda symbol: main.analyze_symbol(symbol),research_collector=capture_research,execution_context=execution_context))
     from pro_ticker_workspace import build_workspace_router
     app.include_router(build_workspace_router(require_session=main.require_app_session))
     app.include_router(build_paper_release_router(

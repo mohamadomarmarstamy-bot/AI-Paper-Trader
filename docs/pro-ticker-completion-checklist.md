@@ -1,3 +1,13 @@
+## October 26 evidence and analytics extension
+
+See [current evidence/analytics behavior and limits](pro-ticker-evidence-analytics.md).
+New saved research context, supported attributed news headlines, gross time-series
+analytics, explicit equity observations and retrospective chronological cohorts
+extend the October 23 checkpoint below. These do not establish calibrated AI,
+verified net returns, intraday path/spread analysis, authenticated hosted validation
+of the new endpoints, representative production-data validation or actual broker
+certification. Do not interpret the historical checklist as release approval.
+
 # Pro Ticker completion and validation checklist
 
 Current checkpoint: October 23, 2026. The checklists through **Validation and

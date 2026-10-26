@@ -12,7 +12,7 @@ const fixture=()=>({paper:true,scope:'pro_ticker_strategy_ledger',generated_at:s
  scanner:{reason:'Saved research is not a live scan.'},performance:{reason:'Verified execution prices are unavailable.'}});
 
 test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed refresh', {timeout:90000},async()=>{
- let marketScan=null,marketScanPosts=0,pricedExecutions=[],closedExecutionMetrics=false,invalidExecutionMetrics=false;
+ let marketScan=null,marketScanPosts=0,pricedExecutions=[],closedExecutionMetrics=false,invalidExecutionMetrics=false,invalidAnalytics=false;
  let handoffRequests=[];
  let data=fixture(),fail=false,requests=[],browser,forwardDue=false,savedSignal=null,draftRequests=[],allocationRequests=[],admissionRequests=[],evidenceConfigured=false,ownerSubmissionConfigured=false,managementConfigured=false,managementRequests=0,submissionRequests=0,recoveryRequests=0,signalRequests=[],discoveries=0,invalidClosedPerformance=false,invalidDataset=false,invalidProposal=false,invalidSettings=false,settingsRevision=0,settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
  const raw=fs.readFileSync(path.join(frontend,'index.html'),'utf8');const start=raw.indexOf('<section id="pro-ticker-manual-section"');
@@ -28,6 +28,11 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,account_verified:true,reference_only:true,order_execution_authorized:false,symbol:'AAPL',
     reference:{source:'alpaca_latest_trade',status:'captured',price:10.5,market_timestamp:new Date().toISOString(),age_seconds:1,fresh:true},
     allocation_reference_fresh:true,admission_reference_fresh:true,allocation_max_age_seconds:90,admission_max_age_seconds:30,feed_selection:'provider_default'}));return;
+  }
+  if(req.url.startsWith('/auto-trader/pro-ticker/performance-analytics')){
+   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({version:'pro_ticker_performance_v1',paper:true,order_execution_authorized:false,model_updated:false,automatic_strategy_changes:false,net_pnl_usd:invalidAnalytics?'9':null,fees_usd:null,adjustments_usd:null,closed_count:1,incomplete_sync_count:0,gross_realized_usd:'3',observed_equity_drawdown_usd:null,
+    daily:[{date:'2026-10-20',gross_realized_usd:'3',cumulative_gross_realized_usd:'3',gross_realized_drawdown_usd:'0'}],groups:[{dimension:'research_grade',label:'B',samples:1,gross_realized_usd:'3'}],equity_observations:[],
+    strategy_evaluation:{training_enabled:false,model_updated:false,automatic_strategy_changes:false,risk_limits_changed:false,status:'unavailable_split_required',development:{samples:0,groups:[]},holdout:{samples:0,groups:[]}}}));return;
   }
   if(req.url==='/auto-trader/pro-ticker/closed-performance'){
    const kind='closed_gross_estimate_from_terminal_broker_averages';
@@ -295,6 +300,13 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    assert.match(await page.locator('#pt-priced-executions').innerText(),/average gross result per closed trade: \$1.000000/);
    assert.match(await page.locator('#pt-priced-executions').innerText(),/net P&L remain unavailable/);
    await page.screenshot({path:'.artifacts/pro-ticker-workspace/'+width+'-execution-gross-metrics.png',fullPage:true});
+   await page.locator('#pt-tab-performance').click();
+   await page.getByRole('button',{name:'Refresh execution analytics',exact:true}).click();
+   await page.waitForFunction(()=>document.getElementById('pt-performance-analytics').textContent.includes('Gross realized: $3'));
+   invalidAnalytics=true;await page.getByRole('button',{name:'Refresh execution analytics',exact:true}).click();
+   await page.waitForFunction(()=>document.getElementById('pt-performance-analytics').textContent.includes('Invalid analytics evidence'));
+   assert.doesNotMatch(await page.locator('#pt-performance-analytics').innerText(),/Gross realized: \$3/);
+   invalidAnalytics=false;
    await page.locator('#pt-tab-performance').click();await page.getByRole('button',{name:'Refresh execution grade outcomes',exact:true}).click();
    await page.waitForFunction(()=>document.getElementById('pt-execution-grade-outcomes').textContent.includes('3 of 3 completely covered closed trades'));
    assert.match(await page.locator('#pt-execution-grade-outcomes').innerText(),/daily_fixture_v1/);

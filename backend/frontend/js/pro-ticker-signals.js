@@ -269,6 +269,18 @@
             ["Execution",review.order_intent?.order_submitted===null?"Submission outcome is uncertain. Do not create another buy; reserved funds require independent recovery.":review.order_intent?.order_submitted?"A broker order is linked in the ledger. Inspect fills and protection; model training remains disabled.":"No order placed. Dedicated PAPER execution requires separate configuration and owner approval. Model training is disabled."]]){
             const p=document.createElement("p"),b=document.createElement("strong");b.textContent=label+": ";p.append(b,document.createTextNode(value==null?"Unavailable":String(value)));node.appendChild(p);
         }
+        const context=grade?.research_context?.report;
+        if(context?.version==="pro_ticker_research_context_v1"&&context.research_only===true&&context.order_execution_authorized===false){
+            const heading=document.createElement("h4");heading.textContent="Saved research context";node.appendChild(heading);
+            for(const [label,value] of [["Observed",context.observed_at],["Evidence status at capture",context.status],["Market regime (SPY daily)",context.market_regime],
+                ["Sources",context.sources?.map(source=>source.source+" as of "+source.as_of).join("; ")],
+                ["Supporting evidence",context.supporting_reasons?.join(" ")],["Opposing evidence",context.opposing_reasons?.join(" ")],
+                ["Contradictions",context.contradictions?.join(" ")],["Missing evidence",context.missing_information?.join(", ")],["Provider news",context.news?.articles?.map(a=>a.source+": "+a.headline+" ("+a.created_at+")").join("; ")],
+                ["ATR14 %",context.indicators?.atr14_percent],["Average daily dollar volume",context.indicators?.average_daily_dollar_volume],
+                ["Prior 20-session high",context.indicators?.prior_20_session_high],["Limitations",context.limitations?.join(" ")]]){
+                const p=document.createElement("p"),b=document.createElement("strong");b.textContent=label+": ";p.append(b,document.createTextNode(value==null||value===""?"Unavailable":String(value)));node.appendChild(p);
+            }
+        }
         const check=document.createElement("button");check.type="button";check.textContent="Check 24+ hour forward quote";
         check.disabled=review.status!=="graded"||snapshot?.fresh!==true;
         check.addEventListener("click",async()=>{

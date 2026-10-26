@@ -135,6 +135,28 @@ def build_paper_execution_router(*,require_session,context=None):
         except ValueError:raise HTTPException(422,'Complete owned PAPER management evidence required.') from None
         except Exception:raise HTTPException(503,'Management status unavailable. No broker mutation requested by recovery.') from None
 
+    @router.get(base+'/performance-analytics')
+    def analytics(request:Request, start:str|None=None, end:str|None=None, split_at:str|None=None):
+        require_session(request)
+        from fastapi.responses import JSONResponse
+        from pro_ticker_performance_analytics import analytics_snapshot
+        from pro_ticker_strategy_evaluation import evaluate_strategies
+        if set(request.query_params)-{'start','end','split_at'}:raise HTTPException(422,'Unsupported analytics filter.')
+        try:
+            result=analytics_snapshot(start=start,end=end)
+            result['strategy_evaluation']=evaluate_strategies(result['rows'],split_at=split_at)
+            return JSONResponse(result,headers={'Cache-Control':'no-store'})
+        except ValueError:raise HTTPException(422,'Valid timezone-aware time filters and intact accounting evidence required.') from None
+        except Exception:raise HTTPException(503,'Performance analytics unavailable.') from None
+    @router.post(base+'/performance-analytics/capture')
+    async def capture_performance(request:Request):
+        payload=await body(request)
+        if payload!={}:raise HTTPException(422,'No browser-supplied accounting evidence accepted.')
+        from pro_ticker_performance_analytics import capture_equity
+        try:return await run_in_threadpool(capture_equity,context=context)
+        except ValueError:raise HTTPException(422,'Fresh dedicated account, owned position and complete execution evidence required.') from None
+        except Exception:raise HTTPException(503,'PAPER equity observation unavailable. No order submitted.') from None
+
     @router.get(base+'/execution-journal')
     def execution_journal(request:Request):
         require_session(request)

@@ -58,6 +58,16 @@ class AlpacaPaperEvidenceGateway:
         if not isinstance(trade,dict) or trade.get('symbol') not in (None,symbol):raise PaperGatewayUnavailable('Market evidence symbol mismatch.')
         return {'account':account,'clock':clock,'asset':asset,'positions':positions,'orders':orders,'quote':trade.get('trade')}
 
+    def read_news(self,symbol):
+        import re
+        if not isinstance(symbol,str) or not re.fullmatch(r'[A-Z][A-Z0-9.\-]{0,9}',symbol):
+            raise ValueError('Canonical news symbol required.')
+        self.read_account()
+        value=self._read('/v1beta1/news?symbols='+quote(symbol,safe='')+'&limit=10&sort=desc&include_content=false',data=True)
+        if not isinstance(value,dict) or not isinstance(value.get('news'),list) or len(value['news'])>10:
+            raise PaperGatewayUnavailable('Bounded research news unavailable.')
+        return value
+
     def read_order(self,order_id):
         order_id=_uuid(order_id)
         value=self._read('/v2/orders/'+order_id+'?nested=true')
