@@ -373,7 +373,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    assert.match(await page.locator('#pt-signal-detail').innerText(),/Allocation state: closed/);
 
 
-   await page.getByRole('button',{name:'Check 24+ hour forward quote',exact:true}).click();await page.waitForFunction(()=>document.getElementById('pt-signal-status').textContent.includes('Wait until a fresh market quote'));assert.equal(savedSignal.forward_outcome,undefined);
+   await page.getByRole('button',{name:'Check 24+ hour forward quote',exact:true}).click();await page.waitForFunction(()=>document.getElementById('pt-signal-status').textContent.includes('Wait until a fresh market quote'));assert.equal(savedSignal.forward_outcome,undefined);assert.match(await page.locator('#pt-forward-quote-status').innerText(),/Wait until a fresh market quote/);
    forwardDue=true;await page.getByRole('button',{name:'Check 24+ hour forward quote',exact:true}).click();await page.waitForFunction(()=>document.getElementById('pt-signal-status').textContent.includes('did not update an AI model'));
    assert.match(await page.locator('#pt-signal-detail').innerText(),/-14\.285714/);assert.equal(savedSignal.entry_grade.score,4);
    await page.locator('#pt-tab-performance').click();assert.match(await page.locator('#pt-signal-learning').innerText(),/not realized P&L/);assert.match(await page.locator('#pt-signal-learning-rows').innerText(),/-14\.29/);
@@ -437,6 +437,12 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.locator('#pt-tab-journal').click();assert.equal(await page.locator('#pt-journal tr').count(),2);
    const downloadPromise=page.waitForEvent('download');await page.locator('#pt-export').click();const download=await downloadPromise;const csv=fs.readFileSync(await download.path(),'utf8');assert.match(csv,/test-entry/);assert.doesNotMatch(csv,/realized_pnl/);
    await page.locator('#pt-journal-symbol').fill('MSFT');assert.match(await page.locator('#pt-journal').innerText(),/No persisted/);assert.equal(await page.locator('#pt-export').isDisabled(),true);
+   savedSignal={...savedSignal,symbol:'GCTK',status:'unavailable',proposal:null,order_intent:null,forward_outcome:null,entry_grade:{version:'pro_ticker_daily_technical_grade_v1',status:'unavailable',grade:null,score:null,signal:null,training_eligible:false}};
+   await page.locator('#pt-tab-signals').click();await page.getByRole('button',{name:'Refresh saved reviews',exact:true}).click();
+   await page.getByRole('button',{name:'Inspect GCTK review',exact:true}).click();
+   for(const name of ['Register 60-minute forward study','Evaluate saved forward study','Check 24+ hour forward quote'])assert.equal(await page.getByRole('button',{name,exact:true}).isDisabled(),true);
+   assert.match(await page.locator('#pt-forward-study-status').innerText(),/at least 50 valid price-history sessions/);
+   assert.match(await page.locator('#pt-forward-quote-status').innerText(),/a fresh quote is not enough/);
    await page.locator('#pt-tab-overview').focus();await page.keyboard.press('ArrowRight');assert.equal(await page.locator('#pt-tab-scanner').getAttribute('aria-selected'),'true');
    fail=true;await page.locator('#pt-refresh').click();await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('Unable to load'));assert.equal(await page.locator('#pt-metrics').innerText(),'');assert.match(await page.locator('#pt-journal').innerText(),/Data unavailable/);
    fail=false;data=fixture();data.paper=false;await page.locator('#pt-refresh').click();await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('safety flags'));assert.equal(await page.locator('#pt-metrics').innerText(),'');

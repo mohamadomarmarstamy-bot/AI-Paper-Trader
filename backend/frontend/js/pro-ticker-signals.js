@@ -285,7 +285,12 @@
         forwardTitle.textContent="Pre-register a forward breakout study";forwardNote.textContent="Freeze two fixed hypotheses before a future 60-minute regular-session window. This measures quote research, not fills or trade P/L. A recent completed review with saved daily history is required. No order or strategy change occurs.";
         forwardRegister.type="button";forwardRegister.textContent="Register 60-minute forward study";forwardEvaluate.type="button";forwardEvaluate.textContent="Evaluate saved forward study";forwardStatus.setAttribute("role","status");
         forwardRegister.disabled=review.status!=="graded";forwardEvaluate.disabled=review.status!=="graded";
-        forwardBox.append(forwardTitle,forwardNote,forwardRegister,forwardEvaluate,forwardStatus);node.appendChild(forwardBox);let studyBusy=false;
+        const unavailableResearch="Unavailable for this saved review: no completed daily grade. Daily grading needs at least 50 valid price-history sessions; a fresh quote is not enough. Save a new review after history is available.";
+        forwardStatus.id="pt-forward-study-status";
+        if(review.status!=="graded")forwardStatus.textContent=review.status==="unavailable"?unavailableResearch:"A completed daily grade is required before forward research is available.";
+        forwardRegister.setAttribute("aria-describedby",forwardStatus.id);forwardEvaluate.setAttribute("aria-describedby",forwardStatus.id);
+        const forwardActions=document.createElement("div");forwardActions.style.display="flex";forwardActions.style.flexWrap="wrap";forwardActions.style.gap="0.75rem";forwardActions.append(forwardRegister,forwardEvaluate);
+        forwardBox.append(forwardTitle,forwardNote,forwardActions,forwardStatus);node.appendChild(forwardBox);let studyBusy=false;
         async function studyAction(evaluate){if(studyBusy)return;studyBusy=true;forwardRegister.disabled=true;forwardEvaluate.disabled=true;try{
             forwardStatus.textContent=evaluate?"Checking the completed registered window…":"Saving fixed rules for a future market window…";
             const path=endpoint+"/"+encodeURIComponent(review.request_id)+"/forward-study"+(evaluate?"/evaluate":"");
@@ -299,8 +304,11 @@
         forwardRegister.addEventListener("click",()=>studyAction(false));forwardEvaluate.addEventListener("click",()=>studyAction(true));
         const check=document.createElement("button");check.type="button";check.textContent="Check 24+ hour forward quote";
         check.disabled=review.status!=="graded"||snapshot?.fresh!==true;
+        const quoteStatus=document.createElement("p");quoteStatus.id="pt-forward-quote-status";quoteStatus.setAttribute("role","status");check.setAttribute("aria-describedby",quoteStatus.id);
+        quoteStatus.textContent=review.status!=="graded"?(review.status==="unavailable"?unavailableResearch:"A completed daily grade is required before forward research is available."):snapshot?.fresh!==true?"Unavailable for this saved review: the submission reference was not fresh.":review.forward_outcome?"A separate forward research quote is saved. It is not trade profit.":"This checks a later quote at least 24 hours after analysis completed."+(Number.isFinite(Date.parse(review.completed_at))?" Earliest check: "+date(new Date(Date.parse(review.completed_at)+86400000).toISOString())+"; a fresh provider quote is also required.":"");
+        const quoteFeedback=message=>{quoteStatus.textContent=message;el("status").textContent=message;};
         check.addEventListener("click",async()=>{
-            check.disabled=true;el("status").textContent="Checking a separate forward research quote for "+review.symbol+"…";
+            check.disabled=true;quoteFeedback("Checking a separate forward research quote for "+review.symbol+"…");
             try{
                 const response=await fetch(endpoint+"/"+encodeURIComponent(review.request_id)+"/forward-review",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:"{}"});
                 if(!response.ok)throw Error(response.status===409?"Wait until a fresh market quote is at least 24 hours after grading completed.":"Forward quote could not be verified ("+response.status+").");
@@ -308,10 +316,10 @@
                 if(data.paper!==true||data.model_updated!==false||outcome?.kind!=="forward_quote_return_not_trade_pnl"||outcome.training_eligible!==false||!Number.isFinite(outcome.return_percent))throw Error("Invalid forward research safety flags");
                 const loaded=await refresh();if(detailVersion===selected)detail({...review,forward_outcome:outcome});
                 el("status").textContent="Saved forward research for "+review.symbol+". This is not trade profit and did not update an AI model."+(loaded?"":" History refresh failed; the confirmed outcome is shown below.");
-            }catch(error){el("status").textContent="Forward research unavailable: "+error.message;}
+            }catch(error){quoteFeedback("Forward research unavailable: "+error.message);}
             finally{check.disabled=false;}
         });
-        node.appendChild(check);
+        node.append(check,quoteStatus);
         const draftStatus=document.createElement("p");draftStatus.setAttribute("role","status");
         function showDraft(proposal){
             validateDraft(proposal,review);
