@@ -109,7 +109,7 @@ class NewsEvidenceTests(unittest.TestCase):
         self.assertEqual(len(first['articles']),1)
         self.assertEqual(first['articles'][0]['reported_topics'],['earnings'])
         self.assertFalse(first['independently_verified'])
-        for change in [{'symbols':['OTHER']},{'source':'unknown'},{'url':'javascript:alert(1)'},
+        for change in [{'symbols':'TESTOTHER'},{'symbols':['OTHER']},{'source':'unknown'},{'url':'javascript:alert(1)'},
                        {'url':'https://benzinga.com.evil.test/x'},{'url':'https://user:password@benzinga.com/x'},
                        {'created_at':'2000-01-01T00:00:00Z'},{'created_at':(NOW+timedelta(seconds=1)).isoformat()}]:
             self.assertEqual(normalize_news([{**article,**change}],symbol='TEST',observed=NOW)['status'],'unavailable')

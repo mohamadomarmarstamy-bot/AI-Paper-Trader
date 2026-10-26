@@ -176,7 +176,8 @@ def normalize_news(raw, *, symbol, observed):
     if isinstance(raw,list) and len(raw)<=10:
         for item in raw:
             try:
-                if not isinstance(item,dict) or item.get('source')!='benzinga' or symbol not in item.get('symbols',[]):continue
+                if (not isinstance(item,dict) or item.get('source')!='benzinga'
+                        or not isinstance(item.get('symbols'),list) or len(item['symbols'])>1000 or symbol not in item['symbols']):continue
                 created=_stamp(item['created_at']);updated=_stamp(item.get('updated_at',item['created_at']))
                 if not 0<=(observed-created).total_seconds()<=72*3600 or not created<=updated<=observed:continue
                 title=item['headline'];url=item['url'];parts=urlsplit(url)
