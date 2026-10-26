@@ -166,3 +166,67 @@ require independent correction review rather than silently rewriting history.
 
 References: [Alpaca account activities](https://docs.alpaca.markets/us/docs/account-activities)
 and [Trading API activity retrieval](https://docs.alpaca.markets/us/v1.4.2/reference/getaccountactivities-2).
+
+## Pre-registered intraday forward studies
+
+A recent completed manual review can now register a fixed one-hour regular-session
+study using `POST /auto-trader/pro-ticker/manual-signals/{id}/forward-study` with
+only `{}`. The server freezes the saved prior 20-session high, research evidence
+digest, grade/version, daily volume, market regime, two hypothesis versions and
+future calendar window before the window begins. Input age is limited to five
+minutes and checked again after the database write lock. A live trade reference
+is not needed for this research-only plan when completed daily history is valid;
+this exception does not affect draft/allocation/submission freshness rules.
+
+The dedicated PAPER calendar accounts for holidays and early closes. The window
+starts at the next full future minute inside a session with 60 minutes remaining,
+or at the next known full session. No browser-supplied rules, dates, prices,
+thresholds, bars or outcomes are accepted. The two fixed hypotheses require one
+or two consecutive completed minute closes above the frozen prior high. The
+reference entry is the following minute's open, never the confirmation close.
+An entry must occur within the pre-registered window. The exit reference is the
+last completed close in that window. These are hypothetical quote references,
+not orders, verified fills or trade P/L.
+
+Explicit evaluation after the window plus a one-minute publication allowance
+uses raw single-symbol minute bars, with ticker remapping disabled. Every one of
+60 timestamps must be present, ordered, unique and exactly aligned. A missing
+minute, extra page, bad OHLCV, wrong symbol, early request, account mismatch,
+expired worker claim or changed plan cannot produce a completed outcome. Provider
+publication/subscription delays can require later retries; missing data is never
+imputed. A durable lease prevents duplicate concurrent evaluations; retries replay
+the original saved evidence/report instead of overwriting outcomes.
+
+False-breakout research means a later minute close returned to/below the prior
+high. Entry gap, holding duration, entry-minute volume, full-window volume and
+favorable/adverse OHLC excursions provide descriptive entry/exit and liquidity
+context. They do not establish executable stops, targets or optimal exits. When
+available, the first provider quote within two seconds after the reference entry
+supplies a separately labeled quoted spread. Subtracting one such spread is a
+sensitivity scenario, not actual fees, slippage or net performance. Missing or
+invalid quotes leave spread results unavailable without inventing zero friction.
+
+`GET /auto-trader/pro-ticker/forward-studies` replays saved evidence and reports the
+latest 200 plans, including unevaluated/error states and no-trigger windows.
+No-trigger windows are not breakevens, losses or zero-return trades. Triggered
+quote returns are compared by frozen hypothesis version, saved grade/version,
+market regime, daily-liquidity band and observed spread band. At least 20 paired
+triggered windows are required to name a historical review candidate; this is a
+display guard, not statistical significance or predictive validation. Completed
+plans with the same symbol, window, prior-high threshold and methods contribute
+only once to comparisons; all plans remain visible and duplicates are counted.
+Overlapping windows and correlated stocks are still not independent. Different
+entry times imply different holding periods. Manual selection, corporate actions,
+missing-feed coverage and costs remain limitations. Recommendations never apply
+strategy changes, train a model or raise risk.
+
+Manual Signals exposes registration/evaluation controls. Performance exposes
+plan status, hypothesis/cohort comparisons and per-plan evaluation. All routes
+require owner authentication; writes also require same-origin JSON and a
+separately configured dedicated PAPER reader. The two additive study tables are
+created only by explicit research actions. No broker write, virtual allocation,
+original-trader change or background scheduler is added.
+
+References: [PAPER market calendar](https://docs.alpaca.markets/us/v1.4.2/reference/getcalendar-1),
+[raw historical bars](https://docs.alpaca.markets/us/reference/stockbarsingle-1), and
+[historical quotes](https://docs.alpaca.markets/us/v1.4.2/reference/stockquotesingle-1).

@@ -281,6 +281,22 @@
                 const p=document.createElement("p"),b=document.createElement("strong");b.textContent=label+": ";p.append(b,document.createTextNode(value==null||value===""?"Unavailable":String(value)));node.appendChild(p);
             }
         }
+        const forwardBox=document.createElement("article"),forwardTitle=document.createElement("h4"),forwardNote=document.createElement("p"),forwardStatus=document.createElement("p"),forwardRegister=document.createElement("button"),forwardEvaluate=document.createElement("button");
+        forwardTitle.textContent="Pre-register a forward breakout study";forwardNote.textContent="Freeze two fixed hypotheses before a future 60-minute regular-session window. This measures quote research, not fills or trade P/L. A recent completed review with saved daily history is required. No order or strategy change occurs.";
+        forwardRegister.type="button";forwardRegister.textContent="Register 60-minute forward study";forwardEvaluate.type="button";forwardEvaluate.textContent="Evaluate saved forward study";forwardStatus.setAttribute("role","status");
+        forwardRegister.disabled=review.status!=="graded";forwardEvaluate.disabled=review.status!=="graded";
+        forwardBox.append(forwardTitle,forwardNote,forwardRegister,forwardEvaluate,forwardStatus);node.appendChild(forwardBox);let studyBusy=false;
+        async function studyAction(evaluate){if(studyBusy)return;studyBusy=true;forwardRegister.disabled=true;forwardEvaluate.disabled=true;try{
+            forwardStatus.textContent=evaluate?"Checking the completed registered window…":"Saving fixed rules for a future market window…";
+            const path=endpoint+"/"+encodeURIComponent(review.request_id)+"/forward-study"+(evaluate?"/evaluate":"");
+            const response=await fetch(path,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:"{}"});
+            if(!response.ok)throw Error(response.status===409?"The study is not due yet or another evaluation is active.":"Study unavailable ("+response.status+"). Registration requires a fresh completed review; evaluation requires a saved plan and complete provider data.");
+            const data=await response.json();if(data.paper!==true||data.order_submitted!==false)throw Error("Invalid research safety flags");
+            if(evaluate){if(data.report?.version!=="pro_ticker_intraday_forward_v1"||data.report.order_execution_authorized!==false||data.report.model_updated!==false)throw Error("Invalid forward outcome");forwardStatus.textContent="Saved forward quote research. Open Performance to compare results. No trade P/L, model update or strategy deployment is claimed.";}
+            else{const plan=data.plan;if(plan?.version!=="pro_ticker_intraday_forward_v1"||plan.order_execution_authorized!==false||plan.signal_id!==review.request_id||!Number.isFinite(Date.parse(plan.due_at)))throw Error("Invalid saved future plan");forwardStatus.textContent="Registered future window: "+date(plan.start)+" through "+date(plan.end_exclusive)+". Earliest evaluation: "+date(plan.due_at)+"; provider publication delays may require a later retry. Rules and the original reference remain frozen.";}
+            void window.loadProTickerForwardStudies?.();
+        }catch(error){forwardStatus.textContent="Forward study unavailable: "+error.message;}finally{studyBusy=false;forwardRegister.disabled=review.status!=="graded";forwardEvaluate.disabled=review.status!=="graded";}}
+        forwardRegister.addEventListener("click",()=>studyAction(false));forwardEvaluate.addEventListener("click",()=>studyAction(true));
         const check=document.createElement("button");check.type="button";check.textContent="Check 24+ hour forward quote";
         check.disabled=review.status!=="graded"||snapshot?.fresh!==true;
         check.addEventListener("click",async()=>{

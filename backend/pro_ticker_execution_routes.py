@@ -157,6 +157,31 @@ def build_paper_execution_router(*,require_session,context=None):
         except ValueError:raise HTTPException(422,'Fresh dedicated account, owned position and complete execution evidence required.') from None
         except Exception:raise HTTPException(503,'PAPER equity observation unavailable. No order submitted.') from None
 
+    @router.get(base+'/forward-studies')
+    def forward_studies(request:Request):
+        require_session(request)
+        from fastapi.responses import JSONResponse
+        from pro_ticker_forward_studies import study_history
+        try:return JSONResponse(study_history(),headers={'Cache-Control':'no-store'})
+        except Exception:raise HTTPException(503,'Forward study history unavailable.') from None
+    @router.post(base+'/manual-signals/{signal_id}/forward-study')
+    async def register_forward_study(signal_id:str,request:Request):
+        payload=await body(request)
+        if payload!={}:raise HTTPException(422,'No browser-supplied study rules or evidence accepted.')
+        from pro_ticker_forward_studies import register_study
+        try:return await run_in_threadpool(register_study,signal_id,context=context)
+        except ValueError:raise HTTPException(422,'A fresh completed research review and verified regular-session calendar are required.') from None
+        except Exception:raise HTTPException(503,'Forward registration unavailable. Refresh saved plans before retrying.') from None
+    @router.post(base+'/manual-signals/{signal_id}/forward-study/evaluate')
+    async def evaluate_forward_study(signal_id:str,request:Request):
+        payload=await body(request)
+        if payload!={}:raise HTTPException(422,'No browser-supplied future bars, quotes or outcomes accepted.')
+        from pro_ticker_forward_studies import evaluate_study,StudyNotDue,StudyConflict
+        try:return await run_in_threadpool(evaluate_study,signal_id,context=context)
+        except (StudyNotDue,StudyConflict):raise HTTPException(409,'Study is not due or another evaluation is active. Refresh saved status.') from None
+        except ValueError:raise HTTPException(422,'Complete registered forward evidence required; no missing minute is inferred.') from None
+        except Exception:raise HTTPException(503,'Forward evidence unavailable. No order or strategy update occurred.') from None
+
     @router.get(base+'/cash-evidence')
     def cash_evidence(request:Request):
         require_session(request)

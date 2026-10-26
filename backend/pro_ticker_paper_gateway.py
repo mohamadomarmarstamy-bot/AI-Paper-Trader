@@ -97,6 +97,41 @@ class AlpacaPaperEvidenceGateway:
             raise PaperGatewayUnavailable('Complete bounded PAPER order snapshot unavailable.')
         return orders
 
+    def read_research_calendar(self,start,end):
+        from datetime import date
+        first,last=date.fromisoformat(start),date.fromisoformat(end)
+        if not 0<=(last-first).days<=7:raise ValueError('Bounded research calendar required.')
+        value=self._read('/v2/calendar?start='+first.isoformat()+'&end='+last.isoformat()+'&date_type=TRADING')
+        if not isinstance(value,list) or len(value)>8:raise PaperGatewayUnavailable('Research calendar unavailable.')
+        return value
+
+    def read_research_bars(self,symbol,start,end_exclusive):
+        from datetime import datetime,timedelta
+        import re
+        if not isinstance(symbol,str) or not re.fullmatch(r'[A-Z][A-Z0-9.\-]{0,9}',symbol):raise ValueError('Canonical research symbol required.')
+        first=datetime.fromisoformat(start.replace('Z','+00:00'));last=datetime.fromisoformat(end_exclusive.replace('Z','+00:00'))
+        if first.tzinfo is None or last.tzinfo is None or last-first!=timedelta(minutes=60):raise ValueError('One-hour research window required.')
+        path='/v2/stocks/'+quote(symbol,safe='')+'/bars?timeframe=1Min&adjustment=raw&asof=-&sort=asc&limit=1000&start='+quote(first.isoformat(),safe='')+'&end='+quote((last-timedelta(microseconds=1)).isoformat(),safe='')
+        value=self._read(path,data=True)
+        if not isinstance(value,dict) or value.get('symbol')!=symbol or value.get('next_page_token') not in (None,''):
+            raise PaperGatewayUnavailable('Complete bounded research bars unavailable.')
+        rows=value.get('bars')
+        if not isinstance(rows,list) or len(rows)>60:raise PaperGatewayUnavailable('Bounded minute bars required.')
+        return {'symbol':symbol,'bars':[{k:row.get(k) for k in ('t','o','h','l','c','v')} for row in rows if isinstance(row,dict)],'next_page_token':None}
+
+    def read_research_quote(self,symbol,start,end):
+        from datetime import datetime,timedelta
+        import re
+        if not isinstance(symbol,str) or not re.fullmatch(r'[A-Z][A-Z0-9.\-]{0,9}',symbol):raise ValueError('Canonical research symbol required.')
+        first=datetime.fromisoformat(start.replace('Z','+00:00'));last=datetime.fromisoformat(end.replace('Z','+00:00'))
+        if first.tzinfo is None or last.tzinfo is None or last-first!=timedelta(seconds=2):raise ValueError('Bounded entry quote window required.')
+        path='/v2/stocks/'+quote(symbol,safe='')+'/quotes?asof=-&sort=asc&limit=1&start='+quote(first.isoformat(),safe='')+'&end='+quote(last.isoformat(),safe='')
+        value=self._read(path,data=True)
+        if not isinstance(value,dict) or value.get('symbol')!=symbol or not isinstance(value.get('quotes'),list) or len(value['quotes'])>1:
+            raise PaperGatewayUnavailable('Bounded research quote unavailable.')
+        # Only the first ascending quote is requested, not a full quote history.
+        return value['quotes'][0] if value['quotes'] else None
+
     def read_nontrade_activities(self):
         """Bounded account cash history; no assumption of final fee settlement."""
         import re
