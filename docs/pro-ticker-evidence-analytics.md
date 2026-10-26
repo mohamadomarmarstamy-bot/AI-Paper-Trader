@@ -230,3 +230,17 @@ original-trader change or background scheduler is added.
 References: [PAPER market calendar](https://docs.alpaca.markets/us/v1.4.2/reference/getcalendar-1),
 [raw historical bars](https://docs.alpaca.markets/us/reference/stockbarsingle-1), and
 [historical quotes](https://docs.alpaca.markets/us/v1.4.2/reference/stockquotesingle-1).
+
+
+## Public origin behind a TLS proxy
+
+Set `APP_PUBLIC_ORIGIN` to the exact public HTTPS origin for each hosted
+environment, without a trailing slash (for example, `https://paper.example.com`).
+The shared Pro Ticker write guard requires both the browser Origin and incoming
+Host to match this server-owned value. Client-supplied Forwarded/X-Forwarded
+headers cannot choose the accepted origin. This supports TLS termination when
+the internal ASGI request is HTTP without trusting arbitrary proxy headers or
+removing CSRF checks. Invalid configuration rejects writes. With the variable
+unset, direct local/development requests retain strict request-base-origin
+matching. Owner authentication, JSON/body bounds, trading flags and dedicated
+account requirements remain separate mandatory checks.

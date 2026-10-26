@@ -16128,8 +16128,8 @@ def build_pro_ticker_learning_analysis(
 
 
 def require_pro_ticker_same_origin(request):
-    if request.headers.get("origin") != str(request.base_url).rstrip("/"):
-        raise HTTPException(status_code=403, detail="Same-origin request required.")
+    from pro_ticker_http_security import require_same_origin
+    require_same_origin(request)
 
 
 def make_pro_ticker_evidence_gateway():

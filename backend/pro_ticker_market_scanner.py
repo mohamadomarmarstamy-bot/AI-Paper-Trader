@@ -1,4 +1,5 @@
 """Owner-triggered, rotating research scans. No brokerage credentials or writes."""
+from pro_ticker_http_security import require_same_origin
 from contextlib import closing
 from datetime import datetime,timezone
 from decimal import Decimal
@@ -214,7 +215,7 @@ def build_market_scanner_router(*,require_session,fetch_snapshot=yahoo_research_
     @router.post(path)
     async def scan(request:Request):
         require_session(request)
-        if request.headers.get('origin')!=str(request.base_url).rstrip('/'):raise HTTPException(403,'Same-origin request required.')
+        require_same_origin(request)
         if request.headers.get('content-type','').split(';')[0].strip().lower()!='application/json':raise HTTPException(415,'JSON required.')
         raw=await request.body()
         if len(raw)>2048:raise HTTPException(413,'Request too large.')
