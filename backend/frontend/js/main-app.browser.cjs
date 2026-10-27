@@ -91,7 +91,8 @@ test('main app desktop/mobile settings, Jarvis actions, drawer and voice fallbac
    await page.locator('#jarvis-orb').click();await page.locator('#jarvis-drawer.open').waitFor();await page.locator('#jarvis-listen-button').click();
    await page.evaluate(()=>window.__recognition.onresult({results:[[{transcript:'set stop loss to 2%'}]]}));assert.equal(chatPosts.length,2);
    await page.evaluate(()=>window.__recognition.onresult({results:[[{transcript:'Hey Jarvis, set stop loss to 2%'}]]}));await page.waitForFunction(()=>document.getElementById('jarvis-actions').textContent.includes('Saved change'));assert.equal(chatPosts.length,3);
-   await page.locator('#jarvis-voice-end').click();await page.getByRole('button',{name:'Close Jarvis',exact:true}).click();
+   await page.locator('#jarvis-voice-end').click();const micStarts=await page.evaluate(()=>window.__micStarts);await page.getByRole('button',{name:'Close Jarvis',exact:true}).click();
+   await page.waitForTimeout(450);assert.equal(await page.evaluate(()=>window.__micStarts),micStarts,'closed voice sessions must not restart the microphone');
    assert.deepEqual(errors,[]);await context.close();
   }
  }finally{releaseSpeech?.();await browser?.close();await new Promise(r=>server.close(r));}

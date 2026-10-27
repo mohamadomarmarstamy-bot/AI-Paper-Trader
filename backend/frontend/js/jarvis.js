@@ -936,6 +936,7 @@
     }
 
     function startListening() {
+        if (!state.voiceSession || state.muted) return;
         if (!state.recognition) {
             setStatus(
                 "Microphone unavailable",
