@@ -170,7 +170,7 @@ def build_manual_signal_router(*,require_session,quote_fetcher,analyzer,executio
         context=manual_entry_context() if manual_entry_context is not None else None
         enabled=bool(context is not None and context.enabled() is True and context.paper_base_url=='https://paper-api.alpaca.markets')
         from fastapi.responses import JSONResponse
-        return JSONResponse(status(enabled=enabled),headers={'Cache-Control':'no-store'})
+        return JSONResponse(status(enabled=enabled,premarket_enabled=enabled and context.premarket_enabled() is True,quote_feed=context.quote_feed if context else 'iex'),headers={'Cache-Control':'no-store'})
 
     @router.post('/auto-trader/pro-ticker/manual-signals/buy-and-scan')
     async def buy_and_scan(request:Request):

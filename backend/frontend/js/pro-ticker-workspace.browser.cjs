@@ -12,7 +12,7 @@ const fixture=()=>({paper:true,scope:'pro_ticker_strategy_ledger',generated_at:s
  scanner:{reason:'Saved research is not a live scan.'},performance:{reason:'Verified execution prices are unavailable.'}});
 
 test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed refresh', {timeout:90000},async()=>{
- let marketScan=null,marketScanPosts=0,pricedExecutions=[],closedExecutionMetrics=false,invalidExecutionMetrics=false,invalidAnalytics=false,invalidCash=false,studyPlan=null,invalidStudies=false,manualModeEnabled=false,manualWorkerReady=true,manualModePosts=[];
+ let marketScan=null,marketScanPosts=0,pricedExecutions=[],closedExecutionMetrics=false,invalidExecutionMetrics=false,invalidAnalytics=false,invalidCash=false,studyPlan=null,invalidStudies=false,manualModeEnabled=false,manualWorkerReady=true,premarketModeEnabled=false,manualModePosts=[];
  let handoffRequests=[];
  let data=fixture(),fail=false,requests=[],browser,forwardDue=false,savedSignal=null,draftRequests=[],allocationRequests=[],admissionRequests=[],evidenceConfigured=false,ownerSubmissionConfigured=false,managementConfigured=false,managementRequests=0,submissionRequests=0,recoveryRequests=0,signalRequests=[],discoveries=0,invalidClosedPerformance=false,invalidDataset=false,invalidProposal=false,invalidSettings=false,settingsRevision=0,settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
  const raw=fs.readFileSync(path.join(frontend,'index.html'),'utf8');const start=raw.indexOf('<section id="pro-ticker-manual-section"');
@@ -30,12 +30,13 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
     allocation_reference_fresh:true,admission_reference_fresh:true,allocation_max_age_seconds:90,admission_max_age_seconds:30,feed_selection:'provider_default'}));return;
   }
   if(req.url==='/auto-trader/pro-ticker/manual-entry-status'){
-   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,version:'owner_manual_scanner_v1',enabled:manualModeEnabled,scanner_ready:manualModeEnabled&&manualWorkerReady,target_usd:'2000',whole_shares_only:true,regular_session_only:true,broad_scanner_buying_enabled:false}));return;
+   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,version:'owner_manual_scanner_v1',enabled:manualModeEnabled,scanner_ready:manualModeEnabled&&manualWorkerReady,target_usd:'2000',whole_shares_only:true,regular_session_only:!premarketModeEnabled,premarket_enabled:premarketModeEnabled,broad_scanner_buying_enabled:false}));return;
   }
   if(req.url==='/auto-trader/pro-ticker/manual-signals/buy-and-scan'){
    assert.equal(req.method,'POST');assert.equal(req.headers.origin,origin);assert.equal(manualModeEnabled,true);assert.equal(manualWorkerReady,true);
    const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=JSON.parse(Buffer.concat(chunks).toString());assert.deepEqual(Object.keys(body).sort(),['request_id','symbol']);manualModePosts.push(body);
    const entry={request_id:body.request_id,symbol:body.symbol,state:'blocked',target_usd:'2000',shares:null,reference_ask:null,order_submitted:false,broker_order_id:null,reason:'Regular market is closed. No buy is queued.',managed_by:'existing_scanner_rules',paper:true,version:'owner_manual_scanner_v1'};
+   if(premarketModeEnabled)Object.assign(entry,{state:'open',shares:43,reference_ask:'45.50',entry_session:'premarket',entry_limit:'45.50',broker_status:'filled',filled_shares:'43',order_submitted:true,broker_order_id:'11111111-1111-4111-8111-111111111111',reason:null,stop_price:'44.59',take_profit_price:'47.32',exit_order_type:'market'});
    savedSignal={...savedSignal,request_id:body.request_id,symbol:body.symbol,manual_entry:entry,proposal:null,order_intent:null,forward_outcome:null};
    res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,kind:'owner_manual_scanner_v1',live_trading:false,signal:savedSignal,entry}));return;
   }
@@ -206,7 +207,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
  try{
   browser=await chromium.launch({headless:true});fs.mkdirSync('.artifacts/pro-ticker-workspace',{recursive:true});
   for(const width of [1280,390]){
-   marketScan=null;pricedExecutions=[];studyPlan=null;invalidStudies=false;manualModeEnabled=false;manualWorkerReady=true;manualModePosts=[];data=fixture();fail=false;requests=[];forwardDue=false;savedSignal=null;draftRequests=[];allocationRequests=[];admissionRequests=[];evidenceConfigured=false;recoveryRequests=0;signalRequests=[];discoveries=0;invalidClosedPerformance=false;invalidDataset=false;invalidProposal=false;invalidSettings=false;settingsRevision=0;settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
+   marketScan=null;pricedExecutions=[];studyPlan=null;invalidStudies=false;manualModeEnabled=false;manualWorkerReady=true;premarketModeEnabled=false;manualModePosts=[];data=fixture();fail=false;requests=[];forwardDue=false;savedSignal=null;draftRequests=[];allocationRequests=[];admissionRequests=[];evidenceConfigured=false;recoveryRequests=0;signalRequests=[];discoveries=0;invalidClosedPerformance=false;invalidDataset=false;invalidProposal=false;invalidSettings=false;settingsRevision=0;settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
    const context=await browser.newContext({viewport:{width,height:1000},acceptDownloads:true});const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
    await page.goto(origin);await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('Ledger snapshot:'));
    assert.equal(await page.locator('[role=tab]').count(),9);assert.equal(await page.locator('[role=tabpanel]:visible').count(),1);
@@ -462,6 +463,15 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.getByRole('button',{name:'Buy ~$2,000 PAPER & research',exact:true}).click();
    await page.waitForFunction(()=>document.getElementById('pt-signal-status').textContent.includes('No buy is queued'));
    assert.equal(manualModePosts.length,2);assert.equal(manualModePosts[0].request_id,manualModePosts[1].request_id);
+   premarketModeEnabled=true;await page.getByRole('button',{name:'Refresh saved reviews',exact:true}).click();
+   await assert.doesNotReject(()=>page.getByText(/Premarket stops depend on this app staying online/).waitFor());
+   await page.getByRole('button',{name:'Start a new review',exact:true}).click();
+   await page.getByRole('textbox',{name:'Stock symbol',exact:true}).fill('GCTK');
+   await page.getByRole('button',{name:'Buy ~$2,000 PAPER & research',exact:true}).click();
+   await page.getByText('Entry limit: 45.50',{exact:true}).waitFor();
+   await page.getByText(/App downtime can leave premarket positions without an active stop/).waitFor();
+   assert.equal(manualModePosts.length,3);
+   assert.notEqual(manualModePosts[2].request_id,manualModePosts[0].request_id);
    manualWorkerReady=false;await page.getByRole('button',{name:'Refresh saved reviews',exact:true}).click();
    await page.waitForFunction(()=>document.getElementById('pt-manual-entry-mode').textContent.includes('Scanner worker is not ready'));
    assert.equal(await page.getByRole('button',{name:'Buy ~$2,000 PAPER & research',exact:true}).isDisabled(),true);

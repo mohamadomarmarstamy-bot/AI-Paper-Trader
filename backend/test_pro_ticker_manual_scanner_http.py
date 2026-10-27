@@ -88,3 +88,18 @@ class ManualScannerHTTPTests(unittest.TestCase):
         self.assertFalse(response.json()['scanner_ready'])
         self.assertFalse(response.json()['broad_scanner_buying_enabled'])
         self.context.request.assert_not_called()
+
+
+    def test_browser_cannot_override_server_session_or_limit(self):
+        self.context.premarket_enabled=lambda:True
+        for extra in ({'premarket':True},{'entry_session':'premarket'},{'limit_price':'1.00'}):
+            self.assertEqual(self.request(payload={**self.payload,**extra}).status_code,422)
+        self.context.submit.assert_not_called()
+        self.context.request.assert_not_called()
+
+    def test_server_status_exposes_premarket_mode_without_broker_reads(self):
+        self.context.premarket_enabled=lambda:True
+        response=self.request('GET','/auto-trader/pro-ticker/manual-entry-status')
+        self.assertTrue(response.json()['premarket_enabled'])
+        self.assertFalse(response.json()['regular_session_only'])
+        self.context.request.assert_not_called()
