@@ -355,6 +355,7 @@ def reconcile_external_close(row, parent, legs, *, context, clock):
         return False
     context.record_exit(row, exits)
     _save(row['request_id'], state='closed', reason='External close reconciled from linked broker fills.', updated_at=clock())
+    print(json.dumps({'manual_external_close_reconciled':{'symbol':row['symbol'], 'state':'closed'}}), flush=True)
     return True
 
 
