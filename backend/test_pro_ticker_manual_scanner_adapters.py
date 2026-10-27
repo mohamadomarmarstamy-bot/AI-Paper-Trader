@@ -38,6 +38,7 @@ class ManualScannerAdapterTests(unittest.TestCase):
         with patch.dict(os.environ,{'PRO_TICKER_MANUAL_SCANNER_ENABLED':'true'}),patch('pro_ticker_manual_scanner.assert_dispatch',return_value='ptm-'+'a'*32) as claim:
             result=fn(symbol='test',shares=43,reference_price=45.5,scanner_result={},manual_request_id='claim')
         self.assertTrue(result['success'])
+        self.assertTrue(ns['validate_alpaca_paper_order_risk'].call_args.kwargs['owner_manual_entry'])
         self.assertEqual(claim.call_count,2)
         body=ns['alpaca_paper_request'].call_args.kwargs['json_body']
         self.assertEqual(body['client_order_id'],'ptm-'+'a'*32)
@@ -59,6 +60,7 @@ class ManualScannerAdapterTests(unittest.TestCase):
         fn,ns=adapter('submit_alpaca_auto_bracket_buy')
         result=fn(symbol='test',shares=43,reference_price=45.5,scanner_result={})
         self.assertTrue(result['entries_paused'])
+        self.assertFalse(ns['validate_alpaca_paper_order_risk'].call_args.kwargs['owner_manual_entry'])
         ns['alpaca_paper_request'].assert_not_called()
 
     def test_disabled_manual_mode_cannot_bypass_entry_pause(self):

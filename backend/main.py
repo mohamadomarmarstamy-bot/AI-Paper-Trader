@@ -3456,6 +3456,7 @@ def validate_alpaca_paper_order_risk(
     side: str,
     owned_order_ids=None,
     manual_premarket=False,
+    owner_manual_entry=False,
 ) -> dict[str, Any]:
     """
     Validate a manual PAPER order against conservative execution controls.
@@ -3643,6 +3644,17 @@ def validate_alpaca_paper_order_risk(
             "open_order_sides": open_sides,
         }
 
+    # A SELL reduces an existing long position. Entry spread/quote filters
+    # must not trap an owner in a position they are trying to close.
+    if normalized_side == "sell":
+        position = get_alpaca_position_for_symbol(normalized_symbol, positions)
+        quantity = safe_float(position.get("qty")) if position else None
+        if quantity is None or quantity <= 0 or shares > quantity:
+            return {"approved":False,"error":f"Only verified long {normalized_symbol} shares may be sold.",
+                    "max_allowed_shares":max(0, math.floor(quantity or 0))}
+        return {"approved":True,"symbol":normalized_symbol,"side":"sell","shares":shares,
+                "quote":None,"spread_check_applied":False,"verified_long_shares":quantity}
+
     quote = (manual_scanner_context().quote(normalized_symbol) if manual_premarket
              else fetch_alpaca_risk_quote(normalized_symbol))
     if manual_premarket:
@@ -3656,7 +3668,7 @@ def validate_alpaca_paper_order_risk(
         )
     )
 
-    if (
+    if not owner_manual_entry and (
         spread_percent is None
         or spread_percent >
             RISK_MAX_SPREAD_PERCENT
@@ -7859,6 +7871,7 @@ def submit_alpaca_auto_bracket_buy(
             symbol=normalized_symbol,
             shares=shares,
             side="buy",
+            owner_manual_entry=manual_request_id is not None,
         )
     )
 
@@ -16289,7 +16302,7 @@ def manual_scanner_context():
             strategy_version="owner_manual_scanner_v1",manual_request_id=request_id,manual_settings=frozen)
     return ManualScannerContext(request=alpaca_paper_request,
         quote=lambda symbol: fetch_alpaca_risk_quote(symbol,feed=os.getenv("PRO_TICKER_MANUAL_QUOTE_FEED","iex")),
-        risk=validate_alpaca_paper_order_risk,submit=dispatch,
+        risk=lambda **kw: validate_alpaca_paper_order_risk(**kw,owner_manual_entry=kw.get("side")=="buy"),submit=dispatch,
         record_entry=persist_entry_fill,record_exit=persist_exit_fills,
         cancel=lambda symbol,owned_order_ids: cancel_alpaca_open_orders_for_symbol(symbol,allowed_order_ids=owned_order_ids),
         close=lambda **kw: close_alpaca_paper_position_manually(**kw,exit_reason="manual_scanner_exit"),scan=scan_manual_paper_symbol,

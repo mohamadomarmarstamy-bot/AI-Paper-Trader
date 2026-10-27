@@ -4,7 +4,7 @@
 
 Quantity is `floor(2000 / fresh ask)`, with whole shares only. For a $45.50 ask, the initial request is 43 shares ($1,956.50 estimated). Existing account risk limits may reduce that quantity or block the purchase. This is a market order, so the actual fill price and cost can differ. A share above $2,000 is blocked.
 
-The regular-session workflow requires an authenticated owner, matching Origin, active PAPER account, recent scanner-worker heartbeat, fresh execution quote, regular open session, supported daily scanner history, buying power, and existing spread/position/order risk checks. It rejects an existing position in the same symbol. With premarket disabled it does not queue closed-market buys. Start a new review after opening to make a new request. Repeating the same request ID recovers the existing order and never creates another buy. An unresolved order blocks further new entries until reconciled.
+The regular-session workflow requires an authenticated owner, matching Origin, active PAPER account, recent scanner-worker heartbeat, fresh execution quote, regular open session, buying power, and existing position/order risk checks. It rejects an existing position in the same symbol. With premarket disabled it does not queue closed-market buys. Start a new review after opening to make a new request. Repeating the same request ID recovers the existing order and never creates another buy. An unresolved order blocks further new entries until reconciled.
 
 The broker receives the existing native stop-loss/take-profit bracket. The separate 15-second worker runs the existing scanner analysis for each owned manual position, including symbols outside the scanner's displayed top results. It may exit on SELL with score <=40 and confidence >=80, using the existing exit settings. Native protective orders can exit sooner. This is a daily-indicator scanner, not a tick-by-tick intraday strategy. All old broad automatic-buy flags and the original automatic-entry pause remain unchanged.
 
@@ -39,8 +39,15 @@ IEX session coverage: https://www.iex.io/resources/trading/trading-hours-holiday
 
 ## Per-stock amount and protection settings
 
-Pro Ticker → Settings & Health → Manual PAPER order settings provides dollars per stock, take-profit percent and stop-loss percent. Values are separate from main-app settings. Until first saved, the amount defaults to $2,000 and protection inherits current main-app percentages. Once saved, these Pro Ticker values remain independent. Amount supports $1–$50,000 in cents; stop loss 0.1–25%; take profit 0.1–100%. Existing buying-power, spread and order/position caps still apply and may reduce or block sizing. Regular market orders can fill at a different price; the dollar target is approximate.
+Pro Ticker → Settings & Health → Manual PAPER order settings provides dollars per stock, take-profit percent and stop-loss percent. Values are separate from main-app settings. Until first saved, the amount defaults to $2,000 and protection inherits current main-app percentages. Once saved, these Pro Ticker values remain independent. Amount supports $1–$50,000 in cents; stop loss 0.1–25%; take profit 0.1–100%. Existing buying-power and order/position caps still apply and may reduce or block sizing. Regular market orders can fill at a different price; the dollar target is approximate.
 
 Each new submission freezes its amount and percentages in its durable entry record. Whole-share sizing and native regular-session bracket prices use that snapshot; premarket OCO protection uses the same saved percentages. Editing preferences never changes existing positions, pending orders or an unchanged request-ID retry. Revision checks reject stale saves and stale buy forms; refresh before confirming the new amount. No order is placed by saving settings.
 
 The connection button verifies the active account mode. When manual execution is enabled it checks the original PAPER account and matching-account worker heartbeat, without requiring an unrelated dedicated research account. The dedicated-account check remains available for dedicated mode. The research ledger's reconciliation status is distinct from manual account/worker readiness; no ledger reconciliation is fabricated by an account check.
+
+
+## Owner selection and exit spreads
+
+Owner-submitted symbols attempt entry independently of technical grades and scanner entry coverage. Missing daily analysis does not veto the owner's PAPER buy. Scanner analysis remains in use for subsequent owned exits, alongside saved stop-loss/take-profit protection.
+
+The entry spread ceiling still applies to broad automatic buys. It does not apply to owner-submitted Pro Ticker buys or to verified long-position sells. Buying power, tradability, position/order limits, fresh execution references, supported sessions, broker acceptance and duplicate-dispatch protections still apply. Wide spreads can make executable exit proceeds lower than a displayed latest-trade gain. Blocked entries report the specific risk reason. Saved blocked submissions are not replayed; a fresh review is required after correcting the blocker.
