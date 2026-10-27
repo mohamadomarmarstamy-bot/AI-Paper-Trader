@@ -419,3 +419,20 @@ class ManualScannerTests(unittest.TestCase):
         self.assertEqual(saved_entries()[self.request_id]['state'],'attention')
         with closing(database.get_connection()) as conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM trade_book').fetchone()[0],0)
+
+
+    def test_entry_filling_during_cancel_is_flattened_if_bracket_was_canceled(self):
+        self.journal_context()
+        self.context.submit.side_effect=self.partial_buy
+        def finish_without_protection(symbol,owned_order_ids):
+            self.cancel_partial(symbol,owned_order_ids)
+            parent=self.orders['ptm-'+uuid.UUID(self.request_id).hex]
+            parent.update(status='filled',filled_qty=parent['qty'])
+            self.positions[0]['qty']=parent['qty']
+        self.context.cancel=Mock(side_effect=finish_without_protection)
+        self.submit()
+        self.tick()
+        self.assertEqual(self.context.close.call_args.kwargs['shares'],43)
+        self.tick()
+        self.assertEqual(saved_entries()[self.request_id]['state'],'closed')
+        self.assertEqual(self.context.close.call_count,1)

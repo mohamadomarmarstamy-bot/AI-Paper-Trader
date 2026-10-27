@@ -562,8 +562,16 @@ def _flatten_partial(request_id, parent, *, context, clock):
     _verify_order(latest,row)
     if latest.get('status') == 'filled':
         recover_entry(request_id,context=context,clock=clock)
-        return
-    if latest.get('status') not in ('canceled','expired','rejected'):
+        legs = latest.get('legs') or []
+        if (len(legs) == 2 and {leg.get('type') for leg in legs} == {'limit','stop'}
+                and all(leg.get('status') in ('new','accepted','pending_new','held')
+                        and _number(leg.get('qty')) == _number(latest['filled_qty'])
+                        and _number(leg.get('filled_qty','0')) == 0 for leg in legs)):
+            return
+        # Cancellation may win against newly activated protective children.
+        # If they are no longer confirmed working, flatten the full verified
+        # entry rather than retaining an unprotected position.
+    if latest.get('status') not in ('filled','canceled','expired','rejected'):
         raise ValueError('Partial entry cancellation is not confirmed.')
     quantity = _number(latest['filled_qty'])
     if not 0 < quantity <= row['shares'] or quantity != quantity.to_integral_value():
