@@ -10,6 +10,9 @@ from solana_meme_bot import public, configure, tick, Conflict
 def build_router(*,require_session):
     router=APIRouter()
     @router.get('/meme-coins')
+    @router.get('/meme-coins/trades')
+    @router.get('/meme-coins/scanner')
+    @router.get('/meme-coins/settings')
     def page(request:Request):
         require_session(request)
         return FileResponse(Path(__file__).parent/'frontend'/'meme-coins.html')
