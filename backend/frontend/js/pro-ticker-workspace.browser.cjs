@@ -13,15 +13,16 @@ const fixture=()=>({paper:true,scope:'pro_ticker_strategy_ledger',generated_at:s
 
 test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed refresh', {timeout:90000},async()=>{
  let marketScan=null,marketScanPosts=0,pricedExecutions=[],closedExecutionMetrics=false,invalidExecutionMetrics=false,invalidAnalytics=false,invalidCash=false,studyPlan=null,invalidStudies=false,manualModeEnabled=false,manualWorkerReady=true,premarketModeEnabled=false,manualModePosts=[];
- let handoffRequests=[];
+ let handoffRequests=[],entryRevision=0,entrySettings={dollars_per_stock:2000,stop_loss_percent:2,take_profit_percent:4};
  let data=fixture(),fail=false,requests=[],browser,forwardDue=false,savedSignal=null,draftRequests=[],allocationRequests=[],admissionRequests=[],evidenceConfigured=false,ownerSubmissionConfigured=false,managementConfigured=false,managementRequests=0,submissionRequests=0,recoveryRequests=0,signalRequests=[],discoveries=0,invalidClosedPerformance=false,invalidDataset=false,invalidProposal=false,invalidSettings=false,settingsRevision=0,settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
  const raw=fs.readFileSync(path.join(frontend,'index.html'),'utf8');const start=raw.indexOf('<section id="pro-ticker-manual-section"');
  const section=raw.slice(start,raw.indexOf('</section>',start)+10).replace('class="app-section hidden"','class="app-section"').replace(' hidden>','>');
  const server=http.createServer(async(req,res)=>{
   requests.push([req.method,req.url]);
-  if(req.url==='/'){res.setHeader('Content-Type','text/html; charset=utf-8');res.end('<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head><body><main style="padding:16px;max-width:1100px;margin:auto">'+section+'</main><script src="/js/pro-ticker-workspace.js"></script><script src="/js/pro-ticker-signals.js"></script><script>window.loadProTickerWorkspace();window.loadProTickerSignals()</script></body></html>');return;}
+  if(req.url==='/'){res.setHeader('Content-Type','text/html; charset=utf-8');res.end('<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head><body><main style="padding:16px;max-width:1100px;margin:auto">'+section+'</main><script src="/js/pro-ticker-workspace.js"></script><script src="/js/pro-ticker-signals.js"></script><script src="/js/pro-ticker-entry-settings.js"></script><script>window.loadProTickerWorkspace();window.loadProTickerSignals()</script></body></html>');return;}
   if(req.url==='/style.css'){res.setHeader('Content-Type','text/css');res.end(fs.readFileSync(path.join(frontend,'style.css')));return;}
   if(req.url==='/js/pro-ticker-workspace.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(__dirname,'pro-ticker-workspace.js')));return;}
+  if(req.url==='/js/pro-ticker-entry-settings.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(__dirname,'pro-ticker-entry-settings.js')));return;}
   if(req.url==='/js/pro-ticker-signals.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(__dirname,'pro-ticker-signals.js')));return;}
   if(req.url.startsWith('/auto-trader/pro-ticker/market-reference?')){
    assert.equal(req.method,'GET');assert.equal(new URL(req.url,origin).searchParams.get('symbol'),'AAPL');
@@ -29,8 +30,13 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
     reference:{source:'alpaca_latest_trade',status:'captured',price:10.5,market_timestamp:new Date().toISOString(),age_seconds:1,fresh:true},
     allocation_reference_fresh:true,admission_reference_fresh:true,allocation_max_age_seconds:90,admission_max_age_seconds:30,feed_selection:'provider_default'}));return;
   }
+  if(req.url==='/auto-trader/pro-ticker/entry-settings'){
+   res.setHeader('Content-Type','application/json');if(req.method==='PUT'){assert.equal(req.headers.origin,origin);const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=JSON.parse(Buffer.concat(chunks).toString());if(body.expected_revision!==entryRevision){res.statusCode=409;res.end(JSON.stringify({detail:'Settings changed. Reload before saving.'}));return;}entrySettings=body.settings;entryRevision++;}
+   res.end(JSON.stringify({paper:true,revision:entryRevision,settings:entrySettings,effect:'Future submissions only; existing positions are unchanged.'}));return;
+  }
+  if(req.url==='/auto-trader/pro-ticker/manual-account-status'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,account_verified:true,scope:'original_manual_paper_account',order_submitted:false,scanner_ready:manualWorkerReady}));return;}
   if(req.url==='/auto-trader/pro-ticker/manual-entry-status'){
-   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,version:'owner_manual_scanner_v1',enabled:manualModeEnabled,scanner_ready:manualModeEnabled&&manualWorkerReady,target_usd:'2000',whole_shares_only:true,regular_session_only:!premarketModeEnabled,premarket_enabled:premarketModeEnabled,broad_scanner_buying_enabled:false}));return;
+   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({paper:true,version:'owner_manual_scanner_v1',enabled:manualModeEnabled,scanner_ready:manualModeEnabled&&manualWorkerReady,target_usd:String(entrySettings.dollars_per_stock),whole_shares_only:true,regular_session_only:!premarketModeEnabled,premarket_enabled:premarketModeEnabled,broad_scanner_buying_enabled:false}));return;
   }
   if(req.url==='/auto-trader/pro-ticker/manual-signals/buy-and-scan'){
    assert.equal(req.method,'POST');assert.equal(req.headers.origin,origin);assert.equal(manualModeEnabled,true);assert.equal(manualWorkerReady,true);
@@ -207,7 +213,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
  try{
   browser=await chromium.launch({headless:true});fs.mkdirSync('.artifacts/pro-ticker-workspace',{recursive:true});
   for(const width of [1280,390]){
-   marketScan=null;pricedExecutions=[];studyPlan=null;invalidStudies=false;manualModeEnabled=false;manualWorkerReady=true;premarketModeEnabled=false;manualModePosts=[];data=fixture();fail=false;requests=[];forwardDue=false;savedSignal=null;draftRequests=[];allocationRequests=[];admissionRequests=[];evidenceConfigured=false;recoveryRequests=0;signalRequests=[];discoveries=0;invalidClosedPerformance=false;invalidDataset=false;invalidProposal=false;invalidSettings=false;settingsRevision=0;settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
+   entryRevision=0;entrySettings={dollars_per_stock:2000,stop_loss_percent:2,take_profit_percent:4};marketScan=null;pricedExecutions=[];studyPlan=null;invalidStudies=false;manualModeEnabled=false;manualWorkerReady=true;premarketModeEnabled=false;manualModePosts=[];data=fixture();fail=false;requests=[];forwardDue=false;savedSignal=null;draftRequests=[];allocationRequests=[];admissionRequests=[];evidenceConfigured=false;recoveryRequests=0;signalRequests=[];discoveries=0;invalidClosedPerformance=false;invalidDataset=false;invalidProposal=false;invalidSettings=false;settingsRevision=0;settingsValues={max_allocation_cents:5000000,max_stop_risk_cents:5000000,discovery_article_limit:5};
    const context=await browser.newContext({viewport:{width,height:1000},acceptDownloads:true});const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
    await page.goto(origin);await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('Ledger snapshot:'));
    assert.equal(await page.locator('[role=tab]').count(),9);assert.equal(await page.locator('[role=tabpanel]:visible').count(),1);
@@ -411,6 +417,9 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.evaluate(()=>{crypto.randomUUID=window.testOriginalUUID;});
 
    await page.locator('#pt-tab-health').click();
+   await page.waitForFunction(()=>document.getElementById('pt-entry-save').disabled===false);
+   await page.locator('#pt-entry-dollars').fill('1250');await page.locator('#pt-entry-loss').fill('1');await page.locator('#pt-entry-profit').fill('3');await page.locator('#pt-entry-save').click();await page.getByText(/Order settings saved/).waitFor();assert.equal(entrySettings.dollars_per_stock,1250);assert.equal(entrySettings.stop_loss_percent,1);
+   await page.locator('#pt-entry-dollars').fill('2000');await page.locator('#pt-entry-loss').fill('2');await page.locator('#pt-entry-profit').fill('4');await page.locator('#pt-entry-save').click();await page.getByText(/Order settings saved/).waitFor();
    await page.waitForFunction(()=>document.getElementById('pt-settings-status').textContent.includes('revision 0'));
    await page.locator('#pt-settings-allocation').fill('40');await page.locator('#pt-settings-risk').fill('1');await page.locator('#pt-settings-articles').fill('2');
    await page.locator('#pt-refresh').click();assert.equal(await page.locator('#pt-settings-allocation').inputValue(),'40');
@@ -455,6 +464,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    assert.match(await page.locator('#pt-forward-study-status').innerText(),/at least 50 valid price-history sessions/);
    assert.match(await page.locator('#pt-forward-quote-status').innerText(),/a fresh quote is not enough/);
    manualModeEnabled=true;await page.getByRole('button',{name:'Refresh saved reviews',exact:true}).click();
+   await page.locator('#pt-tab-health').click();await page.locator('#pt-account-check').click();await page.getByText(/Original PAPER account verified for manual Pro Ticker/).waitFor();await page.locator('#pt-tab-signals').click();
    await page.waitForFunction(()=>document.getElementById('pt-manual-entry-mode').textContent.includes('PAPER BUY MODE'));
    await page.getByRole('button',{name:'Start a new review',exact:true}).click();await page.locator('#pt-signal-symbol').fill('GCTK');
    await page.getByRole('button',{name:'Buy ~$2,000 PAPER & research',exact:true}).click();
@@ -479,7 +489,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
    await page.locator('#pt-tab-overview').focus();await page.keyboard.press('ArrowRight');assert.equal(await page.locator('#pt-tab-scanner').getAttribute('aria-selected'),'true');
    fail=true;await page.locator('#pt-refresh').click();await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('Unable to load'));assert.equal(await page.locator('#pt-metrics').innerText(),'');assert.match(await page.locator('#pt-journal').innerText(),/Data unavailable/);
    fail=false;data=fixture();data.paper=false;await page.locator('#pt-refresh').click();await page.waitForFunction(()=>document.getElementById('pt-status').textContent.includes('safety flags'));assert.equal(await page.locator('#pt-metrics').innerText(),'');
-   assert.deepEqual(errors,[]);assert.ok(requests.every(([method,url])=>method==='GET'||method==='POST'&&['/auto-trader/pro-ticker/proposal','/auto-trader/pro-ticker/discovery','/auto-trader/pro-ticker/manual-signals','/auto-trader/pro-ticker/manual-signals/buy-and-scan','/auto-trader/pro-ticker/manual-signals/proposal','/auto-trader/pro-ticker/order-intents','/auto-trader/pro-ticker/market-scan','/auto-trader/pro-ticker/cash-evidence/sync'].includes(url)||method==='POST'&&url.startsWith('/auto-trader/pro-ticker/manual-signals/')&&url.endsWith('/forward-review')||method==='POST'&&/^\/auto-trader\/pro-ticker\/manual-signals\/[0-9a-f-]{36}\/forward-study(?:\/evaluate)?$/.test(url)||method==='POST'&&url.startsWith('/auto-trader/pro-ticker/order-intents/')&&['/cancel','/admission-review','/recover','/protection-review','/submit','/monitor','/execution-sync','/manage','/manage-recover'].some(suffix=>url.endsWith(suffix))||method==='PUT'&&url==='/auto-trader/pro-ticker/settings'),'workspace writes must use explicit authenticated controls');await context.close();
+   assert.deepEqual(errors,[]);assert.ok(requests.every(([method,url])=>method==='GET'||method==='POST'&&['/auto-trader/pro-ticker/proposal','/auto-trader/pro-ticker/discovery','/auto-trader/pro-ticker/manual-signals','/auto-trader/pro-ticker/manual-signals/buy-and-scan','/auto-trader/pro-ticker/manual-signals/proposal','/auto-trader/pro-ticker/order-intents','/auto-trader/pro-ticker/market-scan','/auto-trader/pro-ticker/cash-evidence/sync'].includes(url)||method==='POST'&&url.startsWith('/auto-trader/pro-ticker/manual-signals/')&&url.endsWith('/forward-review')||method==='POST'&&/^\/auto-trader\/pro-ticker\/manual-signals\/[0-9a-f-]{36}\/forward-study(?:\/evaluate)?$/.test(url)||method==='POST'&&url.startsWith('/auto-trader/pro-ticker/order-intents/')&&['/cancel','/admission-review','/recover','/protection-review','/submit','/monitor','/execution-sync','/manage','/manage-recover'].some(suffix=>url.endsWith(suffix))||method==='PUT'&&['/auto-trader/pro-ticker/settings','/auto-trader/pro-ticker/entry-settings'].includes(url)),'workspace writes must use explicit authenticated controls');await context.close();
   }
  }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
 });

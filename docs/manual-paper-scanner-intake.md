@@ -36,3 +36,11 @@ Turning the premarket flag off blocks new premarket dispatches while preserving 
 
 Broker requirements: https://docs.alpaca.markets/us/docs/orders-at-alpaca
 IEX session coverage: https://www.iex.io/resources/trading/trading-hours-holidays
+
+## Per-stock amount and protection settings
+
+Pro Ticker → Settings & Health → Manual PAPER order settings provides dollars per stock, take-profit percent and stop-loss percent. Values are separate from main-app settings. Until first saved, the amount defaults to $2,000 and protection inherits current main-app percentages. Once saved, these Pro Ticker values remain independent. Amount supports $1–$50,000 in cents; stop loss 0.1–25%; take profit 0.1–100%. Existing buying-power, spread and order/position caps still apply and may reduce or block sizing. Regular market orders can fill at a different price; the dollar target is approximate.
+
+Each new submission freezes its amount and percentages in its durable entry record. Whole-share sizing and native regular-session bracket prices use that snapshot; premarket OCO protection uses the same saved percentages. Editing preferences never changes existing positions, pending orders or an unchanged request-ID retry. Revision checks reject stale saves and stale buy forms; refresh before confirming the new amount. No order is placed by saving settings.
+
+The connection button verifies the active account mode. When manual execution is enabled it checks the original PAPER account and matching-account worker heartbeat, without requiring an unrelated dedicated research account. The dedicated-account check remains available for dedicated mode. The research ledger's reconciliation status is distinct from manual account/worker readiness; no ledger reconciliation is fabricated by an account check.

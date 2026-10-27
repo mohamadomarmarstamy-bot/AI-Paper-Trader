@@ -52,6 +52,8 @@ class ManualScannerContext:
     enabled: object = lambda: os.getenv('PRO_TICKER_MANUAL_SCANNER_ENABLED') == 'true'
     premarket_enabled: object = lambda: os.getenv('PRO_TICKER_PREMARKET_ENABLED') == 'true'
     quote_feed: str = 'iex'
+    settings_revision: int = 0
+    target_usd: float = 2000
     stop_loss_percent: float = 2
     take_profit_percent: float = 4
     exit_score: float = 40
@@ -124,7 +126,7 @@ def public_entry(row):
     attempted = row['state'] not in ('preparing', 'blocked')
     order = json.loads(row['order_json']) if row['order_json'] else {}
     return {'request_id': row['request_id'], 'symbol': row['symbol'], 'state': row['state'],
-            'target_usd': str(TARGET), 'shares': row['shares'], 'reference_ask': row['reference_ask'],
+            'target_usd': str(row.get('target_usd','2000')), 'shares': row['shares'], 'reference_ask': row['reference_ask'],
             'order_submitted': None if row['state'] in ('uncertain', 'submitting') else attempted,
             'broker_order_id': row['broker_order_id'], 'reason': row['reason'],
             'broker_status': order.get('status'), 'filled_shares': order.get('filled_qty'),
@@ -143,18 +145,18 @@ def saved_entries():
         return {r['request_id']: public_entry(r) for r in rows}
 
 
-def status(*, enabled, premarket_enabled=False, quote_feed='iex', clock=time.time):
+def status(*, enabled, premarket_enabled=False, quote_feed='iex', target_usd=2000, entry_settings_revision=0, clock=time.time):
     ready = False
     with closing(database.get_connection()) as conn:
         if conn.execute("SELECT 1 FROM sqlite_master WHERE name='pro_ticker_manual_scanner_health'").fetchone():
             row = conn.execute('SELECT * FROM pro_ticker_manual_scanner_health WHERE id=1').fetchone()
             ready = bool(row and 0 <= clock() - row['checked_at'] <= 60)
     return {'paper': True, 'version': VERSION, 'enabled': enabled is True,
-            'scanner_ready': ready and enabled is True, 'target_usd': str(TARGET),
+            'scanner_ready': ready and enabled is True, 'target_usd': format(Decimal(str(target_usd)).normalize(),'f'),
             'whole_shares_only': True, 'regular_session_only': not (premarket_enabled is True and enabled is True),
             'premarket_enabled':premarket_enabled is True and enabled is True,
             'premarket_protection':'app_monitored_limits_native_stops_regular_only','quote_feed':quote_feed,
-            'broad_scanner_buying_enabled': False}
+            'broad_scanner_buying_enabled': False,'entry_settings_revision':entry_settings_revision}
 
 
 def _ready(fingerprint, now):
@@ -227,7 +229,7 @@ def persist_entry_fill(row, order):
                 (row['symbol'],float(quantity),float(price),stamp,order['id'],'owner_manual_submission',VERSION,stamp,stamp)).lastrowid
         if not conn.execute("SELECT 1 FROM trade_book_events WHERE trade_book_id=? AND event='entry'", (book_id,)).fetchone():
             details = json.dumps({'strategy_version':VERSION,'manual_signal_id':row['request_id'],
-                                  'entry_source':'owner_submission','target_usd':str(TARGET)})
+                                  'entry_source':'owner_submission','target_usd':str(row.get('target_usd','2000'))})
             conn.execute("INSERT INTO trade_book_events(trade_book_id,symbol,event,timestamp,details_json) VALUES (?,?,'entry',?,?)", (book_id,row['symbol'],stamp,details))
         conn.commit()
     database.upsert_broker_fill(order_id=order['id'],symbol=row['symbol'],side='BUY',
@@ -351,6 +353,10 @@ def submit_entry(request_id, symbol, *, context, clock=time.time):
                      (request_id, symbol, now, now, 'preparing', 'ptm-' + uuid.UUID(request_id).hex))
         conn.commit()
     try:
+        target=_number(context.target_usd)
+        from pro_ticker_entry_settings import validate
+        validate({'dollars_per_stock':float(target),'stop_loss_percent':context.stop_loss_percent,'take_profit_percent':context.take_profit_percent})
+        _save(request_id,target_usd=format(target,'f').rstrip('0').rstrip('.') if '.' in format(target,'f') else str(target),stop_loss_percent=str(context.stop_loss_percent),take_profit_percent=str(context.take_profit_percent))
         fingerprint = _account(context)
         if not _ready(fingerprint, clock()):
             raise EntryBlocked('The scanner sell worker is not ready. No buy was sent.')
@@ -372,9 +378,9 @@ def submit_entry(request_id, symbol, *, context, clock=time.time):
             _save(request_id,entry_session='premarket',entry_limit=str(sizing_price),
                   entry_expires_at=min(clock()+60,_stamp(market['next_open'])-15),
                   stop_loss_percent=str(stop_percent),take_profit_percent=str(profit_percent))
-        shares = int((TARGET / sizing_price).to_integral_value(rounding=ROUND_DOWN))
+        shares = int((target / sizing_price).to_integral_value(rounding=ROUND_DOWN))
         if not 1 <= shares <= 100000:
-            raise EntryBlocked('The $2,000 whole-share quantity is outside supported limits.')
+            raise EntryBlocked('The configured dollar target cannot buy a supported whole-share quantity.')
         candidate = context.scan(symbol)
         if not isinstance(candidate, dict) or candidate.get('symbol') != symbol or candidate.get('scanner_stale') is not False:
             raise EntryBlocked('Scanner coverage is unavailable for this stock. No buy was sent.')

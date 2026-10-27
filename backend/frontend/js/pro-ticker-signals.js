@@ -6,11 +6,12 @@
     let manualMode={enabled:false,scanner_ready:false},manualModeVersion=0;
     async function loadManualMode(){const current=++manualModeVersion;const note=document.getElementById("pt-manual-entry-mode");try{
         const response=await fetch("/auto-trader/pro-ticker/manual-entry-status",{credentials:"same-origin",cache:"no-store"});if(!response.ok)throw Error("Mode unavailable");const data=await response.json();
-        if(data.paper!==true||data.version!=="owner_manual_scanner_v1"||typeof data.enabled!=="boolean"||typeof data.scanner_ready!=="boolean"||data.target_usd!=="2000"||data.whole_shares_only!==true||data.regular_session_only!==(data.premarket_enabled!==true)||data.broad_scanner_buying_enabled!==false)throw Error("Invalid PAPER mode");
+        if(data.paper!==true||data.version!=="owner_manual_scanner_v1"||typeof data.enabled!=="boolean"||typeof data.scanner_ready!=="boolean"||!Number.isFinite(Number(data.target_usd))||Number(data.target_usd)<=0||data.whole_shares_only!==true||data.regular_session_only!==(data.premarket_enabled!==true)||data.broad_scanner_buying_enabled!==false)throw Error("Invalid PAPER mode");
+
         if(current!==manualModeVersion)return;manualMode=data;
-        if(note)note.textContent=data.enabled?"PAPER BUY MODE: each NEW submission requests approximately $2,000 in whole shares in the existing PAPER account. The scanner manages exits. "+(data.premarket_enabled?"Premarket limits and regular-session buys are enabled. Premarket stops depend on this app staying online; broker stops operate in regular hours. Limits may not fill; unfilled buys are canceled after 60 seconds while the worker is online. Fresh quotes are required. "+(data.quote_feed==="sip"?"Configured SIP entitlement is required. ":"The IEX feed begins at 8 a.m. Eastern. ")+"":"Regular market only. ")+"Risk limits apply. Repeating the same request never creates another buy."+(data.scanner_ready?"":" Scanner worker is not ready; buying is blocked. Refresh saved reviews in a moment."):"Research mode: submitting saves a review without buying. Manual PAPER buying is disabled.";
+        if(note)note.textContent=data.enabled?"PAPER BUY MODE: each NEW submission requests approximately $"+Number(data.target_usd).toLocaleString("en-US")+" in whole shares in the existing PAPER account. The scanner manages exits. "+(data.premarket_enabled?"Premarket limits and regular-session buys are enabled. Premarket stops depend on this app staying online; broker stops operate in regular hours. Limits may not fill; unfilled buys are canceled after 60 seconds while the worker is online. Fresh quotes are required. "+(data.quote_feed==="sip"?"Configured SIP entitlement is required. ":"The IEX feed begins at 8 a.m. Eastern. ")+"":"Regular market only. ")+"Risk limits apply. Repeating the same request never creates another buy."+(data.scanner_ready?"":" Scanner worker is not ready; buying is blocked. Refresh saved reviews in a moment."):"Research mode: submitting saves a review without buying. Manual PAPER buying is disabled.";
     }catch(error){if(current!==manualModeVersion)return;manualMode={enabled:false,scanner_ready:false};if(note)note.textContent="PAPER buying status is unavailable. This form can save research only; no order will be requested.";}
-        if(current===manualModeVersion){el("submit").textContent=manualMode.enabled?"Buy ~$2,000 PAPER & research":"Save & grade stock";if(!saving)el("submit").disabled=manualMode.enabled&&!manualMode.scanner_ready;}
+        if(current===manualModeVersion){el("submit").textContent=manualMode.enabled?"Buy ~$"+Number(manualMode.target_usd||2000).toLocaleString("en-US")+" PAPER & research":"Save & grade stock";if(!saving)el("submit").disabled=manualMode.enabled&&!manualMode.scanner_ready;}
     }
     const draftIntents=new Map();
     const allocationIds=new Map();
@@ -257,7 +258,7 @@
         if(grade&& (grade.version!=="pro_ticker_daily_technical_grade_v1"||grade.training_eligible!==false||
             !["graded","unavailable"].includes(grade.status)||grade.status==="graded"&&(!["A","B","C","D"].includes(grade.grade)||!Number.isFinite(grade.score)||grade.score< -6||grade.score>6)))throw Error("Invalid grade evidence");
         const manual=value.manual_entry;
-        if(manual&&(manual.paper!==true||manual.version!=="owner_manual_scanner_v1"||manual.request_id!==value.request_id||manual.symbol!==value.symbol||manual.target_usd!=="2000"||manual.managed_by!=="existing_scanner_rules"||!["preparing","submitting","uncertain","accepted","open","closing","closed","blocked","attention"].includes(manual.state)||![true,false,null].includes(manual.order_submitted)||(manual.shares!==null&&(!Number.isSafeInteger(manual.shares)||manual.shares<1))||(manual.order_submitted!==false&&(!Number.isSafeInteger(manual.shares)||manual.shares<1))))throw Error("Invalid manual PAPER order evidence");
+        if(manual&&(manual.paper!==true||manual.version!=="owner_manual_scanner_v1"||manual.request_id!==value.request_id||manual.symbol!==value.symbol||!Number.isFinite(Number(manual.target_usd))||Number(manual.target_usd)<=0||manual.managed_by!=="existing_scanner_rules"||!["preparing","submitting","uncertain","accepted","open","closing","closed","blocked","attention"].includes(manual.state)||![true,false,null].includes(manual.order_submitted)||(manual.shares!==null&&(!Number.isSafeInteger(manual.shares)||manual.shares<1))||(manual.order_submitted!==false&&(!Number.isSafeInteger(manual.shares)||manual.shares<1))))throw Error("Invalid manual PAPER order evidence");
         const outcome=value.forward_outcome;
         if(outcome&&(outcome.kind!=="forward_quote_return_not_trade_pnl"||outcome.training_eligible!==false||!Number.isFinite(outcome.return_percent)||outcome.request_id!==value.request_id))throw Error("Invalid forward evidence");
         if(value.proposal)validateDraft(value.proposal,value);
@@ -403,14 +404,14 @@
     form.addEventListener("submit",async event=>{
         event.preventDefault();if(saving)return;if(manualMode.enabled&&!manualMode.scanner_ready){el("status").textContent="Scanner sell worker is not ready; no buy was sent. Refresh saved reviews.";return;}saving=true;version++;el("submit").disabled=true;el("symbol").disabled=true;
         const wantsBuy=manualMode.enabled===true;
-        el("status").textContent=wantsBuy?"Checking the ~$2,000 whole-share PAPER buy and scanner handoff…":"Capturing reference data and grading the stock. This does not submit a PAPER order…";
+        el("status").textContent=wantsBuy?"Checking the ~$"+Number(manualMode.target_usd||2000).toLocaleString("en-US")+" whole-share PAPER buy and scanner handoff…":"Capturing reference data and grading the stock. This does not submit a PAPER order…";
         try{
             const symbol=el("symbol").value.trim().toUpperCase();
             // Scanner handoffs assign .value without an input event. Preserve
             // retries only for the same symbol, never another research request.
             if(requestSymbol!==symbol){requestId=null;requestSymbol=symbol;}
             requestId=requestId||crypto.randomUUID();
-            const response=await fetch(endpoint+(wantsBuy?"/buy-and-scan":""),{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbol,request_id:requestId})});
+            const response=await fetch(endpoint+(wantsBuy?"/buy-and-scan":""),{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbol,request_id:requestId,...(wantsBuy&&Number.isInteger(manualMode.entry_settings_revision)?{entry_settings_revision:manualMode.entry_settings_revision}:{})})});
             if(!response.ok)throw Error("Review request failed ("+response.status+"). Refresh saved status before retrying.");
             const data=await response.json();flags(data);const review=record(data.signal);
             const loaded=await refresh();detail(review);el("status").textContent=(review.manual_entry?"PAPER entry for "+review.symbol+": "+review.manual_entry.state+". "+(review.manual_entry.reason||"Inspect the saved order below; no model training occurred."):"Review "+review.status+" for "+review.symbol+". No PAPER order placed; no model training performed.")+(loaded?"":" History refresh failed; the confirmed review is shown below.");

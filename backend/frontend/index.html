@@ -1343,8 +1343,15 @@
 <div class="panel pt-panel" role="tabpanel" id="pt-panel-health" aria-labelledby="pt-tab-health">
 <h3>Settings and system health</h3>
 <div id="pt-health"></div>
-<button id="pt-account-check" type="button">Verify dedicated PAPER connection</button>
+<button id="pt-account-check" type="button">Verify active PAPER connection</button>
 <p id="pt-account-status" role="status" aria-live="polite">Connection has not been checked. Verification only reads account information.</p>
+<h3>Manual PAPER order settings</h3><form id="pt-entry-settings-form" class="pt-filters">
+<label>Dollars per stock ($)<input id="pt-entry-dollars" type="number" min="1" max="50000" step="0.01" required></label>
+<label>Take profit (%)<input id="pt-entry-profit" type="number" min="0.1" max="100" step="0.1" required></label>
+<label>Stop loss (%)<input id="pt-entry-loss" type="number" min="0.1" max="25" step="0.1" required></label>
+<button id="pt-entry-save" type="submit" disabled>Save order settings</button><button id="pt-entry-reload" type="button">Reload order settings</button></form>
+<p id="pt-entry-settings-status" role="status">Loading order settings…</p><p>Applies to new Pro Ticker submissions only. Quantities round down to whole shares. Account risk limits can reduce or block an order. Existing positions keep their saved stops and targets. Premarket stops require the app online and limit fills are not guaranteed.</p>
+<h3>Hypothetical research settings</h3>
 <p>These settings apply only to Pro Ticker hypothetical proposals and manual public discovery. They do not enable trading or alter the existing auto-trader. Estimated stop risk is not a guaranteed maximum loss.</p>
 <form id="pt-settings-form" class="pt-filters">
 <label>Maximum hypothetical allocation ($)<input id="pt-settings-allocation" type="number" min="0.01" max="50000" step="0.01" required disabled></label>
@@ -1355,8 +1362,8 @@
 <p id="pt-settings-status" role="status" aria-live="polite">Settings have not loaded.</p>
 <h3>Validation boundaries</h3>
 <ul>
-<li>Automatic discovery and PAPER execution integration are unfinished.</li>
-<li>Dedicated broker lifecycle certification remains required before enabling execution.</li>
+<li>Manual stock submissions use the configured PAPER account and scanner worker; verify their status above.</li>
+<li>The separate dedicated research-account lifecycle still requires its own configuration and certification.</li>
 <li>Automatic virtual budget release is disabled.</li></ul></div></div></div></section>
                 <section
                     id="strategy-section"
@@ -1819,7 +1826,7 @@
                         </div>
                     </div>
                     <p role="status">Edit real PAPER settings, review saved changes, and ask Jarvis to help.</p>
-                    <article class="panel"><h2>Application status</h2><p id="settings-runtime" role="status">Loading service status…</p><button type="button" id="settings-refresh">Reload saved values &amp; status</button><p>Jarvis and these controls use the same saved settings. Existing orders keep their original protection. Manual ~$2,000 submissions have a separate fixed size.</p></article>
+                    <article class="panel"><h2>Application status</h2><p id="settings-runtime" role="status">Loading service status…</p><button type="button" id="settings-refresh">Reload saved values &amp; status</button><p>Jarvis and these controls use the same saved settings. Existing orders keep their original protection. Manual Pro Ticker amounts are configured separately in Pro Ticker Settings &amp; Health.</p></article>
                     <article class="panel">
                         <h2>Paper Trading</h2>
                         <p>Manage simulated trading operations.</p>
@@ -1923,8 +1930,9 @@
     <script src="js/portfolio.js"></script>
     <script src="js/pro-ticker-manual.js"></script>
     <script src="js/pro-ticker-release.js"></script>
-    <script src="js/pro-ticker-workspace.js?v=forward-v1"></script>
-    <script src="js/pro-ticker-signals.js?v=premarket-v1"></script>
+    <script src="js/pro-ticker-workspace.js?v=entry-settings-v1"></script>
+    <script src="js/pro-ticker-signals.js?v=entry-settings-v1"></script>
+    <script src="js/pro-ticker-entry-settings.js?v=entry-settings-v1"></script>
     <script src="js/strategy.js?v=jarvis-v2"></script>
     <script src="js/jarvis.js?v=jarvis-v2"></script>
     <script src="js/profile.js?v=jarvis-v2"></script>
