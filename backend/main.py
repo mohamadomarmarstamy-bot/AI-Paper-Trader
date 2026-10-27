@@ -3256,10 +3256,13 @@ def market_is_open_from_calendar(
 
 def fetch_alpaca_risk_quote(
     symbol: str,
+    *, feed="iex",
 ) -> dict[str, Any]:
     """
     Fetch the latest Alpaca IEX bid/ask quote used for execution risk checks.
     """
+    if feed not in ("iex", "sip"):
+        raise ValueError("Only current IEX or subscribed SIP quotes are supported.")
     normalized_symbol = clean_symbol(symbol)
 
     if not normalized_symbol:
@@ -3287,7 +3290,7 @@ def fetch_alpaca_risk_quote(
             "Accept": "application/json",
         },
         params={
-            "feed": "iex",
+            "feed": feed,
         },
         timeout=10,
     )
@@ -3450,6 +3453,7 @@ def validate_alpaca_paper_order_risk(
     shares: int,
     side: str,
     owned_order_ids=None,
+    manual_premarket=False,
 ) -> dict[str, Any]:
     """
     Validate a manual PAPER order against conservative execution controls.
@@ -3575,7 +3579,14 @@ def validate_alpaca_paper_order_risk(
     if buying_power is None:
         buying_power = 0.0
 
-    if RISK_REQUIRE_REGULAR_MARKET_OPEN:
+    if manual_premarket:
+        from pro_ticker_premarket import session
+        if (os.getenv("PRO_TICKER_PREMARKET_ENABLED") != "true"
+                or not manual_scanner_enabled()
+                or session(manual_scanner_context(),time.time)[0] != "premarket"):
+            return {"approved":False,"error":"Verified manual PAPER premarket session required."}
+
+    if RISK_REQUIRE_REGULAR_MARKET_OPEN and not manual_premarket:
         clock = fetch_alpaca_market_clock()
 
         if not bool(
@@ -3630,9 +3641,12 @@ def validate_alpaca_paper_order_risk(
             "open_order_sides": open_sides,
         }
 
-    quote = fetch_alpaca_risk_quote(
-        normalized_symbol
-    )
+    quote = (manual_scanner_context().quote(normalized_symbol) if manual_premarket
+             else fetch_alpaca_risk_quote(normalized_symbol))
+    if manual_premarket:
+        from pro_ticker_manual_scanner import _stamp
+        if not 0 <= time.time()-_stamp(quote["timestamp"]) <= 30:
+            return {"approved":False,"error":"Fresh premarket quote required."}
 
     spread_percent = safe_float(
         quote.get(
@@ -3670,10 +3684,11 @@ def validate_alpaca_paper_order_risk(
             ),
         }
 
-    estimated_notional = (
-        midpoint
-        * shares
-    )
+    execution_price = midpoint
+    if manual_premarket and normalized_side=="buy":
+        from pro_ticker_premarket import tick_price
+        execution_price = max(midpoint,float(tick_price(quote["ask"],buy=True)))
+    estimated_notional = execution_price * shares
 
     max_order_notional = (
         equity
@@ -16255,12 +16270,17 @@ def manual_scanner_context():
             reference_price=reference_price,scanner_result=candidate,
             entry_context={"manual_signal_id":request_id,"entry_source":"owner_manual_scanner_v1"},
             strategy_version="owner_manual_scanner_v1",manual_request_id=request_id)
-    return ManualScannerContext(request=alpaca_paper_request,quote=fetch_alpaca_risk_quote,
+    return ManualScannerContext(request=alpaca_paper_request,
+        quote=lambda symbol: fetch_alpaca_risk_quote(symbol,feed=os.getenv("PRO_TICKER_MANUAL_QUOTE_FEED","iex")),
         risk=validate_alpaca_paper_order_risk,submit=dispatch,
         record_entry=persist_entry_fill,record_exit=persist_exit_fills,
         cancel=lambda symbol,owned_order_ids: cancel_alpaca_open_orders_for_symbol(symbol,allowed_order_ids=owned_order_ids),
         close=lambda **kw: close_alpaca_paper_position_manually(**kw,exit_reason="manual_scanner_exit"),scan=scan_manual_paper_symbol,
         paper_base_url=ALPACA_PAPER_BASE_URL,enabled=manual_scanner_enabled,
+        premarket_enabled=lambda: os.getenv("PRO_TICKER_PREMARKET_ENABLED")=="true",
+        quote_feed=os.getenv("PRO_TICKER_MANUAL_QUOTE_FEED","iex"),
+        stop_loss_percent=get_auto_trader_setting("stop_loss_percent"),
+        take_profit_percent=get_auto_trader_setting("take_profit_percent"),
         exit_score=AUTO_TRADER_EXIT_SCORE_MAX,exit_confidence=AUTO_TRADER_EXIT_CONFIDENCE_MIN)
 
 

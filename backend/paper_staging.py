@@ -100,7 +100,7 @@ def create_staging_app(*, _data_directory='/staging-data'):
 <details class="paper-staging-backup"><summary>Staging backup</summary><p>Private snapshot for migration validation. Keep it secure; this does not restore data.</p>
 <form action="/staging/database-backup" method="post"><button type="submit">Download staging database backup</button></form></details>'''
             + section + '''</main><script src="/js/pro-ticker-manual.js"></script>
-<script src="/js/pro-ticker-release.js"></script><script src="/js/pro-ticker-workspace.js?v=forward-v1"></script><script src="/js/pro-ticker-signals.js?v=manual-scanner-v1"></script><script>
+<script src="/js/pro-ticker-release.js"></script><script src="/js/pro-ticker-workspace.js?v=forward-v1"></script><script src="/js/pro-ticker-signals.js?v=premarket-v1"></script><script>
 window.loadProTickerManualLab(); window.loadProTickerReleasePanel(); window.loadProTickerWorkspace(); window.loadProTickerSignals();</script></body></html>''')
 
     app.add_api_route('/style.css', main.frontend_style, methods=['GET'])

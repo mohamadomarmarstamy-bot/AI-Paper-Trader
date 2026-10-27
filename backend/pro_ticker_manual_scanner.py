@@ -14,6 +14,7 @@ import time
 import uuid
 
 import database
+import pro_ticker_premarket as premarket
 from pro_ticker_manual_intake import parse_manual_symbols
 
 VERSION = 'owner_manual_scanner_v1'
@@ -49,11 +50,15 @@ class ManualScannerContext:
     cancel: object = None
     paper_base_url: str = PAPER_URL
     enabled: object = lambda: os.getenv('PRO_TICKER_MANUAL_SCANNER_ENABLED') == 'true'
+    premarket_enabled: object = lambda: os.getenv('PRO_TICKER_PREMARKET_ENABLED') == 'true'
+    quote_feed: str = 'iex'
+    stop_loss_percent: float = 2
+    take_profit_percent: float = 4
     exit_score: float = 40
     exit_confidence: float = 80
 
     def validate(self):
-        if self.paper_base_url != PAPER_URL or self.enabled() is not True:
+        if self.paper_base_url != PAPER_URL or self.enabled() is not True or self.quote_feed not in ('iex','sip'):
             raise EntryBlocked('Manual PAPER buying and scanner management are disabled.')
 
 
@@ -95,6 +100,7 @@ def _save(request_id, **values):
     allowed = {'state', 'account_fingerprint', 'shares', 'reference_ask', 'broker_order_id',
                'order_json', 'result_json', 'reason', 'exit_started_at', 'exit_client_order_id',
                'exit_json', 'exit_shares', 'lease_owner', 'lease_until', 'checked_at', 'updated_at'}
+    allowed |= set(premarket.COLUMNS)
     if not values or not set(values) <= allowed:
         raise ValueError('Invalid entry update.')
     with closing(database.get_connection()) as conn:
@@ -107,12 +113,14 @@ def _save(request_id, **values):
 def _row(request_id):
     with closing(database.get_connection()) as conn:
         conn.executescript(SCHEMA)
+        premarket.migrate(conn)
         value = conn.execute('SELECT * FROM pro_ticker_manual_scanner_entries WHERE request_id=?',
                              (request_id,)).fetchone()
         return dict(value) if value else None
 
 
 def public_entry(row):
+    row = dict(row)
     attempted = row['state'] not in ('preparing', 'blocked')
     order = json.loads(row['order_json']) if row['order_json'] else {}
     return {'request_id': row['request_id'], 'symbol': row['symbol'], 'state': row['state'],
@@ -120,7 +128,11 @@ def public_entry(row):
             'order_submitted': None if row['state'] in ('uncertain', 'submitting') else attempted,
             'broker_order_id': row['broker_order_id'], 'reason': row['reason'],
             'broker_status': order.get('status'), 'filled_shares': order.get('filled_qty'),
-            'managed_by': 'existing_scanner_rules', 'paper': True, 'version': VERSION}
+            'managed_by': 'existing_scanner_rules', 'paper': True, 'version': VERSION,
+            'entry_session': row.get('entry_session','regular'), 'entry_limit':row.get('entry_limit'),
+            'protection_mode': 'app_premarket_native_regular' if row.get('entry_session')=='premarket' else 'native_regular_app_premarket',
+            'stop_price':row.get('stop_price'),'take_profit_price':row.get('take_profit_price'),
+            'exit_order_type':row.get('exit_order_type','market'),'exit_limit':row.get('exit_limit')}
 
 
 def saved_entries():
@@ -131,7 +143,7 @@ def saved_entries():
         return {r['request_id']: public_entry(r) for r in rows}
 
 
-def status(*, enabled, clock=time.time):
+def status(*, enabled, premarket_enabled=False, quote_feed='iex', clock=time.time):
     ready = False
     with closing(database.get_connection()) as conn:
         if conn.execute("SELECT 1 FROM sqlite_master WHERE name='pro_ticker_manual_scanner_health'").fetchone():
@@ -139,7 +151,9 @@ def status(*, enabled, clock=time.time):
             ready = bool(row and 0 <= clock() - row['checked_at'] <= 60)
     return {'paper': True, 'version': VERSION, 'enabled': enabled is True,
             'scanner_ready': ready and enabled is True, 'target_usd': str(TARGET),
-            'whole_shares_only': True, 'regular_session_only': True,
+            'whole_shares_only': True, 'regular_session_only': not (premarket_enabled is True and enabled is True),
+            'premarket_enabled':premarket_enabled is True and enabled is True,
+            'premarket_protection':'app_monitored_limits_native_stops_regular_only','quote_feed':quote_feed,
             'broad_scanner_buying_enabled': False}
 
 
@@ -161,10 +175,18 @@ def _verify_order(order, row, *, exit_order=False):
     _uuid(order.get('id'))
     if not exit_order and row.get('broker_order_id') and order['id'] != row['broker_order_id']:
         raise ValueError('Linked broker parent identity changed.')
-    if order.get('type') != 'market' or order.get('time_in_force') != ('day' if exit_order else 'gtc'):
-        raise ValueError('Unexpected manual broker order type.')
-    if not exit_order and order.get('order_class') != 'bracket':
-        raise ValueError('Protective bracket parent required.')
+    limit_order = row.get('exit_order_type')=='limit' if exit_order else row.get('entry_session')=='premarket'
+    if limit_order:
+        limit = row['exit_limit'] if exit_order else row['entry_limit']
+        if (order.get('type')!='limit' or order.get('time_in_force')!='day'
+                or order.get('extended_hours') is not True or order.get('order_class','simple') not in ('simple','')
+                or _number(order.get('limit_price'))!=_number(limit)):
+            raise ValueError('Saved extended-hours limit identity differs.')
+    else:
+        if order.get('type') != 'market' or order.get('time_in_force') != ('day' if exit_order else 'gtc'):
+            raise ValueError('Unexpected manual broker order type.')
+        if not exit_order and order.get('order_class') != 'bracket':
+            raise ValueError('Protective bracket parent required.')
     return order
 
 
@@ -332,11 +354,7 @@ def submit_entry(request_id, symbol, *, context, clock=time.time):
         fingerprint = _account(context)
         if not _ready(fingerprint, clock()):
             raise EntryBlocked('The scanner sell worker is not ready. No buy was sent.')
-        market = context.request('GET', '/v2/clock')
-        if market.get('is_open') is not True:
-            raise EntryBlocked('Regular market is closed. No buy is queued; submit a new review after opening.')
-        if _stamp(market['next_close']) - clock() < 120:
-            raise EntryBlocked('Too close to market close for a new managed entry.')
+        market_session, market = premarket.session(context,clock,entry=True)
         positions = context.request('GET', '/v2/positions')
         if not isinstance(positions, list) or any(p.get('symbol') == symbol for p in positions):
             raise EntryBlocked('A position already exists or the account position snapshot is unavailable.')
@@ -344,18 +362,28 @@ def submit_entry(request_id, symbol, *, context, clock=time.time):
         ask = _number(quote['ask'])
         if quote.get('symbol') != symbol or not ask > 0 or not 0 <= clock() - _stamp(quote['timestamp']) <= 30:
             raise EntryBlocked('A fresh execution quote is required.')
-        shares = int((TARGET / ask).to_integral_value(rounding=ROUND_DOWN))
+        sizing_price = ask
+        if market_session=='premarket':
+            premarket.fresh_quote(context,symbol,clock)
+            sizing_price = premarket.tick_price(ask,buy=True)
+            stop_percent,profit_percent = _number(context.stop_loss_percent),_number(context.take_profit_percent)
+            if not 0 < stop_percent < 100 or not 0 < profit_percent < 100:
+                raise EntryBlocked('Valid stop-loss and take-profit settings required.')
+            _save(request_id,entry_session='premarket',entry_limit=str(sizing_price),
+                  entry_expires_at=min(clock()+60,_stamp(market['next_open'])-15),
+                  stop_loss_percent=str(stop_percent),take_profit_percent=str(profit_percent))
+        shares = int((TARGET / sizing_price).to_integral_value(rounding=ROUND_DOWN))
         if not 1 <= shares <= 100000:
             raise EntryBlocked('The $2,000 whole-share quantity is outside supported limits.')
         candidate = context.scan(symbol)
         if not isinstance(candidate, dict) or candidate.get('symbol') != symbol or candidate.get('scanner_stale') is not False:
             raise EntryBlocked('Scanner coverage is unavailable for this stock. No buy was sent.')
-        risk = context.risk(symbol=symbol, shares=shares, side='buy')
+        risk = premarket.risk(context,market_session,symbol=symbol, shares=shares, side='buy')
         maximum = risk.get('max_allowed_shares')
         if (risk.get('approved') is not True and isinstance(maximum, int)
                 and not isinstance(maximum, bool) and 1 <= maximum < shares):
             shares = maximum
-            risk = context.risk(symbol=symbol, shares=shares, side='buy')
+            risk = premarket.risk(context,market_session,symbol=symbol, shares=shares, side='buy')
         if risk.get('approved') is not True:
             raise EntryBlocked('Existing buying-power, spread, position or order risk limits blocked this buy.')
         context.validate()
@@ -378,11 +406,17 @@ def submit_entry(request_id, symbol, *, context, clock=time.time):
     # The durable marker precedes transport. Never replay this callback, even
     # when the response is lost; recovery looks up the stable client identity.
     try:
-        result = context.submit(symbol=symbol, shares=shares, reference_price=float(ask),
-                                request_id=request_id, candidate=candidate)
+        if market_session=='premarket':
+            result = premarket.submit_limit(_row(request_id),context,clock)
+        else:
+            result = context.submit(symbol=symbol, shares=shares, reference_price=float(ask),
+                                    request_id=request_id, candidate=candidate)
         if isinstance(result, dict) and result.get('risk', {}).get('approved') is False:
             _save(request_id, state='blocked', reason='Risk checks blocked dispatch.', updated_at=clock())
             return public_entry(_row(request_id))
+    except EntryBlocked as error:
+        _save(request_id,state='blocked',reason=str(error),updated_at=clock())
+        return public_entry(_row(request_id))
     except Exception:
         pass
     with closing(database.get_connection()) as conn:
@@ -406,6 +440,7 @@ def worker_tick(*, context, clock=time.time):
     now = clock()
     with closing(database.get_connection()) as conn:
         conn.executescript(SCHEMA)
+        premarket.migrate(conn)
         conn.execute('INSERT INTO pro_ticker_manual_scanner_health VALUES (1,?,?) ON CONFLICT(id) DO UPDATE SET checked_at=excluded.checked_at,account_fingerprint=excluded.account_fingerprint', (now, fingerprint))
         # A crashed preflight never becomes a deferred buy.
         conn.execute("UPDATE pro_ticker_manual_scanner_entries SET state='blocked',reason='Preflight expired; submit a new review.' WHERE state='preparing' AND created_at<?", (now - 60,))
@@ -449,7 +484,7 @@ def _manage(request_id, *, context, clock):
         # scanner exit is posted. Resolve those owned fills first.
         parent = context.request('GET','/v2/orders/'+row['broker_order_id'],params={'nested':'true'})
         _verify_order(parent,row)
-        prior = [leg for leg in parent.get('legs',[]) if _number(leg.get('filled_qty','0'))>0]
+        prior = [leg for leg in premarket.protective_legs(row,parent,context,clock) if _number(leg.get('filled_qty','0'))>0]
         if sum((_number(leg['filled_qty']) for leg in prior),Decimal(0)) == _owned_quantity(row):
             if callable(context.record_exit):
                 context.record_exit(row,prior)
@@ -460,22 +495,28 @@ def _manage(request_id, *, context, clock):
         if order.get('status') == 'filled' and callable(context.record_exit):
             context.record_exit(row, [*prior,order])
         _save(request_id, exit_json=json.dumps(order, allow_nan=False),
-              state='closed' if order.get('status') == 'filled' else 'attention', updated_at=clock())
+              state='closed' if order.get('status') == 'filled' else 'closing' if order.get('status') in ('new','accepted','pending_new','partially_filled') else 'attention', updated_at=clock())
         return
     parent = context.request('GET', '/v2/orders/' + row['broker_order_id'], params={'nested': 'true'})
     parent = _verify_order(parent, row)
     if callable(context.record_entry):
         context.record_entry(row, parent)
+    if row.get('entry_session')=='premarket':
+        parent = premarket.settle_entry(row,parent,context,clock)
+        if parent is None:
+            return
+        row = _row(request_id)
     filled = _number(parent['filled_qty'])
     if filled == 0:
         return
-    if parent.get('status') != 'filled':
+    if parent.get('status') != 'filled' and row.get('entry_session')!='premarket':
         # Native bracket legs activate only after the complete entry fills.
         # Cancel the remaining entry, confirm terminal broker quantity, then
         # flatten only the verified partial fill instead of leaving it naked.
         _flatten_partial(request_id, parent, context=context, clock=clock)
         return
-    legs = parent.get('legs')
+    legs = premarket.protective_legs(row,parent,context,clock,ensure=True)
+    row = _row(request_id)
     if not isinstance(legs, list) or len(legs) != 2:
         _save(request_id, state='attention', reason='Protective bracket evidence is incomplete.')
         return
@@ -502,25 +543,34 @@ def _manage(request_id, *, context, clock):
     if any(leg.get('status') not in ('new','accepted','pending_new','held','partially_filled') or _number(leg.get('qty'))-_number(leg.get('filled_qty','0')) != remaining for leg in legs):
         _save(request_id, state='attention', reason='Protective order status requires reconciliation.')
         return
-    market = context.request('GET', '/v2/clock')
-    if market.get('is_open') is not True:
+    try:
+        market_session,_ = premarket.session(context,clock)
+    except EntryBlocked:
         return
-    candidate = context.scan(row['symbol'])
-    if (not isinstance(candidate, dict) or candidate.get('symbol') != row['symbol']
-            or candidate.get('scanner_stale') is not False
-            or candidate.get('signal') != 'SELL'):
-        return
-    score, confidence = _number(candidate.get('score')), _number(candidate.get('confidence'))
-    if not 0 <= score <= context.exit_score or not context.exit_confidence <= confidence <= 100:
+    protection_trigger=False
+    if market_session=='premarket':
+        bid=_number(premarket.fresh_quote(context,row['symbol'],clock)['bid'])
+        stop=next(leg for leg in legs if leg['type']=='stop')
+        profit=next(leg for leg in legs if leg['type']=='limit')
+        protection_trigger=bid<=_number(stop['stop_price']) or bid>=_number(profit['limit_price'])
+    candidate = context.scan(row['symbol']) if not protection_trigger else None
+    scanner_sell = (isinstance(candidate,dict) and candidate.get('symbol')==row['symbol']
+                    and candidate.get('scanner_stale') is False and candidate.get('signal')=='SELL'
+                    and 0<=_number(candidate.get('score'))<=context.exit_score
+                    and context.exit_confidence<=_number(candidate.get('confidence'))<=100)
+    if not protection_trigger and not scanner_sell:
         return
     # Check exit feasibility while protection is still present. Only owned
     # bracket IDs may be ignored by this preflight, never arbitrary orders.
     owned_ids = {parent['id'], *(leg['id'] for leg in legs)}
-    risk = context.risk(symbol=row['symbol'], shares=int(remaining), side='sell', owned_order_ids=owned_ids)
+    risk = premarket.risk(context,market_session,symbol=row['symbol'], shares=int(remaining), side='sell', owned_order_ids=owned_ids)
     if risk.get('approved') is not True:
         _save(request_id, reason='Scanner SELL observed; exit risk check blocked cancellation.')
         return
-    _dispatch_close(row, int(remaining), owned_ids, context=context, clock=clock)
+    if market_session=='premarket':
+        premarket.dispatch_exit(row,int(remaining),owned_ids,context,clock)
+    else:
+        _dispatch_close(row, int(remaining), owned_ids, context=context, clock=clock)
 
 
 def _dispatch_close(row, remaining, owned_ids, *, context, clock):
