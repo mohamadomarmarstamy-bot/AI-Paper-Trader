@@ -107,6 +107,36 @@ class EngineTests(unittest.TestCase):
         self.configure({'watchlist':[MINT],'discover':False});self.tick(force=True)
         self.now+=60;self.providers.price=1.01
         self.assertFalse(self.tick(force=True)['positions'])
+    def test_early_manual_scans_do_not_restart_confirmation_timer(self):
+        self.configure({'enabled':True,'watchlist':[MINT],'discover':False});self.tick()
+        self.now+=10;self.providers.price=1.002
+        self.assertFalse(self.tick(force=True)['positions'])
+        self.now+=40;self.providers.price=1.01
+        self.assertEqual(len(self.tick(force=True)['positions']),1)
+
+    def test_discovery_rotates_after_two_scans_without_dropping_positions(self):
+        state=bot.initial();profiles=['1'*31+c for c in '23456789ABCDEFGH']
+        first=bot.select_candidates(state,profiles)
+        self.assertEqual(len(first),8)
+        self.assertEqual(bot.select_candidates(state,profiles[::-1]),first)
+        third=bot.select_candidates(state,profiles)
+        self.assertNotEqual(third,first)
+        state['positions']={MINT:{}}
+        self.assertEqual(bot.select_candidates(state,profiles)[0],MINT)
+
+    def test_missing_liquidity_retains_symbol_and_specific_reason(self):
+        self.configure({'watchlist':[MINT],'discover':False})
+        original=self.providers.pairs
+        def no_liquidity(addresses):
+            rows=original(addresses)
+            del rows[0]['liquidity']
+            return rows
+        self.providers.pairs=no_liquidity
+        result=self.tick(force=True)['candidates'][0]
+        self.assertEqual(result['status'],'unavailable')
+        self.assertIn('TEST',result['symbol'])
+        self.assertEqual(result['reason'],'Liquidity data missing.')
+
     def test_http_auth_origin_and_execution_input_boundaries(self):
         allowed=False
         def auth(request):
