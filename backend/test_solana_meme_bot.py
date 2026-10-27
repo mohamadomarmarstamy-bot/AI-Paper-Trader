@@ -123,6 +123,34 @@ class EngineTests(unittest.TestCase):
         self.assertIsNone(result['equity_history'][-1]['equity_usd'])
         self.assertIsNone(result['unrealized_pnl_usd'])
 
+    def test_confirmation_can_be_disabled_without_bypassing_other_rules(self):
+        self.configure({'enabled':True,'watchlist':[MINT],'discover':False,'confirmation_enabled':False})
+        self.providers.failure='Active mint or freeze authority.'
+        self.assertFalse(self.tick()['positions'])
+        self.providers.failure=None
+        self.assertEqual(len(self.tick()['positions']),1)
+
+    def test_custom_confirmation_wait_and_price_range(self):
+        self.configure({'enabled':True,'watchlist':[MINT],'discover':False,'confirmation_seconds':90,
+                        'confirmation_min_percent':2,'confirmation_max_percent':4})
+        self.tick();self.now+=60;self.providers.price=1.03
+        result=self.tick();self.assertFalse(result['positions'])
+        self.assertEqual(result['candidates'][0]['confirmation_due_at'],self.now+30)
+        self.now+=30;self.providers.price=1.01
+        self.assertIn('Required rise: 2%–4%',self.tick()['candidates'][0]['reason'])
+        self.now+=10;self.providers.price=1.03
+        self.assertEqual(len(self.tick()['positions']),1)
+
+    def test_confirmation_bounds_and_discovery_hold(self):
+        for change in ({'confirmation_enabled':1},{'confirmation_seconds':9},{'confirmation_seconds':10.5},
+                       {'confirmation_min_percent':9},{'confirmation_max_percent':0}):
+            with self.assertRaises(ValueError):self.configure(change)
+        self.configure({'confirmation_seconds':180})
+        state=bot.load()[0];profiles=['1'*31+c for c in bot.ALPHABET]
+        first=bot.select_candidates(state,profiles,self.now)
+        for _ in range(19):self.assertEqual(bot.select_candidates(state,profiles,self.now),first)
+        self.assertNotEqual(bot.select_candidates(state,profiles,self.now),first)
+
     def test_default_paused_makes_no_provider_requests(self):
         with patch.object(self.providers,'profiles',side_effect=AssertionError),patch.object(self.providers,'pairs',side_effect=AssertionError):
             self.assertEqual(self.tick()['health'],'paused')
@@ -194,12 +222,12 @@ class EngineTests(unittest.TestCase):
         self.now+=40;self.providers.price=1.01
         self.assertEqual(len(self.tick(force=True)['positions']),1)
 
-    def test_discovery_rotates_after_six_scans_without_dropping_positions(self):
+    def test_discovery_rotates_after_confirmation_wait_without_dropping_positions(self):
         state=bot.initial();profiles=['1'*31+c for c in bot.ALPHABET]
         first=bot.select_candidates(state,profiles)
         self.assertEqual(len(first),20)
         self.assertEqual(bot.select_candidates(state,profiles[::-1]),first)
-        for _ in range(4):
+        for _ in range(5):
             self.assertEqual(bot.select_candidates(state,profiles),first)
         rotated=bot.select_candidates(state,profiles)
         self.assertNotEqual(rotated,first)
