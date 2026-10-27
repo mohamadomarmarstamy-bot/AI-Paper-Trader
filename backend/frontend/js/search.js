@@ -592,7 +592,7 @@ async function selectSearchStock(
 
         if (priceInput) {
             priceInput.value =
-                price.toFixed(2);
+                price.toFixed(4).replace(/\.?0+$/, "");
 
             priceInput.placeholder =
                 "0.00";
@@ -684,34 +684,10 @@ async function selectSearchStock(
 }
 
 
-function normalizeQuotePrice(
-    payload
-) {
-    if (
-        !payload ||
-        typeof payload !==
-            "object" ||
-        Array.isArray(payload)
-    ) {
-        return null;
-    }
-
-    const price =
-        Number(
-            payload.price ??
-            payload.current_price ??
-            payload.last_price ??
-            payload.regularMarketPrice
-        );
-
-    if (
-        !Number.isFinite(price) ||
-        price <= 0
-    ) {
-        return null;
-    }
-
-    return price;
+function normalizeQuotePrice(payload) {
+    const age=Date.now()-Date.parse(payload?.quote_timestamp);
+    const ask=Number(payload?.ask);
+    return payload?.quote_fresh===true&&Number.isFinite(age)&&age>=0&&age<=30000&&Number.isFinite(ask)&&ask>0?ask:null;
 }
 
 

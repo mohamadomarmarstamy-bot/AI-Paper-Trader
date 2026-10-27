@@ -477,7 +477,7 @@
 
                                 <div class="form-field">
                                     <label for="price">
-                                        Current Market Price
+                                        Buy estimate (ask)
                                     </label>
 
                                     <input
@@ -490,8 +490,8 @@
                                     >
                                 </div>
 
-                                <p class="market-price-note form-field-wide">
-                                    Prices are loaded from the market-data service and may be delayed.
+                                <p id="trade-quote-status" class="market-price-note form-field-wide" role="status">
+                                    Select a symbol for timestamped bid/ask estimates. Market fills may differ.
                                 </p>
 
                                 <section
@@ -1872,11 +1872,11 @@
     <script src="js/trade-activity.js?v=filled-activity-v1"></script>
     <script src="js/notifications.js?v=filled-activity-v1"></script>
     <script src="js/charts.js"></script>
-    <script src="js/trades.js"></script>
+    <script src="js/trades.js?v=execution-quotes-v1"></script>
     <script src="js/trade-journal.js?v=accuracy-20260925-2"></script>
     <script src="js/taxes.js"></script>
     <script src="js/scanner.js?v=fast-movers-v1"></script>
-    <script src="js/search.js"></script>
+    <script src="js/search.js?v=execution-quotes-v1"></script>
     <script src="js/watchlist.js"></script>
     <script src="js/portfolio.js"></script>
     <script src="js/pro-ticker-manual.js"></script>

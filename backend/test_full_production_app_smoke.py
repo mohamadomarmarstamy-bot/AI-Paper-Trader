@@ -736,6 +736,33 @@ print("RESTART_RESULT:" + json.dumps(asyncio.run(check())))
         self.assertEqual(result.json()['coverage']['profile'],'fast_movers_v1')
         broker.assert_not_called()
 
+    def test_quote_is_authenticated_timestamped_and_does_not_use_untimed_fallback(self):
+        import asyncio
+        import httpx
+        from unittest.mock import patch
+        from collections import OrderedDict
+        import execution_quotes
+        from datetime import datetime,timezone
+        stamp=datetime.now(timezone.utc).isoformat()
+        snapshot={'BRAI':{'latestQuote':{'bp':3.56,'ap':3.9,'t':stamp},'latestTrade':{'p':3.77,'t':stamp}}}
+        with patch.object(self.main,'APP_SESSION_SECRET','isolated-quote-secret'), \
+             patch.object(execution_quotes,'_caches',OrderedDict()), \
+             patch.object(self.main,'alpaca_market_data_request',return_value=snapshot) as data, \
+             patch.object(self.main,'fetch_current_price') as fallback, \
+             patch.object(self.main,'alpaca_paper_request') as broker:
+            async def run():
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.main.app),base_url='http://testserver') as client:
+                    anonymous=await client.get('/quote/BRAI')
+                    data.assert_not_called()
+                    client.cookies.set(self.main.APP_SESSION_COOKIE,self.main.create_app_session_token())
+                    return anonymous,await client.get('/quote/BRAI')
+            anonymous,result=asyncio.run(run())
+        self.assertEqual(anonymous.status_code,401)
+        self.assertEqual(result.status_code,200)
+        self.assertTrue(result.json()['quote_fresh'])
+        self.assertEqual(result.json()['ask'],3.9)
+        fallback.assert_not_called();broker.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

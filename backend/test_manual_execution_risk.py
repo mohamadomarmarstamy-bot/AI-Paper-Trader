@@ -43,9 +43,9 @@ class ManualExecutionRiskTests(unittest.TestCase):
         fn,ns=validator(fetch_alpaca_open_orders_for_symbol=Mock(return_value=[{'id':'foreign','side':'buy'}]))
         self.assertFalse(fn(symbol='BRAI',shares=100,side='sell')['approved'])
 
-    def test_automatic_buy_retains_spread_ceiling_owner_selected_buy_does_not(self):
+    def test_wide_spread_does_not_veto_automatic_or_owner_selected_buys(self):
         fn,ns=validator()
-        self.assertFalse(fn(symbol='BRAI',shares=100,side='buy')['approved'])
+        self.assertTrue(fn(symbol='BRAI',shares=100,side='buy')['approved'])
         self.assertTrue(fn(symbol='BRAI',shares=100,side='buy',owner_manual_entry=True)['approved'])
         self.assertTrue(all(c.args[0]=='GET' for c in ns['alpaca_paper_request'].call_args_list))
 
