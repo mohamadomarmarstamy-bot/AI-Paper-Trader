@@ -69,6 +69,44 @@ class EngineTests(unittest.TestCase):
         self.configure({'minimum_liquidity_usd':0,'minimum_m5_volume_usd':0})
         self.assertEqual(bot.public()['rules']['minimum_liquidity_usd'],0)
 
+    def test_scans_do_not_invalidate_settings_and_saves_survive_reload(self):
+        self.configure({'enabled':True,'watchlist':[MINT],'discover':False})
+        edited_revision=bot.public()['revision']
+        for _ in range(3):self.now+=10;self.tick()
+        result=bot.configure({'minimum_liquidity_usd':12345,'minimum_m5_volume_usd':6789},edited_revision)
+        self.assertEqual(result['config']['minimum_liquidity_usd'],12345)
+        self.assertEqual(bot.public()['config']['minimum_m5_volume_usd'],6789)
+        self.assertGreater(result['revision'],edited_revision)
+        with self.assertRaises(bot.Conflict):bot.configure({'trade_usd':90},edited_revision)
+
+    def test_missing_batch_pool_recovers_with_alternate_lookup(self):
+        self.configure({'watchlist':[MINT],'discover':False})
+        good=self.providers.pairs([MINT])
+        self.providers.pairs=lambda addresses:[]
+        self.providers.token_pairs=lambda address:good
+        result=self.tick(force=True)
+        self.assertNotEqual(result['candidates'][0]['status'],'unavailable')
+        self.assertNotIn(MINT,bot.load()[0]['unavailable_until'])
+
+    def test_incomplete_discovery_is_backed_off_but_watchlist_remains(self):
+        state=bot.initial();profiles=['1'*31+c for c in bot.ALPHABET]
+        first=bot.select_candidates(state,profiles,self.now)
+        state['unavailable_until']={first[0]:self.now+300}
+        second=bot.select_candidates(state,profiles,self.now+10)
+        self.assertEqual(len(second),20);self.assertNotIn(first[0],second)
+        self.assertIn(first[1],second)
+        state['config']['watchlist']=[first[0]]
+        self.assertEqual(bot.select_candidates(state,profiles,self.now+20)[0],first[0])
+
+    def test_alternate_pool_cannot_replace_held_pool(self):
+        self.open();good=self.providers.pairs([MINT])
+        self.providers.pairs=lambda addresses:[]
+        self.providers.token_pairs=lambda address:[{**r,'pairAddress':OTHER} for r in good]
+        self.now+=10
+        result=self.tick()
+        self.assertEqual(result['positions'][0]['pair'],PAIR)
+        self.assertFalse(result['positions'][0]['mark_fresh'])
+
     def test_default_paused_makes_no_provider_requests(self):
         with patch.object(self.providers,'profiles',side_effect=AssertionError),patch.object(self.providers,'pairs',side_effect=AssertionError):
             self.assertEqual(self.tick()['health'],'paused')

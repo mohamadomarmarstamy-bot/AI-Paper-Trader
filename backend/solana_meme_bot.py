@@ -102,8 +102,8 @@ def public():
         if mark is None:complete=False
         else:value+=mark
         positions.append({'mint':address,**p,'mark_fresh':fresh,'current_modeled_value_usd':mark})
-    return {'version':VERSION,'paper':True,'live_execution_enabled':False,'revision':revision,
-            **{k:v for k,v in state.items() if k not in ('positions','observations','cooldowns','discovery_batch','discovery_uses','discovery_offset')},
+    return {'version':VERSION,'paper':True,'live_execution_enabled':False,'revision':state.get('settings_revision',0),
+            **{k:v for k,v in state.items() if k not in ('positions','observations','cooldowns','discovery_batch','discovery_uses','discovery_offset','settings_revision','unavailable_until')},
             'positions':positions,'paper_equity_usd':round(value,4) if complete else None,
             'realized_pnl_usd':round(sum(p['pnl_usd'] for p in state['closed']),4),
             'realized_scope':'Latest 200 completed paper trades; older events may be excluded.',
@@ -129,8 +129,9 @@ def configure(changes,expected_revision):
             if not low<=num(value)<=high or key in ('max_positions','max_hold_minutes') and num(value)%1:
                 raise ValueError('Setting outside paper experiment bounds.')
     state,revision=load()
-    if revision!=expected_revision:raise Conflict('Settings changed. Refresh before saving.')
+    if state.get('settings_revision',0)!=expected_revision:raise Conflict('Settings changed. Refresh before saving.')
     state['config'].update(changes)
+    state['settings_revision']=state.get('settings_revision',0)+1
     if state['config']['trail_percent']>=state['config']['trail_arm_percent']:
         raise ValueError('Trailing distance must be below its activation percentage.')
     state['health']='starting' if state['config']['enabled'] else 'paused_entries_monitoring_exits'
@@ -164,6 +165,12 @@ class ReadOnlyProviders:
         data=self._json(requests.get('https://api.dexscreener.com/tokens/v1/solana/'+','.join(addresses),timeout=4))
         if not isinstance(data,list) or len(data)>500:raise ValueError('Pair evidence unavailable.')
         return data
+    def token_pairs(self,address):
+        mint(address)
+        data=self._json(requests.get('https://api.dexscreener.com/token-pairs/v1/solana/'+address,timeout=3))
+        if not isinstance(data,list) or len(data)>500:raise ValueError('Pair evidence unavailable.')
+        return data
+
     def rpc(self,method,params):
         if method not in ('getAccountInfo','getTokenLargestAccounts'):raise ValueError('Read-only RPC method required.')
         mint(params[0])
@@ -231,18 +238,22 @@ def entry_reason(row,previous,now,config=None):
     return None
 
 
-def select_candidates(state, profiles):
+def select_candidates(state, profiles, now=None):
     """Keep a discovery batch for confirmation, then rotate beyond the first batch."""
     priority=list(dict.fromkeys([*state['positions'],*state['config']['watchlist']]))[:MAX_SCAN_TOKENS]
     slots=MAX_SCAN_TOKENS-len(priority)
     if not slots:return priority
-    batch=[a for a in state.get('discovery_batch',[]) if a not in priority][:slots]
+    now=time.time() if now is None else now
+    excluded={a for a,until in state.get('unavailable_until',{}).items() if until>now}
+    batch=[a for a in state.get('discovery_batch',[]) if a not in priority and a not in excluded][:slots]
     if state.get('discovery_uses',DISCOVERY_BATCH_SCANS)>=DISCOVERY_BATCH_SCANS or not batch:
-        pool=list(dict.fromkeys(a for a in profiles if a not in priority))
+        pool=list(dict.fromkeys(a for a in profiles if a not in priority and a not in excluded))
         offset=state.get('discovery_offset',0)%len(pool) if pool else 0
         batch=(pool[offset:]+pool[:offset])[:slots]
         state['discovery_offset']=(offset+len(batch))%len(pool) if pool else 0
         state['discovery_uses']=0
+    if len(batch)<slots:
+        batch+=list(dict.fromkeys(a for a in profiles if a not in priority and a not in excluded and a not in batch))[:slots-len(batch)]
     state['discovery_batch']=batch
     state['discovery_uses']=state.get('discovery_uses',0)+1
     return priority+batch
@@ -262,12 +273,28 @@ def tick(*,providers=None,clock=time.time,force=False):
     try:
         candidates=list(dict.fromkeys([*state['positions'],*config['watchlist']]))[:MAX_SCAN_TOKENS]
         if config['discover'] and (config['enabled'] or force):
-            try:candidates=select_candidates(state,providers.profiles())
+            try:candidates=select_candidates(state,providers.profiles(),now)
             except Exception:state['error']='Discovery unavailable; existing positions/watchlist still monitored.'
         if not candidates:
             state.update(health='waiting_for_mints',last_cycle=now)
         else:
             raw=providers.pairs(candidates);observed=clock()
+            if not 0<=observed-now<=45:raise ValueError('Observation request exceeded cycle budget.')
+            # Only incomplete/absent pool batches receive a bounded alternate-pool lookup.
+            recoveries=0
+            for address in candidates:
+                matching=[r for r in raw if r.get('baseToken',{}).get('address')==address and r.get('chainId')=='solana']
+                complete=False
+                for r in matching:
+                    try:
+                        normalized=normalize_pair(r,address,observed)
+                        if address not in state['positions'] or normalized['pair']==state['positions'][address]['pair']:complete=True
+                    except (ValueError,KeyError,TypeError):pass
+                if not complete and recoveries<4 and hasattr(providers,'token_pairs'):
+                    recoveries+=1
+                    try:raw.extend(providers.token_pairs(address))
+                    except Exception:pass
+            observed=clock()
             if not 0<=observed-now<=45:raise ValueError('Observation request exceeded cycle budget.')
             snapshots={};missing={}
             for address in candidates:
@@ -287,6 +314,11 @@ def tick(*,providers=None,clock=time.time,force=False):
                 if address in state['positions']:
                     valid=[r for r in valid if r['pair']==state['positions'][address]['pair']]
                 if valid:snapshots[address]=max(valid,key=lambda r:r['liquidity_usd'])
+            unavailable={a:t for a,t in state.get('unavailable_until',{}).items() if t>observed}
+            for address in candidates:
+                if address in snapshots:unavailable.pop(address,None)
+                else:unavailable[address]=observed+300
+            state['unavailable_until']=unavailable
             closed_this_cycle=set()
             for address,p in list(state['positions'].items()):
                 row=snapshots.get(address)
