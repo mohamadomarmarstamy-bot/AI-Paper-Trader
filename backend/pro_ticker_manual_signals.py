@@ -229,7 +229,9 @@ def build_manual_signal_router(*,require_session,quote_fetcher,analyzer,executio
             return {'paper':True,'kind':'owner_manual_scanner_v1','live_trading':False,
                     'signal':{**result['signal'],'manual_entry':entry},'entry':entry}
         except HTTPException:raise
-        except EntryBlocked as error:raise HTTPException(409,str(error)) from None
+        except EntryBlocked as error:
+            print(json.dumps({'manual_entry_conflict':{'symbol':payload.get('symbol'),'reason':str(error)}}),flush=True)
+            raise HTTPException(409,str(error)) from None
         except SignalConflict:raise HTTPException(409,'Existing review or order is active; refresh saved status.') from None
         except ValueError:raise HTTPException(422,'Provide one symbol and canonical request ID only.') from None
         except Exception:raise HTTPException(503,'Unable to confirm the PAPER entry. Refresh the same request; never create a second buy to recover.') from None

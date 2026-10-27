@@ -339,6 +339,7 @@ async function loadLivePrice(
 
     if(currentTradeQuote?.symbol!==symbol||!currentTradeQuote?.quote)setTradePriceLoading();
 
+    const quoteRequestStarted=performance.now();
     try {
         const response = await fetch(
             `${getTradeApiUrl()}/quote/${encodeURIComponent(
@@ -362,6 +363,11 @@ async function loadLivePrice(
             await readTradeJson(
                 response
             );
+        if(result&&typeof result==="object"){
+            result._received_monotonic=performance.now();
+            result._round_trip_ms=result._received_monotonic-quoteRequestStarted;
+        }
+
 
         if (!response.ok) {
             throw new Error(
@@ -380,14 +386,16 @@ async function loadLivePrice(
         }
 
         const price =
-            normalizeQuotePrice(
+            normalizeTradeQuotePrice(
                 result
             );
 
         if (price === null) {
-            throw new Error(
-                "No valid live price was returned for this symbol."
-            );
+            const feed=result?.feed==="sip"?"SIP":"IEX";
+            const age=Number(result?.quote_age_seconds);
+            const when=Date.parse(result?.quote_timestamp);
+            const last=result?.quote_age_seconds!==null&&Number.isFinite(age)&&Number.isFinite(when)?` Last ${feed} quote: ${new Date(when).toLocaleString()} (${Math.floor(age)}s old).`:"";
+            throw new Error(result?.quote_fresh===true?"Quote could not be verified as fresh after transport. Refresh to request a new quote.":`Fresh ${feed} bid/ask unavailable for ${symbol}.${last} No delayed price was substituted.`);
         }
 
         if (
@@ -543,7 +551,7 @@ async function loadRiskPlan(
                 response
             );
 
-        if (!response.ok) {
+        if (!response.ok || result?.success === false || result?.error) {
             throw new Error(
                 getTradeResponseMessage(
                     result,
@@ -2031,7 +2039,7 @@ function setTradePriceError(
 
     currentTradeQuote = null;
     const note=document.getElementById("trade-quote-status");
-    if(note)note.textContent="Fresh bid/ask unavailable. No delayed price was substituted.";
+    if(note)note.textContent=message||"Fresh bid/ask unavailable. No delayed price was substituted.";
 
     if (priceInput) {
         priceInput.value = "";
@@ -2236,16 +2244,22 @@ function getTradePrice() {
 }
 
 
-function normalizeQuotePrice(payload) {
-    const age=Date.now()-Date.parse(payload?.quote_timestamp);
+function normalizeTradeQuotePrice(payload) {
+    const age=quoteAgeMillis(payload);
     if(payload?.quote_fresh!==true||!Number.isFinite(age)||age<0||age>30000)return null;
     return toPositiveTradeNumber(payload.ask);
+}
+
+function quoteAgeMillis(quote) {
+    if(quote?.quote_age_seconds===null||typeof quote?.quote_age_seconds!=="number"||!Number.isFinite(Date.parse(quote?.quote_timestamp)))return NaN;
+    const elapsed=typeof quote._received_monotonic==="number"?Math.max(0,performance.now()-quote._received_monotonic):0;
+    return quote.quote_age_seconds*1000+Math.max(0,Number(quote._round_trip_ms)||0)+elapsed;
 }
 
 function renderExecutionQuote(quote) {
     const note=document.getElementById("trade-quote-status");
     if(!note)return;
-    const age=Date.now()-Date.parse(quote.quote_timestamp);
+    const age=quoteAgeMillis(quote);
     if(quote.quote_fresh!==true||!Number.isFinite(age)||age<0||age>30000){
         note.textContent="Quote is stale or unavailable. No delayed price is shown as current.";
         const input=document.getElementById("price");if(input)input.value="";currentTradeQuote=null;updateTradePreview();return;
@@ -2444,6 +2458,7 @@ function clampTradeNumber(
 function formatTradeCurrency(
     value
 ) {
+    if(value===null||value===undefined||value===""||typeof value==="boolean")return "—";
     const number =
         Number(value);
 
@@ -2461,6 +2476,7 @@ function formatTradeNumber(
     value,
     decimalPlaces = 2
 ) {
+    if(value===null||value===undefined||value===""||typeof value==="boolean")return "—";
     const number =
         Number(value);
 

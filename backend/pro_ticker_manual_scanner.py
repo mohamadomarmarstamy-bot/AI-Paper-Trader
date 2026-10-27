@@ -145,15 +145,28 @@ def saved_entries():
         return {r['request_id']: public_entry(r) for r in rows}
 
 
+_last_blocker_diagnostic = None
+
+
 def status(*, enabled, premarket_enabled=False, quote_feed='iex', target_usd=2000, entry_settings_revision=0, clock=time.time):
+    global _last_blocker_diagnostic
     ready = False
+    blockers=[]
     with closing(database.get_connection()) as conn:
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE name='pro_ticker_manual_scanner_entries'").fetchone():
+            blockers=[dict(row) for row in conn.execute("SELECT symbol,state,reason FROM pro_ticker_manual_scanner_entries WHERE state IN ('preparing','submitting','uncertain','closing','attention','accepted','open') ORDER BY CASE WHEN state IN ('accepted','open') THEN 1 ELSE 0 END,updated_at DESC LIMIT 20").fetchall()]
+            for row in blockers:row['scope']='symbol' if row['state'] in ('accepted','open') else 'account'
+
         if conn.execute("SELECT 1 FROM sqlite_master WHERE name='pro_ticker_manual_scanner_health'").fetchone():
             row = conn.execute('SELECT * FROM pro_ticker_manual_scanner_health WHERE id=1').fetchone()
             ready = bool(row and 0 <= clock() - row['checked_at'] <= 60)
+    diagnostic=tuple((b['symbol'],b['state'],b['reason']) for b in blockers)
+    if diagnostic!=_last_blocker_diagnostic:
+        if blockers or _last_blocker_diagnostic:print(json.dumps({'manual_entry_blockers':blockers}),flush=True)
+        _last_blocker_diagnostic=diagnostic
     return {'paper': True, 'version': VERSION, 'enabled': enabled is True,
             'scanner_ready': ready and enabled is True, 'target_usd': format(Decimal(str(target_usd)).normalize(),'f'),
-            'whole_shares_only': True, 'regular_session_only': not (premarket_enabled is True and enabled is True),
+            'entry_blockers':blockers,'whole_shares_only': True, 'regular_session_only': not (premarket_enabled is True and enabled is True),
             'premarket_enabled':premarket_enabled is True and enabled is True,
             'premarket_protection':'app_monitored_limits_native_stops_regular_only','quote_feed':quote_feed,
             'broad_scanner_buying_enabled': False,'entry_settings_revision':entry_settings_revision}

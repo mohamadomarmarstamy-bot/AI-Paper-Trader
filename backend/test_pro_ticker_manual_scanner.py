@@ -101,6 +101,16 @@ class ManualScannerTests(unittest.TestCase):
         self.assertTrue(result['order_submitted'])
         self.assertEqual(self.context.submit.call_count, 1)
 
+    def test_status_explains_existing_order_blockers_without_broker_requests(self):
+        self.submit()
+        _save(self.request_id,state='attention',reason='Protective order evidence incomplete.')
+        before=self.context.request.call_count;sent=self.context.submit.call_count
+        result=status(enabled=True)
+        self.assertEqual(result['entry_blockers'][0]['symbol'],self.symbol)
+        self.assertEqual(result['entry_blockers'][0]['scope'],'account')
+        self.assertEqual(self.context.request.call_count,before)
+        self.assertEqual(self.context.submit.call_count,sent)
+
     def test_repeat_and_lost_confirmation_never_repeat_buy(self):
         original = self.context.submit.side_effect
         def lost(**kwargs):

@@ -10,6 +10,10 @@
 
         if(current!==manualModeVersion)return;manualMode=data;
         if(note)note.textContent=data.enabled?"PAPER BUY MODE: each NEW submission requests approximately $"+Number(data.target_usd).toLocaleString("en-US")+" in whole shares in the existing PAPER account. Grades are informational and do not veto your buy. The entry spread ceiling does not apply to owner submissions; wide spreads can reduce realized proceeds. The scanner manages exits. "+(data.premarket_enabled?"Premarket limits and regular-session buys are enabled. Premarket stops depend on this app staying online; broker stops operate in regular hours. Limits may not fill; unfilled buys are canceled after 60 seconds while the worker is online. Fresh quotes are required. "+(data.quote_feed==="sip"?"Configured SIP entitlement is required. ":"The IEX feed begins at 8 a.m. Eastern. ")+"":"Regular market only. ")+"Risk limits apply. Repeating the same request never creates another buy."+(data.scanner_ready?"":" Scanner worker is not ready; buying is blocked. Refresh saved reviews in a moment."):"Research mode: submitting saves a review without buying. Manual PAPER buying is disabled.";
+        if(note&&Array.isArray(data.entry_blockers)&&data.entry_blockers.length){
+            const blockers=data.entry_blockers.slice(0,3).map(item=>`${item.symbol}: ${item.state}${item.reason?" — "+item.reason:""}${item.scope==="account"?" (blocks new entries until reconciled)":" (another buy of this symbol is blocked)"}`);
+            note.textContent+=" Saved order state: "+blockers.join("; ");
+        }
     }catch(error){if(current!==manualModeVersion)return;manualMode={enabled:false,scanner_ready:false};if(note)note.textContent="PAPER buying status is unavailable. This form can save research only; no order will be requested.";}
         if(current===manualModeVersion){el("submit").textContent=manualMode.enabled?"Buy ~$"+Number(manualMode.target_usd||2000).toLocaleString("en-US")+" PAPER & research":"Save & grade stock";if(!saving)el("submit").disabled=manualMode.enabled&&!manualMode.scanner_ready;}
     }
@@ -412,10 +416,15 @@
             if(requestSymbol!==symbol){requestId=null;requestSymbol=symbol;}
             requestId=requestId||crypto.randomUUID();
             const response=await fetch(endpoint+(wantsBuy?"/buy-and-scan":""),{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbol,request_id:requestId,...(wantsBuy&&Number.isInteger(manualMode.entry_settings_revision)?{entry_settings_revision:manualMode.entry_settings_revision}:{})})});
-            if(!response.ok)throw Error("Review request failed ("+response.status+"). Refresh saved status before retrying.");
+            if(!response.ok){
+                let failure=null;try{failure=await response.json();}catch{}
+                const reason=typeof failure?.detail==="string"?failure.detail:typeof failure?.error==="string"?failure.error:"Review request failed ("+response.status+"). Refresh saved status before retrying.";
+                const guidance=response.status===409&&reason.includes("A new submission is required")?" Use Start a new review for a fresh request.":"";
+                const failureError=Error(reason+guidance);failureError.status=response.status;throw failureError;
+            }
             const data=await response.json();flags(data);const review=record(data.signal);
             const loaded=await refresh();detail(review);el("status").textContent=(review.manual_entry?"PAPER entry for "+review.symbol+": "+review.manual_entry.state+". "+(review.manual_entry.reason||"Inspect the saved order below; no model training occurred."):"Review "+review.status+" for "+review.symbol+". No PAPER order placed; no model training performed.")+(loaded?"":" History refresh failed; the confirmed review is shown below.");
-        }catch(error){el("status").textContent="Unable to confirm review: "+error.message+" Retrying unchanged input reuses the same request ID.";}
+        }catch(error){el("status").textContent="Unable to confirm review: "+error.message+(error.status===409?" Refresh saved reviews and follow the specific reason above.":" Retrying unchanged input reuses the same request ID.");}
         finally{saving=false;el("submit").disabled=manualMode.enabled&&!manualMode.scanner_ready;el("symbol").disabled=false;}
     });
     el("refresh").addEventListener("click",refresh);
