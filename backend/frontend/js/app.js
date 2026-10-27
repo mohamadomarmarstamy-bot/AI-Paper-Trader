@@ -1,5 +1,4 @@
-﻿window.API_URL =
-    "https://ai-paper-trader-production-7465.up.railway.app";
+window.API_URL = window.location.origin;
     
 async function refreshDashboard() {
     const results = await Promise.allSettled([

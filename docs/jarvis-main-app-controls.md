@@ -1,0 +1,26 @@
+# Jarvis and main-app controls
+
+Jarvis 2 uses the already configured `OPENAI_API_KEY` and `JARVIS_MODEL` (default `gpt-5.6`). No credential is exposed to the browser or assistant tools. This is an app-connected API assistant, not a promise of identical behavior to a ChatGPT product session.
+
+## What works
+
+- Main Settings and Jarvis share `app_controls`: the same persisted risk values, validation, revision checks, audit receipts and undo. The production sizing/bracket/profit-lock/daily-limit code continues reading those keys. Changing a setting affects subsequent decisions; existing native orders and already frozen manual-premarket protection are not amended.
+- Clear current-turn commands such as `Set stop loss to 2%`, `Change take profit from 4% to 3%`, or `Pause new paper entries` apply once and return a receipt. These literal commands do not require a paid model call. Ambiguous/general requests use the configured AI; its only write-related tool creates a preview. The owner applies that server-saved preview with the displayed Apply button. Previews expire after ten minutes and reject stale revisions.
+- App tools read timestamped settings, runtime health, PAPER account/positions, cached scanner data, paginated journal/tax rows, canonical performance and recent activity. `read_symbol` uses the existing daily analysis. The browser watchlist is passed as bounded, unverified UI context. Data is not unrestricted filesystem or database access; missing data and truncated history remain explicit.
+- Activity feed preferences filter trade/protection/scanner events. They do not erase logs or disable critical monitoring. Reload, emergency pause, restore defaults (which pauses new entries), and undo have real backend actions. Unsupported AI-training/experiment switches were removed from Settings and replaced with actual availability indicators; no fake feature is enabled.
+- The drawer opens from either the sidebar or orb. Profile save, British voice preset, AI voice preview, voice toggle, stop, mic, mute and end are connected. Saved language is used for recognition. Saved wake phrase is required during an explicitly started voice session when that preference is enabled. Greeting is local, once per page session, and respects the saved preference. No background microphone starts from a saved toggle alone.
+- Voice uses the existing `gpt-4o-mini-tts` service and a built-in voice (Cedar preset), with original composed British delivery. It does not clone an actor. AI-generated speech is disclosed. Browser speech is a fallback when neural speech fails; stopping invalidates pending audio so an old response cannot resume it. Replies longer than 3,900 characters speak an excerpt and direct the user to the full chat text.
+
+## Authorization and correctness
+
+Every write requires owner authentication, JSON and matching origin. Numeric ranges, whole-position counts and related sizing limits are checked atomically. Deployment flags, credentials, live trading, training, direct buy/sell/cancel actions and arbitrary code are outside the assistant's tools. Provider output, prior chat, profiles, logs, headlines and browser context cannot directly authorize settings changes. Clear-command parsing is deliberately narrow; hypothetical, negated or ambiguous instructions cannot auto-apply.
+
+Settings writes use optimistic revision checks. Retried request IDs return their original receipt; a reused ID with different changes is rejected. Jarvis requests are durably claimed before processing. If an applied setting survives a crash before the reply, its receipt can be recovered without another change or paid model request. An uncertain processing request is not automatically replayed. Existing broker orders and historical trade-book records are preserved.
+
+AI calls are capped at three Responses rounds with at most four tool calls per round and 3,000 output tokens per round. Responses use `store:false`; this does not promise zero provider retention under all service policies. Direct commands and greetings avoid unnecessary AI billing. Voice is off by default and preview/playback is a user action. No paid-provider or broker request is made by synthetic tests.
+
+## Verification and release
+
+`test_app_jarvis_controls.py` covers actual SQLite persistence, receipts/recovery, concurrency, undo, profile/speech validation, read-tool limits, secret filtering, cross-origin boundaries and saved-stop propagation into the production pricing function. `main-app.browser.cjs` exercises the real main HTML and the changed scripts against synthetic APIs at desktop/mobile sizes, alongside the existing Pro Ticker browser fixtures. Out-of-scope trading/chart scripts are excluded from this targeted fixture; it does not certify every existing app feature.
+
+Preserve all current trading flags and the database backup-validation startup guard during release. The assistant adds no new automation permission or broker gateway. Staging's isolated factory remains research-only; the full-app CI smoke imports the production app. A real owner should verify microphone permission and final voice preference on their own device; cloud synthetic tests do not certify how a chosen speaker sounds on their hardware.

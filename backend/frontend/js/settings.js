@@ -1,220 +1,33 @@
 "use strict";
-
-(function () {
-    const API_BASE = window.API_URL || window.location.origin;
-
-    const NUMERIC_SETTINGS = [
-        "position_size_percent",
-        "max_order_size_percent",
-        "max_position_size_percent",
-        "max_open_positions",
-        "stop_loss_percent",
-        "take_profit_percent",
-        "profit_lock_trigger_percent",
-        "profit_lock_percent",
-        "trailing_stop_percent",
-        "daily_profit_target_percent",
-        "daily_loss_limit_percent",
-    ];
-
-    const INPUT_IDS = {
-        position_size_percent: "setting-position-size-percent",
-        max_order_size_percent: "setting-max-order-size-percent",
-        max_position_size_percent: "setting-max-position-size-percent",
-        max_open_positions: "setting-max-open-positions",
-        stop_loss_percent: "setting-stop-loss-percent",
-        take_profit_percent: "setting-take-profit-percent",
-        profit_lock_trigger_percent: "setting-profit-lock-trigger-percent",
-        profit_lock_percent: "setting-profit-lock-percent",
-        trailing_stop_percent: "setting-trailing-stop-percent",
-        daily_profit_target_percent: "setting-daily-profit-target-percent",
-        daily_loss_limit_percent: "setting-daily-loss-limit-percent",
-    };
-
-    function element(id) {
-        return document.getElementById(id);
-    }
-
-    function showPauseStatus(message) {
-        const status = element("settings-pause-new-entries-status");
-        if (status) status.textContent = message;
-    }
-
-    function showSaveStatus(message) {
-        const status = element("settings-save-status");
-        if (status) status.textContent = message;
-    }
-
-    async function requestSettings(method, body) {
-        const options = {
-            method,
-            credentials: "same-origin",
-            cache: "no-store",
-            headers: {
-                Accept: "application/json",
-            },
-        };
-
-        if (body !== undefined) {
-            options.headers["Content-Type"] = "application/json";
-            options.body = JSON.stringify(body);
-        }
-
-        const response = await fetch(
-            `${API_BASE}/auto-trader/settings`,
-            options
-        );
-
-        let data;
-        try {
-            data = await response.json();
-        } catch (_error) {
-            throw new Error(`HTTP ${response.status}: invalid server response`);
-        }
-
-        if (!response.ok || data.success !== true) {
-            throw new Error(
-                data.error || data.detail || `HTTP ${response.status}`
-            );
-        }
-
-        return data;
-    }
-
-    function renderSettings(settings) {
-        NUMERIC_SETTINGS.forEach((key) => {
-            const input = element(INPUT_IDS[key]);
-            const value = settings[key];
-
-            if (input && typeof value === "number" && Number.isFinite(value)) {
-                input.value = String(value);
-            }
-        });
-
-        const toggle = element("settings-pause-new-entries");
-        const description = element("settings-pause-new-entries-description");
-
-        if (toggle && typeof settings.pause_new_entries === "boolean") {
-            toggle.checked = settings.pause_new_entries;
-            if (description) {
-                description.textContent = toggle.checked
-                    ? "Paused: new automatic paper BUYs are blocked."
-                    : "Active: new automatic paper BUYs are permitted by settings.";
-            }
-        }
-    }
-
-    async function loadSettings() {
-        const toggle = element("settings-pause-new-entries");
-        const description = element("settings-pause-new-entries-description");
-        const saveButton = element("settings-save-button");
-
-        if (toggle) toggle.disabled = true;
-        if (saveButton) saveButton.disabled = true;
-        if (description) description.textContent = "Loading saved settings...";
-
-        try {
-            const data = await requestSettings("GET");
-            renderSettings(data.settings || {});
-            showPauseStatus("");
-            showSaveStatus("Saved settings loaded.");
-            if (toggle) toggle.disabled = false;
-            if (saveButton) saveButton.disabled = false;
-        } catch (error) {
-            if (description) {
-                description.textContent = "Unable to load saved settings.";
-            }
-            showPauseStatus(`Settings unavailable: ${error.message}`);
-            showSaveStatus("Settings could not be loaded; values were not changed.");
-        }
-    }
-
-    async function savePauseSetting() {
-        const toggle = element("settings-pause-new-entries");
-        const description = element("settings-pause-new-entries-description");
-        if (!toggle) return;
-
-        const requestedValue = toggle.checked;
-        toggle.disabled = true;
-        showPauseStatus("Saving pause setting...");
-
-        try {
-            const data = await requestSettings("POST", {
-                pause_new_entries: requestedValue,
-            });
-            const savedPauseValue =
-                typeof data.settings?.pause_new_entries === "boolean"
-                    ? data.settings.pause_new_entries
-                    : requestedValue;
-            toggle.checked = savedPauseValue;
-            if (description) {
-                description.textContent = savedPauseValue
-                    ? "Paused: new automatic paper BUYs are blocked."
-                    : "Active: new automatic paper BUYs are permitted by settings.";
-            }
-            showPauseStatus(
-                requestedValue
-                    ? "New automatic paper entries paused successfully."
-                    : "New automatic paper entries resumed successfully."
-            );
-        } catch (error) {
-            toggle.checked = !requestedValue;
-            if (description) {
-                description.textContent = toggle.checked
-                    ? "Paused: new automatic paper BUYs are blocked."
-                    : "Active: new automatic paper BUYs are permitted by settings.";
-            }
-            showPauseStatus(`Could not save pause setting: ${error.message}`);
-        } finally {
-            toggle.disabled = false;
-        }
-    }
-
-    async function saveNumericSettings(event) {
-        event.preventDefault();
-
-        const form = element("auto-trader-settings-form");
-        const saveButton = element("settings-save-button");
-        if (!form || !form.reportValidity()) return;
-
-        const values = {};
-        for (const key of NUMERIC_SETTINGS) {
-            const input = element(INPUT_IDS[key]);
-            const value = input ? input.valueAsNumber : NaN;
-            if (!Number.isFinite(value)) {
-                showSaveStatus(`Enter a valid number for ${key}.`);
-                return;
-            }
-            values[key] = value;
-        }
-
-        if (saveButton) saveButton.disabled = true;
-        showSaveStatus("Validating and saving trading settings...");
-
-        try {
-            const data = await requestSettings("POST", values);
-            renderSettings(data.settings || values);
-            showSaveStatus(
-                "Trading settings saved. New values apply to subsequent decisions; existing protective orders were not automatically canceled."
-            );
-        } catch (error) {
-            showSaveStatus(`Could not save settings: ${error.message}`);
-        } finally {
-            if (saveButton) saveButton.disabled = false;
-        }
-    }
-
-    document.addEventListener("DOMContentLoaded", () => {
-        const toggle = element("settings-pause-new-entries");
-        const form = element("auto-trader-settings-form");
-
-        if (toggle) {
-            toggle.addEventListener("change", savePauseSetting);
-        }
-        if (form) {
-            form.addEventListener("submit", saveNumericSettings);
-        }
-
-        loadSettings();
-    });
+(()=>{
+ const get=id=>document.getElementById(id),keys=['position_size_percent','max_order_size_percent','max_position_size_percent','max_open_positions','stop_loss_percent','take_profit_percent','profit_lock_trigger_percent','profit_lock_percent','trailing_stop_percent','daily_profit_target_percent','daily_loss_limit_percent'],prefs=['notify_trade_events','notify_protection_events','notify_scanner_events'];
+ const field=key=>get('setting-'+key.replaceAll('_','-'));
+ let current=null,dirty=false,busy=false,loadVersion=0,pending=null;
+ const status=text=>{if(get('settings-save-status'))get('settings-save-status').textContent=text;};
+ async function request(path='',body){const response=await fetch('/auto-trader/settings'+path,{method:body?'POST':'GET',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});const data=await response.json();if(!response.ok||data.success!==true)throw Error(data.detail||data.error||'Settings unavailable ('+response.status+').');return data;}
+ function render(data){current=data;for(const key of keys)if(field(key))field(key).value=String(data.settings[key]);for(const key of prefs)if(get('setting-'+key))get('setting-'+key).checked=data.settings[key];if(get('settings-pause-new-entries'))get('settings-pause-new-entries').checked=data.settings.pause_new_entries;
+  if(get('settings-pause-new-entries-description'))get('settings-pause-new-entries-description').textContent=data.settings.pause_new_entries?'New broad automatic buys are paused.':'Entry pause is off; server automation permissions still apply.';
+  if(get('settings-runtime')){const r=data.runtime||{};get('settings-runtime').textContent='Automatic trader: '+(r.automatic_trader_enabled?'running':'paused')+'. Scanner health: '+(r.scanner_health||'unavailable')+'. Error logging and health monitoring stay on. AI model training and strategy experiments are disabled.';}
+  if(get('settings-audit')){get('settings-audit').replaceChildren();for(const item of data.audit||[]){const row=document.createElement('p');row.textContent=new Date(item.created_at).toLocaleString()+' · '+item.actor+' · '+Object.entries(item.after).map(([k,v])=>k.replaceAll('_',' ')+': '+item.before[k]+' → '+v).join('; ');get('settings-audit').appendChild(row);}}
+  window.appSettings=data.settings;document.dispatchEvent(new CustomEvent('app:preferences',{detail:data.settings}));dirty=false;if(get('settings-pause-new-entries'))get('settings-pause-new-entries').indeterminate=false;
+ }
+ function buttons(){for(const id of ['settings-save-button','settings-refresh','settings-restore','settings-emergency-pause','settings-undo'])if(get(id))get(id).disabled=busy||!current||(id==='settings-undo'&&!current.audit?.length);if(get('settings-pause-new-entries'))get('settings-pause-new-entries').disabled=busy||!current;}
+ async function load(){const version=++loadVersion;try{const data=await request();if(version!==loadVersion)return;if(dirty){status('Settings changed or were refreshed. Your draft is preserved; reload saved values to discard it.');return;}render(data);status('Saved settings loaded. Changes affect subsequent decisions.');}catch(error){status(error.message);}buttons();}
+ async function save(changes,path=''){if(busy||!current)return;const keepDraft=dirty&&!path&&Object.keys(changes).length===1&&Object.hasOwn(changes,'pause_new_entries'),draft=keepDraft?Object.fromEntries(keys.map(k=>[k,field(k)?.value])):null;busy=true;buttons();const identity=JSON.stringify([path,changes,current.revision]);if(pending?.identity!==identity)pending={identity,id:crypto.randomUUID()};status('Saving settings…');
+  try{const data=await request(path,path?{expected_revision:current.revision,request_id:pending.id}:{changes,expected_revision:current.revision,request_id:pending.id});pending=null;dirty=false;render({...current,...data});await load();if(keepDraft){for(const [k,v] of Object.entries(draft))if(field(k))field(k).value=v;dirty=true;}status('Settings saved. '+(data.effect||''));document.dispatchEvent(new CustomEvent('app:settings-changed',{detail:{source:'settings'}}));}
+  catch(error){if(Object.hasOwn(changes,'pause_new_entries')&&get('settings-pause-new-entries'))get('settings-pause-new-entries').indeterminate=true;status(error.message+' Your input was kept. Reload saved values before resolving a conflict.');}
+  finally{busy=false;buttons();}
+ }
+ document.addEventListener('DOMContentLoaded',()=>{
+  const form=get('auto-trader-settings-form');form?.addEventListener('input',()=>{dirty=true;});
+  form?.addEventListener('submit',event=>{event.preventDefault();const changes={};for(const key of keys){const value=Number(field(key)?.value);if(field(key)?.value===''||!Number.isFinite(value)){status('Enter a finite number for '+key);return;}if(value!==current?.settings[key])changes[key]=value;}for(const key of prefs)if(get('setting-'+key)&&get('setting-'+key).checked!==current?.settings[key])changes[key]=get('setting-'+key).checked;if(!Object.keys(changes).length){status('No changed settings to save.');return;}save(changes);});
+  get('settings-pause-new-entries')?.addEventListener('change',()=>save({pause_new_entries:get('settings-pause-new-entries').checked}));
+  get('settings-refresh')?.addEventListener('click',()=>{dirty=false;load();});
+  get('settings-emergency-pause')?.addEventListener('click',()=>save({pause_new_entries:true}));
+  get('settings-restore')?.addEventListener('click',()=>save({position_size_percent:2,max_order_size_percent:2.5,max_position_size_percent:5,max_open_positions:50,stop_loss_percent:2,take_profit_percent:4,profit_lock_trigger_percent:.75,profit_lock_percent:.25,trailing_stop_percent:1,daily_profit_target_percent:5,daily_loss_limit_percent:1,pause_new_entries:true,notify_trade_events:true,notify_protection_events:true,notify_scanner_events:true}));
+  get('settings-undo')?.addEventListener('click',()=>{const id=current?.audit?.[0]?.id;if(id)save({},'/undo/'+encodeURIComponent(id));});
+  document.addEventListener('app:settings-changed',event=>{if(event.detail?.source!=='settings')load();});
+  load();buttons();
+ });
+ window.loadMainSettings=load;
 })();

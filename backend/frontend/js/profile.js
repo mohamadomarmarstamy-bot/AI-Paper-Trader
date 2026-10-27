@@ -1,4 +1,4 @@
-﻿"use strict";
+"use strict";
 
 (() => {
     const PROFILE_ENDPOINT = "/jarvis/profile";
@@ -153,8 +153,8 @@
             fillForm(data.profile);
             setStatus("Profile loaded.", true);
 
-            window.jarvisProfile =
-                data.profile;
+            window.jarvisProfile = data.profile;
+            document.dispatchEvent(new CustomEvent("jarvis:profile",{detail:data.profile}));
 
             return data.profile;
         } catch (error) {
@@ -222,8 +222,8 @@
 
             fillForm(data.profile);
 
-            window.jarvisProfile =
-                data.profile;
+            window.jarvisProfile = data.profile;
+            document.dispatchEvent(new CustomEvent("jarvis:profile",{detail:data.profile}));
 
             setStatus(
                 "Profile saved.",
@@ -279,6 +279,10 @@
     window.saveJarvisProfile =
         saveProfile;
 
+    document.addEventListener("DOMContentLoaded",()=>{
+        get("jarvis-british-preset")?.addEventListener("click",async()=>{get("jarvis-profile-language").value="en-GB";get("jarvis-profile-voice").value="cedar";await saveProfile();});
+        get("jarvis-voice-preview")?.addEventListener("click",()=>window.jarvisPreviewVoice?.());
+    });
     document.addEventListener(
         "DOMContentLoaded",
         bind
