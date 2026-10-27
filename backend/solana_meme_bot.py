@@ -20,7 +20,9 @@ ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 DEFAULTS = {'enabled':False, 'discover':True, 'watchlist':[], 'trade_usd':50,
             'max_positions':3, 'stop_percent':8, 'target_percent':20,
             'trail_arm_percent':12, 'trail_percent':6, 'max_hold_minutes':30,
-            'daily_loss_usd':50, 'minimum_liquidity_usd':100000, 'minimum_m5_volume_usd':20000}
+            'daily_loss_usd':50, 'minimum_liquidity_usd':100000, 'minimum_m5_volume_usd':20000,
+            'confirmation_enabled':True,'confirmation_seconds':45,
+            'confirmation_min_percent':.5,'confirmation_max_percent':8}
 RULES = {'minimum_liquidity_usd':100000, 'minimum_m5_volume_usd':20000,
          'minimum_m5_transactions':40, 'minimum_buy_sell_ratio':1.2,
          'minimum_pair_age_minutes':30, 'maximum_pair_age_days':30,
@@ -110,7 +112,7 @@ def public():
             'unrealized_pnl_usd':round(sum(p['current_modeled_value_usd']-p['cost_usd'] for p in positions),4) if complete else None,
             'discovery_cooldown_count':sum(t>time.time() for t in state.get('unavailable_until',{}).values()),
             'realized_scope':'Latest 200 completed paper trades; older events may be excluded.',
-            'rules':{**RULES,**{k:state['config'][k] for k in ('minimum_liquidity_usd','minimum_m5_volume_usd')}},'limitations':LIMITATIONS}
+            'rules':{**RULES,'confirmation_enabled':state['config']['confirmation_enabled'],'confirmation_seconds':state['config']['confirmation_seconds'],'confirmation_change_range_percent':[state['config']['confirmation_min_percent'],state['config']['confirmation_max_percent']],**{k:state['config'][k] for k in ('minimum_liquidity_usd','minimum_m5_volume_usd')}},'limitations':LIMITATIONS}
 
 
 def configure(changes,expected_revision):
@@ -118,7 +120,7 @@ def configure(changes,expected_revision):
             or isinstance(expected_revision,bool) or not isinstance(expected_revision,int)):
         raise ValueError('Known configuration changes and revision required.')
     for key,value in changes.items():
-        if key in ('enabled','discover'):
+        if key in ('enabled','discover','confirmation_enabled'):
             if type(value) is not bool:raise ValueError('Boolean control required.')
         elif key=='watchlist':
             if not isinstance(value,list) or len(value)>MAX_SCAN_TOKENS or len(set(value))!=len(value):raise ValueError('At most 20 distinct mint addresses.')
@@ -127,9 +129,10 @@ def configure(changes,expected_revision):
             limits={'trade_usd':(5,200),'max_positions':(1,5),'stop_percent':(3,20),
                     'target_percent':(5,100),'trail_arm_percent':(5,50),'trail_percent':(2,20),
                     'max_hold_minutes':(5,120),'daily_loss_usd':(10,100),
-                    'minimum_liquidity_usd':(0,1000000000),'minimum_m5_volume_usd':(0,1000000000)}
+                    'minimum_liquidity_usd':(0,1000000000),'minimum_m5_volume_usd':(0,1000000000),
+                    'confirmation_seconds':(10,180),'confirmation_min_percent':(0,20),'confirmation_max_percent':(.1,100)}
             low,high=limits[key]
-            if not low<=num(value)<=high or key in ('max_positions','max_hold_minutes') and num(value)%1:
+            if not low<=num(value)<=high or key in ('max_positions','max_hold_minutes','confirmation_seconds') and num(value)%1:
                 raise ValueError('Setting outside paper experiment bounds.')
     state,revision=load()
     if state.get('settings_revision',0)!=expected_revision:raise Conflict('Settings changed. Refresh before saving.')
@@ -137,6 +140,8 @@ def configure(changes,expected_revision):
     state['settings_revision']=state.get('settings_revision',0)+1
     if state['config']['trail_percent']>=state['config']['trail_arm_percent']:
         raise ValueError('Trailing distance must be below its activation percentage.')
+    if state['config']['confirmation_min_percent']>=state['config']['confirmation_max_percent']:
+        raise ValueError('Minimum confirmation rise must be below its maximum.')
     state['health']='starting' if state['config']['enabled'] else 'paused_entries_monitoring_exits'
     with closing(database.get_connection()) as conn:
         initialize(conn)
@@ -234,10 +239,12 @@ def entry_reason(row,previous,now,config=None):
     if row['buys_m5']+row['sells_m5']<40:return 'Insufficient recent observed activity.'
     if row['buys_m5']<1.2*max(1,row['sells_m5']):return 'Buy/sell activity confirmation missing.'
     if not 2<=row['change_m5_percent']<=20:return 'Five-minute change outside experimental momentum range.'
-    if not previous or previous['pair']!=row['pair'] or not 45<=now-previous['observed_at']<=180:
-        return 'Waiting for a second observation of the same pool, 45–180 seconds apart.'
+    if not config['confirmation_enabled']:return None
+    wait=config['confirmation_seconds'];expiry=max(180,wait+60)
+    if not previous or previous['pair']!=row['pair'] or not wait<=now-previous['observed_at']<=expiry:
+        return f'Waiting for a second observation of the same pool, {wait:g}–{expiry:g} seconds apart.'
     move=(row['price_usd']/previous['price_usd']-1)*100
-    if not .5<=move<=8:return 'No confirmed continuation, or price has run too far to chase.'
+    if not config['confirmation_min_percent']<=move<=config['confirmation_max_percent']:return f"No confirmed continuation, or price has run too far to chase. Required rise: {config['confirmation_min_percent']:g}%–{config['confirmation_max_percent']:g}%."
     return None
 
 
@@ -249,7 +256,8 @@ def select_candidates(state, profiles, now=None):
     now=time.time() if now is None else now
     excluded={a for a,until in state.get('unavailable_until',{}).items() if until>now}
     batch=[a for a in state.get('discovery_batch',[]) if a not in priority and a not in excluded][:slots]
-    if state.get('discovery_uses',DISCOVERY_BATCH_SCANS)>=DISCOVERY_BATCH_SCANS or not batch:
+    hold_scans=max(DISCOVERY_BATCH_SCANS,math.ceil(state['config']['confirmation_seconds']/SCAN_SECONDS)+2) if state['config']['confirmation_enabled'] else DISCOVERY_BATCH_SCANS
+    if state.get('discovery_uses',hold_scans)>=hold_scans or not batch:
         pool=list(dict.fromkeys(a for a in profiles if a not in priority and a not in excluded))
         offset=state.get('discovery_offset',0)%len(pool) if pool else 0
         batch=(pool[offset:]+pool[:offset])[:slots]
@@ -381,14 +389,15 @@ def tick(*,providers=None,clock=time.time,force=False):
                         **{k:config[k] for k in ('stop_percent','target_percent','trail_arm_percent','trail_percent','max_hold_minutes')}}
                     p=state['positions'][address];p.update(marked_at=observed,marked_value_usd=max(0,p['quantity']*row['price_usd']*.99-.10))
                     state['cash_usd']-=cost;equity-=cost-p['marked_value_usd'];reason='PAPER buy simulated after momentum and on-chain checks.'
+                expiry=max(180,config['confirmation_seconds']+60)
                 baseline=state['observations'].get(address)
-                if not baseline or baseline['pair']!=row['pair'] or observed-baseline['observed_at']>180:baseline=row
-                confirmation={'confirmation_started_at':baseline['observed_at'],'confirmation_due_at':baseline['observed_at']+45,'confirmation_expires_at':baseline['observed_at']+180} if reason.startswith('Waiting for a second') else {}
+                if not baseline or baseline['pair']!=row['pair'] or observed-baseline['observed_at']>expiry:baseline=row
+                confirmation={'confirmation_started_at':baseline['observed_at'],'confirmation_due_at':baseline['observed_at']+config['confirmation_seconds'],'confirmation_expires_at':baseline['observed_at']+expiry} if reason.startswith('Waiting for a second') else {}
                 state['candidates'].append({**row,**confirmation,'status':'paper_open' if address in state['positions'] else 'blocked','reason':reason})
                 prior=state['observations'].get(address)
-                if not prior or prior['pair']!=row['pair'] or observed-prior['observed_at']>=45:
+                if not prior or prior['pair']!=row['pair'] or observed-prior['observed_at']>expiry:
                     state['observations'][address]=row
-            state['observations']={a:r for a,r in state['observations'].items() if observed-r['observed_at']<=180}
+            state['observations']={a:r for a,r in state['observations'].items() if observed-r['observed_at']<=max(180,config['confirmation_seconds']+60)}
             state['cooldowns']={a:t for a,t in state['cooldowns'].items() if t>observed}
             state.update(last_cycle=observed,health='entry_brake' if brake else 'running' if config['enabled'] else 'paused_entries_monitoring_exits')
     except Exception:

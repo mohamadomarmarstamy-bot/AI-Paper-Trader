@@ -30,7 +30,7 @@ require an authenticated owner session and same-origin JSON requests.
   buy/sell transactions, buy activity at least 1.2 times sell activity, and pair
   age from 30 minutes to 30 days.
 - Five-minute change between +2% and +20%; a second same-pool observation 45–180
-  seconds later must show +0.5% to +8% continuation. No first-observation buy.
+  seconds later must show +0.5% to +8% continuation by default. The second-observation check is configurable in Settings.
 - Finalized on-chain mint account: initialized legacy SPL mint, revoked mint and
   freeze authorities. Token-2022 and other programs are currently unsupported.
 - Largest token account at most 35% of supply; ten largest at most 70%. These are
@@ -40,7 +40,7 @@ require an authenticated owner session and same-origin JSON requests.
   a $50 daily marked-equity loss brake. The first complete observation after UTC
   midnight establishes that day's baseline. Missing marks block new entries.
 - Only three on-chain candidate checks and 20 observed mints per cycle.
-  Discovery holds each batch for six scans (about one minute) to support confirmation, then rotates;
+  Discovery holds each batch for the configured confirmation wait plus two scans to support confirmation, then rotates;
   open positions and the saved watchlist have priority.
 
 These thresholds are deliberately fixed hypotheses, not optimized or proven
@@ -99,3 +99,5 @@ Liquidity and five-minute volume minimums are editable in Settings (USD, 0–1 b
 Settings use a dedicated revision, independent of scan writes, and remain in SQLite across refreshes/restarts. Concurrent settings edits still conflict. The form displays save success or errors beside Save. Missing batch data triggers at most four alternate-pool lookups per cycle, then incomplete discovered mints are skipped for five minutes. Positions and watchlist mints remain monitored; held positions never switch pools. Missing values are never fabricated.
 
 The meme workspace has Home (/meme-coins), Trades (/meme-coins/trades), Scanner (/meme-coins/scanner), and Settings (/meme-coins/settings). Every route requires the owner session. Home shows cash, current marked equity, P/L since the original $1,000, open holdings and separately scoped realized/open P/L. Equity history begins on rollout, stores at most 1,440 minute-spaced observations, and leaves unavailable observations as gaps. The trades queue shows the existing automatic confirmation window using server timestamps; timer completion does not authorize or guarantee a buy. Scanner counts/filters describe the latest scan only, with incomplete discovery backoff shown separately. Navigation does not write settings or trigger orders.
+
+Second-price confirmation is configurable: enabled by default, wait 10–180 whole seconds (default 45), minimum rise 0–20% (default 0.5), maximum rise 0.1–100% (default 8), with minimum strictly below maximum. Off skips only this wait/continuation check. All other entry and exit rules remain active. The baseline stays fixed until expiry (at least 180 seconds, or wait + 60) instead of restarting after each failed attempt. Discovery retains each batch long enough for the configured wait plus two scans. The queue timer uses the saved wait. Settings are persisted; existing configurations keep confirmation enabled with original thresholds.
