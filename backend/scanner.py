@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import logging
 import math
 import threading
@@ -32,7 +33,8 @@ SCAN_CACHE_SECONDS = 1 * 60
 DOWNLOAD_PERIOD = "6mo"
 DOWNLOAD_INTERVAL = "1d"
 DOWNLOAD_BATCH_SIZE = 25
-DOWNLOAD_TIMEOUT_SECONDS = 30
+DOWNLOAD_TIMEOUT_SECONDS = 12
+SCAN_DOWNLOAD_BUDGET_SECONDS = 45
 
 MINIMUM_HISTORY_DAYS = 55
 MINIMUM_PRICE = 0.25
@@ -84,7 +86,7 @@ NEWS_NEGATIVE_TERMS = (
 )
 
 # Preserve a useful mix of BUY, HOLD, and SELL candidates.
-MAX_RESULTS_PER_SIGNAL = 30
+MAX_RESULTS_PER_SIGNAL = 50
 SIGNAL_ORDER = ("BUY", "HOLD", "SELL")
 
 
@@ -108,6 +110,20 @@ _cache_lock = threading.RLock()
 
 # Prevent two requests from launching separate full-market scans at once.
 _scan_lock = threading.Lock()
+# Daily indicators can be reused briefly; live discovery still refreshes each scan.
+DAILY_ANALYSIS_CACHE_SECONDS = 300
+_daily_candidate_cache = {}
+_scan_metrics = {}
+
+
+def get_scanner_status():
+    from universe import get_momentum_universe_status
+    result=copy.deepcopy(_scan_metrics)
+    result['discovery']=get_momentum_universe_status()
+    result['age_seconds']=max(0,time.time()-result['completed_at']) if result.get('completed_at') else None
+    result['stale']=result.get('last_refresh_failed',False) or result['age_seconds'] is None or result['age_seconds']>=SCAN_CACHE_SECONDS
+    return result
+
 
 
 # =========================================================
@@ -162,7 +178,16 @@ def split_into_batches(
 
 def _copy_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return a deep copy so callers cannot mutate cached nested values."""
-    return copy.deepcopy(results)
+    rows=copy.deepcopy(results)
+    from fast_mover_discovery import timestamp,MAX_AGE
+    for row in rows:
+        live=row.get('live_discovery')
+        if isinstance(live,dict):
+            stamps=[timestamp(live.get(k)) for k in ('snapshot_trade_at','snapshot_quote_at')]
+            stale=any(t is None or not 0<=time.time()-t.timestamp()<=MAX_AGE for t in stamps)
+            live['stale']=stale
+            if stale: row['fast_mover_priority']=False;row['fast_mover_score']=0
+    return rows
 
 
 def _get_cached_results(
@@ -1100,7 +1125,10 @@ def apply_live_momentum_metadata(
         else None
     )
 
-    candidate["momentum_data_source"] = "alpaca_movers"
+    candidate["fast_mover_priority"] = metadata.get("fast_mover_priority") is True
+    candidate["fast_mover_score"] = metadata.get("fast_mover_score",0)
+    candidate["live_discovery"] = dict(metadata)
+    candidate["momentum_data_source"] = metadata.get("source", "alpaca_movers")
     candidate["momentum_live_price"] = live_price
     candidate["momentum_live_change"] = live_change
 
@@ -1113,7 +1141,7 @@ def apply_live_momentum_metadata(
 
 def _candidate_sort_key(
     stock: dict[str, Any],
-) -> tuple[float, float, float, float]:
+) -> tuple[float, ...]:
     """
     Return a signal-aware sort key.
 
@@ -1137,22 +1165,24 @@ def _candidate_sort_key(
 
     if signal == "SELL":
         return (
-            momentum_priority,
+            0.0, 0.0, momentum_priority,
             100.0 - score,
             volume_ratio,
             -five_day_change,
         )
 
+    fresh_priority=1.0 if stock.get("fast_mover_priority") is True else 0.0
+    discovery_score=safe_float(stock.get("fast_mover_score")) or 0.0
     if signal == "HOLD":
         return (
-            momentum_priority,
+            fresh_priority, discovery_score, momentum_priority,
             abs(score - 50.0),
             volume_ratio,
             abs(five_day_change),
         )
 
     return (
-        momentum_priority,
+        fresh_priority, discovery_score, momentum_priority,
         score,
         volume_ratio,
         five_day_change,
@@ -1195,9 +1225,7 @@ def _select_balanced_results(
                 if str(stock.get("signal", "HOLD")).upper() in SIGNAL_ORDER
                 else "HOLD"
             ),
-            -_candidate_sort_key(stock)[0],
-            -_candidate_sort_key(stock)[1],
-            -_candidate_sort_key(stock)[2],
+            *(-value for value in _candidate_sort_key(stock)),
         )
     )
 
@@ -1243,6 +1271,7 @@ def scan_market(
                 return fresh_cache
 
         stale_cache = _get_cached_results(allow_stale=True)
+        _scan_metrics["last_refresh_failed"]=True
 
         try:
             if request_func is not None:
@@ -1323,16 +1352,36 @@ def scan_market(
         results: list[dict[str, Any]] = []
         extraction_count = 0
         analyzed_count = 0
-        successful_batch_count = 0
+        scan_started=time.time()
+        cached_count=0
+        missing=[]
+        for symbol in symbols:
+            cached=_daily_candidate_cache.get(symbol)
+            if cached and 0<=scan_started-cached[0]<DAILY_ANALYSIS_CACHE_SECONDS:
+                base=copy.deepcopy(cached[1])
+                base['daily_analysis_captured_at']=cached[0]
+                results.append(base)
+                cached_count+=1
+            else:
+                missing.append(symbol)
+        successful_batch_count = 1 if cached_count else 0
+        # Bound memory over rotations; failed/stale candidates never refresh this cache.
+        for symbol,(captured,_) in list(_daily_candidate_cache.items()):
+            if not 0<=scan_started-captured<DAILY_ANALYSIS_CACHE_SECONDS:
+                _daily_candidate_cache.pop(symbol,None)
 
         batches = list(
             split_into_batches(
-                symbols,
+                missing,
                 DOWNLOAD_BATCH_SIZE,
             )
         )
 
+        attempted_symbols=0
         for batch_index, batch in enumerate(batches, start=1):
+            if time.time()-scan_started>=SCAN_DOWNLOAD_BUDGET_SECONDS:
+                break
+            attempted_symbols+=len(batch)
             logger.info(
                 "Scanning batch %s/%s with %s symbols.",
                 batch_index,
@@ -1372,9 +1421,9 @@ def scan_market(
                     continue
 
                 if candidate is not None:
-                    candidate = apply_live_momentum_metadata(
-                        candidate
-                    )
+                    captured=time.time()
+                    candidate['daily_analysis_captured_at']=captured
+                    _daily_candidate_cache[symbol]=(captured,copy.deepcopy(candidate))
                     analyzed_count += 1
                     results.append(candidate)
 
@@ -1404,8 +1453,17 @@ def scan_market(
 
             return []
 
+        from universe import refresh_selected_momentum_snapshots
+        refresh_selected_momentum_snapshots([r['symbol'] for r in results],market_data_request_func)
+        results=[apply_live_momentum_metadata(candidate) for candidate in results]
         final_results = _select_balanced_results(results)
         _set_cached_results(final_results)
+        _scan_metrics.update(last_refresh_failed=False,profile='fast_movers_v1',requested_symbols=len(symbols),
+            downloaded_symbols=attempted_symbols,downloaded_histories=extraction_count,
+            deferred_daily_histories=max(0,len(missing)-attempted_symbols),
+            reused_daily_analyses=cached_count,valid_candidates=len(results),returned_candidates=len(final_results),
+            completed_at=time.time(),duration_seconds=round(time.time()-scan_started,2))
+        print(json.dumps({"scanner_coverage":get_scanner_status()}),flush=True)
 
         logger.info(
             (
@@ -1436,6 +1494,8 @@ def clear_scanner_cache() -> None:
     with _cache_lock:
         _scan_cache["results"] = []
         _scan_cache["updated_at"] = 0.0
+        _daily_candidate_cache.clear()
+        _scan_metrics.clear()
 
 def get_market_regime(
     *,

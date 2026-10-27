@@ -4958,3 +4958,6 @@ body.jarvis-drawer-open {
     z-index: 1;
     background: var(--color-surface, #151c2e);
 }
+
+.scanner-price-row { flex-wrap: wrap; }
+.scanner-price-row small { flex-basis: 100%; font-size: 12px; color: var(--color-muted); }

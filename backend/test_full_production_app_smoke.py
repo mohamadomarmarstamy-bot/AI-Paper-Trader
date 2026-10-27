@@ -714,6 +714,28 @@ print("RESTART_RESULT:" + json.dumps(asyncio.run(check())))
         self.assertEqual(broker.call_count,1)
         submit.assert_not_called()
 
+    def test_scanner_more_results_and_coverage_remain_authenticated_and_read_only(self):
+        import asyncio
+        import httpx
+        from unittest.mock import patch
+        rows=[dict(symbol='S'+str(i),signal='BUY',score=80) for i in range(120)]
+        with patch.object(self.main,'APP_SESSION_SECRET','isolated-scanner-smoke-secret'), \
+             patch.object(self.main,'scan_market',return_value=rows) as scan, \
+             patch('scanner.get_scanner_status',return_value={'profile':'fast_movers_v1','valid_candidates':120}) as status, \
+             patch.object(self.main,'alpaca_paper_request') as broker:
+            async def run():
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.main.app),base_url='http://testserver') as client:
+                    anonymous=await client.get('/scanner?limit=150')
+                    scan.assert_not_called()
+                    client.cookies.set(self.main.APP_SESSION_COOKIE,self.main.create_app_session_token())
+                    return anonymous,await client.get('/scanner?limit=150')
+            anonymous,result=asyncio.run(run())
+        self.assertEqual(anonymous.status_code,401)
+        self.assertEqual(result.status_code,200)
+        self.assertEqual(result.json()['count'],120)
+        self.assertEqual(result.json()['coverage']['profile'],'fast_movers_v1')
+        broker.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
