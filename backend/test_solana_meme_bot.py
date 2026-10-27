@@ -43,6 +43,32 @@ class EngineTests(unittest.TestCase):
         self.configure({'enabled':True,'watchlist':[MINT],'discover':False})
         self.tick();self.now+=60;self.providers.price=1.01
         result=self.tick();self.assertEqual(len(result['positions']),1);return result
+    def test_liquidity_and_volume_settings_control_entries(self):
+        self.configure({'enabled':True,'watchlist':[MINT],'discover':False,
+                        'minimum_liquidity_usd':300000,'minimum_m5_volume_usd':60000})
+        self.assertIn('Liquidity below $300,000',self.tick()['candidates'][0]['reason'])
+        self.configure({'minimum_liquidity_usd':200000})
+        self.assertIn('Five-minute volume below $60,000',self.tick()['candidates'][0]['reason'])
+        self.configure({'minimum_m5_volume_usd':50000})
+        self.now+=60;self.providers.price=1.01
+        self.assertEqual(len(self.tick()['positions']),1)
+
+    def test_legacy_saved_settings_receive_defaults_without_reset(self):
+        self.configure({'trade_usd':75})
+        with database.get_connection() as conn:
+            import json
+            state=json.loads(conn.execute('SELECT state_json FROM solana_meme_paper_state').fetchone()[0])
+            state['config'].pop('minimum_liquidity_usd');state['config'].pop('minimum_m5_volume_usd')
+            conn.execute('UPDATE solana_meme_paper_state SET state_json=?',(json.dumps(state),));conn.commit()
+        result=bot.public()
+        self.assertEqual(result['config']['minimum_liquidity_usd'],100000)
+        self.assertEqual(result['config']['minimum_m5_volume_usd'],20000)
+        self.assertEqual(result['config']['trade_usd'],75)
+        for value in (-1,float('nan'),float('inf'),True,1000000001):
+            with self.assertRaises(ValueError):self.configure({'minimum_liquidity_usd':value})
+        self.configure({'minimum_liquidity_usd':0,'minimum_m5_volume_usd':0})
+        self.assertEqual(bot.public()['rules']['minimum_liquidity_usd'],0)
+
     def test_default_paused_makes_no_provider_requests(self):
         with patch.object(self.providers,'profiles',side_effect=AssertionError),patch.object(self.providers,'pairs',side_effect=AssertionError):
             self.assertEqual(self.tick()['health'],'paused')

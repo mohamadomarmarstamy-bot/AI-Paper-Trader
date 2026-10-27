@@ -93,3 +93,5 @@ Settings, trading rules and data notes are collapsed by default. Full mint
 addresses and longer explanations are available in per-row Details, whose open
 state survives refreshes. Watching means confirmation is pending; Skipped means
 a rule failed; No data names the missing provider evidence. Thresholds are unchanged.
+
+Liquidity and five-minute volume minimums are editable in Settings (USD, 0–1 billion; zero disables only that minimum). Defaults remain $100,000 and $20,000. Changes apply to new entries, not open-position exit rules. Missing metrics still prevent entry. Existing saved configurations receive these defaults without resetting balances, positions, or other settings.
