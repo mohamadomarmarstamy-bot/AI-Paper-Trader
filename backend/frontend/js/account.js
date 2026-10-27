@@ -126,7 +126,7 @@ async function loadAccount() {
         if (account.error) throw new Error(account.error);
         renderAccountOverview(account);
         renderTradingSummary(account.performance_summary, account.timestamp);
-        renderHistory(document.getElementById("history-table"), normalizeHistory(account.history ?? []));
+
     } catch (error) {
         if (controller.signal.aborted && accountRequestController !== controller) return;
         console.warn("Account refresh failed:", error);

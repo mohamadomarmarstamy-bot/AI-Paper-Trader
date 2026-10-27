@@ -26,6 +26,7 @@ test('main app desktop/mobile settings, Jarvis actions, drawer and voice fallbac
   }
   if(url.pathname.startsWith('/auto-trader/settings/undo/'))return send(mutate(audit[0].before,'undo'));
   if(url.pathname==='/auto-trader/status')return send({health:'disabled',enabled:false});
+  if(url.pathname==='/account/trade-activity')return send({buys:[],sells:[],completed:[],generated_at:Date.now()/1000,broker_available:true});
   if(url.pathname==='/auto-trader/logs')return send({logs:[]});
   if(url.pathname==='/jarvis/status')return send({success:true,chat_ready:true,settings_ready:true,trading_access:false});
   if(url.pathname==='/jarvis/profile'){if(req.method==='POST')Object.assign(profile,body);return send({success:true,profile});}
@@ -39,7 +40,7 @@ test('main app desktop/mobile settings, Jarvis actions, drawer and voice fallbac
   if(url.pathname==='/jarvis/speech'){speechPosts++;if(delaySpeech)await new Promise(r=>{releaseSpeech=r;});return send({detail:'Synthetic speech failure'},503);}
   if(url.pathname==='/'){
    let html=fs.readFileSync(path.join(root,'index.html'),'utf8');
-   const tested=new Set(['app.js','jarvis.js','profile.js','settings.js','notifications.js']);
+   const tested=new Set(['app.js','jarvis.js','profile.js','settings.js','trade-activity.js','notifications.js']);
    html=html.replace(/<script\b[^>]*src="([^"]+)"[^>]*><\/script>/g,(tag,src)=>tested.has(src.split('/').pop().split('?')[0])?tag:'');
    res.setHeader('Content-Type','text/html');res.end(html);return;
   }

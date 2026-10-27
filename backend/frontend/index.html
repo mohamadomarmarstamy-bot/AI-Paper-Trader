@@ -42,7 +42,7 @@
 
     <link
         rel="stylesheet"
-        href="style.css"
+        href="style.css?v=filled-activity-v1"
     >
 
 </head>
@@ -767,61 +767,11 @@
 
                 <section id="activity-section" class="app-section hidden" hidden aria-labelledby="activity-section-title">
                     <div class="section-heading"><p class="panel-kicker">Activity</p><h2 id="activity-section-title">Trade Activity</h2><p>Review completed paper-trading activity and account history.</p></div>
-                    <section class="activity-grid">
-                        <!-- History -->
-
-                        <article class="panel history-panel">
-                            <div class="panel-header">
-                                <div>
-                                    <p class="panel-kicker">
-                                        Activity
-                                    </p>
-
-                                    <h2>
-                                        Trade History
-                                    </h2>
-                                </div>
-                            </div>
-
-                            <div class="table-wrapper">
-                                <table>
-                                    <caption class="visually-hidden">
-                                        Completed paper trades
-                                    </caption>
-
-                                    <thead>
-                                        <tr>
-                                            <th scope="col">
-                                                Action
-                                            </th>
-
-                                            <th scope="col">
-                                                Symbol
-                                            </th>
-
-                                            <th scope="col">
-                                                Shares
-                                            </th>
-
-                                            <th scope="col">
-                                                Price / Profit
-                                            </th>
-                                            <th scope="col">
-                                                Profit / Loss
-                                            </th>
-                                        </tr>
-                                    </thead>
-
-                                    <tbody id="history-table">
-                                        <tr>
-                                            <td colspan="5">
-                                                No trades yet.
-                                            </td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </article>
+                    <div class="panel-actions"><button id="refresh-activity-button" class="secondary-button" type="button">Refresh activity</button><span id="activity-status" role="status">Loading confirmed fills…</span></div>
+                    <section class="activity-grid trade-activity-grid">
+                        <article class="panel history-panel"><h2>Buys</h2><p>Executed shares and average fill prices.</p><div class="table-wrapper"><table><caption class="visually-hidden">Confirmed PAPER buys</caption><thead><tr><th>Filled</th><th>Stock</th><th>Shares</th><th>Buy price</th><th>Amount</th></tr></thead><tbody id="activity-buys"><tr><td colspan="5">Loading…</td></tr></tbody></table></div></article>
+                        <article class="panel history-panel"><h2>Sells</h2><p>Executed shares and average fill prices, including protective exits.</p><div class="table-wrapper"><table><caption class="visually-hidden">Confirmed PAPER sells</caption><thead><tr><th>Filled</th><th>Stock</th><th>Shares</th><th>Sell price</th><th>Proceeds</th></tr></thead><tbody id="activity-sells"><tr><td colspan="5">Loading…</td></tr></tbody></table></div></article>
+                        <article class="panel history-panel activity-completed"><h2>Completed trades by stock</h2><p>Fully sold buy lots only. Prices are share-weighted; expand a stock to see each completed buy and its sell fills.</p><p class="muted">FIFO display across the available PAPER account fills. This is separate from bot journal and tax accounting. Missing older buys, stock splits and other corporate actions can affect matching.</p><div class="table-wrapper"><table><caption class="visually-hidden">Fully sold lots grouped by stock</caption><thead><tr><th>Stock / details</th><th>Shares sold</th><th>Average buy</th><th>Average sell</th><th>Cost</th><th>Proceeds</th><th>Profit / loss</th></tr></thead><tbody id="activity-completed"><tr><td colspan="7">Loading…</td></tr></tbody></table></div></article>
                     </section>
                 </section>
 
@@ -829,7 +779,7 @@
                     <div class="section-heading">
                         <p class="panel-kicker">Bot Feed</p>
                         <h2 id="notifications-section-title">Notifications</h2>
-                        <p>Live automatic-trading decisions, fills, blocks, and system events.</p>
+                        <p>Confirmed PAPER buys and sells. Ideas, verification failures and unfilled orders stay out of this feed.</p>
                     </div>
 
                     <section class="notifications-layout">
@@ -855,11 +805,9 @@
                                 <label class="compact-field" for="notification-filter">
                                     <span>Show</span>
                                     <select id="notification-filter">
-                                        <option value="all">All events</option>
-                                        <option value="trade">Trades</option>
-                                        <option value="blocked">Blocked</option>
-                                        <option value="system">System</option>
-                                        <option value="error">Errors</option>
+                                        <option value="all">All buys and sells</option>
+                                        <option value="buy">Buys</option>
+                                        <option value="sell">Sells</option>
                                     </select>
                                 </label>
 
@@ -1918,8 +1866,9 @@
     ====================================== -->
 
     <script src="js/app.js?v=jarvis-v2"></script>
-    <script src="js/account.js?v=rate-limit-20260925"></script>
-    <script src="js/notifications.js?v=jarvis-v2"></script>
+    <script src="js/account.js?v=filled-activity-v1"></script>
+    <script src="js/trade-activity.js?v=filled-activity-v1"></script>
+    <script src="js/notifications.js?v=filled-activity-v1"></script>
     <script src="js/charts.js"></script>
     <script src="js/trades.js"></script>
     <script src="js/trade-journal.js?v=accuracy-20260925-2"></script>
