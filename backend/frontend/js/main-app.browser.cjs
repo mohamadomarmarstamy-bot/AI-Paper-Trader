@@ -61,7 +61,7 @@ test('main app desktop/mobile settings, Jarvis actions, drawer and voice fallbac
     window.SpeechSynthesisUtterance=class{constructor(text){this.text=text;}};
     Object.defineProperty(window,'speechSynthesis',{value:{getVoices:()=>[{lang:'en-GB'}],cancel(){},speak(utterance){window.__browserSpeaks++;utterance.onstart?.();setTimeout(()=>utterance.onend?.(),10);}}});
    });
-   await page.goto(origin);await page.locator('#jarvis-status-text').getByText('Online · app tools connected',{exact:true}).waitFor();
+   await page.goto(origin);await page.waitForFunction(()=>document.getElementById('jarvis-status-text').textContent==='Online · app tools connected');
    assert.equal(await page.evaluate(()=>window.API_URL),origin);
    await page.locator('.nav-button[data-section="settings-section"]').click();
    await page.getByText('Saved settings loaded. Changes affect subsequent decisions.',{exact:true}).waitFor();
