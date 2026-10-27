@@ -337,7 +337,9 @@ def tick(*,providers=None,clock=time.time,force=False):
                     p=state['positions'][address];p.update(marked_at=observed,marked_value_usd=max(0,p['quantity']*row['price_usd']*.99-.10))
                     state['cash_usd']-=cost;equity-=cost-p['marked_value_usd'];reason='PAPER buy simulated after momentum and on-chain checks.'
                 state['candidates'].append({**row,'status':'paper_open' if address in state['positions'] else 'blocked','reason':reason})
-                state['observations'][address]=row
+                prior=state['observations'].get(address)
+                if not prior or prior['pair']!=row['pair'] or observed-prior['observed_at']>=45:
+                    state['observations'][address]=row
             state['observations']={a:r for a,r in state['observations'].items() if observed-r['observed_at']<=180}
             state['cooldowns']={a:t for a,t in state['cooldowns'].items() if t>observed}
             state.update(last_cycle=observed,health='entry_brake' if brake else 'running' if config['enabled'] else 'paused_entries_monitoring_exits')

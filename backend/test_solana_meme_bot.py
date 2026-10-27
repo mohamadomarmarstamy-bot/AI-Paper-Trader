@@ -107,6 +107,13 @@ class EngineTests(unittest.TestCase):
         self.configure({'watchlist':[MINT],'discover':False});self.tick(force=True)
         self.now+=60;self.providers.price=1.01
         self.assertFalse(self.tick(force=True)['positions'])
+    def test_early_manual_scans_do_not_restart_confirmation_timer(self):
+        self.configure({'enabled':True,'watchlist':[MINT],'discover':False});self.tick()
+        self.now+=10;self.providers.price=1.002
+        self.assertFalse(self.tick(force=True)['positions'])
+        self.now+=40;self.providers.price=1.01
+        self.assertEqual(len(self.tick(force=True)['positions']),1)
+
     def test_discovery_rotates_after_two_scans_without_dropping_positions(self):
         state=bot.initial();profiles=['1'*31+c for c in '23456789ABCDEFGH']
         first=bot.select_candidates(state,profiles)
