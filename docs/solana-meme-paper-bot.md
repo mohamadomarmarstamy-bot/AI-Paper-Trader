@@ -95,3 +95,5 @@ state survives refreshes. Watching means confirmation is pending; Skipped means
 a rule failed; No data names the missing provider evidence. Thresholds are unchanged.
 
 Liquidity and five-minute volume minimums are editable in Settings (USD, 0–1 billion; zero disables only that minimum). Defaults remain $100,000 and $20,000. Changes apply to new entries, not open-position exit rules. Missing metrics still prevent entry. Existing saved configurations receive these defaults without resetting balances, positions, or other settings.
+
+Settings use a dedicated revision, independent of scan writes, and remain in SQLite across refreshes/restarts. Concurrent settings edits still conflict. The form displays save success or errors beside Save. Missing batch data triggers at most four alternate-pool lookups per cycle, then incomplete discovered mints are skipped for five minutes. Positions and watchlist mints remain monitored; held positions never switch pools. Missing values are never fabricated.
