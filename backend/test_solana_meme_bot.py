@@ -107,6 +107,22 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(result['positions'][0]['pair'],PAIR)
         self.assertFalse(result['positions'][0]['mark_fresh'])
 
+    def test_confirmation_metadata_and_equity_history_are_saved(self):
+        self.configure({'enabled':True,'watchlist':[MINT],'discover':False})
+        result=self.tick();queue=result['candidates'][0]
+        self.assertEqual(queue['confirmation_due_at'],self.now+45)
+        self.assertEqual(result['equity_history'][0]['equity_usd'],1000)
+        self.now+=10;self.tick()
+        self.assertEqual(len(bot.public()['equity_history']),1)
+        self.now+=50;self.providers.price=1.01
+        result=self.tick()
+        self.assertEqual(len(result['equity_history']),2)
+        self.assertAlmostEqual(result['unrealized_pnl_usd'],result['positions'][0]['current_modeled_value_usd']-result['positions'][0]['cost_usd'],places=3)
+        self.now+=60;self.providers.missing=True
+        result=self.tick()
+        self.assertIsNone(result['equity_history'][-1]['equity_usd'])
+        self.assertIsNone(result['unrealized_pnl_usd'])
+
     def test_default_paused_makes_no_provider_requests(self):
         with patch.object(self.providers,'profiles',side_effect=AssertionError),patch.object(self.providers,'pairs',side_effect=AssertionError):
             self.assertEqual(self.tick()['health'],'paused')
@@ -210,7 +226,10 @@ class EngineTests(unittest.TestCase):
         app=FastAPI();app.include_router(build_router(require_session=auth))
         with TestClient(app) as client:
             self.assertEqual(client.get('/meme-coins').status_code,401)
-            self.assertEqual(client.get('/meme-coins/status').status_code,401);allowed=True
+            self.assertEqual(client.get('/meme-coins/status').status_code,401)
+            for route in ('trades','scanner','settings'):self.assertEqual(client.get('/meme-coins/'+route).status_code,401)
+            allowed=True
+            for route in ('trades','scanner','settings'):self.assertEqual(client.get('/meme-coins/'+route).status_code,200)
             self.assertEqual(client.post('/meme-coins/config',json={}).status_code,403)
             response=client.post('/meme-coins/scan',headers={'Origin':'http://testserver'},json={'wallet':'anything'})
             self.assertEqual(response.status_code,422)

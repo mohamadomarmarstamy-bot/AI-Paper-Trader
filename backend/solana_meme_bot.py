@@ -106,6 +106,9 @@ def public():
             **{k:v for k,v in state.items() if k not in ('positions','observations','cooldowns','discovery_batch','discovery_uses','discovery_offset','settings_revision','unavailable_until')},
             'positions':positions,'paper_equity_usd':round(value,4) if complete else None,
             'realized_pnl_usd':round(sum(p['pnl_usd'] for p in state['closed']),4),
+            'server_time':time.time(),
+            'unrealized_pnl_usd':round(sum(p['current_modeled_value_usd']-p['cost_usd'] for p in positions),4) if complete else None,
+            'discovery_cooldown_count':sum(t>time.time() for t in state.get('unavailable_until',{}).values()),
             'realized_scope':'Latest 200 completed paper trades; older events may be excluded.',
             'rules':{**RULES,**{k:state['config'][k] for k in ('minimum_liquidity_usd','minimum_m5_volume_usd')}},'limitations':LIMITATIONS}
 
@@ -378,7 +381,10 @@ def tick(*,providers=None,clock=time.time,force=False):
                         **{k:config[k] for k in ('stop_percent','target_percent','trail_arm_percent','trail_percent','max_hold_minutes')}}
                     p=state['positions'][address];p.update(marked_at=observed,marked_value_usd=max(0,p['quantity']*row['price_usd']*.99-.10))
                     state['cash_usd']-=cost;equity-=cost-p['marked_value_usd'];reason='PAPER buy simulated after momentum and on-chain checks.'
-                state['candidates'].append({**row,'status':'paper_open' if address in state['positions'] else 'blocked','reason':reason})
+                baseline=state['observations'].get(address)
+                if not baseline or baseline['pair']!=row['pair'] or observed-baseline['observed_at']>180:baseline=row
+                confirmation={'confirmation_started_at':baseline['observed_at'],'confirmation_due_at':baseline['observed_at']+45,'confirmation_expires_at':baseline['observed_at']+180} if reason.startswith('Waiting for a second') else {}
+                state['candidates'].append({**row,**confirmation,'status':'paper_open' if address in state['positions'] else 'blocked','reason':reason})
                 prior=state['observations'].get(address)
                 if not prior or prior['pair']!=row['pair'] or observed-prior['observed_at']>=45:
                     state['observations'][address]=row
@@ -388,6 +394,13 @@ def tick(*,providers=None,clock=time.time,force=False):
     except Exception:
         for position in state['positions'].values():position['mark_available']=False
         state.update(health='data_unavailable',error='Provider unavailable or rate limited. No new paper entry; unresolved marks are unavailable.',last_cycle=clock())
+    history=state.get('equity_history',[])
+    recorded=clock()
+    if not history or recorded-history[-1]['at']>=60:
+        available=all(p.get('mark_available',True) and 0<=recorded-p.get('marked_at',0)<=120 for p in state['positions'].values())
+        marked=state['cash_usd']+sum(p.get('marked_value_usd',0) for p in state['positions'].values()) if available else None
+        history.append({'at':recorded,'equity_usd':round(marked,4) if marked is not None else None})
+        state['equity_history']=history[-1440:]
     try:
         with closing(database.get_connection()) as conn:
             changed=conn.execute('UPDATE solana_meme_paper_state SET state_json=?,revision=revision+1 WHERE id=1 AND revision=? AND lease_owner=? AND lease_until>?',
