@@ -31,6 +31,12 @@ class EntrySettingsTests(unittest.TestCase):
    fn(symbol='TEST',shares=10,reference_price=100,scanner_result={},manual_request_id='claim',manual_settings={'dollars_per_stock':1000,'stop_loss_percent':1,'take_profit_percent':3})
   body=ns['alpaca_paper_request'].call_args.kwargs['json_body'];self.assertEqual(body['stop_loss']['stop_price'],'99.00');self.assertEqual(body['take_profit']['limit_price'],'103.00')
 
+ def test_subdollar_stock_target_crossing_one_dollar_has_legal_price_precision(self):
+  fn,ns=adapters.adapter('submit_alpaca_auto_bracket_buy')
+  with patch.dict('os.environ',{'PRO_TICKER_MANUAL_SCANNER_ENABLED':'true'}),patch('pro_ticker_manual_scanner.assert_dispatch',return_value='ptm-'+'a'*32):
+   fn(symbol='TEST',shares=100,reference_price=.99,scanner_result={},manual_request_id='claim',manual_settings={'dollars_per_stock':100,'stop_loss_percent':1,'take_profit_percent':8})
+  body=ns['alpaca_paper_request'].call_args.kwargs['json_body'];self.assertEqual(body['take_profit']['limit_price'],'1.07');self.assertEqual(body['stop_loss']['stop_price'],'0.9801')
+
 class EntrySizingTests(unittest.TestCase):
  setUp=fixtures.ManualScannerTests.setUp
  broker=fixtures.ManualScannerTests.broker

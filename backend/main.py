@@ -7938,7 +7938,7 @@ def submit_alpaca_auto_bracket_buy(
     }
 
     if manual_request_id is not None and reference_price < 1:
-        request_body["take_profit"]["limit_price"] = f"{take_profit_price:.4f}"
+        request_body["take_profit"]["limit_price"] = f"{take_profit_price:.4f}" if take_profit_price < 1 else f"{take_profit_price:.2f}"
         request_body["stop_loss"]["stop_price"] = f"{stop_price:.4f}"
 
     # Emergency control: block new automatic PAPER entries.

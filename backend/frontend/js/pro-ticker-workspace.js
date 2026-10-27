@@ -429,6 +429,7 @@
                 return;
             }
             const response = await fetch('/auto-trader/pro-ticker/account-status', {credentials: 'same-origin', cache: 'no-store'});
+            if (response.status===403) throw Error('Dedicated research PAPER access is not configured or is blocked. Manual PAPER mode is disabled in this environment.');
             if (!response.ok) throw Error('Connection could not be verified (' + response.status + ').');
             const data = await response.json();
             if (data.paper !== true || data.account_verified !== true || data.order_execution_authorized !== false) throw Error('Unexpected verification response.');
