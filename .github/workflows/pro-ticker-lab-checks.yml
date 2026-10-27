@@ -146,7 +146,7 @@ jobs:
       - name: Verify preinstalled Chromium
         run: node -e "const {chromium}=require('playwright'); require('fs').accessSync(chromium.executablePath())"
       - name: PAPER release desktop and mobile browser smoke
-        run: node --test backend/frontend/js/pro-ticker-release.browser.cjs backend/frontend/js/pro-ticker-workspace.browser.cjs backend/frontend/js/main-app.browser.cjs backend/frontend/js/scanner.browser.cjs backend/frontend/js/execution-quotes.browser.cjs
+        run: node --test backend/frontend/js/pro-ticker-release.browser.cjs backend/frontend/js/pro-ticker-workspace.browser.cjs backend/frontend/js/main-app.browser.cjs backend/frontend/js/scanner.browser.cjs backend/frontend/js/execution-quotes.browser.cjs backend/frontend/js/day-trader.browser.cjs
       - name: Keep PAPER release screenshots for review
         if: always()
         uses: actions/upload-artifact@v4
@@ -155,6 +155,7 @@ jobs:
           path: |
             .artifacts/paper-release/
             .artifacts/pro-ticker-workspace/
+            .artifacts/day-trader/
           if-no-files-found: ignore
 
   isolated-staging-container:

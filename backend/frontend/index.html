@@ -827,6 +827,15 @@
 
                 <section id="scanner-section" class="app-section hidden" hidden aria-labelledby="scanner-section-title">
                     <div class="section-heading"><p class="panel-kicker">Discovery</p><h2 id="scanner-section-title">AI Market Scanner</h2><p>Find and filter market opportunities without cluttering the home screen.</p></div>
+                    <article class="panel" aria-labelledby="day-trader-title">
+                        <h3 id="day-trader-title">Day trader strategy lab</h3>
+                        <p>Test opening-range breakouts and VWAP pullbacks using completed minute bars. Freeze the evidence now, then measure the future path. Experimental simulations place no orders and do not change automatic trading.</p>
+                        <form id="day-trader-form"><label for="day-trader-symbol">Stock symbol</label><input id="day-trader-symbol" maxlength="10" autocomplete="off" placeholder="AAPL" required><button type="submit" class="primary-button">Freeze intraday experiment</button></form>
+                        <button id="day-trader-new" type="button" class="secondary-button">New observation</button>
+                        <button id="day-trader-refresh" type="button" class="secondary-button">Refresh saved experiments</button>
+                        <p id="day-trader-note" role="status" aria-live="polite">Fixed experimental caps: $2,000 notional and $20 planned risk per simulated trade; whole shares only. Costs can exceed assumptions. No profitability established.</p>
+                        <div id="day-trader-results" style="max-height:600px;overflow:auto"></div>
+                    </article>
                     <section class="scanner-page-grid">
                         <!-- Scanner -->
 
@@ -1876,6 +1885,7 @@
     <script src="js/trade-journal.js?v=accuracy-20260925-2"></script>
     <script src="js/taxes.js"></script>
     <script src="js/scanner.js?v=fast-movers-v1"></script>
+    <script src="js/day-trader.js?v=intraday-v1"></script>
     <script src="js/search.js?v=entry-diagnostics-v1"></script>
     <script src="js/watchlist.js"></script>
     <script src="js/portfolio.js"></script>
