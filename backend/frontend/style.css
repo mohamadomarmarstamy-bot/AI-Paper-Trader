@@ -4942,3 +4942,19 @@ body.jarvis-drawer-open {
 .trade-activity-grid summary { cursor: pointer; font-weight: 700; }
 .activity-lot { padding: 8px 0; border-bottom: 1px solid var(--border-color, #334155); }
 @media (max-width: 900px) { .trade-activity-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* One header plus ten compact rows; each Activity table scrolls independently. */
+.trade-activity-grid .table-wrapper {
+    max-height: calc(33rem + 2px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+.trade-activity-grid table { border-collapse: separate; border-spacing: 0; }
+.trade-activity-grid tr { height: 3rem; }
+.trade-activity-grid th, .trade-activity-grid td { padding: .5rem .75rem; line-height: 1.25rem; }
+.trade-activity-grid thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--color-surface, #151c2e);
+}

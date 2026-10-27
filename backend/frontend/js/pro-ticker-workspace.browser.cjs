@@ -526,6 +526,20 @@ test('Activity desktop/mobile: executed fills only, prices, completed groups and
    await page.locator('#mark-notifications-read-button').click();
    assert.equal(await page.locator('#notification-badge').innerText(),'0');
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+   const original={buys:data.buys,sells:data.sells,completed:data.completed};
+   for(const key of ['buys','sells','completed'])data[key]=Array.from({length:25},(_,i)=>({...original[key][0],symbol:'STOCK'+i}));
+   await page.locator('#refresh-activity-button').click();
+   await page.waitForFunction(()=>document.querySelectorAll('#activity-buys tr').length===25);
+   for(const id of ['activity-buys','activity-sells','activity-completed']){
+    const geometry=await page.locator('#'+id).evaluate(body=>{
+     const wrapper=body.closest('.table-wrapper'),header=wrapper.querySelector('thead'),row=body.querySelector('tr');
+     wrapper.scrollTop=wrapper.scrollHeight;
+     return {height:wrapper.clientHeight,tenRows:header.offsetHeight+10*row.offsetHeight,scroll:wrapper.scrollTop,overflow:getComputedStyle(wrapper).overflowY,sticky:getComputedStyle(header.querySelector('th')).position};
+    });
+    assert.ok(Math.abs(geometry.height-geometry.tenRows)<=20,JSON.stringify(geometry));
+    assert.ok(geometry.scroll>0);assert.equal(geometry.overflow,'auto');assert.equal(geometry.sticky,'sticky');
+   }
+   Object.assign(data,original);
    fail=true;await page.locator('#refresh-activity-button').click();
    await page.waitForFunction(()=>document.getElementById('activity-status').textContent.includes('refresh failed'));
    assert.match(await page.locator('#activity-sells').innerText(),/\$2\.25/);
