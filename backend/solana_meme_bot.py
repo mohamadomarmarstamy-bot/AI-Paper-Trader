@@ -20,7 +20,7 @@ ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 DEFAULTS = {'enabled':False, 'discover':True, 'watchlist':[], 'trade_usd':50,
             'max_positions':3, 'stop_percent':8, 'target_percent':20,
             'trail_arm_percent':12, 'trail_percent':6, 'max_hold_minutes':30,
-            'daily_loss_usd':50}
+            'daily_loss_usd':50, 'minimum_liquidity_usd':100000, 'minimum_m5_volume_usd':20000}
 RULES = {'minimum_liquidity_usd':100000, 'minimum_m5_volume_usd':20000,
          'minimum_m5_transactions':40, 'minimum_buy_sell_ratio':1.2,
          'minimum_pair_age_minutes':30, 'maximum_pair_age_days':30,
@@ -80,7 +80,10 @@ def load():
         if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='solana_meme_paper_state'").fetchone():
             return initial(),0
         row=conn.execute('SELECT * FROM solana_meme_paper_state WHERE id=1').fetchone()
-    return (json.loads(row['state_json']),row['revision']) if row else (initial(),0)
+    if not row:return initial(),0
+    state=json.loads(row['state_json'])
+    state['config']={**deepcopy(DEFAULTS),**state['config']}
+    return state,row['revision']
 
 
 def initialize(conn):
@@ -104,7 +107,7 @@ def public():
             'positions':positions,'paper_equity_usd':round(value,4) if complete else None,
             'realized_pnl_usd':round(sum(p['pnl_usd'] for p in state['closed']),4),
             'realized_scope':'Latest 200 completed paper trades; older events may be excluded.',
-            'rules':RULES,'limitations':LIMITATIONS}
+            'rules':{**RULES,**{k:state['config'][k] for k in ('minimum_liquidity_usd','minimum_m5_volume_usd')}},'limitations':LIMITATIONS}
 
 
 def configure(changes,expected_revision):
@@ -120,7 +123,8 @@ def configure(changes,expected_revision):
         else:
             limits={'trade_usd':(5,200),'max_positions':(1,5),'stop_percent':(3,20),
                     'target_percent':(5,100),'trail_arm_percent':(5,50),'trail_percent':(2,20),
-                    'max_hold_minutes':(5,120),'daily_loss_usd':(10,100)}
+                    'max_hold_minutes':(5,120),'daily_loss_usd':(10,100),
+                    'minimum_liquidity_usd':(0,1000000000),'minimum_m5_volume_usd':(0,1000000000)}
             low,high=limits[key]
             if not low<=num(value)<=high or key in ('max_positions','max_hold_minutes') and num(value)%1:
                 raise ValueError('Setting outside paper experiment bounds.')
@@ -212,10 +216,12 @@ def normalize_pair(row,address,now):
             'market_timestamp':None,'source':'dexscreener_provider_observation'}
 
 
-def entry_reason(row,previous,now):
-    if row['liquidity_usd']<100000:return 'Liquidity below $100,000.'
+def entry_reason(row,previous,now,config=None):
+    config=config or DEFAULTS
+    if row['liquidity_usd']<config['minimum_liquidity_usd']:return f"Liquidity below ${config['minimum_liquidity_usd']:,.0f}."
     if not 30<=row['age_minutes']<=30*1440:return 'Pair age outside 30 minutes–30 days.'
-    if row['volume_m5_usd']<20000 or row['buys_m5']+row['sells_m5']<40:return 'Insufficient recent observed activity.'
+    if row['volume_m5_usd']<config['minimum_m5_volume_usd']:return f"Five-minute volume below ${config['minimum_m5_volume_usd']:,.0f}."
+    if row['buys_m5']+row['sells_m5']<40:return 'Insufficient recent observed activity.'
     if row['buys_m5']<1.2*max(1,row['sells_m5']):return 'Buy/sell activity confirmation missing.'
     if not 2<=row['change_m5_percent']<=20:return 'Five-minute change outside experimental momentum range.'
     if not previous or previous['pair']!=row['pair'] or not 45<=now-previous['observed_at']<=180:
@@ -312,7 +318,7 @@ def tick(*,providers=None,clock=time.time,force=False):
                 row=snapshots.get(address)
                 if not row:
                     state['candidates'].append({'mint':address,'status':'unavailable',**missing.get(address,{'reason':'No matching pool data.'})});continue
-                reason=entry_reason(row,state['observations'].get(address),observed)
+                reason=entry_reason(row,state['observations'].get(address),observed,config)
                 if address in state['positions']:reason='Existing paper position is being monitored.'
                 elif address in closed_this_cycle or state['cooldowns'].get(address,0)>observed:reason='One-hour re-entry cooldown.'
                 elif brake:reason='Paper daily loss brake or incomplete position marks blocks new entries.'

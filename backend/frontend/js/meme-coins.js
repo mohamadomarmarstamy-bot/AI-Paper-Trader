@@ -1,6 +1,6 @@
 (() => {
  const $=id=>document.getElementById(id), note=$('meme-status');let revision=null,busy=false,dirty=false,initialized=false,editRevision=null;
- const fields={trade_usd:['Dollars per paper trade',5,200],max_positions:['Maximum open positions',1,5],stop_percent:['Stop loss %',3,20],target_percent:['Take profit %',5,100],trail_arm_percent:['Trail activates at %',5,50],trail_percent:['Trail giveback points',2,20],max_hold_minutes:['Maximum hold minutes',5,120],daily_loss_usd:['Daily loss brake $',10,100]};
+ const fields={minimum_liquidity_usd:['Minimum pool liquidity $',0,1000000000],minimum_m5_volume_usd:['Minimum 5-minute volume $',0,1000000000],trade_usd:['Dollars per paper trade',5,200],max_positions:['Maximum open positions',1,5],stop_percent:['Stop loss %',3,20],target_percent:['Take profit %',5,100],trail_arm_percent:['Trail activates at %',5,50],trail_percent:['Trail giveback points',2,20],max_hold_minutes:['Maximum hold minutes',5,120],daily_loss_usd:['Daily loss brake $',10,100]};
  const text=(tag,value)=>{const n=document.createElement(tag);n.textContent=value;return n;};
  const short=v=>v?`${v.slice(0,5)}…${v.slice(-4)}`:'Token';
  const compact=v=>typeof v==='number'&&Number.isFinite(v)?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',notation:'compact',maximumFractionDigits:1}).format(v):'—';
@@ -16,7 +16,8 @@
  }
  function reason(row){
   const value=row.reason||'';
-  if(value.startsWith('Liquidity below'))return `Low liquidity · ${compact(row.liquidity_usd)} / $100k`;
+  if(value.startsWith('Liquidity below'))return `Low liquidity · ${compact(row.liquidity_usd)} · ${value}`;
+  if(value.startsWith('Five-minute volume below'))return `Low 5m volume · ${compact(row.volume_m5_usd)} · ${value}`;
   if(value.startsWith('Waiting for a second'))return 'Waiting for confirmation';
   if(value.startsWith('Five-minute change'))return 'Momentum outside +2–20%';
   if(value.startsWith('Pair age'))return 'Pool too new or too old';
