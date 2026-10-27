@@ -9,3 +9,9 @@ The Trade screen shows the buy estimate at ask and a separate sell estimate at b
 `APP_QUOTE_FEED` defaults to `iex`. This is one exchange, so its prices can differ from a consolidated feed. `sip` is supported only when the account has the required entitlement; failures are surfaced, not silently replaced with another feed. This release does not add a paid subscription or change the configured feed. Market orders can fill away from either displayed estimate as the market changes. Broker-confirmed execution prices in Activity and Notifications remain the actual saved fill prices.
 
 API contract: https://docs.alpaca.markets/us/reference/stocksnapshots-1
+
+## Unavailable data and blocked entries
+
+When a fresh quote is unavailable, Trade shows the configured feed and last quote timestamp/age when supplied. No older value is presented as current. The browser ages quotes using the server-provided source age plus monotonic elapsed/transport time, so a wrong device wall clock cannot make a fresh quote disappear. Failed risk-plan responses remain unavailable, and null values are never formatted as zero dollars.
+
+Pro Ticker displays the server's actual 409 reason and the saved requests that currently block new entries. The advisory distinguishes account-wide unresolved requests from a symbol's accepted/open entry. It does not override or reconcile an order, regenerate a request ID, replay a blocked buy, or change the quote feed. Quote availability and order-conflict reasons are logged without prices or credentials for diagnosis.

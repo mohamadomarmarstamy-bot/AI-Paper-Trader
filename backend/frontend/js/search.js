@@ -538,6 +538,7 @@ async function selectSearchStock(
             QUOTE_REQUEST_TIMEOUT_MS
         );
 
+    const quoteRequestStarted=performance.now();
     try {
         const response = await fetch(
             `${getSearchApiUrl()}/quote/${encodeURIComponent(
@@ -560,6 +561,8 @@ async function selectSearchStock(
             await readSearchJson(
                 response
             );
+        if(payload&&typeof payload==="object")payload._round_trip_ms=Math.max(0,performance.now()-quoteRequestStarted);
+
 
         if (!response.ok) {
             const message =
@@ -685,9 +688,9 @@ async function selectSearchStock(
 
 
 function normalizeQuotePrice(payload) {
-    const age=Date.now()-Date.parse(payload?.quote_timestamp);
+    const age=typeof payload?.quote_age_seconds==="number"?payload.quote_age_seconds*1000+(payload._round_trip_ms||0):NaN;
     const ask=Number(payload?.ask);
-    return payload?.quote_fresh===true&&Number.isFinite(age)&&age>=0&&age<=30000&&Number.isFinite(ask)&&ask>0?ask:null;
+    return payload?.quote_fresh===true&&Number.isFinite(Date.parse(payload.quote_timestamp))&&Number.isFinite(age)&&age>=0&&age<=30000&&Number.isFinite(ask)&&ask>0?ask:null;
 }
 
 

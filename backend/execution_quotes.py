@@ -2,6 +2,7 @@
 from collections import OrderedDict
 from datetime import datetime, timezone
 import math
+import json
 import threading
 import time
 from broker_throttle import DisplaySnapshotCache
@@ -9,6 +10,7 @@ from broker_throttle import DisplaySnapshotCache
 MAX_AGE_SECONDS=30
 _caches=OrderedDict()
 _lock=threading.Lock()
+_diagnostic_times=OrderedDict()
 
 
 def number(value):
@@ -63,4 +65,15 @@ def read_quote(symbol,request_func,*,feed='iex'):
         if not isinstance(payload,dict):raise ValueError('Invalid snapshot response.')
         return payload.get(symbol,{})
     # Recompute freshness even when a raw snapshot was served from the 2s cache.
-    return parse_snapshot(symbol,cache.get(load),feed=feed)
+    result=parse_snapshot(symbol,cache.get(load),feed=feed)
+    if not result['quote_fresh']:
+        now=time.time()
+        with _lock:
+            previous=_diagnostic_times.get(key)
+            emit=previous is None or not 0<=now-previous<60
+            if emit:
+                _diagnostic_times[key]=now
+                if len(_diagnostic_times)>256:_diagnostic_times.popitem(last=False)
+        if emit:
+            print(json.dumps({'quote_source_status':{k:result[k] for k in ('symbol','feed','quote_fresh','trade_fresh','quote_timestamp','quote_age_seconds','quote_error')}}),flush=True)
+    return result
