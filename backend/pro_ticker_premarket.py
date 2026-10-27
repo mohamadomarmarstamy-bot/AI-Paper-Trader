@@ -13,6 +13,7 @@ import database
 
 EASTERN = ZoneInfo('America/New_York')
 COLUMNS = {
+    'target_usd': "TEXT NOT NULL DEFAULT '2000'",
     'entry_session': "TEXT NOT NULL DEFAULT 'regular'",
     'entry_limit': 'TEXT', 'entry_expires_at': 'REAL',
     'stop_loss_percent': 'TEXT', 'take_profit_percent': 'TEXT',

@@ -138,7 +138,7 @@
             (snapshot.scanner.unattributed_research_records ? " Research records without an identified symbol: " + snapshot.scanner.unattributed_research_records + ". They are excluded from candidates." : "") +
             (discovery && typeof discovery.status === "string" ? " Last public discovery: " + discovery.status + (discovery.run?.finished_at ? " (" + date(discovery.run.finished_at) + ")" : "") + ". This is not a live market scan." : "") : "Scanner data unavailable.";
         el("performance-note").textContent=snapshot ? snapshot.performance.reason : "Performance data unavailable.";
-        el("health").textContent=snapshot ? "Database: readable. Broker positions and orders: not reconciled by this ledger snapshot. Automatic discovery: disabled. Order submission requires separate server configuration and owner approval. Automatic release: disabled. No background jobs are started by this workspace." : "System health unavailable.";
+        el("health").textContent=snapshot ? "Research ledger: readable. This ledger snapshot does not reconcile broker positions or orders. Automatic discovery and virtual budget release are disabled. Manual PAPER account and sell-worker status are checked separately below." : "System health unavailable.";
         el("research-detail").replaceChildren();
         el("research-detail").textContent="Select a saved candidate in Scanner to inspect its evidence.";
         candidates(); journal();
@@ -417,8 +417,17 @@
     if (!button || !status) return;
     button.addEventListener('click', async () => {
         button.disabled = true;
-        status.textContent = 'Checking dedicated PAPER account…';
+        status.textContent = 'Checking active PAPER account mode…';
         try {
+            const modeResponse=await fetch('/auto-trader/pro-ticker/manual-entry-status',{credentials:'same-origin',cache:'no-store'});
+            const mode=modeResponse.ok?await modeResponse.json():null;
+            if(mode?.enabled===true){
+                const checked=await fetch('/auto-trader/pro-ticker/manual-account-status',{credentials:'same-origin',cache:'no-store'});
+                const result=await checked.json();
+                if(!checked.ok||result.paper!==true||result.account_verified!==true||result.scope!=='original_manual_paper_account')throw Error(result.detail||'Manual PAPER connection unavailable.');
+                status.textContent='Original PAPER account verified for manual Pro Ticker submissions. Scanner sell worker: '+(result.scanner_ready?'ready.':'not ready; new buys are blocked.')+' No order was submitted.';
+                return;
+            }
             const response = await fetch('/auto-trader/pro-ticker/account-status', {credentials: 'same-origin', cache: 'no-store'});
             if (!response.ok) throw Error('Connection could not be verified (' + response.status + ').');
             const data = await response.json();

@@ -38,7 +38,7 @@ class ManualScannerHTTPTests(unittest.TestCase):
         async def run():
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app),base_url='https://test') as client:
                 return await client.request(method,path,headers=self.headers if headers is None else headers,
-                    **({'json':self.payload if payload is None else payload} if method=='POST' else {}))
+                    **({'json':self.payload if payload is None else payload} if method in ('POST','PUT') else {}))
         return asyncio.run(run())
 
     def test_unauthenticated_buy_and_status_are_denied_before_context(self):
@@ -102,4 +102,29 @@ class ManualScannerHTTPTests(unittest.TestCase):
         response=self.request('GET','/auto-trader/pro-ticker/manual-entry-status')
         self.assertTrue(response.json()['premarket_enabled'])
         self.assertFalse(response.json()['regular_session_only'])
+        self.context.request.assert_not_called()
+
+    def test_manual_account_verification_reads_original_account_without_dedicated_configuration(self):
+        self.context.request.return_value={'id':str(uuid.uuid4()),'status':'ACTIVE','trading_blocked':False,'account_blocked':False}
+        result=self.request('GET','/auto-trader/pro-ticker/manual-account-status')
+        self.assertEqual(result.status_code,200)
+        self.assertEqual(result.json()['scope'],'original_manual_paper_account')
+        self.assertFalse(result.json()['order_submitted'])
+        self.context.request.assert_called_once_with('GET','/v2/account')
+
+    def test_entry_settings_reject_cross_origin_and_revision_conflicts(self):
+        payload={'expected_revision':0,'settings':{'dollars_per_stock':1000,'stop_loss_percent':1,'take_profit_percent':3}}
+        route='/auto-trader/pro-ticker/entry-settings'
+        self.assertEqual(self.request('PUT',route,payload=payload,headers={**self.headers,'origin':'https://evil.test'}).status_code,403)
+        self.assertEqual(self.request('PUT',route,payload=payload).status_code,200)
+        self.assertEqual(self.request('PUT',route,payload=payload).status_code,409)
+        self.assertEqual(self.request('GET',route).json()['settings']['dollars_per_stock'],1000)
+        self.context.request.assert_not_called()
+
+
+    def test_stale_order_settings_require_refresh_before_any_entry_dispatch(self):
+        self.context.settings_revision=1
+        self.assertEqual(self.request(payload={**self.payload,'entry_settings_revision':0}).status_code,409)
+        self.assertEqual(self.request().status_code,409)
+        self.context.submit.assert_not_called()
         self.context.request.assert_not_called()

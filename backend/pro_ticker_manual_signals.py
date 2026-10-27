@@ -170,7 +170,40 @@ def build_manual_signal_router(*,require_session,quote_fetcher,analyzer,executio
         context=manual_entry_context() if manual_entry_context is not None else None
         enabled=bool(context is not None and context.enabled() is True and context.paper_base_url=='https://paper-api.alpaca.markets')
         from fastapi.responses import JSONResponse
-        return JSONResponse(status(enabled=enabled,premarket_enabled=enabled and context.premarket_enabled() is True,quote_feed=context.quote_feed if context else 'iex'),headers={'Cache-Control':'no-store'})
+        return JSONResponse(status(enabled=enabled,premarket_enabled=enabled and context.premarket_enabled() is True,quote_feed=context.quote_feed if context else 'iex',target_usd=context.target_usd if context else 2000,entry_settings_revision=context.settings_revision if context else 0),headers={'Cache-Control':'no-store'})
+
+    @router.get('/auto-trader/pro-ticker/entry-settings')
+    def entry_settings(request:Request):
+        require_session(request)
+        from pro_ticker_entry_settings import read
+        context=manual_entry_context() if manual_entry_context else None
+        defaults={'dollars_per_stock':2000.0,'stop_loss_percent':context.stop_loss_percent if context else 2.0,'take_profit_percent':context.take_profit_percent if context else 4.0}
+        return read(defaults)
+
+    @router.put('/auto-trader/pro-ticker/entry-settings')
+    async def save_entry_settings(request:Request):
+        require_session(request);require_same_origin(request)
+        from pro_ticker_entry_settings import save,Conflict
+        if request.headers.get('content-type','').split(';')[0]!='application/json':raise HTTPException(415,'JSON required.')
+        raw=await request.body()
+        if len(raw)>4096:raise HTTPException(413,'Request too large.')
+        context=manual_entry_context() if manual_entry_context else None
+        defaults={'dollars_per_stock':2000.0,'stop_loss_percent':context.stop_loss_percent if context else 2.0,'take_profit_percent':context.take_profit_percent if context else 4.0}
+        try:return await run_in_threadpool(save,json.loads(raw),defaults=defaults)
+        except Conflict as error:raise HTTPException(409,str(error)) from None
+        except ValueError as error:raise HTTPException(422,str(error)) from None
+
+    @router.get('/auto-trader/pro-ticker/manual-account-status')
+    def manual_account_status(request:Request):
+        require_session(request)
+        if manual_entry_context is None:raise HTTPException(403,'Manual PAPER account is not configured.')
+        from pro_ticker_manual_scanner import _account,status,_ready,EntryBlocked
+        context=manual_entry_context()
+        try:
+            fingerprint=_account(context)
+            return {'paper':True,'account_verified':True,'scope':'original_manual_paper_account','order_submitted':False,'scanner_ready':status(enabled=True)['scanner_ready'] and _ready(fingerprint,time.time())}
+        except EntryBlocked:raise HTTPException(403,'Manual PAPER mode is disabled or the account is blocked.') from None
+        except Exception:raise HTTPException(503,'Broker account check unavailable.') from None
 
     @router.post('/auto-trader/pro-ticker/manual-signals/buy-and-scan')
     async def buy_and_scan(request:Request):
@@ -187,10 +220,15 @@ def build_manual_signal_router(*,require_session,quote_fetcher,analyzer,executio
         except EntryBlocked:raise HTTPException(403,'Manual PAPER buying and scanner management are disabled.') from None
         try:
             payload=json.loads(body)
+            if not isinstance(payload,dict):raise ValueError('JSON object required.')
+            revision=payload.pop('entry_settings_revision',None)
+            if (revision is not None or context.settings_revision>0) and (type(revision) is not int or revision!=context.settings_revision):
+                raise HTTPException(409,'Order settings changed. Refresh saved reviews and confirm the new amount before submitting.')
             result=await run_in_threadpool(submit_manual_signal,payload,quote_fetcher=quote_fetcher,analyzer=analyzer,research_collector=research_collector)
             entry=await run_in_threadpool(submit_entry,payload['request_id'],result['signal']['symbol'],context=context)
             return {'paper':True,'kind':'owner_manual_scanner_v1','live_trading':False,
                     'signal':{**result['signal'],'manual_entry':entry},'entry':entry}
+        except HTTPException:raise
         except EntryBlocked as error:raise HTTPException(409,str(error)) from None
         except SignalConflict:raise HTTPException(409,'Existing review or order is active; refresh saved status.') from None
         except ValueError:raise HTTPException(422,'Provide one symbol and canonical request ID only.') from None

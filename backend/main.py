@@ -7826,6 +7826,7 @@ def submit_alpaca_auto_bracket_buy(
     entry_context: dict[str, Any] | None = None,
     strategy_version: str = AUTO_TRADER_STRATEGY_VERSION,
     manual_request_id=None,
+    manual_settings=None,
 ) -> dict[str, Any]:
     """
     Submit an automatic PAPER buy with broker-native stop-loss and
@@ -7843,6 +7844,13 @@ def submit_alpaca_auto_bracket_buy(
         if os.getenv("PRO_TICKER_MANUAL_SCANNER_ENABLED") != "true":
             raise ValueError("Manual PAPER scanner mode is disabled.")
         manual_client_id = assert_dispatch(manual_request_id, normalized_symbol, shares)
+
+    def entry_setting(key):
+        if manual_request_id is not None and manual_settings is not None:
+            from pro_ticker_entry_settings import validate
+            validate(manual_settings)
+            return manual_settings[key]
+        return get_auto_trader_setting(key)
 
     risk_check = (
         validate_alpaca_paper_order_risk(
@@ -7872,7 +7880,7 @@ def submit_alpaca_auto_bracket_buy(
         * (
             1
             - (
-                get_auto_trader_setting("stop_loss_percent")
+                entry_setting("stop_loss_percent")
                 / 100
             )
         ),
@@ -7884,7 +7892,7 @@ def submit_alpaca_auto_bracket_buy(
         * (
             1
             + (
-                get_auto_trader_setting("take_profit_percent")
+                entry_setting("take_profit_percent")
                 / 100
             )
         ),
@@ -7892,8 +7900,8 @@ def submit_alpaca_auto_bracket_buy(
     )
 
     if manual_request_id is not None and reference_price < 1:
-        stop_price = round(reference_price * (1-get_auto_trader_setting("stop_loss_percent")/100),4)
-        take_profit_price = round(reference_price * (1+get_auto_trader_setting("take_profit_percent")/100),4)
+        stop_price = round(reference_price * (1-entry_setting("stop_loss_percent")/100),4)
+        take_profit_price = round(reference_price * (1+entry_setting("take_profit_percent")/100),4)
 
     if (
         stop_price <= 0
@@ -8005,10 +8013,10 @@ def submit_alpaca_auto_bracket_buy(
         }
         result["bracket"] = {
             "stop_loss_percent": (
-                get_auto_trader_setting("stop_loss_percent")
+                entry_setting("stop_loss_percent")
             ),
             "take_profit_percent": (
-                get_auto_trader_setting("take_profit_percent")
+                entry_setting("take_profit_percent")
             ),
             "stop_price": stop_price,
             "take_profit_price": (
@@ -8160,10 +8168,10 @@ def submit_alpaca_auto_bracket_buy(
                             )
                         ),
                         "stop_loss_percent": (
-                            get_auto_trader_setting("stop_loss_percent")
+                            entry_setting("stop_loss_percent")
                         ),
                         "take_profit_percent": (
-                            get_auto_trader_setting("take_profit_percent")
+                            entry_setting("take_profit_percent")
                         ),
                         "stop_price": stop_price,
                         "take_profit_price": (
@@ -16265,11 +16273,18 @@ def scan_manual_paper_symbol(symbol):
 
 def manual_scanner_context():
     from pro_ticker_manual_scanner import ManualScannerContext,persist_entry_fill,persist_exit_fills
+    from pro_ticker_entry_settings import read
+    defaults={"dollars_per_stock":2000.0,"stop_loss_percent":get_auto_trader_setting("stop_loss_percent"),"take_profit_percent":get_auto_trader_setting("take_profit_percent")}
+    saved_preferences=read(defaults)
+    preferences=saved_preferences["settings"]
     def dispatch(*,symbol,shares,reference_price,request_id,candidate):
+        from pro_ticker_manual_scanner import _row
+        row=_row(request_id)
+        frozen={"dollars_per_stock":float(row["target_usd"]),"stop_loss_percent":float(row["stop_loss_percent"]),"take_profit_percent":float(row["take_profit_percent"])}
         return submit_alpaca_auto_bracket_buy(symbol=symbol,shares=shares,
             reference_price=reference_price,scanner_result=candidate,
             entry_context={"manual_signal_id":request_id,"entry_source":"owner_manual_scanner_v1"},
-            strategy_version="owner_manual_scanner_v1",manual_request_id=request_id)
+            strategy_version="owner_manual_scanner_v1",manual_request_id=request_id,manual_settings=frozen)
     return ManualScannerContext(request=alpaca_paper_request,
         quote=lambda symbol: fetch_alpaca_risk_quote(symbol,feed=os.getenv("PRO_TICKER_MANUAL_QUOTE_FEED","iex")),
         risk=validate_alpaca_paper_order_risk,submit=dispatch,
@@ -16279,8 +16294,10 @@ def manual_scanner_context():
         paper_base_url=ALPACA_PAPER_BASE_URL,enabled=manual_scanner_enabled,
         premarket_enabled=lambda: os.getenv("PRO_TICKER_PREMARKET_ENABLED")=="true",
         quote_feed=os.getenv("PRO_TICKER_MANUAL_QUOTE_FEED","iex"),
-        stop_loss_percent=get_auto_trader_setting("stop_loss_percent"),
-        take_profit_percent=get_auto_trader_setting("take_profit_percent"),
+        settings_revision=saved_preferences["revision"],
+        target_usd=preferences["dollars_per_stock"],
+        stop_loss_percent=preferences["stop_loss_percent"],
+        take_profit_percent=preferences["take_profit_percent"],
         exit_score=AUTO_TRADER_EXIT_SCORE_MAX,exit_confidence=AUTO_TRADER_EXIT_CONFIDENCE_MIN)
 
 
