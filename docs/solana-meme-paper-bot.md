@@ -40,6 +40,8 @@ require an authenticated owner session and same-origin JSON requests.
   a $50 daily marked-equity loss brake. The first complete observation after UTC
   midnight establishes that day's baseline. Missing marks block new entries.
 - Only three on-chain candidate checks and eight observed mints per cycle.
+  Discovery holds each batch for two scans to support confirmation, then rotates;
+  open positions and the saved watchlist have priority.
 
 These thresholds are deliberately fixed hypotheses, not optimized or proven
 profitable. Model performance must be evaluated prospectively across conditions.
@@ -83,3 +85,11 @@ future funded bot, validate actual buy and sell routes, transaction identities,
 output limits, Token-2022 behavior, confirmation/recovery, custody and emergency
 controls, and assess real costs and prospective results. Paper gains cannot
 establish that a route can execute or that a token is safe to buy.
+
+## Compact interface
+
+Controls, portfolio totals and compact candidate/position/trade rows stay visible.
+Settings, trading rules and data notes are collapsed by default. Full mint
+addresses and longer explanations are available in per-row Details, whose open
+state survives refreshes. Watching means confirmation is pending; Skipped means
+a rule failed; No data names the missing provider evidence. Thresholds are unchanged.

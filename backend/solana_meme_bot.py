@@ -96,7 +96,7 @@ def public():
         else:value+=mark
         positions.append({'mint':address,**p,'mark_fresh':fresh,'current_modeled_value_usd':mark})
     return {'version':VERSION,'paper':True,'live_execution_enabled':False,'revision':revision,
-            **{k:v for k,v in state.items() if k not in ('positions','observations','cooldowns')},
+            **{k:v for k,v in state.items() if k not in ('positions','observations','cooldowns','discovery_batch','discovery_uses','discovery_offset')},
             'positions':positions,'paper_equity_usd':round(value,4) if complete else None,
             'realized_pnl_usd':round(sum(p['pnl_usd'] for p in state['closed']),4),
             'realized_scope':'Latest 200 completed paper trades; older events may be excluded.',
@@ -221,6 +221,23 @@ def entry_reason(row,previous,now):
     return None
 
 
+def select_candidates(state, profiles):
+    """Keep a discovery batch for confirmation, then rotate beyond the first eight."""
+    priority=list(dict.fromkeys([*state['positions'],*state['config']['watchlist']]))[:8]
+    slots=8-len(priority)
+    if not slots:return priority
+    batch=[a for a in state.get('discovery_batch',[]) if a not in priority][:slots]
+    if state.get('discovery_uses',2)>=2 or not batch:
+        pool=list(dict.fromkeys(a for a in profiles if a not in priority))
+        offset=state.get('discovery_offset',0)%len(pool) if pool else 0
+        batch=(pool[offset:]+pool[:offset])[:slots]
+        state['discovery_offset']=(offset+len(batch))%len(pool) if pool else 0
+        state['discovery_uses']=0
+    state['discovery_batch']=batch
+    state['discovery_uses']=state.get('discovery_uses',0)+1
+    return priority+batch
+
+
 def tick(*,providers=None,clock=time.time,force=False):
     state,revision=load();now=clock();config=state['config']
     if not force and not config['enabled'] and not state['positions']:return public()
@@ -233,22 +250,29 @@ def tick(*,providers=None,clock=time.time,force=False):
     providers=providers or ReadOnlyProviders()
     state['error']=None
     try:
-        candidates=list(state['positions'])+config['watchlist']
+        candidates=list(dict.fromkeys([*state['positions'],*config['watchlist']]))[:8]
         if config['discover'] and (config['enabled'] or force):
-            try:candidates+=providers.profiles()
+            try:candidates=select_candidates(state,providers.profiles())
             except Exception:state['error']='Discovery unavailable; existing positions/watchlist still monitored.'
-        candidates=list(dict.fromkeys(candidates))[:8]
         if not candidates:
             state.update(health='waiting_for_mints',last_cycle=now)
         else:
             raw=providers.pairs(candidates);observed=clock()
             if not 0<=observed-now<=45:raise ValueError('Observation request exceeded cycle budget.')
-            snapshots={}
+            snapshots={};missing={}
             for address in candidates:
                 valid=[]
                 for row in raw:
+                    if row.get('chainId')!='solana' or row.get('baseToken',{}).get('address')!=address:continue
                     try:valid.append(normalize_pair(row,address,observed))
-                    except (ValueError,KeyError,TypeError):continue
+                    except (ValueError,KeyError,TypeError) as error:
+                        fields={'liquidity':'Liquidity data missing.','usd':'Liquidity data missing.',
+                                'priceUsd':'Price data missing.','pairCreatedAt':'Pool age missing.',
+                                'txns':'Recent activity missing.','volume':'Volume data missing.',
+                                'priceChange':'Price-change data missing.','m5':'Five-minute activity missing.'}
+                        missing[address]={'symbol':str(row.get('baseToken',{}).get('symbol',''))[:24],
+                            'reason':fields.get(error.args[0] if isinstance(error,KeyError) else '', 'Pool metrics incomplete or invalid.')}
+                        continue
                 # Open positions stay pinned to their original pool, not a new unrelated price.
                 if address in state['positions']:
                     valid=[r for r in valid if r['pair']==state['positions'][address]['pair']]
@@ -283,7 +307,7 @@ def tick(*,providers=None,clock=time.time,force=False):
             for address in candidates:
                 row=snapshots.get(address)
                 if not row:
-                    state['candidates'].append({'mint':address,'status':'unavailable','reason':'Pool observation unavailable; no invented mark or exit.'});continue
+                    state['candidates'].append({'mint':address,'status':'unavailable',**missing.get(address,{'reason':'No matching pool data.'})});continue
                 reason=entry_reason(row,state['observations'].get(address),observed)
                 if address in state['positions']:reason='Existing paper position is being monitored.'
                 elif address in closed_this_cycle or state['cooldowns'].get(address,0)>observed:reason='One-hour re-entry cooldown.'
