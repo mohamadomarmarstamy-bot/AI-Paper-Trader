@@ -18,6 +18,7 @@ let latestTradeQuoteRequestNumber = 0;
 let latestRiskRequestNumber = 0;
 
 let currentTradeQuote = null;
+let liveTradeQuoteInterval = null;
 let currentRiskPlan = null;
 
 const TRADE_QUOTE_DEBOUNCE_MS = 500;
@@ -71,6 +72,13 @@ function initializeTradeCenter() {
     }
 
     createTradeCenterPanels();
+    if(liveTradeQuoteInterval)window.clearInterval(liveTradeQuoteInterval);
+    liveTradeQuoteInterval=window.setInterval(()=>{
+        const section=document.getElementById("trade-section");
+        if(!document.hidden && (!section||!section.hidden) && getTradeSymbol() && !tradeInProgress && !activeTradeQuoteRequest)loadLivePrice();
+        if(currentTradeQuote?.quote)renderExecutionQuote(currentTradeQuote.quote);
+    },5000);
+
 
     symbolInput.addEventListener(
         "input",
@@ -247,36 +255,10 @@ function handleExternalStockSelection(event) {
             symbol;
     }
 
-    if (
-        priceInput &&
-        price !== null
-    ) {
-        priceInput.value =
-            price.toFixed(2);
-
-        priceInput.placeholder =
-            "0.00";
-
-        priceInput.classList.remove(
-            "error"
-        );
-
-        currentTradeQuote = {
-            symbol,
-            price
-        };
-    }
-
+    currentTradeQuote=null;
     clearTimeout(quoteRefreshTimer);
     clearTimeout(riskRefreshTimer);
-
-    riskRefreshTimer =
-        window.setTimeout(
-            () => {
-                loadRiskPlan(symbol);
-            },
-            0
-        );
+    scheduleTradeDataRefresh(symbol,0);
 
     updateTradePreview();
 }
@@ -355,7 +337,7 @@ async function loadLivePrice(
             QUOTE_REQUEST_TIMEOUT_MS
         );
 
-    setTradePriceLoading();
+    if(currentTradeQuote?.symbol!==symbol||!currentTradeQuote?.quote)setTradePriceLoading();
 
     try {
         const response = await fetch(
@@ -370,6 +352,7 @@ async function loadLivePrice(
                         "application/json"
                 },
 
+                cache: "no-store",
                 signal:
                     controller.signal
             }
@@ -416,11 +399,12 @@ async function loadLivePrice(
 
         currentTradeQuote = {
             symbol,
-            price
+            price,
+            quote: result
         };
-
+        renderExecutionQuote(result);
         priceInput.value =
-            price.toFixed(2);
+            price.toFixed(4).replace(/\.?0+$/, "");
 
         priceInput.placeholder =
             "0.00";
@@ -1319,17 +1303,22 @@ function updateTradePreview() {
         ),
 
         createTradeMetric(
-            "Market Price",
+            "Buy estimate (ask)",
             formatTradeCurrency(
                 price
             )
         ),
 
         createTradeMetric(
-            "Estimated Value",
+            "Estimated buy cost",
             formatTradeCurrency(
                 estimatedValue
             )
+        ),
+
+        createTradeMetric(
+            "Estimated sell proceeds (bid)",
+            currentTradeQuote?.quote?.bid ? formatTradeCurrency(currentTradeQuote.quote.bid * shares) : "—"
         ),
 
         createTradeMetric(
@@ -2041,6 +2030,8 @@ function setTradePriceError(
         );
 
     currentTradeQuote = null;
+    const note=document.getElementById("trade-quote-status");
+    if(note)note.textContent="Fresh bid/ask unavailable. No delayed price was substituted.";
 
     if (priceInput) {
         priceInput.value = "";
@@ -2072,6 +2063,7 @@ function clearTradePrice() {
         );
 
     currentTradeQuote = null;
+    const note=document.getElementById("trade-quote-status");if(note)note.textContent="Select a symbol for fresh bid/ask estimates.";
 
     if (!priceInput) {
         return;
@@ -2244,24 +2236,23 @@ function getTradePrice() {
 }
 
 
-function normalizeQuotePrice(
-    payload
-) {
-    if (
-        !payload ||
-        typeof payload !== "object" ||
-        Array.isArray(payload)
-    ) {
-        return null;
-    }
+function normalizeQuotePrice(payload) {
+    const age=Date.now()-Date.parse(payload?.quote_timestamp);
+    if(payload?.quote_fresh!==true||!Number.isFinite(age)||age<0||age>30000)return null;
+    return toPositiveTradeNumber(payload.ask);
+}
 
-    return firstPositiveTradeNumber(
-        payload.price,
-        payload.current_price,
-        payload.last_price,
-        payload.regularMarketPrice,
-        payload.quote?.price
-    );
+function renderExecutionQuote(quote) {
+    const note=document.getElementById("trade-quote-status");
+    if(!note)return;
+    const age=Date.now()-Date.parse(quote.quote_timestamp);
+    if(quote.quote_fresh!==true||!Number.isFinite(age)||age<0||age>30000){
+        note.textContent="Quote is stale or unavailable. No delayed price is shown as current.";
+        const input=document.getElementById("price");if(input)input.value="";currentTradeQuote=null;updateTradePreview();return;
+    }
+    const money=value=>new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:4}).format(value);
+    const source=quote.feed==="sip"?"Alpaca SIP":"Alpaca IEX (single exchange)";
+    note.textContent=`Buy estimate (ask): ${money(quote.ask)} · Sell estimate (bid): ${money(quote.bid)} · ${source} · ${new Date(quote.quote_timestamp).toLocaleTimeString()} (${Math.floor(age/1000)}s old). Market fills may differ.`;
 }
 
 

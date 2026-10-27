@@ -159,7 +159,6 @@ ALPACA_READ_RETRY_DELAY_SECONDS = 0.75
 RISK_MAX_ORDER_EQUITY_PERCENT = 2.5
 RISK_MAX_POSITION_EQUITY_PERCENT = 5.0
 RISK_MAX_OPEN_POSITIONS = 50
-RISK_MAX_SPREAD_PERCENT = 2.0
 RISK_BUYING_POWER_BUFFER_DOLLARS = 25.0
 RISK_REQUIRE_REGULAR_MARKET_OPEN = True
 RISK_BLOCK_SHORT_SELLING = True
@@ -371,7 +370,6 @@ AUTO_TRADER_MAX_NEW_POSITIONS_PER_CYCLE = 2
 
 # The global risk system still allows up to 2% spread,
 # but the automatic trader will eventually use the tighter 1%.
-AUTO_TRADER_MAX_ENTRY_SPREAD_PERCENT = 1.0
 
 # Avoid extremely volatile automatic entries.
 # We will wire ATR into the entry logic after the basic fixes.
@@ -3464,7 +3462,7 @@ def validate_alpaca_paper_order_risk(
     Controls:
       - regular-market session only for market orders
       - no duplicate open orders for the same symbol
-      - spread ceiling
+      - spread shown for information; no execution ceiling
       - max order size as a percent of account equity
       - max total position size as a percent of account equity
       - max number of simultaneous positions
@@ -3668,21 +3666,7 @@ def validate_alpaca_paper_order_risk(
         )
     )
 
-    if not owner_manual_entry and (
-        spread_percent is None
-        or spread_percent >
-            RISK_MAX_SPREAD_PERCENT
-    ):
-        return {
-            "approved": False,
-            "error": (
-                f"{normalized_symbol}'s bid/ask spread is "
-                f"{(spread_percent or 0):.2f}%, above the "
-                f"{RISK_MAX_SPREAD_PERCENT:.2f}% safety limit."
-            ),
-            "quote": quote,
-        }
-
+    # Spreads are displayed as execution information, not an order veto.
     midpoint = safe_float(
         quote.get("midpoint")
     )
@@ -3698,7 +3682,7 @@ def validate_alpaca_paper_order_risk(
             ),
         }
 
-    execution_price = midpoint
+    execution_price = safe_float(quote.get("ask")) or midpoint
     if manual_premarket and normalized_side=="buy":
         from pro_ticker_premarket import tick_price
         execution_price = max(midpoint,float(tick_price(quote["ask"],buy=True)))
@@ -3752,7 +3736,7 @@ def validate_alpaca_paper_order_risk(
                 0,
                 math.floor(
                     max_order_notional
-                    / midpoint
+                    / execution_price
                 ),
             )
 
@@ -3790,7 +3774,7 @@ def validate_alpaca_paper_order_risk(
                 0,
                 math.floor(
                     remaining_capacity
-                    / midpoint
+                    / execution_price
                 ),
             )
 
@@ -3880,6 +3864,7 @@ def validate_alpaca_paper_order_risk(
 
     return {
         "approved": True,
+        "spread_check_applied": False,
         "symbol": normalized_symbol,
         "side": normalized_side,
         "shares": shares,
@@ -3903,8 +3888,7 @@ def validate_alpaca_paper_order_risk(
                 get_auto_trader_setting("max_position_size_percent"),
             "max_open_positions":
                 get_auto_trader_setting("max_open_positions"),
-            "max_spread_percent":
-                RISK_MAX_SPREAD_PERCENT,
+            "max_spread_percent": None,
             "buying_power_buffer_dollars":
                 RISK_BUYING_POWER_BUFFER_DOLLARS,
             "regular_market_only":
@@ -8845,20 +8829,6 @@ def submit_alpaca_paper_extended_hours_exit(
                 ),
             }
 
-        if (
-            spread_percent is None
-            or spread_percent > RISK_MAX_SPREAD_PERCENT
-        ):
-            return {
-                "success": False,
-                "paper": True,
-                "error": (
-                    f"{normalized_symbol}'s spread is too wide "
-                    "for an automatic extended-hours exit."
-                ),
-                "quote": quote,
-            }
-
         limit_price = round(
             bid
             * (
@@ -9385,21 +9355,6 @@ def safely_submit_extended_hours_exit(
                     "Extended-hours protection was left intact "
                     "because no valid bid was available."
                 ),
-            }
-
-        if (
-            preflight_spread is None
-            or preflight_spread > RISK_MAX_SPREAD_PERCENT
-        ):
-            return {
-                "success": False,
-                "paper": True,
-                "symbol": normalized_symbol,
-                "error": (
-                    "Extended-hours protection was left intact "
-                    "because the spread was too wide."
-                ),
-                "quote": preflight_quote,
             }
 
         quote_timestamp = (
@@ -13205,56 +13160,6 @@ def run_auto_trader_cycle() -> dict[str, Any]:
 
                     continue
 
-                if (
-                    spread_percent is None
-                    or spread_percent
-                    > AUTO_TRADER_MAX_ENTRY_SPREAD_PERCENT
-                ):
-                    cycle_result[
-                        "skipped_candidates"
-                    ].append({
-                        "symbol": symbol,
-                        "reason": (
-                            "automatic entry spread too wide"
-                        ),
-                        "spread_percent": (
-                            round(
-                                spread_percent,
-                                4,
-                            )
-                            if spread_percent is not None
-                            else None
-                        ),
-                        "maximum_spread_percent": (
-                            AUTO_TRADER_MAX_ENTRY_SPREAD_PERCENT
-                        ),
-                    })
-
-                    record_scanner_decision_research(
-                        symbol=symbol,
-                        observation_id=scanner_observation_ids.get(
-                            symbol
-                        ),
-                        reference_price=reference_price,
-                        decision="rejected",
-                        failed_requirements=[
-                            "entry_spread_too_wide"
-                        ],
-                        entry_quality={
-                            **(
-                                entry_quality
-                                if isinstance(entry_quality, dict)
-                                else {}
-                            ),
-                            "spread_percent": spread_percent,
-                            "maximum_spread_percent": (
-                                AUTO_TRADER_MAX_ENTRY_SPREAD_PERCENT
-                            ),
-                        },
-                        strategy_version=selected_strategy_version,
-                    )
-
-                    continue
 
                 if (
                     shares <= 0
@@ -22908,34 +22813,16 @@ def chart(
 
 
 @app.get("/quote/{symbol}")
-def get_quote(
-    request: Request,
-    symbol: str,
-) -> dict[str, Any]:
-    require_app_session(
-        request
-    )
-    normalized_symbol = clean_symbol(symbol)
-
-    if not normalized_symbol:
-        return {"error": "Symbol is required."}
-
-    price = fetch_current_price(
-        normalized_symbol
-    )
-
-    if price is None:
-        return {
-            "error": (
-                f"Could not retrieve the price for "
-                f"{normalized_symbol}."
-            )
-        }
-
-    return {
-        "symbol": normalized_symbol,
-        "price": price,
-    }
+def get_quote(request: Request, symbol: str) -> dict[str, Any]:
+    require_app_session(request)
+    normalized_symbol=clean_symbol(symbol)
+    if not normalized_symbol:raise HTTPException(422,"Symbol is required.")
+    from execution_quotes import read_quote
+    try:
+        return read_quote(normalized_symbol,alpaca_market_data_request,
+                          feed=os.getenv("APP_QUOTE_FEED","iex").strip().lower())
+    except Exception:
+        raise HTTPException(503,"Current quote unavailable from the configured feed. No delayed price was substituted.") from None
 
 
 # =========================================================
@@ -23088,7 +22975,11 @@ def get_risk_plan(
             "message": "Enter a valid stock symbol.",
         }
 
-    price = fetch_current_price(normalized_symbol)
+    try:
+        quote=get_quote(request,normalized_symbol)
+        price=quote.get('ask') if quote.get('quote_fresh') is True else None
+    except HTTPException:
+        price=None
 
     if price is None:
         message = (
