@@ -114,13 +114,15 @@ class EngineTests(unittest.TestCase):
         self.now+=40;self.providers.price=1.01
         self.assertEqual(len(self.tick(force=True)['positions']),1)
 
-    def test_discovery_rotates_after_two_scans_without_dropping_positions(self):
-        state=bot.initial();profiles=['1'*31+c for c in '23456789ABCDEFGH']
+    def test_discovery_rotates_after_six_scans_without_dropping_positions(self):
+        state=bot.initial();profiles=['1'*31+c for c in bot.ALPHABET]
         first=bot.select_candidates(state,profiles)
-        self.assertEqual(len(first),8)
+        self.assertEqual(len(first),20)
         self.assertEqual(bot.select_candidates(state,profiles[::-1]),first)
-        third=bot.select_candidates(state,profiles)
-        self.assertNotEqual(third,first)
+        for _ in range(4):
+            self.assertEqual(bot.select_candidates(state,profiles),first)
+        rotated=bot.select_candidates(state,profiles)
+        self.assertNotEqual(rotated,first)
         state['positions']={MINT:{}}
         self.assertEqual(bot.select_candidates(state,profiles)[0],MINT)
 

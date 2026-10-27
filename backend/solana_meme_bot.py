@@ -10,6 +10,10 @@ import uuid
 import requests
 import database
 
+MAX_SCAN_TOKENS = 20
+SCAN_SECONDS = 10
+DISCOVERY_BATCH_SCANS = 6
+
 VERSION = 'solana_momentum_paper_v1'
 TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
 ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
@@ -23,7 +27,7 @@ RULES = {'minimum_liquidity_usd':100000, 'minimum_m5_volume_usd':20000,
          'm5_change_range_percent':[2,20], 'confirmation_change_range_percent':[.5,8],
          'maximum_single_account_percent':35, 'maximum_top10_accounts_percent':70,
          'modeled_cost_bps_per_side':100, 'modeled_network_usd_per_side':.10,
-         'cycle_seconds':60, 'cooldown_minutes':60}
+         'cycle_seconds':SCAN_SECONDS, 'cooldown_minutes':60}
 LIMITATIONS = [
     'PAPER simulation only: no wallet, signing key, swap submission, or real funds.',
     'DEX Screener prices are provider observations, not executable quotes; market timestamps are unavailable.',
@@ -32,7 +36,7 @@ LIMITATIONS = [
     'Largest token accounts are not unique holders; pool vaults are not excluded. Concentration can cause false rejections.',
     'Mint/freeze checks do not establish safety, locked liquidity, sellability, or absence of insider/wash trading.',
     'Costs are assumptions. Real slippage, priority fees, MEV, taxes, liquidity loss and failed exits can be worse.',
-    'Stops are sampled once per minute and cannot guarantee a price. Missing observations leave exits unresolved.',
+    'Stops are sampled every 10 seconds and cannot guarantee a price. Missing observations leave exits unresolved.',
     'Daily loss brake uses marked paper equity since UTC midnight; unknown marks block new entries.',
 ]
 SCHEMA = '''CREATE TABLE IF NOT EXISTS solana_meme_paper_state (
@@ -111,7 +115,7 @@ def configure(changes,expected_revision):
         if key in ('enabled','discover'):
             if type(value) is not bool:raise ValueError('Boolean control required.')
         elif key=='watchlist':
-            if not isinstance(value,list) or len(value)>8 or len(set(value))!=len(value):raise ValueError('At most eight distinct mint addresses.')
+            if not isinstance(value,list) or len(value)>MAX_SCAN_TOKENS or len(set(value))!=len(value):raise ValueError('At most 20 distinct mint addresses.')
             for address in value:mint(address)
         else:
             limits={'trade_usd':(5,200),'max_positions':(1,5),'stop_percent':(3,20),
@@ -151,7 +155,7 @@ class ReadOnlyProviders:
                 except ValueError:pass
         return list(dict.fromkeys(result))
     def pairs(self,addresses):
-        if not 1<=len(addresses)<=8:raise ValueError('Bounded mint batch required.')
+        if not 1<=len(addresses)<=MAX_SCAN_TOKENS:raise ValueError('Bounded mint batch required.')
         for address in addresses:mint(address)
         data=self._json(requests.get('https://api.dexscreener.com/tokens/v1/solana/'+','.join(addresses),timeout=4))
         if not isinstance(data,list) or len(data)>500:raise ValueError('Pair evidence unavailable.')
@@ -222,12 +226,12 @@ def entry_reason(row,previous,now):
 
 
 def select_candidates(state, profiles):
-    """Keep a discovery batch for confirmation, then rotate beyond the first eight."""
-    priority=list(dict.fromkeys([*state['positions'],*state['config']['watchlist']]))[:8]
-    slots=8-len(priority)
+    """Keep a discovery batch for confirmation, then rotate beyond the first batch."""
+    priority=list(dict.fromkeys([*state['positions'],*state['config']['watchlist']]))[:MAX_SCAN_TOKENS]
+    slots=MAX_SCAN_TOKENS-len(priority)
     if not slots:return priority
     batch=[a for a in state.get('discovery_batch',[]) if a not in priority][:slots]
-    if state.get('discovery_uses',2)>=2 or not batch:
+    if state.get('discovery_uses',DISCOVERY_BATCH_SCANS)>=DISCOVERY_BATCH_SCANS or not batch:
         pool=list(dict.fromkeys(a for a in profiles if a not in priority))
         offset=state.get('discovery_offset',0)%len(pool) if pool else 0
         batch=(pool[offset:]+pool[:offset])[:slots]
@@ -250,7 +254,7 @@ def tick(*,providers=None,clock=time.time,force=False):
     providers=providers or ReadOnlyProviders()
     state['error']=None
     try:
-        candidates=list(dict.fromkeys([*state['positions'],*config['watchlist']]))[:8]
+        candidates=list(dict.fromkeys([*state['positions'],*config['watchlist']]))[:MAX_SCAN_TOKENS]
         if config['discover'] and (config['enabled'] or force):
             try:candidates=select_candidates(state,providers.profiles())
             except Exception:state['error']='Discovery unavailable; existing positions/watchlist still monitored.'
@@ -362,4 +366,4 @@ async def worker():
     while True:
         try:await asyncio.to_thread(tick)
         except Exception:pass
-        await asyncio.sleep(60)
+        await asyncio.sleep(SCAN_SECONDS)
