@@ -513,6 +513,7 @@
     }
 
     function startVoiceSession() {
+        state.awaitingWakeCommand=false;
         const voiceMode =
             document.getElementById(
                 "jarvis-voice-mode"
@@ -564,6 +565,7 @@
     }
 
     function endVoiceSession() {
+        state.awaitingWakeCommand=false;
         const voiceMode =
             document.getElementById(
                 "jarvis-voice-mode"

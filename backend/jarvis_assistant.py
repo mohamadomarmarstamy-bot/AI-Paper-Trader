@@ -64,8 +64,15 @@ def tools():
 
 
 def receipt_text(receipt):
-    values='; '.join(f"{key.replace('_',' ')}: {receipt['before'][key]} → {value}" for key,value in receipt['after'].items())
-    return 'Saved '+values+'. '+controls.EFFECT
+    after=receipt['after']
+    if after=={'pause_new_entries':True}:
+        return 'New automatic PAPER entries are paused. Existing positions and orders are unchanged.'
+    parts=[]
+    for key,value in after.items():
+        label=key.replace('_percent','').replace('_',' ').capitalize()
+        rendered=(format(value,'.12g')+'%' if key.endswith('_percent') else str(value))
+        parts.append(label+' is now '+rendered+'.')
+    return ' '.join(parts)+' This applies to future decisions; existing orders keep their current protection.'
 
 
 class Assistant:

@@ -9,7 +9,7 @@ const root=path.resolve(__dirname,'..');
 const defaults={position_size_percent:2,max_order_size_percent:2.5,max_position_size_percent:5,max_open_positions:50,stop_loss_percent:2,take_profit_percent:4,profit_lock_trigger_percent:.75,profit_lock_percent:.25,trailing_stop_percent:1,daily_profit_target_percent:5,daily_loss_limit_percent:1,pause_new_entries:true,notify_trade_events:true,notify_protection_events:true,notify_scanner_events:true};
 
 test('main app desktop/mobile settings, Jarvis actions, drawer and voice fallback',{timeout:120000},async()=>{
- let settings,revision,audit,profile,proposals,chatPosts,speechPosts,delaySpeech=false;
+ let settings,revision,audit,profile,proposals,chatPosts,speechPosts,delaySpeech=false,releaseSpeech=null;
  const reset=()=>{settings={...defaults};revision='0';audit=[];profile={preferred_name:'Omar',address_as:'Sir',language:'en-US',voice:'cedar',timezone:'America/New_York',wake_phrase:'Hey Jarvis',voice_activation:false,automatic_greeting:false};proposals=new Map();chatPosts=[];speechPosts=0;};reset();
  const runtime={automatic_trader_enabled:false,scanner_health:'disabled'};
  const snapshot=()=>({success:true,paper:true,settings:{...settings},revision,audit:[...audit],runtime});
@@ -36,7 +36,7 @@ test('main app desktop/mobile settings, Jarvis actions, drawer and voice fallbac
    return send({success:true,reply:'Review the proposed setting below.',proposals:[proposal]});
   }
   if(url.pathname.startsWith('/jarvis/proposals/')&&url.pathname.endsWith('/apply')){const id=url.pathname.split('/')[3];return send(mutate(proposals.get(id).after,'jarvis_preview'));}
-  if(url.pathname==='/jarvis/speech'){speechPosts++;if(delaySpeech)await new Promise(r=>setTimeout(r,250));return send({detail:'Synthetic speech failure'},503);}
+  if(url.pathname==='/jarvis/speech'){speechPosts++;if(delaySpeech)await new Promise(r=>{releaseSpeech=r;});return send({detail:'Synthetic speech failure'},503);}
   if(url.pathname==='/'){
    let html=fs.readFileSync(path.join(root,'index.html'),'utf8');
    const tested=new Set(['app.js','jarvis.js','profile.js','settings.js','notifications.js']);
@@ -84,8 +84,8 @@ test('main app desktop/mobile settings, Jarvis actions, drawer and voice fallbac
    await page.getByRole('button',{name:'Preview AI voice',exact:true}).click();await page.waitForFunction(()=>window.__browserSpeaks===1&&!document.body.classList.contains('jarvis-speaking'));assert.equal(speechPosts,1);
    delaySpeech=true;const pendingSpeech=page.waitForRequest(req=>req.url()===origin+'/jarvis/speech');
    await page.getByRole('button',{name:'Preview AI voice',exact:true}).click();await pendingSpeech;
-   await page.locator('#jarvis-orb').click();await page.locator('#jarvis-stop-button').click();
-   await page.waitForTimeout(350);assert.equal(await page.evaluate(()=>window.__browserSpeaks),1);
+   await page.locator('#jarvis-orb').click();await page.locator('#jarvis-stop-button').click();releaseSpeech?.();releaseSpeech=null;
+   await page.waitForTimeout(100);assert.equal(await page.evaluate(()=>window.__browserSpeaks),1);
    delaySpeech=false;await page.getByRole('button',{name:'Close Jarvis',exact:true}).click();
    await page.locator('#jarvis-profile-voice-activation').check();await page.locator('#jarvis-profile-save').click();await page.getByText('Profile saved.',{exact:true}).waitFor();
    await page.locator('#jarvis-orb').click();await page.locator('#jarvis-drawer.open').waitFor();await page.locator('#jarvis-listen-button').click();
@@ -94,5 +94,5 @@ test('main app desktop/mobile settings, Jarvis actions, drawer and voice fallbac
    await page.locator('#jarvis-voice-end').click();await page.getByRole('button',{name:'Close Jarvis',exact:true}).click();
    assert.deepEqual(errors,[]);await context.close();
   }
- }finally{await browser?.close();await new Promise(r=>server.close(r));}
+ }finally{releaseSpeech?.();await browser?.close();await new Promise(r=>server.close(r));}
 });
