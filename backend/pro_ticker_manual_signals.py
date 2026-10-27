@@ -95,8 +95,10 @@ def list_manual_signals():
         proposals=proposals_for_signals(conn,[r['request_id'] for r in rows])
         from pro_ticker_order_intents import intents_for_proposals
         intents=intents_for_proposals(conn,[p['request_id'] for p in proposals.values()])
+    from pro_ticker_manual_scanner import saved_entries
+    manual_entries=saved_entries()
     return {'paper':True,'orders_submitted':0,'automatic_execution_enabled':False,
-            'signals':[{**_record(r,time.time()),'forward_outcome':outcomes.get(r['request_id']),'proposal':proposals.get(r['request_id']),'order_intent':intents.get(proposals.get(r['request_id'],{}).get('request_id'))} for r in rows],'total_count':count,'has_more':count>len(rows)}
+            'signals':[{**_record(r,time.time()),'forward_outcome':outcomes.get(r['request_id']),'manual_entry':manual_entries.get(r['request_id']),'proposal':proposals.get(r['request_id']),'order_intent':intents.get(proposals.get(r['request_id'],{}).get('request_id'))} for r in rows],'total_count':count,'has_more':count>len(rows)}
 
 
 def submit_manual_signal(payload, *, quote_fetcher, analyzer, clock=time.time, research_collector=None):
@@ -152,13 +154,48 @@ def list_result(row,now):
         proposal=proposals_for_signals(conn,[row['request_id']]).get(row['request_id'])
         from pro_ticker_order_intents import intents_for_proposals
         intent=intents_for_proposals(conn,[proposal['request_id']]).get(proposal['request_id']) if proposal else None
+    from pro_ticker_manual_scanner import saved_entries
+    manual_entry=saved_entries().get(row['request_id'])
     return {'paper':True,'orders_submitted':0,'automatic_execution_enabled':False,
-            'signal':{**_record(row,now),'forward_outcome':outcome,'proposal':proposal,'order_intent':intent},'execution_blocked_reason':'broker_execution_and_outcome_learning_not_connected'}
+            'signal':{**_record(row,now),'manual_entry':manual_entry,'forward_outcome':outcome,'proposal':proposal,'order_intent':intent},'execution_blocked_reason':'broker_execution_and_outcome_learning_not_connected'}
 
 
-def build_manual_signal_router(*,require_session,quote_fetcher,analyzer,execution_context=None,research_collector=None):
+def build_manual_signal_router(*,require_session,quote_fetcher,analyzer,execution_context=None,research_collector=None,manual_entry_context=None):
     from starlette.concurrency import run_in_threadpool
     router=APIRouter()
+    @router.get('/auto-trader/pro-ticker/manual-entry-status')
+    def manual_entry_status(request:Request):
+        require_session(request)
+        from pro_ticker_manual_scanner import status
+        context=manual_entry_context() if manual_entry_context is not None else None
+        enabled=bool(context is not None and context.enabled() is True and context.paper_base_url=='https://paper-api.alpaca.markets')
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status(enabled=enabled),headers={'Cache-Control':'no-store'})
+
+    @router.post('/auto-trader/pro-ticker/manual-signals/buy-and-scan')
+    async def buy_and_scan(request:Request):
+        require_session(request)
+        require_same_origin(request)
+        if request.headers.get('content-type','').split(';')[0].strip().lower()!='application/json':raise HTTPException(415,'Expected JSON.')
+        body=await request.body()
+        if len(body)>2048:raise HTTPException(413,'Request too large.')
+        from pro_ticker_manual_scanner import submit_entry,EntryBlocked
+        context=manual_entry_context() if manual_entry_context is not None else None
+        try:
+            if context is None:raise EntryBlocked('Manual PAPER mode is not configured.')
+            context.validate()
+        except EntryBlocked:raise HTTPException(403,'Manual PAPER buying and scanner management are disabled.') from None
+        try:
+            payload=json.loads(body)
+            result=await run_in_threadpool(submit_manual_signal,payload,quote_fetcher=quote_fetcher,analyzer=analyzer,research_collector=research_collector)
+            entry=await run_in_threadpool(submit_entry,payload['request_id'],result['signal']['symbol'],context=context)
+            return {'paper':True,'kind':'owner_manual_scanner_v1','live_trading':False,
+                    'signal':{**result['signal'],'manual_entry':entry},'entry':entry}
+        except EntryBlocked as error:raise HTTPException(409,str(error)) from None
+        except SignalConflict:raise HTTPException(409,'Existing review or order is active; refresh saved status.') from None
+        except ValueError:raise HTTPException(422,'Provide one symbol and canonical request ID only.') from None
+        except Exception:raise HTTPException(503,'Unable to confirm the PAPER entry. Refresh the same request; never create a second buy to recover.') from None
+
     @router.post('/auto-trader/pro-ticker/manual-signals/proposal')
     async def proposal(request:Request):
         require_session(request)

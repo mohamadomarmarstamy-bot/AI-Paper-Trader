@@ -3,6 +3,15 @@
     const form=document.getElementById("pt-signal-form"); if(!form)return;
     const el=id=>document.getElementById("pt-signal-"+id), endpoint="/auto-trader/pro-ticker/manual-signals";
     let requestId=null,requestSymbol=null,saving=false,version=0,detailVersion=0;
+    let manualMode={enabled:false,scanner_ready:false},manualModeVersion=0;
+    async function loadManualMode(){const current=++manualModeVersion;const note=document.getElementById("pt-manual-entry-mode");try{
+        const response=await fetch("/auto-trader/pro-ticker/manual-entry-status",{credentials:"same-origin",cache:"no-store"});if(!response.ok)throw Error("Mode unavailable");const data=await response.json();
+        if(data.paper!==true||data.version!=="owner_manual_scanner_v1"||typeof data.enabled!=="boolean"||typeof data.scanner_ready!=="boolean"||data.target_usd!=="2000"||data.whole_shares_only!==true||data.regular_session_only!==true||data.broad_scanner_buying_enabled!==false)throw Error("Invalid PAPER mode");
+        if(current!==manualModeVersion)return;manualMode=data;
+        if(note)note.textContent=data.enabled?"PAPER BUY MODE: each NEW submission requests approximately $2,000 in whole shares in the existing PAPER account. The scanner manages exits with existing protective orders. Regular market only; risk limits apply. Repeating the same request never creates another buy."+(data.scanner_ready?"":" Scanner worker is not ready; buying is blocked. Refresh saved reviews in a moment."):"Research mode: submitting saves a review without buying. Manual PAPER buying is disabled.";
+    }catch(error){if(current!==manualModeVersion)return;manualMode={enabled:false,scanner_ready:false};if(note)note.textContent="PAPER buying status is unavailable. This form can save research only; no order will be requested.";}
+        if(current===manualModeVersion){el("submit").textContent=manualMode.enabled?"Buy ~$2,000 PAPER & research":"Save & grade stock";if(!saving)el("submit").disabled=manualMode.enabled&&!manualMode.scanner_ready;}
+    }
     const draftIntents=new Map();
     const allocationIds=new Map();
     let intentVersion=0;
@@ -237,7 +246,7 @@
     }
 
     const date=value=>value&&Number.isFinite(Date.parse(value))?new Date(value).toLocaleString():"Unavailable";
-    function flags(data){if(!data||data.paper!==true||data.orders_submitted!==0||data.automatic_execution_enabled!==false)throw Error("Unexpected PAPER safety flags");}
+    function flags(data){if(data?.kind==="owner_manual_scanner_v1"){if(data.paper!==true||data.live_trading!==false||!data.entry||JSON.stringify(data.signal?.manual_entry)!==JSON.stringify(data.entry))throw Error("Unexpected manual PAPER response");return;}if(!data||data.paper!==true||data.orders_submitted!==0||data.automatic_execution_enabled!==false)throw Error("Unexpected PAPER safety flags");}
     function validateDraft(proposal,review){
         if(proposal?.paper!==true||proposal.signal_id!==review.request_id||proposal.symbol!==review.symbol||proposal.budget_reserved!==false||proposal.order_submitted!==false||proposal.execution_authorized!==false||proposal.status!=="research_draft"||!Number.isSafeInteger(proposal.shares)||proposal.shares<1||!Number.isSafeInteger(proposal.allocation_cents)||proposal.allocation_cents<1)throw Error("Invalid saved draft safety flags");
     }
@@ -247,6 +256,8 @@
         const grade=value.entry_grade;
         if(grade&& (grade.version!=="pro_ticker_daily_technical_grade_v1"||grade.training_eligible!==false||
             !["graded","unavailable"].includes(grade.status)||grade.status==="graded"&&(!["A","B","C","D"].includes(grade.grade)||!Number.isFinite(grade.score)||grade.score< -6||grade.score>6)))throw Error("Invalid grade evidence");
+        const manual=value.manual_entry;
+        if(manual&&(manual.paper!==true||manual.version!=="owner_manual_scanner_v1"||manual.request_id!==value.request_id||manual.symbol!==value.symbol||manual.target_usd!=="2000"||manual.managed_by!=="existing_scanner_rules"||!["preparing","submitting","uncertain","accepted","open","closing","closed","blocked","attention"].includes(manual.state)||![true,false,null].includes(manual.order_submitted)||(manual.shares!==null&&(!Number.isSafeInteger(manual.shares)||manual.shares<1))||(manual.order_submitted!==false&&(!Number.isSafeInteger(manual.shares)||manual.shares<1))))throw Error("Invalid manual PAPER order evidence");
         const outcome=value.forward_outcome;
         if(outcome&&(outcome.kind!=="forward_quote_return_not_trade_pnl"||outcome.training_eligible!==false||!Number.isFinite(outcome.return_percent)||outcome.request_id!==value.request_id))throw Error("Invalid forward evidence");
         if(value.proposal)validateDraft(value.proposal,value);
@@ -266,9 +277,11 @@
             ["Volume relative to 20-day average",grade?.indicators?.volume_ratio],["Reasons",grade?.reasons?.join(" ")],
             ["Limitations",grade?.limitations?.join(" ")],
             ["Saved forward quote change (not trade profit)",review.forward_outcome?String(review.forward_outcome.return_percent)+"%":"Not evaluated"],
-            ["Execution",review.order_intent?.order_submitted===null?"Submission outcome is uncertain. Do not create another buy; reserved funds require independent recovery.":review.order_intent?.order_submitted?"A broker order is linked in the ledger. Inspect fills and protection; model training remains disabled.":"No order placed. Dedicated PAPER execution requires separate configuration and owner approval. Model training is disabled."]]){
+            ["Execution",review.manual_entry?(review.manual_entry.order_submitted===null?"PAPER submission is uncertain. Keep this request ID; do not create a second buy.":review.manual_entry.order_submitted?"A manual PAPER order is linked. Inspect its state below; the scanner manages owned positions.":"No manual PAPER order was sent. See the blocked reason below."):review.order_intent?.order_submitted===null?"Submission outcome is uncertain. Do not create another buy; reserved funds require independent recovery.":review.order_intent?.order_submitted?"A broker order is linked in the ledger. Inspect fills and protection; model training remains disabled.":"No order placed. Dedicated PAPER execution requires separate configuration and owner approval. Model training is disabled."]]){
             const p=document.createElement("p"),b=document.createElement("strong");b.textContent=label+": ";p.append(b,document.createTextNode(value==null?"Unavailable":String(value)));node.appendChild(p);
         }
+        if(review.manual_entry){const entry=review.manual_entry,box=document.createElement("article"),heading=document.createElement("h4");heading.textContent="Manual PAPER buy & scanner management";box.appendChild(heading);
+            for(const [label,value]of [["Order state",entry.state],["Target USD",entry.target_usd],["Requested whole shares",entry.shares],["Broker status",entry.broker_status],["Filled shares",entry.filled_shares],["Reference ask (estimated size, not fill)",entry.reference_ask],["Broker order",entry.broker_order_id],["Management","Existing scanner sell rules and broker protective exits"],["Status",entry.reason||"Existing-order reconciliation is automatic. Refresh saved reviews for the current state."]]){const p=document.createElement("p");p.textContent=label+": "+(value??"Unavailable");box.appendChild(p);}node.appendChild(box);}
         const context=grade?.research_context?.report;
         if(context?.version==="pro_ticker_research_context_v1"&&context.research_only===true&&context.order_execution_authorized===false){
             const heading=document.createElement("h4");heading.textContent="Saved research context";node.appendChild(heading);
@@ -364,6 +377,7 @@
     }
     async function refresh(){
         const current=++version;
+        await loadManualMode();
         void loadExecutionStatus();
         void loadMonitorStatus();
         void refreshIntents();
@@ -377,30 +391,31 @@
             el("history").replaceChildren();
             for(const review of data.signals){
                 const row=document.createElement("tr"),grade=review.entry_grade,snapshot=review.market_snapshot;
-                for(const value of [date(review.submitted_at),review.symbol,grade?.grade??"Unavailable",grade?.score??"Unavailable",snapshot?.status==="captured"?(snapshot.fresh?"Fresh at capture":"Stale at capture"):"Unavailable",review.status+(review.order_intent?.order_submitted===null?" · submission uncertain":review.order_intent?.order_submitted?" · broker order linked":" · no order")]){const td=document.createElement("td");td.textContent=String(value);row.appendChild(td);}
+                for(const value of [date(review.submitted_at),review.symbol,grade?.grade??"Unavailable",grade?.score??"Unavailable",snapshot?.status==="captured"?(snapshot.fresh?"Fresh at capture":"Stale at capture"):"Unavailable",review.status+(review.manual_entry?" · PAPER "+review.manual_entry.state:review.order_intent?.order_submitted===null?" · submission uncertain":review.order_intent?.order_submitted?" · broker order linked":" · no order")]){const td=document.createElement("td");td.textContent=String(value);row.appendChild(td);}
                 const td=document.createElement("td"),button=document.createElement("button");button.type="button";button.textContent="Inspect "+review.symbol+" review";button.addEventListener("click",()=>detail(review));td.appendChild(button);row.appendChild(td);el("history").appendChild(row);
             }
-            el("status").textContent=data.total_count?"Loaded "+data.signals.length+" saved review(s). "+(data.has_more?"Latest 100 displayed. ":"")+"No automatic PAPER orders or model updates.":"No saved signal reviews yet.";
+            el("status").textContent=data.total_count?"Loaded "+data.signals.length+" saved review(s). "+(data.has_more?"Latest 100 displayed. ":"")+(manualMode.enabled?"Manual PAPER orders are shown by request; no model updates.":"No automatic PAPER orders or model updates."):"No saved signal reviews yet.";
             await learning(current);
             return true;
         }catch(error){if(current===version){el("history").replaceChildren();el("detail").replaceChildren();if(el("learning-rows"))el("learning-rows").replaceChildren();if(el("learning"))el("learning").textContent="Forward research unavailable while saved reviews cannot be loaded. No training is enabled.";el("status").textContent="Unable to load reviews: "+error.message;}return false;}
     }
     el("symbol").addEventListener("input",()=>{requestId=null;});
     form.addEventListener("submit",async event=>{
-        event.preventDefault();if(saving)return;saving=true;version++;el("submit").disabled=true;el("symbol").disabled=true;
-        el("status").textContent="Capturing reference data and grading the stock. This does not submit a PAPER order…";
+        event.preventDefault();if(saving)return;if(manualMode.enabled&&!manualMode.scanner_ready){el("status").textContent="Scanner sell worker is not ready; no buy was sent. Refresh saved reviews.";return;}saving=true;version++;el("submit").disabled=true;el("symbol").disabled=true;
+        const wantsBuy=manualMode.enabled===true;
+        el("status").textContent=wantsBuy?"Checking the ~$2,000 whole-share PAPER buy and scanner handoff…":"Capturing reference data and grading the stock. This does not submit a PAPER order…";
         try{
             const symbol=el("symbol").value.trim().toUpperCase();
             // Scanner handoffs assign .value without an input event. Preserve
             // retries only for the same symbol, never another research request.
             if(requestSymbol!==symbol){requestId=null;requestSymbol=symbol;}
             requestId=requestId||crypto.randomUUID();
-            const response=await fetch(endpoint,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbol,request_id:requestId})});
+            const response=await fetch(endpoint+(wantsBuy?"/buy-and-scan":""),{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbol,request_id:requestId})});
             if(!response.ok)throw Error("Review request failed ("+response.status+"). Refresh saved status before retrying.");
             const data=await response.json();flags(data);const review=record(data.signal);
-            const loaded=await refresh();detail(review);el("status").textContent="Review "+review.status+" for "+review.symbol+". No PAPER order placed; no model training performed."+(loaded?"":" History refresh failed; the confirmed review is shown below.");
+            const loaded=await refresh();detail(review);el("status").textContent=(review.manual_entry?"PAPER entry for "+review.symbol+": "+review.manual_entry.state+". "+(review.manual_entry.reason||"Inspect the saved order below; no model training occurred."):"Review "+review.status+" for "+review.symbol+". No PAPER order placed; no model training performed.")+(loaded?"":" History refresh failed; the confirmed review is shown below.");
         }catch(error){el("status").textContent="Unable to confirm review: "+error.message+" Retrying unchanged input reuses the same request ID.";}
-        finally{saving=false;el("submit").disabled=false;el("symbol").disabled=false;}
+        finally{saving=false;el("submit").disabled=manualMode.enabled&&!manualMode.scanner_ready;el("symbol").disabled=false;}
     });
     el("refresh").addEventListener("click",refresh);
     el("new").addEventListener("click",()=>{if(saving)return;requestId=null;el("symbol").value="";el("symbol").focus();el("status").textContent="Enter a stock for a new timestamped review.";});

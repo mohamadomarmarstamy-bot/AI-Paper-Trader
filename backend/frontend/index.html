@@ -1233,7 +1233,8 @@
 <table><thead><tr><th scope="col">Symbol</th><th scope="col">Recorded score</th><th scope="col">Confidence</th><th scope="col">Direction</th><th scope="col">Updated</th><th scope="col">Research</th></tr></thead><tbody id="pt-candidates"></tbody></table></div></div>
 <div class="panel pt-panel" role="tabpanel" id="pt-panel-signals" aria-labelledby="pt-tab-signals">
 <h3>Manual Pro Ticker signals</h3>
-<p>Enter one stock to capture its submission-time reference and save a provisional daily technical grade. This is a manual observation, not proof of an original Pro Ticker alert. PAPER auto-buy remains blocked until the execution lifecycle is verified.</p>
+<p>Enter one stock to capture its submission-time reference and save a provisional daily technical grade. A saved grade is research, not proof of an original Pro Ticker alert. The mode below states whether submitting also requests a PAPER buy.</p>
+<p id="pt-manual-entry-mode" role="status">Research mode: submitting saves a review without buying.</p>
 <form id="pt-signal-form" class="pt-filters"><label>Stock symbol<input id="pt-signal-symbol" maxlength="10" pattern="[A-Za-z][A-Za-z0-9.\-]{0,9}" required autocomplete="off" placeholder="AAPL"></label><button type="submit" id="pt-signal-submit">Save &amp; grade stock</button><button type="button" id="pt-signal-refresh">Refresh saved reviews</button><button type="button" id="pt-signal-new">Start a new review</button></form>
 <button id="pt-reference-check" type="button">Check latest broker reference</button>
 <p id="pt-reference-status" role="status" aria-live="polite">Enter a symbol to check its latest broker trade without saving another research review. Freshness alone does not approve an order.</p>
@@ -2085,7 +2086,7 @@
     <script src="js/pro-ticker-manual.js"></script>
     <script src="js/pro-ticker-release.js"></script>
     <script src="js/pro-ticker-workspace.js?v=forward-v1"></script>
-    <script src="js/pro-ticker-signals.js?v=research-feedback-v1"></script>
+    <script src="js/pro-ticker-signals.js?v=manual-scanner-v1"></script>
     <script src="js/strategy.js"></script>
     <script src="js/jarvis.js"></script>
     <script src="js/profile.js"></script>

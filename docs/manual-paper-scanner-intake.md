@@ -1,0 +1,21 @@
+# Owner-submitted PAPER buys with scanner exits
+
+`PRO_TICKER_MANUAL_SCANNER_ENABLED=true` enables a separate, explicit owner workflow in the original Alpaca PAPER account. The Research Lab button reads **Buy ~$2,000 PAPER & research**. Submitting it saves research and requests a buy even when the technical grade is unavailable or HOLD. Research-only endpoints continue to create no orders. No model training is enabled.
+
+Quantity is `floor(2000 / fresh ask)`, with whole shares only. For a $45.50 ask, the initial request is 43 shares ($1,956.50 estimated). Existing account risk limits may reduce that quantity or block the purchase. This is a market order, so the actual fill price and cost can differ. A share above $2,000 is blocked.
+
+The workflow requires an authenticated owner, matching Origin, active PAPER account, recent scanner-worker heartbeat, fresh execution quote, regular open session, supported daily scanner history, buying power, and existing spread/position/order risk checks. It rejects an existing position in the same symbol. It does not queue closed-market buys. Start a new review after opening to make a new request. Repeating the same request ID recovers the existing order and never creates another buy. An unresolved order blocks further new entries until reconciled.
+
+The broker receives the existing native stop-loss/take-profit bracket. The separate 15-second worker runs the existing scanner analysis for each owned manual position, including symbols outside the scanner's displayed top results. It may exit on SELL with score <=40 and confidence >=80, using the existing exit settings. Native protective orders can exit sooner. This is a daily-indicator scanner, not a tick-by-tick intraday strategy. All old broad automatic-buy flags and the original automatic-entry pause remain unchanged.
+
+Only the entry's verified remaining whole shares and owned bracket orders can be closed/canceled. Mixed holdings or foreign orders block the action. If an entry only partially fills, its remainder is canceled and the verified filled quantity is flattened for safety once cancellation is confirmed. If it completes during cancellation, its native bracket is retained. Terminal priced fills are posted idempotently to the original trade book under `owner_manual_scanner_v1`; native partial exits and later scanner exits are combined by actual prices and quantities.
+
+Durable dispatch markers and stable buy/sell client IDs precede broker requests. Lost responses are recovered by reading the same client ID; no automatic POST replay occurs. Broker/network errors, unconfirmed cancellations, or mismatched ownership produce `attention`/uncertain state. Inspect broker fills and protective orders before resolving; the app cannot guarantee protection during broker failures. A partial entry that cannot be safely canceled or exited requires operator attention. A canceled partial entry without a broker completion timestamp is still flattened for safety, but exact journal accounting remains in attention until its actual fill evidence is reconciled; no timestamp is invented.
+
+## Rollout and rollback
+
+The flag defaults off. The status route `/auto-trader/pro-ticker/manual-entry-status` requires an owner session and reports mode, target, and heartbeat without broker reads. Enabled UI is disabled until the worker has a current matching-account heartbeat. Refresh saved reviews to inspect order state, filled quantity, and broker status. Existing unavailable research records are not recalculated.
+
+Staging remains research-only and has no order worker. Tests use synthetic broker fixtures; no arbitrary deployment test order is authorized. Before rollout run the complete backend suite, DOM tests, and desktop/mobile browser fixtures. Preserve the existing database backup-validation startup guard. Enable only the new flag; do not enable broad automation or dedicated research execution flags.
+
+Turning the new flag off stops both new manual buys and its scanner worker. Existing broker-native protective orders remain at Alpaca. Inspect/manage open positions before disabling; rollback does not cancel orders or liquidate positions automatically. Tables are additive and old trade-book rows are preserved.

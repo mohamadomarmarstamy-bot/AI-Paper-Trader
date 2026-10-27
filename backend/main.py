@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import secrets
 
+import re
 import requests
 import yfinance as yf
 from fastapi import FastAPI, Form, Header, HTTPException, Query, Request
@@ -1825,6 +1826,7 @@ async def lifespan(app: FastAPI):
     from pro_ticker_monitor_worker import start_monitor, stop_monitor
     from pro_ticker_runtime import dedicated_paper_context
     position_monitor_task = start_monitor(dedicated_paper_context())
+    manual_scanner_task = asyncio.create_task(manual_scanner_loop())
     try:
         yield
     finally:
@@ -1833,12 +1835,14 @@ async def lifespan(app: FastAPI):
         auto_trade_task.cancel()
         health_watchdog_task.cancel()
         pro_ticker_scheduler_task.cancel()
+        manual_scanner_task.cancel()
 
         for task in (
             refresh_task,
             auto_trade_task,
             health_watchdog_task,
             pro_ticker_scheduler_task,
+            manual_scanner_task,
         ):
             try:
                 await task
@@ -3445,6 +3449,7 @@ def validate_alpaca_paper_order_risk(
     symbol: str,
     shares: int,
     side: str,
+    owned_order_ids=None,
 ) -> dict[str, Any]:
     """
     Validate a manual PAPER order against conservative execution controls.
@@ -3596,6 +3601,13 @@ def validate_alpaca_paper_order_risk(
             normalized_symbol
         )
     )
+
+    if owned_order_ids is not None:
+        if normalized_side != "sell" or not isinstance(owned_order_ids, set) or not owned_order_ids:
+            return {"approved": False, "error": "Owned SELL order identities required."}
+        if any(str(order.get("id")) not in owned_order_ids for order in open_orders):
+            return {"approved": False, "error": "An unrelated open order prevents this scanner exit."}
+        open_orders = []
 
     if open_orders:
         open_sides = sorted({
@@ -4045,6 +4057,7 @@ def submit_alpaca_paper_market_order(
     symbol: str,
     shares: int,
     side: str,
+    client_order_id=None,
 ) -> dict[str, Any]:
     """
     Submit a whole-share DAY market order to Alpaca PAPER Trading.
@@ -4126,9 +4139,9 @@ def submit_alpaca_paper_market_order(
         "type": "market",
         "time_in_force": "day",
         "client_order_id": (
-            f"paper-{normalized_side}-"
-            f"{normalized_symbol.lower()}-"
-            f"{uuid.uuid4().hex[:12]}"
+            client_order_id or (
+                f"paper-{normalized_side}-{normalized_symbol.lower()}-{uuid.uuid4().hex[:12]}"
+            )
         ),
     }
 
@@ -4190,6 +4203,11 @@ def close_alpaca_paper_position_manually(
     *,
     symbol: str,
     shares: int,
+    client_order_id=None,
+    expected_total_shares=None,
+    owned_order_ids=None,
+    expected_entry_order_id=None,
+    exit_reason="manual_close",
 ) -> dict[str, Any]:
     """
     Manually close a whole-share Alpaca PAPER position.
@@ -4276,6 +4294,13 @@ def close_alpaca_paper_position_manually(
             ),
         }
 
+    if expected_total_shares is not None:
+        if (os.getenv("PRO_TICKER_MANUAL_SCANNER_ENABLED") != "true"
+                or broker_shares != expected_total_shares or shares != expected_total_shares
+                or not isinstance(client_order_id, str)
+                or not re.fullmatch(r"ptm-exit-[0-9a-f]{32}", client_order_id)):
+            return {"success": False, "paper": True, "error": "Manual scanner ownership changed; no exit sent."}
+
     # Always close the full quantity verified directly from the PAPER broker.
     shares = broker_shares
 
@@ -4293,7 +4318,7 @@ def close_alpaca_paper_position_manually(
         if existing_open_orders:
             canceled_orders = (
                 cancel_alpaca_open_orders_for_symbol(
-                    normalized_symbol
+                    normalized_symbol, **({"allowed_order_ids": owned_order_ids} if owned_order_ids is not None else {})
                 )
             )
 
@@ -4322,8 +4347,13 @@ def close_alpaca_paper_position_manually(
     exit_result = submit_alpaca_paper_market_order(
         symbol=normalized_symbol,
         shares=shares,
-        side="sell",
+        side="sell", **({"client_order_id": client_order_id} if client_order_id is not None else {}),
     )
+
+    if expected_entry_order_id is not None:
+        # The manual ledger records exact broker fills, including partial
+        # protective exits and lost acknowledgements. Avoid a second writer.
+        return exit_result
 
     if not exit_result.get("success"):
         exit_result["canceled_protective_orders"] = (
@@ -4379,9 +4409,9 @@ def close_alpaca_paper_position_manually(
 
     try:
         open_book_entry = (
-            load_open_trade_book_entry(
-                normalized_symbol
-            )
+            load_trade_book_entry_by_order_id(expected_entry_order_id)
+            if expected_entry_order_id is not None
+            else load_open_trade_book_entry(normalized_symbol)
         )
 
         if (
@@ -4403,7 +4433,7 @@ def close_alpaca_paper_position_manually(
                     exit_order_id=(
                         order_id or None
                     ),
-                    exit_reason="manual_close",
+                    exit_reason=exit_reason,
                 )
             )
 
@@ -6796,6 +6826,7 @@ def mark_auto_trader_symbol_cooldown(
 
 def cancel_alpaca_open_orders_for_symbol(
     symbol: str,
+    *, allowed_order_ids=None,
 ) -> list[str]:
     """
     Cancel current PAPER orders for one symbol.
@@ -6805,11 +6836,10 @@ def cancel_alpaca_open_orders_for_symbol(
     """
     canceled_ids: list[str] = []
 
-    for order in (
-        fetch_alpaca_open_orders_for_symbol(
-            symbol
-        )
-    ):
+    snapshot = fetch_alpaca_open_orders_for_symbol(symbol)
+    if allowed_order_ids is not None and any(str(o.get("id")) not in allowed_order_ids for o in snapshot):
+        raise ValueError("Unrelated orders prevent owned scanner cancellation.")
+    for order in snapshot:
         order_id = str(
             order.get(
                 "id",
@@ -7780,6 +7810,7 @@ def submit_alpaca_auto_bracket_buy(
     scanner_result: dict[str, Any],
     entry_context: dict[str, Any] | None = None,
     strategy_version: str = AUTO_TRADER_STRATEGY_VERSION,
+    manual_request_id=None,
 ) -> dict[str, Any]:
     """
     Submit an automatic PAPER buy with broker-native stop-loss and
@@ -7790,6 +7821,13 @@ def submit_alpaca_auto_bracket_buy(
     normalized_symbol = clean_symbol(
         symbol
     )
+
+    manual_client_id = None
+    if manual_request_id is not None:
+        from pro_ticker_manual_scanner import assert_dispatch
+        if os.getenv("PRO_TICKER_MANUAL_SCANNER_ENABLED") != "true":
+            raise ValueError("Manual PAPER scanner mode is disabled.")
+        manual_client_id = assert_dispatch(manual_request_id, normalized_symbol, shares)
 
     risk_check = (
         validate_alpaca_paper_order_risk(
@@ -7838,6 +7876,10 @@ def submit_alpaca_auto_bracket_buy(
         2,
     )
 
+    if manual_request_id is not None and reference_price < 1:
+        stop_price = round(reference_price * (1-get_auto_trader_setting("stop_loss_percent")/100),4)
+        take_profit_price = round(reference_price * (1+get_auto_trader_setting("take_profit_percent")/100),4)
+
     if (
         stop_price <= 0
         or take_profit_price <= stop_price
@@ -7868,15 +7910,17 @@ def submit_alpaca_auto_bracket_buy(
             ),
         },
         "client_order_id": (
-            f"auto-entry-"
-            f"{normalized_symbol.lower()}-"
-            f"{uuid.uuid4().hex[:12]}"
+            manual_client_id or f"auto-entry-{normalized_symbol.lower()}-{uuid.uuid4().hex[:12]}"
         ),
     }
 
+    if manual_request_id is not None and reference_price < 1:
+        request_body["take_profit"]["limit_price"] = f"{take_profit_price:.4f}"
+        request_body["stop_loss"]["stop_price"] = f"{stop_price:.4f}"
+
     # Emergency control: block new automatic PAPER entries.
     # Existing SELL and position-protection paths are unaffected.
-    if automatic_entries_paused():
+    if manual_request_id is None and automatic_entries_paused():
         return {
             "success": False,
             "paper": True,
@@ -7884,6 +7928,12 @@ def submit_alpaca_auto_bracket_buy(
             "entries_paused": True,
             "error": "New automatic paper entries are paused.",
         }
+
+    if manual_request_id is not None:
+        from pro_ticker_manual_scanner import assert_dispatch
+        if os.getenv("PRO_TICKER_MANUAL_SCANNER_ENABLED") != "true":
+            raise ValueError("Manual PAPER scanner mode was disabled.")
+        assert_dispatch(manual_request_id, normalized_symbol, shares)
 
     try:
         payload = alpaca_paper_request(
@@ -7915,6 +7965,10 @@ def submit_alpaca_auto_bracket_buy(
 
         result["risk"] = risk_check
         result["automatic"] = True
+        if manual_request_id is not None:
+            # The manual ledger owns idempotent fill/journal posting, including
+            # accepted orders that fill after this HTTP response is lost.
+            return result
         result["scanner"] = {
             "score": scanner_result.get(
                 "score"
@@ -16166,6 +16220,67 @@ def fetch_pro_ticker_manual_signal_quote(symbol):
 
 
 from pro_ticker_runtime import dedicated_paper_context
+def manual_scanner_enabled():
+    return os.getenv("PRO_TICKER_MANUAL_SCANNER_ENABLED") == "true"
+
+
+_manual_symbol_scans = {}
+
+
+def scan_manual_paper_symbol(symbol):
+    from scanner import analyze_stock
+    cached = _manual_symbol_scans.get(symbol)
+    if cached and 0 <= time.time()-cached[0] < 45:
+        return dict(cached[1])
+    history = fetch_strategy_history(symbol)
+    if history is None or history.empty:
+        return None
+    latest = history.index[-1].to_pydatetime()
+    if latest.tzinfo is None or not 0 <= time.time()-latest.timestamp() <= 7*86400:
+        return None
+    result = analyze_stock(symbol, history)
+    if not isinstance(result, dict):
+        return None
+    result = {**result, "scanner_stale": False}
+    if len(_manual_symbol_scans) >= 100:
+        _manual_symbol_scans.clear()
+    _manual_symbol_scans[symbol] = (time.time(), result)
+    return result
+
+
+def manual_scanner_context():
+    from pro_ticker_manual_scanner import ManualScannerContext,persist_entry_fill,persist_exit_fills
+    def dispatch(*,symbol,shares,reference_price,request_id,candidate):
+        return submit_alpaca_auto_bracket_buy(symbol=symbol,shares=shares,
+            reference_price=reference_price,scanner_result=candidate,
+            entry_context={"manual_signal_id":request_id,"entry_source":"owner_manual_scanner_v1"},
+            strategy_version="owner_manual_scanner_v1",manual_request_id=request_id)
+    return ManualScannerContext(request=alpaca_paper_request,quote=fetch_alpaca_risk_quote,
+        risk=validate_alpaca_paper_order_risk,submit=dispatch,
+        record_entry=persist_entry_fill,record_exit=persist_exit_fills,
+        cancel=lambda symbol,owned_order_ids: cancel_alpaca_open_orders_for_symbol(symbol,allowed_order_ids=owned_order_ids),
+        close=lambda **kw: close_alpaca_paper_position_manually(**kw,exit_reason="manual_scanner_exit"),scan=scan_manual_paper_symbol,
+        paper_base_url=ALPACA_PAPER_BASE_URL,enabled=manual_scanner_enabled,
+        exit_score=AUTO_TRADER_EXIT_SCORE_MAX,exit_confidence=AUTO_TRADER_EXIT_CONFIDENCE_MIN)
+
+
+async def manual_scanner_loop():
+    from pro_ticker_manual_scanner import worker_tick
+    ready=False
+    while True:
+        if manual_scanner_enabled():
+            try:
+                await asyncio.to_thread(worker_tick, context=manual_scanner_context())
+                if not ready:
+                    print(json.dumps({"manual_paper_scanner_ready":True,"broad_scanner_buying_enabled":False}),flush=True)
+                ready=True
+            except Exception:
+                if ready:
+                    print(json.dumps({"manual_paper_scanner_ready":False,"broad_scanner_buying_enabled":False}),flush=True)
+                ready=False
+        await asyncio.sleep(15)
+
+
 from pro_ticker_manual_signals import build_manual_signal_router
 from pro_ticker_research_evidence import capture_research
 app.include_router(build_manual_signal_router(
@@ -16174,6 +16289,7 @@ app.include_router(build_manual_signal_router(
     analyzer=lambda symbol: analyze_symbol(symbol),
     research_collector=capture_research,
     execution_context=dedicated_paper_context(),
+    manual_entry_context=manual_scanner_context,
 ))
 
 
