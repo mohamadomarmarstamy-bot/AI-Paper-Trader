@@ -4933,3 +4933,12 @@ body.jarvis-drawer-open {
     #pro-ticker-manual-section dl { grid-template-columns:minmax(0,1fr); }
 }
 @media(prefers-reduced-motion:reduce) { #pro-ticker-manual-section * { scroll-behavior:auto; transition:none; } }
+
+.trade-activity-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 20px; }
+.trade-activity-grid .activity-completed { grid-column: 1 / -1; }
+.trade-activity-grid article { min-width: 0; }
+.trade-activity-grid th, .trade-activity-grid td { white-space: nowrap; }
+.trade-activity-grid details { white-space: normal; min-width: 210px; }
+.trade-activity-grid summary { cursor: pointer; font-weight: 700; }
+.activity-lot { padding: 8px 0; border-bottom: 1px solid var(--border-color, #334155); }
+@media (max-width: 900px) { .trade-activity-grid { grid-template-columns: minmax(0, 1fr); } }

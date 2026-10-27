@@ -686,6 +686,34 @@ print("RESTART_RESULT:" + json.dumps(asyncio.run(check())))
             response = asyncio.run(run())
         self.assertEqual(response.status_code, 400)
 
+    def test_trade_activity_authenticated_read_only_and_saved_fill_fallback(self):
+        import asyncio
+        import httpx
+        from unittest.mock import patch
+        from broker_throttle import DisplaySnapshotCache
+        row = dict(order_id='saved-sell', symbol='ABC', side='SELL', shares=2, price=3.25, filled_at='2026-10-26T15:00:00Z')
+        with patch.object(self.main, 'APP_SESSION_SECRET', 'isolated-operator-smoke-secret'), \
+             patch.object(self.main, '_activity_snapshot_cache', DisplaySnapshotCache(ttl=10)), \
+             patch.object(self.main, 'load_broker_fills', return_value=[row]) as ledger, \
+             patch.object(self.main, 'fetch_alpaca_paper_trade_history', side_effect=RuntimeError('offline')) as broker, \
+             patch.object(self.main, 'alpaca_paper_request') as submit:
+            async def run():
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.main.app), base_url='http://testserver') as client:
+                    anonymous = await client.get('/account/trade-activity')
+                    ledger.assert_not_called()
+                    client.cookies.set(self.main.APP_SESSION_COOKIE, self.main.create_app_session_token())
+                    first = await client.get('/account/trade-activity')
+                    second = await client.get('/account/trade-activity')
+                    return anonymous, first, second
+            anonymous, first, second = asyncio.run(run())
+        self.assertEqual(anonymous.status_code,401)
+        self.assertEqual(first.status_code,200)
+        self.assertEqual(second.status_code,200)
+        self.assertFalse(first.json()['broker_available'])
+        self.assertEqual(first.json()['sells'][0]['price'],3.25)
+        self.assertEqual(broker.call_count,1)
+        submit.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,6 @@
 "use strict";
 
-const NOTIFICATION_POLL_MS = 5000;
+const NOTIFICATION_POLL_MS = 15000;
 const NOTIFICATION_LIMIT = 100;
 const NOTIFICATION_STORAGE_KEY =
     "ai-paper-trader-last-read-notification";
@@ -51,32 +51,7 @@ function normalizeNotificationLog(item) {
 
 
 function classifyNotification(item) {
-    const event =
-        item.event.toLowerCase();
-
-    const success =
-        item.details?.result_success;
-
-    if (
-        event.includes("error") ||
-        event === "background_error" ||
-        event === "cycle_error"
-    ) {
-        return "error";
-    }
-
-    if (
-        event.includes("entry") ||
-        event.includes("exit") ||
-        event.includes("buy") ||
-        event.includes("sell")
-    ) {
-        return success === false
-            ? "blocked"
-            : "trade";
-    }
-
-    return "system";
+    return item.event === "buy_fill" || item.event === "sell_fill" ? "trade" : "system";
 }
 
 
@@ -287,11 +262,7 @@ function renderNotifications() {
                     return true;
                 }
 
-                return (
-                    classifyNotification(
-                        item
-                    ) === filter
-                );
+                return item.event === `${filter}_fill`;
             }
         );
 
@@ -309,7 +280,7 @@ function renderNotifications() {
         if (status) {
             status.textContent =
                 notificationItems.length
-                    ? `${notificationItems.length} total events`
+                    ? `${notificationItems.length} confirmed fills`
                     : "Waiting for activity…";
         }
 
@@ -365,7 +336,7 @@ function renderNotifications() {
 
     if (status) {
         status.textContent =
-            `${notificationItems.length} event${
+            `${notificationItems.length} confirmed fill${
                 notificationItems.length === 1
                     ? ""
                     : "s"
@@ -478,46 +449,15 @@ async function loadNotifications(
                 "Refreshing…";
         }
 
-        const response =
-            await fetch(
-                notificationApiUrl(
-                    `/auto-trader/logs?limit=${NOTIFICATION_LIMIT}`
-                ),
-                {
-                    method: "GET",
-                    cache: "no-store",
-                }
-            );
-
-        if (!response.ok) {
-            throw new Error(
-                `HTTP ${response.status}`
-            );
-        }
-
-        const payload =
-            await response.json();
-
-        const logs =
-            Array.isArray(
-                payload?.logs
-            )
-                ? payload.logs
-                : [];
-
-        notificationItems =
-            logs
-                .map(
-                    normalizeNotificationLog
-                )
-                .filter(item => {
-                    if (!(item.timestamp > 0)) return false;
-                    const p=window.appSettings||{}, event=item.event.toLowerCase();
-                    if (event.includes("protect")||event.includes("stop_loss")) return p.notify_protection_events!==false;
-                    if (event.includes("scan")) return p.notify_scanner_events!==false;
-                    if (classifyNotification(item)==="trade") return p.notify_trade_events!==false;
-                    return true;
-                });
+        const payload = await window.loadTradeActivity({force:Boolean(options.force)});
+        notificationItems = window.appSettings?.notify_trade_events === false ? [] :
+            [...payload.buys, ...payload.sells].map(fill => normalizeNotificationLog({
+                timestamp: fill.timestamp,
+                event: fill.side === "BUY" ? "buy_fill" : "sell_fill",
+                symbol: fill.symbol,
+                message: `${fill.side === "BUY" ? "Bought" : "Sold"} ${fill.shares} shares at ${new Intl.NumberFormat("en-US", {style:"currency", currency:"USD", maximumFractionDigits:fill.price < 1 ? 4 : 2}).format(fill.price)} per share. Confirmed PAPER fill.`,
+                details: {shares:fill.shares, order_id:fill.order_id},
+            })).sort((a,b) => b.timestamp-a.timestamp).slice(0, NOTIFICATION_LIMIT);
 
         const newestTimestamp =
             notificationItems[0]
@@ -562,7 +502,7 @@ async function loadNotifications(
 
         if (status) {
             status.textContent =
-                "Notification feed unavailable";
+                "Notification feed unavailable; displayed fills may be out of date";
         }
     }
 }

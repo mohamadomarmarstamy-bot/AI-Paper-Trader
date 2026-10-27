@@ -493,3 +493,44 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
   }
  }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
 });
+
+test('Activity desktop/mobile: executed fills only, prices, completed groups and notification filtering', {timeout:60000}, async()=>{
+ const raw=fs.readFileSync(path.join(frontend,'index.html'),'utf8');
+ const sections=raw.slice(raw.indexOf('<section id="activity-section"'),raw.indexOf('<section id="scanner-section"'));
+ const data={generated_at:Date.now()/1000,broker_available:true,buys:[{order_id:'b1',side:'BUY',symbol:'ABC',shares:10,price:2,total:20,timestamp:100,filled_at:'2026-10-26T15:00:00Z'},{order_id:'open',side:'BUY',symbol:'OPEN',shares:5,price:7,total:35,timestamp:200,filled_at:'2026-10-26T15:01:00Z'}],sells:[{order_id:'s1',side:'SELL',symbol:'ABC',shares:10,price:2.25,total:22.5,timestamp:300,filled_at:'2026-10-26T15:02:00Z'}],completed:[{symbol:'ABC',shares:10,buy_price:2,sell_price:2.25,buy_total:20,sell_total:22.5,profit_loss:2.5,trades:[{shares:10,buy_price:2,profit_loss:2.5,bought_at:'2026-10-26T15:00:00Z',exits:[{shares:10,price:2.25,filled_at:'2026-10-26T15:02:00Z'}]}]}],unmatched_sells:[]};
+ let requests=[],fail=false,browser;
+ const server=http.createServer((req,res)=>{
+  requests.push([req.method,req.url]);
+  if(req.url==='/'){res.setHeader('content-type','text/html');res.end('<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head><body><span id="notification-badge"></span>'+sections+'<script src="/js/trade-activity.js"></script><script src="/js/notifications.js"></script><script>for(const id of ["activity-section","notifications-section"]){const e=document.getElementById(id);e.hidden=false;e.classList.remove("hidden")}</script></body></html>');return;}
+  if(req.url==='/account/trade-activity'){res.setHeader('content-type','application/json');res.statusCode=fail?503:200;res.end(JSON.stringify(data));return;}
+  if(req.url==='/style.css'||['/js/trade-activity.js','/js/notifications.js'].includes(req.url)){res.setHeader('content-type',req.url.endsWith('.css')?'text/css':'application/javascript');res.end(fs.readFileSync(path.join(frontend,req.url)));return;}
+  res.statusCode=404;res.end();
+ });
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ try {
+  browser=await chromium.launch({headless:true,args:['--no-sandbox']});
+  for(const width of [1440,390]){
+   const page=await browser.newPage({viewport:{width,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
+   await page.goto('http://127.0.0.1:'+server.address().port);
+   await page.waitForFunction(()=>document.getElementById('notification-feed').textContent.includes('Sold 10'));
+   assert.match(await page.locator('#activity-sells').innerText(),/\$2\.25/);
+   assert.match(await page.locator('#activity-buys').innerText(),/OPEN/);
+   assert.doesNotMatch(await page.locator('#activity-completed').innerText(),/OPEN/);
+   await page.locator('#activity-completed summary').click();
+   assert.match(await page.locator('#activity-completed').innerText(),/Sold 10 @ \$2\.25/);
+   assert.equal(await page.locator('.notification-item').count(),3);
+   await page.locator('#notification-filter').selectOption('sell');
+   assert.equal(await page.locator('.notification-item').count(),1);
+   assert.match(await page.locator('.notification-item').innerText(),/SELL.*ABC/s);
+   await page.locator('#mark-notifications-read-button').evaluate(e=>e.addEventListener('click',window.markAllNotificationsRead));
+   await page.locator('#mark-notifications-read-button').click();
+   assert.equal(await page.locator('#notification-badge').innerText(),'0');
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+   fail=true;await page.locator('#refresh-activity-button').click();
+   await page.waitForFunction(()=>document.getElementById('activity-status').textContent.includes('refresh failed'));
+   assert.match(await page.locator('#activity-sells').innerText(),/\$2\.25/);
+   fail=false;assert.deepEqual(errors,[]);await page.close();
+  }
+  assert.equal(requests.some(([method,url])=>method!=='GET'||url.includes('/auto-trader/logs')),false);
+ } finally {if(browser)await browser.close();await new Promise(r=>server.close(r));}
+});

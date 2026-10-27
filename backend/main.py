@@ -27,6 +27,8 @@ from broker_throttle import BrokerRequestGate, BrokerRateLimited, DisplaySnapsho
 _broker_request_gate = BrokerRequestGate()
 _dashboard_snapshot_cache = DisplaySnapshotCache(ttl=10.0)
 _history_snapshot_cache = DisplaySnapshotCache(ttl=60.0)
+_activity_snapshot_cache = DisplaySnapshotCache(ttl=10.0)
+from trade_activity import build_activity
 _portfolio_history_cache = DisplaySnapshotCache(ttl=300.0)
 
 from reporting_metrics import (account_equity_metrics, summarize_trades, daily_realized_summaries, annotate_order_history, timestamp_sort_key)
@@ -17415,6 +17417,21 @@ def auto_trader_status(
     )
 
     return get_auto_trader_status()
+
+
+def load_trade_activity_snapshot() -> dict[str, Any]:
+    persisted = load_broker_fills(limit=10000)
+    try:
+        orders = fetch_alpaca_paper_trade_history(limit=500)
+    except Exception:
+        return build_activity(persisted, [], broker_available=False)
+    return build_activity(persisted, orders)
+
+
+@app.get("/account/trade-activity")
+def account_trade_activity(request: Request) -> dict[str, Any]:
+    require_app_session(request)
+    return _activity_snapshot_cache.get(load_trade_activity_snapshot)
 
 
 @app.get("/auto-trader/logs")
