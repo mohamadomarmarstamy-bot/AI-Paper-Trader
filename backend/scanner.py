@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import logging
 import math
 import threading
@@ -1462,7 +1463,7 @@ def scan_market(
             deferred_daily_histories=max(0,len(missing)-attempted_symbols),
             reused_daily_analyses=cached_count,valid_candidates=len(results),returned_candidates=len(final_results),
             completed_at=time.time(),duration_seconds=round(time.time()-scan_started,2))
-        logger.info("Fast mover coverage: %s",get_scanner_status())
+        print(json.dumps({"scanner_coverage":get_scanner_status()}),flush=True)
 
         logger.info(
             (
