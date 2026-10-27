@@ -414,6 +414,84 @@ class ManualScannerTests(unittest.TestCase):
         self.assertEqual(saved_entries()[self.request_id]['state'],'open')
         self.context.close.assert_not_called()
 
+    def external_close_fixture(self, *, linked=True, quantity='43', open_orders=None):
+        self.journal_context()
+        self.submit()
+        parent = self.orders['ptm-'+uuid.UUID(self.request_id).hex]
+        book = database.load_trade_book_entry_by_order_id(parent['id'])
+        for leg in parent['legs']:
+            leg['status'] = 'canceled'
+        order = {'id':str(uuid.uuid4()), 'symbol':self.symbol, 'side':'sell',
+                 'qty':quantity, 'filled_qty':quantity, 'status':'filled',
+                 'filled_avg_price':'46', 'filled_at':self.stamp()}
+        if linked:
+            database.create_trade_book_order_link(trade_book_id=book['id'], order_id=order['id'],
+                                                  order_role='EXIT', created_at=self.stamp())
+        self.positions = []
+        original = self.broker
+        def broker(method, path, **kwargs):
+            self.assertEqual(method, 'GET')
+            if path == '/v2/orders':
+                self.assertEqual(kwargs['params']['symbols'], self.symbol)
+                return [] if open_orders is None else open_orders
+            for candidate in [order, *parent['legs']]:
+                if path == '/v2/orders/'+candidate['id']:
+                    return candidate
+            return original(method, path, **kwargs)
+        self.context.request.side_effect = broker
+        return parent, order
+
+    def test_external_linked_close_reconciles_without_another_order(self):
+        parent, order = self.external_close_fixture()
+        self.tick()
+        self.tick()
+        self.assertEqual(saved_entries()[self.request_id]['state'], 'closed')
+        book = database.load_trade_book_entry_by_order_id(parent['id'])
+        self.assertEqual(book['status'], 'CLOSED')
+        self.assertEqual(book['exit_price'], 46)
+        self.assertEqual(book['realized_profit_loss'], 21.5)
+        self.context.close.assert_not_called()
+        self.assertEqual(self.context.submit.call_count, 1)
+
+    def test_missing_position_without_linked_exit_stays_unresolved(self):
+        self.external_close_fixture(linked=False)
+        self.tick()
+        self.assertEqual(saved_entries()[self.request_id]['state'], 'attention')
+        self.context.close.assert_not_called()
+
+    def test_partial_external_exit_cannot_clear_missing_position(self):
+        self.external_close_fixture(quantity='10')
+        self.tick()
+        self.assertEqual(saved_entries()[self.request_id]['state'], 'attention')
+        self.context.close.assert_not_called()
+
+    def test_remaining_open_order_prevents_external_close_reconciliation(self):
+        self.external_close_fixture(open_orders=[{'symbol':'TEST','status':'new'}])
+        self.tick()
+        self.assertEqual(saved_entries()[self.request_id]['state'], 'attention')
+        self.context.close.assert_not_called()
+
+    def test_external_exit_for_another_symbol_is_not_closure_evidence(self):
+        _, order = self.external_close_fixture()
+        order['symbol'] = 'OTHER'
+        self.tick()
+        self.assertEqual(saved_entries()[self.request_id]['state'], 'attention')
+        self.context.close.assert_not_called()
+
+    def test_active_protection_prevents_external_close_reconciliation(self):
+        parent, _ = self.external_close_fixture()
+        parent['legs'][0]['status'] = 'new'
+        self.tick()
+        self.assertEqual(saved_entries()[self.request_id]['state'], 'attention')
+        self.context.close.assert_not_called()
+
+    def test_exit_before_entry_is_not_closure_evidence(self):
+        _, order = self.external_close_fixture()
+        order['filled_at'] = datetime.fromtimestamp(self.now-60, timezone.utc).isoformat()
+        self.tick()
+        self.assertEqual(saved_entries()[self.request_id]['state'], 'attention')
+        self.context.close.assert_not_called()
+
     def test_buy_completion_does_not_overwrite_a_concurrent_worker_exit(self):
         original=self.context.submit.side_effect
         def concurrent(**kwargs):
