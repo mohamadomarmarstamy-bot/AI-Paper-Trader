@@ -1827,6 +1827,8 @@ async def lifespan(app: FastAPI):
     from pro_ticker_runtime import dedicated_paper_context
     position_monitor_task = start_monitor(dedicated_paper_context())
     manual_scanner_task = asyncio.create_task(manual_scanner_loop())
+    from solana_meme_bot import worker as meme_paper_worker
+    meme_paper_task = asyncio.create_task(meme_paper_worker())
     try:
         yield
     finally:
@@ -1836,6 +1838,7 @@ async def lifespan(app: FastAPI):
         health_watchdog_task.cancel()
         pro_ticker_scheduler_task.cancel()
         manual_scanner_task.cancel()
+        meme_paper_task.cancel()
 
         for task in (
             refresh_task,
@@ -1843,6 +1846,7 @@ async def lifespan(app: FastAPI):
             health_watchdog_task,
             pro_ticker_scheduler_task,
             manual_scanner_task,
+            meme_paper_task,
         ):
             try:
                 await task
@@ -16248,6 +16252,10 @@ app.include_router(build_manual_signal_router(
     execution_context=dedicated_paper_context(),
     manual_entry_context=manual_scanner_context,
 ))
+
+
+from solana_meme_routes import build_router as build_meme_router
+app.include_router(build_meme_router(require_session=require_app_session))
 
 
 from day_trader_lab import build_router as build_day_trader_router
