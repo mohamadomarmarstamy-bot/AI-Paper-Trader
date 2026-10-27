@@ -24,7 +24,7 @@
   if(value.startsWith('Insufficient recent'))return 'Low recent activity';
   if(value.startsWith('No confirmed continuation'))return 'No continuation / too extended';
   if(value.startsWith('Existing paper position'))return 'Monitoring exits';
-  if(value.startsWith('PAPER buy simulated'))return 'Paper buy opened';
+  if(value.startsWith('PAPER buy simulated')||value.startsWith('PAPER exploration buy'))return 'Paper buy opened';
   return value;
  }
 
@@ -54,7 +54,13 @@
   const total=Number.isFinite(data.paper_equity_usd)?data.paper_equity_usd-1000:null;$('meme-total-pnl').textContent=money(total);tone($('meme-total-pnl'),total);$('meme-open-pnl').textContent=money(data.unrealized_pnl_usd);tone($('meme-open-pnl'),data.unrealized_pnl_usd);tone($('meme-pnl'),data.realized_pnl_usd);drawChart(data);
   const health={running:'Running',paused:'Paused',starting:'Starting',paused_entries_monitoring_exits:'Buys paused · exits active',entry_brake:'Entry brake active',waiting_for_mints:'Waiting for tokens',data_unavailable:'Provider unavailable'};
   note.textContent=`${health[data.health]||data.health} · Last scan ${data.last_cycle?new Date(data.last_cycle*1000).toLocaleTimeString():'not run'}${data.error?' · '+data.error:''}`;
-  if(!initialized||!dirty){for(const key of Object.keys(fields))$('meme-'+key).value=data.config[key];$('meme-watchlist').value=data.config.watchlist.join('\n');$('meme-discover').checked=data.config.discover;$('meme-confirmation-enabled').checked=data.config.confirmation_enabled??true;initialized=true;}
+  if(!initialized||!dirty){for(const key of Object.keys(fields))$('meme-'+key).value=data.config[key];$('meme-watchlist').value=data.config.watchlist.join('\n');$('meme-discover').checked=data.config.discover;$('meme-confirmation-enabled').checked=data.config.confirmation_enabled??true;$('meme-entry-mode').value=data.config.entry_mode||'filtered';$('meme-auto-learning').checked=data.config.auto_learning||false;initialized=true;}
+  const modes={filtered:'Filtered · full entry checks',explore:'PAPER exploration · no entry filters',learned:'Liquidity + volume only · token checks not performed'};
+  $('meme-mode-status').textContent=modes[data.config.entry_mode||'filtered'];
+  const learning=data.learning_summary||{total:0,wins:0,losses:0,notes:[]};
+  $('meme-learning-status').textContent=data.learning?.status||'No learning outcomes yet.';
+  $('meme-learning-totals').textContent=`${learning.total} archived closes · ${learning.wins} wins · ${learning.losses} losses · modeled results, not real fills`;
+  list('meme-learning-notes',learning.notes||[],(el,r)=>{el.append(text('strong',`${r.symbol} · ${money(r.pnl_usd)}`),text('p',r.note||r.reason));const f=r.entry_features||{};el.append(text('small',`Entry liquidity ${compact(f.liquidity_usd)} · 5m volume ${compact(f.volume_m5_usd)}`));detail(el,'learning-'+r.id,r.mint,null);},'Closed trades will appear here with notes.');
   const counts={};for(const row of data.candidates)counts[label(row)]=(counts[label(row)]||0)+1;
   $('meme-candidate-summary').textContent=Object.entries(counts).map(([name,count])=>`${count} ${name.toLowerCase()}`).join(' · ');
   $('scan-total').textContent=data.candidates.length;$('scan-waiting').textContent=counts.Watching||0;$('scan-skipped').textContent=(counts.Skipped||0)+(counts.Paused||0);$('scan-no-data').textContent=counts['No data']||0;
@@ -67,7 +73,7 @@
    const state=label(r),header=text('div','');header.className='meme-title-row';
    const badge=text('span',state);badge.className='meme-badge '+state.toLowerCase().replace(' ','-');
    header.append(text('strong',r.symbol||short(r.mint)),badge);el.append(header,text('p',reason(r)));
-   if(typeof r.liquidity_usd==='number'){const metrics=text('p',`Liq ${compact(r.liquidity_usd)} · Vol ${compact(r.volume_m5_usd)} · 5m ${r.change_m5_percent.toFixed(1)}%`);metrics.className='meme-metrics';el.append(metrics);}
+   if(typeof r.liquidity_usd==='number'){const metrics=text('p',`Liq ${compact(r.liquidity_usd)} · Vol ${compact(r.volume_m5_usd)} · 5m ${(typeof r.change_m5_percent==='number'?r.change_m5_percent.toFixed(1):'—')}%`);metrics.className='meme-metrics';el.append(metrics);}
    detail(el,'candidate-'+r.mint,r.mint,reason(r)!==r.reason?r.reason:null);
   },filter==='all'?'No candidates yet. Run a scan.':'No coins in this category.');
   list('meme-positions',data.positions,(el,r)=>{el.append(text('strong',r.symbol),text('p',`${money(r.cost_usd)} → ${money(r.current_modeled_value_usd)}${r.mark_fresh?'':' · mark unavailable'}`));detail(el,'position-'+r.mint,r.mint);},'None yet.');
@@ -79,6 +85,6 @@
  $('meme-start').onclick=()=>config({enabled:true});$('meme-pause').onclick=()=>config({enabled:false});$('meme-scan').onclick=()=>request('scan',{});$('meme-refresh').onclick=()=>request();
  $('meme-settings').addEventListener('input',()=>{$('meme-save-status').textContent='Unsaved changes';if(!dirty)editRevision=revision;dirty=true;});
  $('meme-settings').addEventListener('invalid',e=>{$('meme-save-status').textContent=`Check ${e.target.closest('label')?.firstChild?.textContent||'settings'}: ${e.target.validationMessage}`;},true);
- $('meme-settings').addEventListener('submit',async e=>{e.preventDefault();const changes={watchlist:$('meme-watchlist').value.split(/\s+/).filter(Boolean),discover:$('meme-discover').checked,confirmation_enabled:$('meme-confirmation-enabled').checked};for(const key of Object.keys(fields))changes[key]=Number($('meme-'+key).value);$('meme-save-status').textContent='Saving…';if(await config(changes,editRevision??revision)){dirty=false;editRevision=null;$('meme-save-status').textContent='Settings saved · remembered after refresh';}else{$('meme-save-status').textContent=note.textContent;}});
+ $('meme-settings').addEventListener('submit',async e=>{e.preventDefault();const changes={watchlist:$('meme-watchlist').value.split(/\s+/).filter(Boolean),discover:$('meme-discover').checked,confirmation_enabled:$('meme-confirmation-enabled').checked,entry_mode:$('meme-entry-mode').value,auto_learning:$('meme-auto-learning').checked};for(const key of Object.keys(fields))changes[key]=Number($('meme-'+key).value);$('meme-save-status').textContent='Saving…';if(await config(changes,editRevision??revision)){dirty=false;editRevision=null;$('meme-save-status').textContent='Settings saved · remembered after refresh';}else{$('meme-save-status').textContent=note.textContent;}});
  request();setInterval(()=>{if(!document.hidden)request();},10000);
 })();

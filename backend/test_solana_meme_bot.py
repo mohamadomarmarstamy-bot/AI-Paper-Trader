@@ -151,6 +151,40 @@ class EngineTests(unittest.TestCase):
         for _ in range(19):self.assertEqual(bot.select_candidates(state,profiles,self.now),first)
         self.assertNotEqual(bot.select_candidates(state,profiles,self.now),first)
 
+    def test_exploration_buys_price_only_without_entry_or_token_checks(self):
+        self.configure({'enabled':True,'watchlist':[MINT],'discover':False,'entry_mode':'explore','auto_learning':True})
+        self.providers.pairs=lambda addresses:[{'chainId':'solana','pairAddress':PAIR,'baseToken':{'address':MINT,'symbol':'TEST'},'priceUsd':'1'}]
+        self.providers.failure='Active mint or freeze authority.'
+        result=self.tick();self.assertEqual(len(result['positions']),1)
+        self.assertEqual(self.providers.checks,0)
+        self.assertIsNone(result['positions'][0]['entry_features']['liquidity_usd'])
+        self.assertEqual(result['positions'][0]['entry_mode'],'explore')
+        self.assertLess(result['positions'][0]['current_modeled_value_usd'],50)
+
+    def test_exploration_keeps_cash_position_pause_and_missing_price_limits(self):
+        self.configure({'watchlist':[MINT],'discover':False,'entry_mode':'explore'})
+        self.assertFalse(self.tick(force=True)['positions'])
+        self.configure({'enabled':True})
+        self.providers.pairs=lambda addresses:[{'chainId':'solana','pairAddress':PAIR,'baseToken':{'address':MINT},'priceUsd':'0'}]
+        self.assertFalse(self.tick()['positions'])
+        self.assertEqual(bot.public()['cash_usd'],1000)
+        with self.assertRaises(ValueError):self.configure({'entry_mode':'live'})
+
+    def test_archived_notes_survive_closed_list_trimming_and_are_idempotent(self):
+        self.configure({'entry_mode':'explore','auto_learning':True});self.open()
+        self.now+=60;self.providers.price=.8
+        result=self.tick();self.assertEqual(result['learning_summary']['total'],1)
+        note=result['learning_summary']['notes'][0]
+        self.assertLess(note['pnl_usd'],0);self.assertIn('Loss',note['note'])
+        self.assertEqual(note['entry_features']['liquidity_usd'],200000)
+        import json
+        with database.get_connection() as conn:
+            state=json.loads(conn.execute('SELECT state_json FROM solana_meme_paper_state').fetchone()[0]);state['closed']=[]
+            conn.execute('UPDATE solana_meme_paper_state SET state_json=?',(json.dumps(state),))
+            bot.learner.archive(conn,[note,note]);conn.commit()
+        self.assertEqual(bot.public()['learning_summary']['total'],1)
+        self.assertFalse(bot.public()['closed'])
+
     def test_default_paused_makes_no_provider_requests(self):
         with patch.object(self.providers,'profiles',side_effect=AssertionError),patch.object(self.providers,'pairs',side_effect=AssertionError):
             self.assertEqual(self.tick()['health'],'paused')
