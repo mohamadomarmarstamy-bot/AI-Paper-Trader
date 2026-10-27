@@ -1,0 +1,339 @@
+"""Isolated USD-denominated Solana paper simulator. No wallet or swap execution."""
+import asyncio
+from contextlib import closing
+from copy import deepcopy
+from decimal import Decimal
+import json
+import math
+import time
+import uuid
+import requests
+import database
+
+VERSION = 'solana_momentum_paper_v1'
+TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
+ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+DEFAULTS = {'enabled':False, 'discover':True, 'watchlist':[], 'trade_usd':50,
+            'max_positions':3, 'stop_percent':8, 'target_percent':20,
+            'trail_arm_percent':12, 'trail_percent':6, 'max_hold_minutes':30,
+            'daily_loss_usd':50}
+RULES = {'minimum_liquidity_usd':100000, 'minimum_m5_volume_usd':20000,
+         'minimum_m5_transactions':40, 'minimum_buy_sell_ratio':1.2,
+         'minimum_pair_age_minutes':30, 'maximum_pair_age_days':30,
+         'm5_change_range_percent':[2,20], 'confirmation_change_range_percent':[.5,8],
+         'maximum_single_account_percent':35, 'maximum_top10_accounts_percent':70,
+         'modeled_cost_bps_per_side':100, 'modeled_network_usd_per_side':.10,
+         'cycle_seconds':60, 'cooldown_minutes':60}
+LIMITATIONS = [
+    'PAPER simulation only: no wallet, signing key, swap submission, or real funds.',
+    'DEX Screener prices are provider observations, not executable quotes; market timestamps are unavailable.',
+    'Discovery uses latest token profiles, a biased limited list; promotion is not a buy signal.',
+    'Legacy SPL mints only. Token-2022 and unsupported programs are excluded.',
+    'Largest token accounts are not unique holders; pool vaults are not excluded. Concentration can cause false rejections.',
+    'Mint/freeze checks do not establish safety, locked liquidity, sellability, or absence of insider/wash trading.',
+    'Costs are assumptions. Real slippage, priority fees, MEV, taxes, liquidity loss and failed exits can be worse.',
+    'Stops are sampled once per minute and cannot guarantee a price. Missing observations leave exits unresolved.',
+    'Daily loss brake uses marked paper equity since UTC midnight; unknown marks block new entries.',
+]
+SCHEMA = '''CREATE TABLE IF NOT EXISTS solana_meme_paper_state (
+ id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL,
+ state_json TEXT NOT NULL, lease_owner TEXT, lease_until REAL NOT NULL DEFAULT 0);'''
+
+
+class Conflict(ValueError):
+    pass
+
+
+def mint(value):
+    if not isinstance(value,str) or not 32<=len(value)<=44 or any(c not in ALPHABET for c in value):
+        raise ValueError('A Solana mint address is required, not a ticker.')
+    n = 0
+    for c in value:
+        n = n*58+ALPHABET.index(c)
+    size = (n.bit_length()+7)//8 + len(value)-len(value.lstrip('1'))
+    if size!=32:
+        raise ValueError('A 32-byte Solana mint address is required.')
+    return value
+
+
+def num(value):
+    if isinstance(value,bool):
+        raise ValueError('Finite numeric evidence required.')
+    n = float(value)
+    if not math.isfinite(n):
+        raise ValueError('Finite numeric evidence required.')
+    return n
+
+
+def initial():
+    return {'config':deepcopy(DEFAULTS),'cash_usd':1000.,'positions':{},'closed':[],
+            'observations':{},'candidates':[],'cooldowns':{},'last_cycle':None,
+            'health':'paused','day':None,'day_equity':None,'error':None}
+
+
+def load():
+    with closing(database.get_connection()) as conn:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='solana_meme_paper_state'").fetchone():
+            return initial(),0
+        row=conn.execute('SELECT * FROM solana_meme_paper_state WHERE id=1').fetchone()
+    return (json.loads(row['state_json']),row['revision']) if row else (initial(),0)
+
+
+def initialize(conn):
+    conn.executescript(SCHEMA)
+    conn.execute('INSERT OR IGNORE INTO solana_meme_paper_state(id,revision,state_json) VALUES (1,0,?)',
+                 (json.dumps(initial()),))
+    conn.commit()
+
+
+def public():
+    state,revision=load()
+    positions=[];value=state['cash_usd'];complete=True
+    for address,p in state['positions'].items():
+        fresh=p.get('mark_available',True) and p.get('marked_at') is not None and 0<=time.time()-p['marked_at']<=120
+        mark=p.get('marked_value_usd') if fresh else None
+        if mark is None:complete=False
+        else:value+=mark
+        positions.append({'mint':address,**p,'mark_fresh':fresh,'current_modeled_value_usd':mark})
+    return {'version':VERSION,'paper':True,'live_execution_enabled':False,'revision':revision,
+            **{k:v for k,v in state.items() if k not in ('positions','observations','cooldowns')},
+            'positions':positions,'paper_equity_usd':round(value,4) if complete else None,
+            'realized_pnl_usd':round(sum(p['pnl_usd'] for p in state['closed']),4),
+            'realized_scope':'Latest 200 completed paper trades; older events may be excluded.',
+            'rules':RULES,'limitations':LIMITATIONS}
+
+
+def configure(changes,expected_revision):
+    if (not isinstance(changes,dict) or not changes or not set(changes)<=set(DEFAULTS)
+            or isinstance(expected_revision,bool) or not isinstance(expected_revision,int)):
+        raise ValueError('Known configuration changes and revision required.')
+    for key,value in changes.items():
+        if key in ('enabled','discover'):
+            if type(value) is not bool:raise ValueError('Boolean control required.')
+        elif key=='watchlist':
+            if not isinstance(value,list) or len(value)>8 or len(set(value))!=len(value):raise ValueError('At most eight distinct mint addresses.')
+            for address in value:mint(address)
+        else:
+            limits={'trade_usd':(5,200),'max_positions':(1,5),'stop_percent':(3,20),
+                    'target_percent':(5,100),'trail_arm_percent':(5,50),'trail_percent':(2,20),
+                    'max_hold_minutes':(5,120),'daily_loss_usd':(10,100)}
+            low,high=limits[key]
+            if not low<=num(value)<=high or key in ('max_positions','max_hold_minutes') and num(value)%1:
+                raise ValueError('Setting outside paper experiment bounds.')
+    state,revision=load()
+    if revision!=expected_revision:raise Conflict('Settings changed. Refresh before saving.')
+    state['config'].update(changes)
+    if state['config']['trail_percent']>=state['config']['trail_arm_percent']:
+        raise ValueError('Trailing distance must be below its activation percentage.')
+    state['health']='starting' if state['config']['enabled'] else 'paused_entries_monitoring_exits'
+    with closing(database.get_connection()) as conn:
+        initialize(conn)
+        count=conn.execute('UPDATE solana_meme_paper_state SET state_json=?,revision=revision+1 WHERE id=1 AND revision=?',
+                           (json.dumps(state,allow_nan=False),revision)).rowcount
+        if count!=1:raise Conflict('Settings changed. Refresh before saving.')
+        conn.commit()
+    return public()
+
+
+class ReadOnlyProviders:
+    """Fixed hosts and read-only JSON-RPC methods; no client-supplied URLs."""
+    def _json(self,response):
+        response.raise_for_status()
+        if len(response.content)>2_000_000:raise ValueError('Provider response too large.')
+        return response.json()
+    def profiles(self):
+        data=self._json(requests.get('https://api.dexscreener.com/token-profiles/latest/v1',timeout=4))
+        rows=data if isinstance(data,list) else [data]
+        result=[]
+        for row in rows[:100]:
+            if row.get('chainId')=='solana':
+                try:result.append(mint(row.get('tokenAddress')))
+                except ValueError:pass
+        return list(dict.fromkeys(result))
+    def pairs(self,addresses):
+        if not 1<=len(addresses)<=8:raise ValueError('Bounded mint batch required.')
+        for address in addresses:mint(address)
+        data=self._json(requests.get('https://api.dexscreener.com/tokens/v1/solana/'+','.join(addresses),timeout=4))
+        if not isinstance(data,list) or len(data)>500:raise ValueError('Pair evidence unavailable.')
+        return data
+    def rpc(self,method,params):
+        if method not in ('getAccountInfo','getTokenLargestAccounts'):raise ValueError('Read-only RPC method required.')
+        mint(params[0])
+        data=self._json(requests.post('https://api.mainnet-beta.solana.com',json={
+            'jsonrpc':'2.0','id':1,'method':method,'params':params},timeout=4))
+        if data.get('error') or 'result' not in data:raise ValueError('On-chain evidence unavailable.')
+        return data['result']
+    def safety(self,address):
+        account=self.rpc('getAccountInfo',[address,{'encoding':'jsonParsed','commitment':'finalized'}])
+        value=account['value']
+        if not value or value.get('owner')!=TOKEN_PROGRAM or value.get('executable') is not False:
+            raise ValueError('Unsupported mint program; only legacy SPL tokens are supported.')
+        parsed=value['data']['parsed']
+        info=parsed['info']
+        if parsed.get('type')!='mint' or info.get('isInitialized') is not True:
+            raise ValueError('Initialized SPL mint required.')
+        if 'mintAuthority' not in info or 'freezeAuthority' not in info:
+            raise ValueError('Authority evidence unavailable.')
+        if info['mintAuthority'] is not None or info['freezeAuthority'] is not None:
+            raise ValueError('Active mint or freeze authority.')
+        supply=Decimal(info['supply'])
+        if not supply.is_finite() or supply<=0:raise ValueError('Supply unavailable.')
+        largest=self.rpc('getTokenLargestAccounts',[address,{'commitment':'finalized'}])
+        rows=largest['value']
+        if not isinstance(rows,list) or not 1<=len(rows)<=20:raise ValueError('Concentration evidence unavailable.')
+        amounts=[Decimal(row['amount']) for row in rows]
+        if any(not n.is_finite() or n<0 for n in amounts) or sum(amounts)>supply:
+            raise ValueError('Invalid token-account concentration evidence.')
+        amounts.sort(reverse=True)
+        single=float(amounts[0]/supply*100);top10=float(sum(amounts[:10])/supply*100)
+        if single>35 or top10>70:raise ValueError('Token-account concentration exceeds the experimental limits.')
+        return {'mint_authority':None,'freeze_authority':None,'largest_account_percent':single,
+                'top10_accounts_percent':top10,'checked_at':time.time(),
+                'slot':largest['context']['slot'],'basis':'token accounts including pool vaults; not unique holders'}
+
+
+def normalize_pair(row,address,now):
+    if (row.get('chainId')!='solana' or row.get('baseToken',{}).get('address')!=address):
+        raise ValueError('Wrong chain or base mint.')
+    pair=mint(row['pairAddress']);price=num(row['priceUsd']);liquidity=num(row['liquidity']['usd'])
+    created=num(row['pairCreatedAt'])/1000
+    buys=num(row['txns']['m5']['buys']);sells=num(row['txns']['m5']['sells'])
+    volume=num(row['volume']['m5']);change=num(row['priceChange']['m5'])
+    if min(price,liquidity)<=0 or min(buys,sells,volume)<0 or not 0<=created<=now:
+        raise ValueError('Invalid pair evidence.')
+    return {'mint':address,'pair':pair,'symbol':str(row['baseToken'].get('symbol','?'))[:24],
+            'price_usd':price,'liquidity_usd':liquidity,'volume_m5_usd':volume,
+            'buys_m5':buys,'sells_m5':sells,'change_m5_percent':change,
+            'age_minutes':(now-created)/60,'observed_at':now,
+            'market_timestamp':None,'source':'dexscreener_provider_observation'}
+
+
+def entry_reason(row,previous,now):
+    if row['liquidity_usd']<100000:return 'Liquidity below $100,000.'
+    if not 30<=row['age_minutes']<=30*1440:return 'Pair age outside 30 minutes–30 days.'
+    if row['volume_m5_usd']<20000 or row['buys_m5']+row['sells_m5']<40:return 'Insufficient recent observed activity.'
+    if row['buys_m5']<1.2*max(1,row['sells_m5']):return 'Buy/sell activity confirmation missing.'
+    if not 2<=row['change_m5_percent']<=20:return 'Five-minute change outside experimental momentum range.'
+    if not previous or previous['pair']!=row['pair'] or not 45<=now-previous['observed_at']<=180:
+        return 'Waiting for a second observation of the same pool, 45–180 seconds apart.'
+    move=(row['price_usd']/previous['price_usd']-1)*100
+    if not .5<=move<=8:return 'No confirmed continuation, or price has run too far to chase.'
+    return None
+
+
+def tick(*,providers=None,clock=time.time,force=False):
+    state,revision=load();now=clock();config=state['config']
+    if not force and not config['enabled'] and not state['positions']:return public()
+    owner=str(uuid.uuid4())
+    with closing(database.get_connection()) as conn:
+        initialize(conn)
+        if conn.execute('UPDATE solana_meme_paper_state SET lease_owner=?,lease_until=? WHERE id=1 AND lease_until<=?',
+                        (owner,now+90,now)).rowcount!=1:raise Conflict('A scan is already running.')
+        conn.commit()
+    providers=providers or ReadOnlyProviders()
+    state['error']=None
+    try:
+        candidates=list(state['positions'])+config['watchlist']
+        if config['discover'] and (config['enabled'] or force):
+            try:candidates+=providers.profiles()
+            except Exception:state['error']='Discovery unavailable; existing positions/watchlist still monitored.'
+        candidates=list(dict.fromkeys(candidates))[:8]
+        if not candidates:
+            state.update(health='waiting_for_mints',last_cycle=now)
+        else:
+            raw=providers.pairs(candidates);observed=clock()
+            if not 0<=observed-now<=45:raise ValueError('Observation request exceeded cycle budget.')
+            snapshots={}
+            for address in candidates:
+                valid=[]
+                for row in raw:
+                    try:valid.append(normalize_pair(row,address,observed))
+                    except (ValueError,KeyError,TypeError):continue
+                # Open positions stay pinned to their original pool, not a new unrelated price.
+                if address in state['positions']:
+                    valid=[r for r in valid if r['pair']==state['positions'][address]['pair']]
+                if valid:snapshots[address]=max(valid,key=lambda r:r['liquidity_usd'])
+            closed_this_cycle=set()
+            for address,p in list(state['positions'].items()):
+                row=snapshots.get(address)
+                if not row:
+                    p['mark_available']=False
+                    continue
+                p['mark_available']=True
+                value=p['quantity']*row['price_usd']*.99-.10
+                change=(value/p['cost_usd']-1)*100
+                p.update(marked_value_usd=value,marked_at=observed,peak_percent=max(p['peak_percent'],change))
+                reason=('stop_loss' if change<=-p['stop_percent'] else 'take_profit' if change>=p['target_percent']
+                        else 'profit_trail' if p['peak_percent']>=p['trail_arm_percent'] and p['peak_percent']-change>=p['trail_percent']
+                        else 'liquidity_drop' if row['liquidity_usd']<p['entry_liquidity_usd']*.5
+                        else 'maximum_hold' if observed-p['opened_at']>=p['max_hold_minutes']*60 else None)
+                if reason:
+                    value=max(0,value);state['cash_usd']+=value
+                    state['closed'].append({'mint':address,'symbol':p['symbol'],'opened_at':p['opened_at'],
+                        'closed_at':observed,'entry_usd':p['cost_usd'],'proceeds_usd':value,
+                        'pnl_usd':value-p['cost_usd'],'reason':reason,'basis':'modeled provider observation; not a swap fill'})
+                    state['closed']=state['closed'][-200:];del state['positions'][address]
+                    state['cooldowns'][address]=observed+3600;closed_this_cycle.add(address)
+            equity=state['cash_usd']+sum(p.get('marked_value_usd',0) for p in state['positions'].values())
+            marks_complete=all(address in snapshots for address in state['positions'])
+            day=time.strftime('%Y-%m-%d',time.gmtime(observed))
+            if state['day']!=day and marks_complete:state.update(day=day,day_equity=equity)
+            brake=not marks_complete or state['day']!=day or equity-state['day_equity']<=-config['daily_loss_usd']
+            state['candidates']=[];checks=0
+            for address in candidates:
+                row=snapshots.get(address)
+                if not row:
+                    state['candidates'].append({'mint':address,'status':'unavailable','reason':'Pool observation unavailable; no invented mark or exit.'});continue
+                reason=entry_reason(row,state['observations'].get(address),observed)
+                if address in state['positions']:reason='Existing paper position is being monitored.'
+                elif address in closed_this_cycle or state['cooldowns'].get(address,0)>observed:reason='One-hour re-entry cooldown.'
+                elif brake:reason='Paper daily loss brake or incomplete position marks blocks new entries.'
+                elif not config['enabled']:reason='New paper buys are paused.'
+                elif len(state['positions'])>=config['max_positions']:reason='Maximum paper positions reached.'
+                elif state['cash_usd']<config['trade_usd']+.10:reason='Insufficient virtual cash.'
+                entry_friction=config['trade_usd']+.20-config['trade_usd']*.99/1.01
+                if reason is None and equity-state['day_equity']-entry_friction<=-config['daily_loss_usd']:
+                    reason='Remaining daily paper-loss budget cannot cover modeled entry/exit friction.'
+                if reason is None:
+                    if checks>=3:reason='On-chain check budget reached; retry next cycle.'
+                    else:
+                        checks+=1
+                        try:
+                            safety=providers.safety(address)
+                            if not 0<=clock()-safety['checked_at']<=30:raise ValueError('On-chain evidence is stale.')
+                            if clock()-observed>45:raise ValueError('Pool observation is too old for entry.')
+                        except ValueError as error:reason=str(error)
+                        except Exception:reason='On-chain checks unavailable; no paper entry.'
+                if reason is None:
+                    amount=config['trade_usd'];cost=amount+.10
+                    state['positions'][address]={'symbol':row['symbol'],'pair':row['pair'],'opened_at':observed,
+                        'quantity':amount/(row['price_usd']*1.01),'cost_usd':cost,'entry_price_usd':row['price_usd'],
+                        'entry_liquidity_usd':row['liquidity_usd'],'peak_percent':0.,'safety':safety,
+                        **{k:config[k] for k in ('stop_percent','target_percent','trail_arm_percent','trail_percent','max_hold_minutes')}}
+                    p=state['positions'][address];p.update(marked_at=observed,marked_value_usd=max(0,p['quantity']*row['price_usd']*.99-.10))
+                    state['cash_usd']-=cost;equity-=cost-p['marked_value_usd'];reason='PAPER buy simulated after momentum and on-chain checks.'
+                state['candidates'].append({**row,'status':'paper_open' if address in state['positions'] else 'blocked','reason':reason})
+                state['observations'][address]=row
+            state['observations']={a:r for a,r in state['observations'].items() if observed-r['observed_at']<=180}
+            state['cooldowns']={a:t for a,t in state['cooldowns'].items() if t>observed}
+            state.update(last_cycle=observed,health='entry_brake' if brake else 'running' if config['enabled'] else 'paused_entries_monitoring_exits')
+    except Exception:
+        for position in state['positions'].values():position['mark_available']=False
+        state.update(health='data_unavailable',error='Provider unavailable or rate limited. No new paper entry; unresolved marks are unavailable.',last_cycle=clock())
+    try:
+        with closing(database.get_connection()) as conn:
+            changed=conn.execute('UPDATE solana_meme_paper_state SET state_json=?,revision=revision+1 WHERE id=1 AND revision=? AND lease_owner=? AND lease_until>?',
+                (json.dumps(state,allow_nan=False),revision,owner,clock())).rowcount
+            conn.commit()
+            if changed!=1:raise Conflict('Configuration changed during scan; simulated changes discarded.')
+    finally:
+        with closing(database.get_connection()) as conn:
+            conn.execute('UPDATE solana_meme_paper_state SET lease_owner=NULL,lease_until=0 WHERE id=1 AND lease_owner=?',(owner,));conn.commit()
+    return public()
+
+
+async def worker():
+    while True:
+        try:await asyncio.to_thread(tick)
+        except Exception:pass
+        await asyncio.sleep(60)
