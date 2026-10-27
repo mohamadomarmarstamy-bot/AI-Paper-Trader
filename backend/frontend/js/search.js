@@ -583,7 +583,7 @@ async function selectSearchStock(
         }
 
         const price =
-            normalizeQuotePrice(
+            normalizeSearchQuotePrice(
                 payload
             );
 
@@ -687,7 +687,7 @@ async function selectSearchStock(
 }
 
 
-function normalizeQuotePrice(payload) {
+function normalizeSearchQuotePrice(payload) {
     const age=typeof payload?.quote_age_seconds==="number"?payload.quote_age_seconds*1000+(payload._round_trip_ms||0):NaN;
     const ask=Number(payload?.ask);
     return payload?.quote_fresh===true&&Number.isFinite(Date.parse(payload.quote_timestamp))&&Number.isFinite(age)&&age>=0&&age<=30000&&Number.isFinite(ask)&&ask>0?ask:null;

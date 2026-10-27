@@ -386,7 +386,7 @@ async function loadLivePrice(
         }
 
         const price =
-            normalizeQuotePrice(
+            normalizeTradeQuotePrice(
                 result
             );
 
@@ -2244,7 +2244,7 @@ function getTradePrice() {
 }
 
 
-function normalizeQuotePrice(payload) {
+function normalizeTradeQuotePrice(payload) {
     const age=quoteAgeMillis(payload);
     if(payload?.quote_fresh!==true||!Number.isFinite(age)||age<0||age>30000)return null;
     return toPositiveTradeNumber(payload.ask);
