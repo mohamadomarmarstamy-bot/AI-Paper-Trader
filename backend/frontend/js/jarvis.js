@@ -2,6 +2,10 @@
 
 (() => {
     const state = {
+        speechVersion: 0,
+        greeted: false,
+        awaitingWakeCommand: false,
+        pendingMessage: null,
         ready: false,
         sending: false,
         voiceEnabled: false,
@@ -153,11 +157,12 @@
         }
 
         if (stopButton) {
-            stopButton.disabled = !state.speaking;
+            stopButton.disabled = !state.speaking && !state.speechPending;
         }
     }
 
     function stopSpeaking() {
+        state.speechVersion++;
         stopBargeInDetection();
 
         if (state.speechController) {
@@ -231,14 +236,18 @@
             .replace(/\s+/g, " ")
             .trim();
 
-        if (!cleanText) {
+        const speechInput=cleanText.length>3900?cleanText.slice(0,3900)+". The full answer is in the chat.":cleanText;
+        if (!speechInput) {
             return;
         }
 
         stopSpeaking();
         stopListening();
+        const speechVersion = state.speechVersion;
+        let speechController = null;
 
         const resumeListening = () => {
+            if (speechVersion !== state.speechVersion) return;
             stopBargeInDetection();
             setSpeaking(false);
             updateVoiceControls();
@@ -287,9 +296,9 @@
 
         try {
             state.speechPending = true;
+            updateVoiceControls();
 
-            const speechController =
-                new AbortController();
+            speechController = new AbortController();
 
             state.speechController =
                 speechController;
@@ -313,7 +322,7 @@
                             "application/json",
                     },
                     body: JSON.stringify({
-                        text: cleanText,
+                        text: speechInput,
                     }),
                 }
             );
@@ -336,6 +345,7 @@
 
             state.speechPending = false;
 
+            if (speechVersion !== state.speechVersion || speechController.signal.aborted) return;
             const audioUrl =
                 URL.createObjectURL(
                     audioBlob
@@ -383,6 +393,7 @@
             await audio.play();
             return;
         } catch (error) {
+            if (speechVersion !== state.speechVersion) return;
             if (
                 state.speechController ===
                 speechController
@@ -414,7 +425,7 @@
 
         const utterance =
             new SpeechSynthesisUtterance(
-                cleanText
+                speechInput
             );
 
         utterance.rate = 1.02;
@@ -502,6 +513,7 @@
     }
 
     function startVoiceSession() {
+        state.awaitingWakeCommand=false;
         const voiceMode =
             document.getElementById(
                 "jarvis-voice-mode"
@@ -553,6 +565,7 @@
     }
 
     function endVoiceSession() {
+        state.awaitingWakeCommand=false;
         const voiceMode =
             document.getElementById(
                 "jarvis-voice-mode"
@@ -923,6 +936,7 @@
     }
 
     function startListening() {
+        if (!state.voiceSession || state.muted) return;
         if (!state.recognition) {
             setStatus(
                 "Microphone unavailable",
@@ -978,10 +992,10 @@
 
             if (
                 data.success &&
-                data.chat_ready
+                (data.chat_ready || data.settings_ready)
             ) {
                 setStatus(
-                    "Online",
+                    data.chat_ready ? "Online · app tools connected" : "Settings ready · AI unavailable",
                     true
                 );
                 return;
@@ -1016,10 +1030,8 @@
             return;
         }
 
-        addMessage(
-            "user",
-            cleanMessage
-        );
+        if (state.pendingMessage?.message !== cleanMessage) state.pendingMessage = {message:cleanMessage,id:crypto.randomUUID()};
+        addMessage("user", cleanMessage);
 
         setSending(true);
 
@@ -1035,8 +1047,9 @@
                                 "application/json",
                         },
                         body: JSON.stringify({
-                            message:
-                                cleanMessage,
+                            message: cleanMessage,
+                            request_id: state.pendingMessage.id,
+                            ui_context: {watchlist:Array.isArray(window.watchlist)?window.watchlist.slice(0,100):[]},
                             history:
                                 state.conversationHistory.slice(
                                     -12
@@ -1045,22 +1058,19 @@
                     }
                 );
 
-            if (!response.ok) {
-                throw new Error(
-                    `Chat request failed (${response.status}).`
-                );
-            }
-
-            const data =
-                await response.json();
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.detail || `Chat request failed (${response.status}).`);
 
             if (!data.success) {
+                state.pendingMessage = null;
                 throw new Error(
                     data.error ||
                     "Jarvis could not respond."
                 );
             }
 
+            state.pendingMessage = null;
+            renderActions(data);
             const reply =
                 data.reply ||
                 "I didn't receive a response.";
@@ -1147,6 +1157,24 @@
         }
     }
 
+    function renderActions(data){
+        const box=document.getElementById("jarvis-actions");if(!box)return;box.replaceChildren();
+        const note=document.createElement("p");note.textContent=data.receipt?"Saved change: "+Object.entries(data.receipt.after).map(([k,v])=>k.replaceAll("_"," ")+": "+data.receipt.before[k]+" → "+v).join("; "):"No settings were changed by this reply.";box.appendChild(note);
+        if(data.receipt)document.dispatchEvent(new CustomEvent("app:settings-changed",{detail:{source:"jarvis"}}));
+        for(const proposal of data.proposals||[]){const card=document.createElement("article"),text=document.createElement("p"),button=document.createElement("button"),cancel=document.createElement("button");
+            text.textContent="Preview (not applied): "+Object.entries(proposal.after).map(([k,v])=>k.replaceAll("_"," ")+": "+proposal.before[k]+" → "+v).join("; ")+". "+proposal.effect;
+            button.type="button";button.textContent="Apply settings preview";cancel.type="button";cancel.textContent="Dismiss preview";let requestId=crypto.randomUUID();
+            button.addEventListener("click",async()=>{button.disabled=true;try{const response=await fetch("/jarvis/proposals/"+encodeURIComponent(proposal.id)+"/apply",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({request_id:requestId})});const result=await response.json();if(!response.ok||!result.success)throw Error(result.detail||result.error||"Unable to confirm change; refresh settings.");text.textContent="Saved: "+Object.entries(result.receipt.after).map(([k,v])=>k.replaceAll("_"," ")+": "+result.receipt.before[k]+" → "+v).join("; ")+". "+result.effect;cancel.disabled=true;document.dispatchEvent(new CustomEvent("app:settings-changed",{detail:{source:"jarvis"}}));}catch(error){text.textContent=error.message;button.disabled=false;}});
+            cancel.addEventListener("click",()=>card.remove());card.append(text,button,cancel);box.appendChild(card);
+        }
+    }
+    function greet(){if(!window.jarvisProfile||state.greeted||window.jarvisProfile.automatic_greeting===false)return;state.greeted=true;const profile=window.jarvisProfile||{},name=profile.preferred_name||profile.address_as||"Sir";const text="Welcome, "+name+". I can inspect your app and help with its settings.";addMessage("assistant",text);if(state.voiceEnabled)speak(text);}
+    function openDrawer(){const drawer=document.getElementById("jarvis-drawer"),backdrop=document.getElementById("jarvis-drawer-backdrop"),section=document.getElementById("jarvis-section");if(section){section.hidden=false;section.classList.remove("hidden");}drawer?.classList.add("open");drawer?.setAttribute("aria-hidden","false");backdrop?.classList.add("open");backdrop?.setAttribute("aria-hidden","false");document.body.classList.add("jarvis-drawer-open");greet();getElements().input?.focus();}
+    function closeDrawer(){document.getElementById("jarvis-drawer")?.classList.remove("open");document.getElementById("jarvis-drawer")?.setAttribute("aria-hidden","true");document.getElementById("jarvis-drawer-backdrop")?.classList.remove("open");document.getElementById("jarvis-drawer-backdrop")?.setAttribute("aria-hidden","true");document.body.classList.remove("jarvis-drawer-open");if(state.voiceSession)endVoiceSession();else{stopSpeaking();stopListening();}}
+    window.openJarvis=openDrawer;window.closeJarvis=closeDrawer;
+    window.jarvisPreviewVoice=()=>{state.voiceEnabled=true;updateVoiceControls();speak("Good evening. Your assistant is ready to inspect the app and help with its settings.");};
+    document.addEventListener("jarvis:profile",event=>{if(state.recognition)state.recognition.lang=event.detail?.language||"en-GB";state.awaitingWakeCommand=false;if(document.getElementById("jarvis-drawer")?.classList.contains("open"))greet();});
+
     function bindJarvis() {
         const {
             form,
@@ -1159,93 +1187,7 @@
         const orb =
             document.getElementById("jarvis-orb");
 
-        if (orb) {
-            orb.addEventListener(
-                "click",
-                () => {
-                    if (state.speaking) {
-                        stopSpeaking();
-                        return;
-                    }
-
-                    const drawer =
-                        document.getElementById(
-                            "jarvis-drawer"
-                        );
-                    const backdrop =
-                        document.getElementById(
-                            "jarvis-drawer-backdrop"
-                        );
-
-                    if (drawer) {
-                        drawer.classList.toggle("open");
-
-                        const isOpen =
-                            drawer.classList.contains("open");
-
-                        drawer.setAttribute(
-                            "aria-hidden",
-                            String(!isOpen)
-                        );
-
-                        backdrop?.classList.toggle(
-                            "open",
-                            isOpen
-                        );
-
-                        backdrop?.setAttribute(
-                            "aria-hidden",
-                            String(!isOpen)
-                        );
-
-                        document.body.classList.toggle(
-                            "jarvis-drawer-open",
-                            isOpen
-                        );
-                    }
-
-                    window.setTimeout(
-                        () => {
-                            const {
-                                input,
-                            } = getElements();
-
-                            input?.focus();
-                        },
-                        100
-                    );
-                }
-            );
-        }
-
-        const closeDrawer = () => {
-            const drawer =
-                document.getElementById(
-                    "jarvis-drawer"
-                );
-            const backdrop =
-                document.getElementById(
-                    "jarvis-drawer-backdrop"
-                );
-
-            drawer?.classList.remove("open");
-            backdrop?.classList.remove("open");
-
-            drawer?.setAttribute(
-                "aria-hidden",
-                "true"
-            );
-
-            backdrop?.setAttribute(
-                "aria-hidden",
-                "true"
-            );
-
-            document.body.classList.remove(
-                "jarvis-drawer-open"
-            );
-        };
-
+        orb?.addEventListener("click",()=>{if(state.speaking){stopSpeaking();return;}const drawer=document.getElementById("jarvis-drawer");if(drawer?.classList.contains("open"))closeDrawer();else openDrawer();});
         const drawerClose =
             document.getElementById(
                 "jarvis-drawer-close"
@@ -1286,7 +1228,7 @@
             const recognition =
                 new SpeechRecognition();
 
-            recognition.lang = "en-US";
+            recognition.lang = window.jarvisProfile?.language || "en-GB";
             recognition.continuous = false;
             recognition.interimResults = false;
             recognition.maxAlternatives = 1;
@@ -1313,6 +1255,7 @@
                 state.recognitionStarting = false;
 
                 setListening(false);
+                if (state.voiceSession && !state.muted && !state.sending && !state.speaking && !state.speechPending) window.setTimeout(startListening,300);
             };
 
             recognition.onerror = event => {
@@ -1344,26 +1287,25 @@
                     return;
                 }
 
-                if (
-                    state.voiceSession &&
-                    !state.muted
-                ) {
-                    updateVoiceMode(
-                        null,
-                        "Microphone paused"
-                    );
-                }
+                if (!["no-speech","aborted"].includes(event.error)) state.voiceSession=false;
+                if (state.voiceSession && !state.muted) updateVoiceMode(null,"Microphone paused");
             };
 
             recognition.onresult = event => {
-                const transcript =
-                    event.results?.[0]?.[0]
-                        ?.transcript?.trim();
+                let transcript = event.results?.[0]?.[0]?.transcript?.trim();
 
                 if (!transcript) {
                     return;
                 }
 
+                const profile=window.jarvisProfile||{};
+                if(profile.voice_activation && !state.awaitingWakeCommand){
+                    const wake=String(profile.wake_phrase||"Hey Jarvis").trim().toLowerCase();
+                    if(!transcript.toLowerCase().startsWith(wake)||(transcript.length>wake.length&&!/^[\s,.!?]/.test(transcript.slice(wake.length)))){updateVoiceMode("listening","Say “"+(profile.wake_phrase||"Hey Jarvis")+"” first");return;}
+                    transcript=transcript.slice(wake.length).replace(/^[ ,.!?]+/,"").trim();
+                    if(!transcript){state.awaitingWakeCommand=true;updateVoiceMode("listening","Ready for your request…");return;}
+                }
+                state.awaitingWakeCommand=false;
                 input.value = transcript;
 
                 if (state.voiceSession) {
@@ -1418,7 +1360,7 @@
         }
 
         if (
-            !("speechSynthesis" in window)
+            typeof Audio !== "function"
         ) {
             state.voiceEnabled = false;
 

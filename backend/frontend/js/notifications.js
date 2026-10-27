@@ -510,11 +510,14 @@ async function loadNotifications(
                 .map(
                     normalizeNotificationLog
                 )
-                .filter(
-                    item =>
-                        item.timestamp >
-                        0
-                );
+                .filter(item => {
+                    if (!(item.timestamp > 0)) return false;
+                    const p=window.appSettings||{}, event=item.event.toLowerCase();
+                    if (event.includes("protect")||event.includes("stop_loss")) return p.notify_protection_events!==false;
+                    if (event.includes("scan")) return p.notify_scanner_events!==false;
+                    if (classifyNotification(item)==="trade") return p.notify_trade_events!==false;
+                    return true;
+                });
 
         const newestTimestamp =
             notificationItems[0]
@@ -604,3 +607,4 @@ window.loadNotifications =
 
 window.markAllNotificationsRead =
     markAllNotificationsRead;
+document.addEventListener("app:preferences",()=>loadNotifications());

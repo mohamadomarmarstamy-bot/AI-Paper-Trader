@@ -977,6 +977,7 @@
     // =====================================================
 
     function showSection(sectionId) {
+        if (sectionId === "jarvis-section") { window.openJarvis?.(); return; }
         if (
             typeof window.showSection === "function" &&
             window.showSection !== showSection
