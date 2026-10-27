@@ -9,7 +9,7 @@ let latestScannerRequestNumber = 0;
 let scannerResultsElement = null;
 let scannerControlsElement = null;
 
-const SCANNER_REQUEST_TIMEOUT_MS = 30_000;
+const SCANNER_REQUEST_TIMEOUT_MS = 90_000;
 
 const scannerState = {
     search: "",
@@ -17,7 +17,7 @@ const scannerState = {
     rating: "ALL",
     risk: "ALL",
     trend: "ALL",
-    sort: "SCORE_DESC",
+    sort: "FAST_MOVERS",
 };
 
 const scannerCurrencyFormatter =
@@ -77,7 +77,7 @@ async function loadScanner() {
 
     try {
         const response = await fetch(
-            `${getScannerApiUrl()}/scanner`,
+            `${getScannerApiUrl()}/scanner?limit=150`,
             {
                 method: "GET",
 
@@ -119,8 +119,13 @@ async function loadScanner() {
             );
 
         updateScannerSummary();
+        const coverage=document.getElementById("scanner-coverage");
+        if(coverage){const c=payload.coverage,d=c?.discovery;
+            coverage.textContent=d?.profile==="fast_movers_v1"?`${d.screened_symbols} symbols screened · ${d.rotating_symbols} rotating · ${c.valid_candidates??0} valid daily analyses · ${d.fresh_selected_snapshots??0} fresh snapshots. ${c.stale?"Last scan is stale. ":""}${d.partial?"Some discovery data is unavailable. ":""}${c.deferred_daily_histories?c.deferred_daily_histories+" daily histories deferred by the scan time budget. ":""}IEX activity covers one exchange; low price does not verify market cap or float.`:"Coverage unavailable; no live discovery claim.";}
         applyScannerFilters();
     } catch (error) {
+        const coverage=document.getElementById("scanner-coverage");
+        if(coverage)coverage.textContent="Scanner refresh failed; previous coverage may be out of date.";
         if (
             error?.name ===
             "AbortError"
@@ -353,6 +358,9 @@ function normalizeScannerStock(
 
         price,
         change,
+        fastPriority: stock.fast_mover_priority === true && stock.live_discovery?.stale !== true,
+        fastScore: toFiniteScannerNumber(stock.fast_mover_score,0),
+        liveDiscovery: stock.live_discovery && typeof stock.live_discovery === "object" ? stock.live_discovery : null,
         score,
         confidence,
         rating,
@@ -449,6 +457,7 @@ function sortScannerStocks(
     sortMethod
 ) {
     const sorters = {
+        FAST_MOVERS: (first,second)=>Number(second.fastPriority)-Number(first.fastPriority)||second.fastScore-first.fastScore||second.score-first.score,
         SCORE_DESC:
             (first, second) =>
                 second.score -
@@ -614,6 +623,13 @@ function createScannerCard(stock) {
         price,
         change
     );
+    if(stock.liveDiscovery){
+        const live=document.createElement("small"),d=stock.liveDiscovery;
+        live.textContent=`${d.stale?"Stale snapshot · ":""}Snapshot move ${formatScannerPercent(d.percent_change)}% · IEX session $${Math.round(d.session_dollar_volume).toLocaleString()} · spread ${Number(d.spread_percent).toFixed(2)}%`;
+        company.textContent=(stock.company||stock.sector||"Market opportunity")+(stock.fastPriority?" · Fast mover":"");
+        priceRow.appendChild(live);
+    }
+
 
     identity.append(
         symbol,
@@ -1352,6 +1368,7 @@ function mapScannerSortValue(
     value
 ) {
     const sortValues = {
+        FAST_MOVERS: "FAST_MOVERS",
         "score-desc":
             "SCORE_DESC",
 

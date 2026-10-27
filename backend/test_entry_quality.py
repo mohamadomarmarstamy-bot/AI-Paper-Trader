@@ -219,6 +219,8 @@ class ScannerCacheTests(unittest.TestCase):
             "copy": copy, "time": types.SimpleNamespace(time=lambda: self.clock.now),
             "_cache_lock": threading.RLock(), "_scan_lock": threading.Lock(),
             "_scan_cache": {"results": [], "updated_at": 0},
+            "_scan_metrics": {}, "_daily_candidate_cache": {},
+            "DAILY_ANALYSIS_CACHE_SECONDS":300,"SCAN_DOWNLOAD_BUDGET_SECONDS":45,
             "SCAN_CACHE_SECONDS": 60, "logger": logging.getLogger("entry_quality_tests"),
         }
         exec(compile(ast.Module(body=future + functions, type_ignores=[]), "scanner.py", "exec"), self.ns)

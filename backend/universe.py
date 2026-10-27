@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+import copy
+import threading
 from typing import Any, Callable
 
 
@@ -239,216 +241,73 @@ def _load_allowed_symbols(
     return symbols.copy()
 
 
-def load_momentum_universe(
-    *,
-    request_func: Callable[..., Any],
-    market_data_request_func: Callable[..., Any] | None = None,
-    force_refresh: bool = False,
-) -> list[str]:
-    """
-    Build a fast-refreshing momentum universe.
+_rotation_cursor = 0
+_universe_lock = threading.RLock()
 
-    The broad tradable asset list is cached for 15 minutes,
-    while Alpaca most-actives and movers refresh every minute.
-    """
-    allowed_symbols_list = _load_allowed_symbols(
-        request_func=request_func,
-        force_refresh=force_refresh,
-    )
 
-    allowed_symbols = set(
-        allowed_symbols_list
-    )
+def load_momentum_universe(*, request_func, market_data_request_func=None, force_refresh=False):
+    with _universe_lock:
+        return _refresh_momentum_universe(request_func=request_func,
+            market_data_request_func=market_data_request_func,force_refresh=force_refresh)
 
-    current_time = time.time()
 
-    cached_hot_symbols = list(
-        _hot_universe_cache.get(
-            "symbols",
-            [],
-        )
-    )
-
-    cached_hot_time = float(
-        _hot_universe_cache.get(
-            "updated_at",
-            0.0,
-        )
-        or 0.0
-    )
-
-    hot_cache_is_valid = (
-        bool(cached_hot_symbols)
-        and current_time - cached_hot_time
-        < HOT_UNIVERSE_CACHE_SECONDS
-    )
-
-    if (
-        hot_cache_is_valid
-        and not force_refresh
-    ):
-        return cached_hot_symbols.copy()
-
-    candidate_symbols: list[str] = []
-    candidate_seen: set[str] = set()
-    mover_metadata: dict[str, dict[str, Any]] = {}
-
+def _refresh_momentum_universe(*, request_func, market_data_request_func, force_refresh):
+    from fast_mover_discovery import (POOL_LIMIT,ROTATION_SIZE,SNAPSHOT_BATCH,rank_pool,snapshot_metrics)
+    global _rotation_cursor
+    # A UI force-refresh must not re-download the slow-changing asset master.
+    allowed_list=_load_allowed_symbols(request_func=request_func,force_refresh=False)
+    allowed=set(allowed_list);now=time.time()
+    if not force_refresh and _hot_universe_cache.get('symbols') and 0<=now-_hot_universe_cache.get('updated_at',0)<HOT_UNIVERSE_CACHE_SECONDS:
+        return [s for s in _hot_universe_cache['symbols'] if s in allowed]
+    rotation=[allowed_list[(_rotation_cursor+i)%len(allowed_list)] for i in range(min(ROTATION_SIZE,len(allowed_list)))]
+    _rotation_cursor=(_rotation_cursor+len(rotation))%len(allowed_list)
+    hot=[];metadata={};failures=[];snapshot_count=0
+    def add(items):
+        for item in items if isinstance(items,list) else []:
+            if not isinstance(item,dict): continue
+            symbol=str(item.get('symbol','')).strip().upper()
+            if symbol in allowed and symbol not in hot: hot.append(symbol)
     if market_data_request_func is not None:
         try:
-            most_active_payload = market_data_request_func(
-                "GET",
-                "/v1beta1/screener/stocks/most-actives",
-                params={
-                    "by": "volume",
-                    "top": 100,
-                },
-                timeout=15.0,
-            )
-
-            if isinstance(
-                most_active_payload,
-                dict,
-            ):
-                for item in most_active_payload.get(
-                    "most_actives",
-                    [],
-                ):
-                    if not isinstance(
-                        item,
-                        dict,
-                    ):
-                        continue
-
-                    symbol = str(
-                        item.get(
-                            "symbol",
-                            "",
-                        )
-                    ).strip().upper()
-
-                    if (
-                        symbol in allowed_symbols
-                        and symbol not in candidate_seen
-                    ):
-                        candidate_symbols.append(
-                            symbol
-                        )
-                        candidate_seen.add(
-                            symbol
-                        )
-
-        except Exception as error:
-            print(
-                "Alpaca most-actives request failed: "
-                f"{error}"
-            )
-
-        try:
-            movers_payload = market_data_request_func(
-                "GET",
-                "/v1beta1/screener/stocks/movers",
-                params={
-                    "top": 50,
-                },
-                timeout=15.0,
-            )
-
-            if isinstance(
-                movers_payload,
-                dict,
-            ):
-                try:
-                    record_explosive_movers_for_research(
-                        movers_payload,
-                        allowed_symbols,
-                    )
-                except Exception as error:
-                    print(
-                        "Explosive momentum research failed: "
-                        f"{error}"
-                    )
-
-                for group_name in (
-                    "gainers",
-                    "losers",
-                ):
-                    for item in movers_payload.get(
-                        group_name,
-                        [],
-                    ):
-                        if not isinstance(
-                            item,
-                            dict,
-                        ):
-                            continue
-
-                        symbol = str(
-                            item.get(
-                                "symbol",
-                                "",
-                            )
-                        ).strip().upper()
-
-                        if symbol in allowed_symbols:
-                            mover_metadata[symbol] = {
-                                "symbol": symbol,
-                                "price": item.get("price"),
-                                "change": item.get("change"),
-                                "percent_change": item.get(
-                                    "percent_change"
-                                ),
-                            }
+            payload=market_data_request_func('GET','/v1beta1/screener/stocks/movers',params={'top':50},timeout=8.0)
+            if not isinstance(payload,dict): raise ValueError('Invalid movers')
+            add(payload.get('gainers',[]));add(payload.get('losers',[]))
+            record_explosive_movers_for_research(payload,allowed)
+        except Exception: failures.append('movers_unavailable')
+        for by in ('volume','trades'):
+            try:
+                payload=market_data_request_func('GET','/v1beta1/screener/stocks/most-actives',params={'by':by,'top':100},timeout=8.0)
+                if not isinstance(payload,dict): raise ValueError('Invalid actives')
+                add(payload.get('most_actives',[]))
+            except Exception: failures.append('most_active_'+by+'_unavailable')
+    pool=list(dict.fromkeys(hot+rotation))[:POOL_LIMIT]
+    if market_data_request_func is not None:
+        for start in range(0,len(pool),SNAPSHOT_BATCH):
+            batch=pool[start:start+SNAPSHOT_BATCH]
+            try:
+                snapshots=market_data_request_func('GET','/v2/stocks/snapshots',params={'symbols':','.join(batch),'feed':'iex'},timeout=8.0)
+                if not isinstance(snapshots,dict): raise ValueError('Invalid snapshots')
+                for symbol in batch:
+                    metrics=snapshot_metrics(snapshots.get(symbol),now=time.time(),feed='iex')
+                    if metrics: metadata[symbol]={'symbol':symbol,**metrics};snapshot_count+=1
+            except Exception: failures.append('snapshot_batch_unavailable')
+    symbols=rank_pool(pool,rotation,metadata)
+    finished=time.time()
+    _hot_universe_cache.update(symbols=symbols.copy(),movers=metadata,updated_at=finished,
+        coverage={'profile':'fast_movers_v1','tradable_universe':len(allowed_list),'screened_symbols':len(pool),
+          'hot_symbols':len(hot),'rotating_symbols':len(rotation),'fresh_snapshots':snapshot_count,
+          'priority_movers':sum(m.get('fast_mover_priority') is True for m in metadata.values()),
+          'history_candidates':len(symbols),'snapshot_feed':'iex','partial':bool(failures) or snapshot_count<len(pool),
+          'missing_or_stale_snapshots':len(pool)-snapshot_count,
+          'limitations':failures,'completed_at':finished,
+          'market_cap_verified':False,'float_verified':False})
+    return symbols.copy()
 
 
-                        if (
-                            symbol in allowed_symbols
-                            and symbol not in candidate_seen
-                        ):
-                            candidate_symbols.append(
-                                symbol
-                            )
-                            candidate_seen.add(
-                                symbol
-                            )
-
-        except Exception as error:
-            print(
-                "Alpaca movers request failed: "
-                f"{error}"
-            )
-
-    if candidate_symbols:
-        hot_symbols = candidate_symbols
-    elif cached_hot_symbols:
-        print(
-            "No fresh Alpaca momentum candidates "
-            "were returned; using the previous hot universe."
-        )
-        hot_symbols = cached_hot_symbols
-    else:
-        print(
-            "No Alpaca momentum candidates were returned; "
-            "using the allowed tradable universe."
-        )
-        hot_symbols = allowed_symbols_list
-
-    # Replace previous mover metadata on every completed refresh.
-    # An empty result clears old momentum readings.
-    _hot_universe_cache["movers"] = {
-        symbol: data.copy()
-        for symbol, data in mover_metadata.items()
-    }
-
-
-    _hot_universe_cache[
-        "symbols"
-    ] = hot_symbols.copy()
-
-    _hot_universe_cache[
-        "updated_at"
-    ] = time.time()
-
-    return hot_symbols.copy()
+def get_momentum_universe_status():
+    result=copy.deepcopy(_hot_universe_cache.get('coverage',{}))
+    result['age_seconds']=max(0,time.time()-result['completed_at']) if result.get('completed_at') else None
+    return result
 
 
 def get_momentum_mover_metadata(
@@ -472,4 +331,38 @@ def get_momentum_mover_metadata(
     if not isinstance(metadata, dict):
         return {}
 
+    captured=metadata.get('captured_at')
+    if not isinstance(captured,(int,float)) or not 0<=time.time()-captured<=90:
+        return {}
+    from fast_mover_discovery import timestamp,MAX_AGE
+    for key in ('snapshot_trade_at','snapshot_quote_at'):
+        stamp=timestamp(metadata.get(key))
+        if stamp is None or not 0<=time.time()-stamp.timestamp()<=MAX_AGE: return {}
     return metadata.copy()
+
+
+def refresh_selected_momentum_snapshots(symbols, market_data_request_func):
+    """Refresh selected live evidence after slow daily analysis, never reuse stale boosts."""
+    from fast_mover_discovery import SNAPSHOT_BATCH,snapshot_metrics
+    if market_data_request_func is None: return
+    valid={};failed=False
+    for start in range(0,len(symbols),SNAPSHOT_BATCH):
+        batch=symbols[start:start+SNAPSHOT_BATCH]
+        try:
+            payload=market_data_request_func('GET','/v2/stocks/snapshots',params={'symbols':','.join(batch),'feed':'iex'},timeout=8.0)
+            if not isinstance(payload,dict): raise ValueError('Invalid snapshots')
+            for symbol in batch:
+                metrics=snapshot_metrics(payload.get(symbol),now=time.time(),feed='iex')
+                if metrics: valid[symbol]={'symbol':symbol,**metrics}
+        except Exception: failed=True
+    # Clear selected stale readings on partial failures, not just overwrite successes.
+    metadata=dict(_hot_universe_cache.get('movers',{}))
+    for symbol in symbols: metadata.pop(symbol,None)
+    metadata.update(valid);_hot_universe_cache['movers']=metadata
+    coverage=copy.deepcopy(_hot_universe_cache.get('coverage',{}))
+    coverage.update(fresh_selected_snapshots=len(valid),live_refreshed_at=time.time(),selected_unavailable_snapshots=len(symbols)-len(valid))
+    if len(valid)<len(symbols): coverage['partial']=True
+    if failed:
+        coverage['partial']=True
+        coverage['limitations']=list(coverage.get('limitations',[]))+['selected_snapshots_unavailable']
+    _hot_universe_cache['coverage']=coverage

@@ -17288,7 +17288,7 @@ def auto_trader_collect_pro_ticker_research(
 @app.get("/market-scan")
 def market_scan(
     request: Request,
-    limit: int = Query(default=10, ge=1, le=30),
+    limit: int = Query(default=30, ge=1, le=150),
     signal: str | None = Query(default=None),
     refresh: bool = Query(default=False),
 ) -> dict[str, Any]:
@@ -17330,10 +17330,12 @@ def market_scan(
 
         final_results = clean_results[:limit]
 
+        from scanner import get_scanner_status
         return {
+            "coverage": get_scanner_status(),
             "results": final_results,
             "count": len(final_results),
-            "scanned_universe": "Alpaca Momentum Candidates",
+            "scanned_universe": "Fast movers + rotating tradable universe",
             "refresh_requested": refresh,
         }
 
@@ -17349,7 +17351,7 @@ def market_scan(
             ),
             "results": [],
             "count": 0,
-            "scanned_universe": "Alpaca Momentum Candidates",
+            "scanned_universe": "Fast movers + rotating tradable universe",
             "refresh_requested": refresh,
         }
 
@@ -17357,7 +17359,7 @@ def market_scan(
 @app.get("/scanner")
 def scanner(
     request: Request,
-    limit: int = Query(default=10, ge=1, le=30),
+    limit: int = Query(default=30, ge=1, le=150),
     signal: str | None = Query(default=None),
     refresh: bool = Query(default=False),
 ) -> dict[str, Any]:
