@@ -311,6 +311,53 @@ def persist_exit_fills(row, orders):
         conn.commit()
 
 
+def reconcile_external_close(row, parent, legs, *, context, clock):
+    """Resolve an externally closed entry using exclusively linked broker fills.
+
+    Absence from positions alone is never closure evidence. This path only reads
+    broker orders and records a complete priced exit; it sends no trading orders.
+    """
+    book = database.load_trade_book_entry_by_order_id(row['broker_order_id'])
+    if not book or book['strategy'] != VERSION or book['symbol'] != row['symbol']:
+        return False
+    if _number(book['shares']) != _owned_quantity(row) or not callable(context.record_exit):
+        return False
+    terminal = {'filled', 'canceled', 'expired', 'rejected'}
+    if any(leg.get('status') not in terminal for leg in legs):
+        return False
+    links = database.load_trade_book_order_links(book['id'])
+    order_ids = {link['order_id'] for link in links if link['order_role'] == 'EXIT' and link['order_id']}
+    if not order_ids or len(order_ids) > 20:
+        return False
+    with closing(database.get_connection()) as conn:
+        for order_id in order_ids:
+            owners = conn.execute('SELECT DISTINCT trade_book_id FROM trade_book_order_links WHERE order_id=?', (order_id,)).fetchall()
+            if len(owners) != 1 or owners[0]['trade_book_id'] != book['id']:
+                return False
+    exits = []
+    for order_id in sorted(order_ids):
+        order = context.request('GET', '/v2/orders/' + _uuid(order_id), params={'nested':'true'})
+        if (not isinstance(order, dict) or order.get('id') != order_id
+                or order.get('symbol') != row['symbol'] or order.get('side') != 'sell'
+                or order.get('status') not in terminal):
+            return False
+        quantity = _number(order.get('filled_qty'))
+        if quantity == 0:
+            continue
+        if (quantity <= 0 or _number(order.get('filled_avg_price')) <= 0
+                or _stamp(order.get('filled_at')) < _stamp(parent.get('filled_at'))):
+            return False
+        exits.append(order)
+    if sum((_number(order['filled_qty']) for order in exits), Decimal(0)) != _owned_quantity(row):
+        return False
+    open_orders = context.request('GET', '/v2/orders', params={'status':'open', 'symbols':row['symbol'], 'nested':'true', 'limit':500})
+    if not isinstance(open_orders, list) or open_orders:
+        return False
+    context.record_exit(row, exits)
+    _save(row['request_id'], state='closed', reason='External close reconciled from linked broker fills.', updated_at=clock())
+    return True
+
+
 def recover_entry(request_id, *, context, clock=time.time):
     row = _row(_uuid(request_id))
     if row is None:
@@ -558,6 +605,8 @@ def _manage(request_id, *, context, clock):
     positions = context.request('GET', '/v2/positions')
     own = [p for p in positions if p.get('symbol') == row['symbol']]
     if len(own) != 1 or _number(own[0].get('qty')) != remaining or remaining != remaining.to_integral_value():
+        if not own and reconcile_external_close(row, parent, legs, context=context, clock=clock):
+            return
         _save(request_id, state='attention', reason='Partial or mixed holdings require reconciliation; no additional order is sent.')
         return
     if any(leg.get('status') not in ('new','accepted','pending_new','held','partially_filled') or _number(leg.get('qty'))-_number(leg.get('filled_qty','0')) != remaining for leg in legs):
