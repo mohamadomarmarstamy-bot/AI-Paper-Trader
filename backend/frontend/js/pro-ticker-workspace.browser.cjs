@@ -22,6 +22,7 @@ test('Pro Ticker desktop/mobile tabs, data, filtering, export and fail-closed re
   if(req.url==='/'){res.setHeader('Content-Type','text/html; charset=utf-8');res.end('<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head><body><main style="padding:16px;max-width:1100px;margin:auto">'+section+'</main><script src="/js/pro-ticker-workspace.js"></script><script src="/js/pro-ticker-signals.js"></script><script src="/js/pro-ticker-entry-settings.js"></script><script>window.loadProTickerWorkspace();window.loadProTickerSignals()</script></body></html>');return;}
   if(req.url==='/style.css'){res.setHeader('Content-Type','text/css');res.end(fs.readFileSync(path.join(frontend,'style.css')));return;}
   if(req.url==='/js/pro-ticker-workspace.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(__dirname,'pro-ticker-workspace.js')));return;}
+  if(req.url==='/js/pro-ticker-entry-settings.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(__dirname,'pro-ticker-entry-settings.js')));return;}
   if(req.url==='/js/pro-ticker-signals.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(__dirname,'pro-ticker-signals.js')));return;}
   if(req.url.startsWith('/auto-trader/pro-ticker/market-reference?')){
    assert.equal(req.method,'GET');assert.equal(new URL(req.url,origin).searchParams.get('symbol'),'AAPL');
