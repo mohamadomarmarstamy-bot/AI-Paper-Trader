@@ -381,9 +381,10 @@ def submit_entry(request_id, symbol, *, context, clock=time.time):
         shares = int((target / sizing_price).to_integral_value(rounding=ROUND_DOWN))
         if not 1 <= shares <= 100000:
             raise EntryBlocked('The configured dollar target cannot buy a supported whole-share quantity.')
-        candidate = context.scan(symbol)
-        if not isinstance(candidate, dict) or candidate.get('symbol') != symbol or candidate.get('scanner_stale') is not False:
-            raise EntryBlocked('Scanner coverage is unavailable for this stock. No buy was sent.')
+        # Owner selection authorizes entry independently of research grades or
+        # scanner coverage. The scanner still manages subsequent owned exits.
+        candidate = {'symbol':symbol, 'signal':'OWNER_SUBMITTED',
+                     'entry_source':'owner_manual_selection', 'score':None, 'confidence':None}
         risk = premarket.risk(context,market_session,symbol=symbol, shares=shares, side='buy')
         maximum = risk.get('max_allowed_shares')
         if (risk.get('approved') is not True and isinstance(maximum, int)
@@ -391,7 +392,7 @@ def submit_entry(request_id, symbol, *, context, clock=time.time):
             shares = maximum
             risk = premarket.risk(context,market_session,symbol=symbol, shares=shares, side='buy')
         if risk.get('approved') is not True:
-            raise EntryBlocked('Existing buying-power, spread, position or order risk limits blocked this buy.')
+            raise EntryBlocked(str(risk.get('error') or 'Buying-power, position or order limits blocked this buy.'))
         context.validate()
         if _account(context) != fingerprint:
             raise EntryBlocked('PAPER account changed during execution checks.')

@@ -132,14 +132,30 @@ class ManualScannerTests(unittest.TestCase):
         self.assertEqual(self.submit()['state'], 'blocked')
         self.context.submit.assert_not_called()
 
-    def test_stale_quote_and_absent_scanner_coverage_block_entry(self):
+    def test_stale_quote_blocks_entry(self):
         self.context.quote.side_effect = lambda s:{'symbol':s,'ask':'10','timestamp':datetime.fromtimestamp(self.now-31,timezone.utc).isoformat()}
         self.assertEqual(self.submit()['state'], 'blocked')
         self.context.submit.assert_not_called()
 
-    def test_scanner_missing_data_blocks_buy(self):
-        self.context.scan.side_effect = lambda s: None
-        self.assertEqual(self.submit()['state'], 'blocked')
+    def test_owner_selection_buys_without_scanner_coverage(self):
+        self.context.scan.side_effect = RuntimeError('No scanner history')
+        self.assertEqual(self.submit()['state'], 'open')
+        self.context.scan.assert_not_called()
+        self.assertEqual(self.context.submit.call_args.kwargs['candidate']['signal'],'OWNER_SUBMITTED')
+
+    def test_d_grade_is_informational_and_does_not_veto_owner_buy(self):
+        self.request_id = str(uuid.uuid4())
+        review = submit_manual_signal({'symbol':self.symbol,'request_id':self.request_id},
+            quote_fetcher=lambda s:None, clock=lambda:self.now,
+            analyzer=lambda s:{'symbol':s,'signal':'SELL','score':-3,'confidence':80,
+                'indicators':{'sma_20':10,'sma_50':11,'rsi':30,'five_day_momentum':-5,'volume_ratio':1},'reason':[]})
+        self.assertEqual(review['signal']['entry_grade']['grade'],'D')
+        self.assertEqual(self.submit()['state'],'open')
+        self.context.submit.assert_called_once()
+
+    def test_specific_risk_rejection_is_visible(self):
+        self.context.risk.return_value={'approved':False,'error':'Available buying power is too low.'}
+        self.assertEqual(self.submit()['reason'],'Available buying power is too low.')
         self.context.submit.assert_not_called()
 
     def test_worker_heartbeat_is_required_before_buy(self):
