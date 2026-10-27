@@ -101,3 +101,42 @@ Settings use a dedicated revision, independent of scan writes, and remain in SQL
 The meme workspace has Home (/meme-coins), Trades (/meme-coins/trades), Scanner (/meme-coins/scanner), and Settings (/meme-coins/settings). Every route requires the owner session. Home shows cash, current marked equity, P/L since the original $1,000, open holdings and separately scoped realized/open P/L. Equity history begins on rollout, stores at most 1,440 minute-spaced observations, and leaves unavailable observations as gaps. The trades queue shows the existing automatic confirmation window using server timestamps; timer completion does not authorize or guarantee a buy. Scanner counts/filters describe the latest scan only, with incomplete discovery backoff shown separately. Navigation does not write settings or trigger orders.
 
 Second-price confirmation is configurable: enabled by default, wait 10–180 whole seconds (default 45), minimum rise 0–20% (default 0.5), maximum rise 0.1–100% (default 8), with minimum strictly below maximum. Off skips only this wait/continuation check. All other entry and exit rules remain active. The baseline stays fixed until expiry (at least 180 seconds, or wait + 60) instead of restarting after each failed attempt. Discovery retains each batch long enough for the configured wait plus two scans. The queue timer uses the saved wait. Settings are persisted; existing configurations keep confirmation enabled with original thresholds.
+
+### PAPER exploration and prospective learning
+
+Settings offers `filtered` (existing full checks), `explore` (no entry filters),
+and `learned` (liquidity/volume minimums only). Exploration/learned modes bypass
+momentum, pool-age, activity, continuation, mint-authority and concentration
+checks; neither mode verifies sellability. They require a valid Solana mint and
+pool identity plus a positive finite observed price. Other metrics may be null,
+never zero-filled. Entry costs still use the modeled 1% + $0.10 per side.
+Cash, daily loss brake, position cap, pause, re-entry cooldown and existing exit
+rules remain enforced. Only PAPER simulations exist; no wallet or swap is added.
+
+Every new closed trade is appended atomically with state updates to
+`solana_meme_learning_outcomes`, independently of the latest-200 closed list.
+The journal preserves winners, losers, entry features, entry mode, frozen exit
+policy, modeled net result, excursion and a plain-language note. All records
+are retained; the UI shows the latest 20 and lifetime counts. Older trades
+without captured entry features are not backfilled or invented.
+
+Automatic learning is opt-in. After at least 30 exploration closes under the
+same exit/size policy, including at least five wins, five losses and ten mints,
+one transparent liquidity/volume heuristic is frozen from the winning training
+examples. No settings change occurs yet. The next 20 *newly opened* exploration
+trades tagged with that candidate form its separate forward evaluation. A rule
+needs at least eight matching trades, five nonmatching trades, five mints,
+four matching winners, positive matching average net return and higher matching
+average return than both the baseline and nonmatching trades. Only then does it
+automatically set mode to liquidity/volume-only and apply its saved minimums.
+It does not change exit rules, trade sizing or loss limits. Settings revision
+advances so unsaved operator edits cannot overwrite the automatic change.
+Failed proposals leave exploration running; another proposal waits for 20 more
+closes. Pausing learning prevents promotion; changing exit/size policy invalidates
+the proposal. Analysis uses the latest 1,000 archived outcomes, training at most
+100, but the archive itself is not trimmed.
+
+This is an experimental selection heuristic, not a trained AI forecast or proof
+of profitability. Provider prices, omitted liquidity/sellability checks and the
+limited discovery sample can make simulated outcomes unrealistic. The forward
+comparison is diagnostic and does not establish statistical significance.
