@@ -399,3 +399,23 @@ class ManualScannerTests(unittest.TestCase):
         self.tick()
         self.assertEqual(self.context.close.call_count,1)
         self.assertEqual(saved_entries()[self.request_id]['state'],'closed')
+
+
+    def test_partial_entry_missing_completion_time_still_gets_one_safety_exit(self):
+        self.journal_context()
+        def partial(**kwargs):
+            self.partial_buy(**kwargs)
+            self.orders['ptm-'+uuid.UUID(self.request_id).hex]['filled_at']=None
+            return {'success':True}
+        self.context.submit.side_effect=partial
+        self.context.cancel=Mock(side_effect=self.cancel_partial)
+        self.submit()
+        self.tick()
+        self.assertEqual(self.context.close.call_count,1)
+        self.assertEqual(self.context.close.call_args.kwargs['shares'],10)
+        self.tick()
+        self.tick()
+        self.assertEqual(self.context.close.call_count,1)
+        self.assertEqual(saved_entries()[self.request_id]['state'],'attention')
+        with closing(database.get_connection()) as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM trade_book').fetchone()[0],0)

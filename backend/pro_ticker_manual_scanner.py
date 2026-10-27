@@ -177,7 +177,12 @@ def persist_entry_fill(row, order):
         return
     quantity = _number(order['filled_qty'])
     price = _number(order['filled_avg_price'])
-    stamp = order['filled_at']
+    stamp = order.get('filled_at')
+    if stamp is None and order.get('status') != 'filled':
+        # A canceled partial entry may have no broker completion timestamp.
+        # Never invent it, and never block the safety liquidation for a
+        # missing journal timestamp. Exact accounting then needs fill review.
+        return
     _stamp(stamp)
     if not 0 < quantity <= row['shares'] or quantity != quantity.to_integral_value() or price <= 0:
         raise ValueError('Complete priced entry required for journal posting.')
