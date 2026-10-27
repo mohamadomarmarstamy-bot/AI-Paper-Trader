@@ -16250,6 +16250,13 @@ app.include_router(build_manual_signal_router(
 ))
 
 
+from day_trader_lab import build_router as build_day_trader_router
+app.include_router(build_day_trader_router(
+    require_session=require_app_session, data_request=alpaca_market_data_request,
+    broker_read=alpaca_paper_request, feed=lambda: os.getenv('APP_QUOTE_FEED','iex'),
+))
+
+
 from pro_ticker_workspace import build_workspace_router
 app.include_router(build_workspace_router(require_session=require_app_session))
 
