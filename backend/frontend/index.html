@@ -42,7 +42,7 @@
 
     <link
         rel="stylesheet"
-        href="style.css?v=filled-activity-v1"
+        href="style.css?v=compact-activity-v1"
     >
 
 </head>
@@ -769,9 +769,9 @@
                     <div class="section-heading"><p class="panel-kicker">Activity</p><h2 id="activity-section-title">Trade Activity</h2><p>Review completed paper-trading activity and account history.</p></div>
                     <div class="panel-actions"><button id="refresh-activity-button" class="secondary-button" type="button">Refresh activity</button><span id="activity-status" role="status">Loading confirmed fills…</span></div>
                     <section class="activity-grid trade-activity-grid">
-                        <article class="panel history-panel"><h2>Buys</h2><p>Executed shares and average fill prices.</p><div class="table-wrapper"><table><caption class="visually-hidden">Confirmed PAPER buys</caption><thead><tr><th>Filled</th><th>Stock</th><th>Shares</th><th>Buy price</th><th>Amount</th></tr></thead><tbody id="activity-buys"><tr><td colspan="5">Loading…</td></tr></tbody></table></div></article>
-                        <article class="panel history-panel"><h2>Sells</h2><p>Executed shares and average fill prices, including protective exits.</p><div class="table-wrapper"><table><caption class="visually-hidden">Confirmed PAPER sells</caption><thead><tr><th>Filled</th><th>Stock</th><th>Shares</th><th>Sell price</th><th>Proceeds</th></tr></thead><tbody id="activity-sells"><tr><td colspan="5">Loading…</td></tr></tbody></table></div></article>
-                        <article class="panel history-panel activity-completed"><h2>Completed trades by stock</h2><p>Fully sold buy lots only. Prices are share-weighted; expand a stock to see each completed buy and its sell fills.</p><p class="muted">FIFO display across the available PAPER account fills. This is separate from bot journal and tax accounting. Missing older buys, stock splits and other corporate actions can affect matching.</p><div class="table-wrapper"><table><caption class="visually-hidden">Fully sold lots grouped by stock</caption><thead><tr><th>Stock / details</th><th>Shares sold</th><th>Average buy</th><th>Average sell</th><th>Cost</th><th>Proceeds</th><th>Profit / loss</th></tr></thead><tbody id="activity-completed"><tr><td colspan="7">Loading…</td></tr></tbody></table></div></article>
+                        <article class="panel history-panel"><h2>Buys</h2><p>Executed shares and average fill prices.</p><div class="table-wrapper" tabindex="0" role="region" aria-label="Scrollable trade history"><table><caption class="visually-hidden">Confirmed PAPER buys</caption><thead><tr><th>Filled</th><th>Stock</th><th>Shares</th><th>Buy price</th><th>Amount</th></tr></thead><tbody id="activity-buys"><tr><td colspan="5">Loading…</td></tr></tbody></table></div></article>
+                        <article class="panel history-panel"><h2>Sells</h2><p>Executed shares and average fill prices, including protective exits.</p><div class="table-wrapper" tabindex="0" role="region" aria-label="Scrollable trade history"><table><caption class="visually-hidden">Confirmed PAPER sells</caption><thead><tr><th>Filled</th><th>Stock</th><th>Shares</th><th>Sell price</th><th>Proceeds</th></tr></thead><tbody id="activity-sells"><tr><td colspan="5">Loading…</td></tr></tbody></table></div></article>
+                        <article class="panel history-panel activity-completed"><h2>Completed trades by stock</h2><p>Fully sold buy lots only. Prices are share-weighted; expand a stock to see each completed buy and its sell fills.</p><p class="muted">FIFO display across the available PAPER account fills. This is separate from bot journal and tax accounting. Missing older buys, stock splits and other corporate actions can affect matching.</p><div class="table-wrapper" tabindex="0" role="region" aria-label="Scrollable trade history"><table><caption class="visually-hidden">Fully sold lots grouped by stock</caption><thead><tr><th>Stock / details</th><th>Shares sold</th><th>Average buy</th><th>Average sell</th><th>Cost</th><th>Proceeds</th><th>Profit / loss</th></tr></thead><tbody id="activity-completed"><tr><td colspan="7">Loading…</td></tr></tbody></table></div></article>
                     </section>
                 </section>
 
