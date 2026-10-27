@@ -7,9 +7,9 @@ exists in this implementation. No live-trading control is exposed.
 
 ## Operation
 
-The owner can save up to eight full mint addresses and opt into latest token
+The owner can save up to 20 full mint addresses and opt into latest token
 profile discovery. New entries are disabled until **Start paper bot** is clicked.
-The server checks every 60 seconds while enabled or paper positions remain open,
+The server checks every 10 seconds while enabled or paper positions remain open,
 including when the page is closed. **Pause new buys** keeps existing simulated
 positions under exit management. **Scan now** performs a read-only observation
 and applies the paper entry rules only if entries were already enabled.
@@ -39,8 +39,8 @@ require an authenticated owner session and same-origin JSON requests.
 - Default $50/trade, three simultaneous positions, available virtual cash, and
   a $50 daily marked-equity loss brake. The first complete observation after UTC
   midnight establishes that day's baseline. Missing marks block new entries.
-- Only three on-chain candidate checks and eight observed mints per cycle.
-  Discovery holds each batch for two scans to support confirmation, then rotates;
+- Only three on-chain candidate checks and 20 observed mints per cycle.
+  Discovery holds each batch for six scans (about one minute) to support confirmation, then rotates;
   open positions and the saved watchlist have priority.
 
 These thresholds are deliberately fixed hypotheses, not optimized or proven
