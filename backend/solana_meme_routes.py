@@ -35,7 +35,7 @@ def build_router(*,require_session):
             raise HTTPException(422,'Settings changes and expected revision required.')
         try:return await run_in_threadpool(configure,payload['changes'],payload['expected_revision'])
         except Conflict as error:raise HTTPException(409,str(error)) from None
-        except (ValueError,TypeError,KeyError):raise HTTPException(422,'Invalid paper settings. Use supported bounds and mint addresses only.') from None
+        except (ValueError,TypeError,KeyError,OverflowError):raise HTTPException(422,'Invalid paper settings. Use finite nonnegative numbers, percentages up to 100, whole coin counts, and valid mint addresses. Check confirmation range and increase-only virtual funding.') from None
     @router.post('/meme-coins/scan')
     async def scan(request:Request):
         payload=await body(request)

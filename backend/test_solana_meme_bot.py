@@ -64,7 +64,7 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(result['config']['minimum_liquidity_usd'],100000)
         self.assertEqual(result['config']['minimum_m5_volume_usd'],20000)
         self.assertEqual(result['config']['trade_usd'],75)
-        for value in (-1,float('nan'),float('inf'),True,1000000001):
+        for value in (-1,float('nan'),float('inf'),True):
             with self.assertRaises(ValueError):self.configure({'minimum_liquidity_usd':value})
         self.configure({'minimum_liquidity_usd':0,'minimum_m5_volume_usd':0})
         self.assertEqual(bot.public()['rules']['minimum_liquidity_usd'],0)
@@ -142,7 +142,7 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(len(self.tick()['positions']),1)
 
     def test_confirmation_bounds_and_discovery_hold(self):
-        for change in ({'confirmation_enabled':1},{'confirmation_seconds':9},{'confirmation_seconds':10.5},
+        for change in ({'confirmation_enabled':1},{'confirmation_seconds':-1},
                        {'confirmation_min_percent':9},{'confirmation_max_percent':0}):
             with self.assertRaises(ValueError):self.configure(change)
         self.configure({'confirmation_seconds':180})
@@ -196,7 +196,7 @@ class EngineTests(unittest.TestCase):
         self.configure({'paper_capital_usd':100000})
         self.assertEqual(bot.public()['cash_usd'],result['cash_usd'])
         self.assertEqual(len(bot.public()['funding_events']),1)
-        for change in ({'paper_capital_usd':1000},{'max_positions':1001},{'max_positions':2.5}):
+        for change in ({'paper_capital_usd':1000},{'max_positions':-1},{'max_positions':2.5}):
             with self.assertRaises(ValueError):self.configure(change)
 
     def test_all_thousand_positions_are_monitored_without_starving_discovery(self):
@@ -308,11 +308,27 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(len(bot.select_candidates(state,profiles,self.now)),37)
         self.assertEqual(bot.public()['config']['scan_interval_seconds'],15)
         self.assertEqual(bot.public()['rules']['cycle_seconds'],15)
-        for changes in ({'scan_batch_size':0},{'scan_batch_size':201},{'scan_batch_size':1.5},
-                        {'scan_interval_seconds':4},{'scan_interval_seconds':61},{'scan_interval_seconds':True}):
+        for changes in ({'scan_batch_size':-1},{'scan_batch_size':1.5},{'scan_interval_seconds':-1},{'scan_interval_seconds':True}):
             with self.assertRaises(ValueError):self.configure(changes)
         self.configure({'scan_batch_size':1,'scan_interval_seconds':5})
         self.assertGreaterEqual(bot.effective_cycle_seconds(bot.load()[0]['config'],1000),14)
+
+    def test_numeric_settings_have_no_arbitrary_upper_cap(self):
+        changes={k:1000000000000 for k,v in bot.DEFAULTS.items() if type(v) in (int,float) and not k.endswith('_percent')}
+        changes.update({k:100 for k in bot.DEFAULTS if k.endswith('_percent')})
+        changes['daily_loss_usd']=500
+        self.configure(changes)
+        self.assertEqual(bot.public()['config']['daily_loss_usd'],500)
+        for key,value in changes.items():self.assertEqual(bot.public()['config'][key],value)
+        for key in changes:
+            with self.assertRaises(ValueError):self.configure({key:-1})
+            if key.endswith('_percent'):
+                with self.assertRaises(ValueError):self.configure({key:100.01})
+        self.configure({k:0 for k in changes if k!='paper_capital_usd'})
+        state,_=bot.load()
+        self.assertEqual(bot.select_candidates(state,[MINT]),[])
+        self.assertGreater(bot.effective_cycle_seconds(state['config'],0),0)
+        self.assertGreater(bot.batch_hold_cycles(state['config']),0)
 
     def test_smaller_scan_batches_rotate_watchlist_and_retain_confirmation(self):
         state=bot.initial();state['config'].update(scan_batch_size=1,scan_interval_seconds=5,watchlist=[MINT,OTHER],discover=False)
@@ -388,7 +404,7 @@ class EngineTests(unittest.TestCase):
     def test_stale_revision_and_unknown_settings_are_rejected(self):
         self.configure({'trade_usd':100})
         with self.assertRaises(bot.Conflict):bot.configure({'enabled':True},0)
-        for changes in ({'private_key':'secret'},{'trade_usd':float('nan')},{'enabled':'true'},{'watchlist':['DOGE']},{'max_positions':1001}):
+        for changes in ({'private_key':'secret'},{'trade_usd':float('nan')},{'enabled':'true'},{'watchlist':['DOGE']},{'max_positions':-1}):
             with self.assertRaises(ValueError):self.configure(changes)
     def test_manual_scan_while_paused_does_not_buy(self):
         self.configure({'watchlist':[MINT],'discover':False});self.tick(force=True)
