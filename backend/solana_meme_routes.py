@@ -52,6 +52,20 @@ def build_router(*,require_session):
         except Conflict as error:raise HTTPException(409,str(error)) from None
         except copy_bot.DataUnavailable as error:raise HTTPException(503,str(error)) from None
         except (ValueError,TypeError,KeyError,OverflowError):raise HTTPException(422,'Invalid copy-paper settings. Use finite nonnegative values and increase-only positive virtual capital.') from None
+    @router.post('/meme-coins/copy/connections')
+    async def copy_connections(request:Request):
+        payload=await body(request)
+        if payload!={}:raise HTTPException(422,'This connection test takes no credentials or execution inputs.')
+        from solana_copy_setup import check_connections
+        return await run_in_threadpool(check_connections)
+    @router.post('/meme-coins/copy/seeds')
+    async def copy_seeds(request:Request):
+        payload=await body(request)
+        if not isinstance(payload,dict) or set(payload)!={'expected_revision'}:raise HTTPException(422,'Current copy revision required.')
+        from solana_copy_setup import seed_wallets
+        try:return await run_in_threadpool(seed_wallets,payload['expected_revision'])
+        except Conflict as error:raise HTTPException(409,str(error)) from None
+        except (ValueError,TypeError):raise HTTPException(422,'Invalid copy revision.') from None
     @router.post('/meme-coins/copy/close')
     async def copy_close(request:Request):
         payload=await body(request,262144)

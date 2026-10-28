@@ -50,7 +50,7 @@ LIMITATIONS = [
     'Mint/freeze checks do not establish safety, locked liquidity, sellability, or absence of insider/wash trading.',
     'Costs are assumptions. Real slippage, priority fees, MEV, taxes, liquidity loss and failed exits can be worse.',
     'Stops are sampled every 10 seconds and cannot guarantee a price. Missing observations leave exits unresolved.',
-    'Daily loss brake uses marked paper equity since UTC midnight; unknown marks block new entries.',
+    'Daily loss brake uses a conservative equity floor from the confirmed UTC daily baseline; unavailable long-only holdings count as a full loss for entry risk only.',
 ]
 SCHEMA = '''CREATE TABLE IF NOT EXISTS solana_meme_paper_state (
  id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL,
@@ -106,6 +106,27 @@ def initialize(conn):
     conn.commit()
 
 
+def entry_risk(state,now):
+    """Conservative long-only PAPER equity floor, never a portfolio valuation."""
+    floor=state['cash_usd'];missing=0
+    for position in state['positions'].values():
+        value=position.get('marked_value_usd');at=position.get('marked_at')
+        fresh=position.get('mark_available',True) and learner.finite(at) and 0<=now-at<=120 and learner.finite(value) and value>=0
+        if fresh:floor+=value
+        else:missing+=1  # Reserve the full loss of this already-paid holding.
+    today=time.strftime('%Y-%m-%d',time.gmtime(now))
+    baseline=state.get('day_equity')
+    known=state.get('day')==today and learner.finite(baseline)
+    limit=state['config']['daily_loss_usd']
+    drawdown=max(0,baseline-floor) if known else None
+    allowed=known and floor-baseline>-limit
+    return {'equity_floor_usd':floor,'missing_count':missing,
+            'daily_loss_limit_usd':limit,'conservative_drawdown_usd':round(drawdown,4) if known else None,
+            'remaining_usd':round(max(0,limit-drawdown),4) if known else None,
+            'entries_allowed':allowed,'reason':None if allowed else 'daily_loss_limit' if known else 'daily_baseline_unknown',
+            'basis':'Fresh holding marks; each unavailable long-only PAPER holding contributes zero to the risk floor only. No sale or P/L is posted.'}
+
+
 def public():
     state,revision=load()
     positions=[];value=state['cash_usd'];complete=True
@@ -125,7 +146,7 @@ def public():
     with closing(database.get_connection()) as conn:learning_summary=learner.summary(conn)
     return {'learning_email_configured':learning_mail.configured(),'learning_summary':learning_summary,'version':VERSION,'paper':True,'live_execution_enabled':False,'revision':state.get('settings_revision',0),
             **{k:v for k,v in state.items() if k not in ('positions','observations','cooldowns','discovery_batch','discovery_uses','discovery_offset','settings_revision','unavailable_until','watch_batch','watch_uses','watch_offset')},
-            'positions':positions,'paper_equity_usd':round(value,4) if complete else None,
+            'positions':positions,'paper_equity_usd':round(value,4) if complete else None,'risk_guard':entry_risk(state,now),
             'valuation':{'missing_count':sum(p['current_modeled_value_usd'] is None for p in positions),
                          'indicative_equity_usd':round(indicative,4) if indicative_complete else None,
                          'oldest_mark_at':min(mark_times) if mark_times else None},
@@ -556,7 +577,8 @@ def tick(*,providers=None,clock=time.time,force=False,manual_exits=None,manual_p
             marks_complete=all(address in snapshots or (manual_exits is not None and address not in targeted and p.get('mark_available',True) and 0<=observed-p.get('marked_at',0)<=120) for address,p in state['positions'].items())
             day=time.strftime('%Y-%m-%d',time.gmtime(observed))
             if state['day']!=day and marks_complete:state.update(day=day,day_equity=equity)
-            brake=not marks_complete or state['day']!=day or equity-state['day_equity']<=-config['daily_loss_usd']
+            risk=entry_risk(state,observed)
+            equity=risk['equity_floor_usd'];brake=not risk['entries_allowed']
             state['candidates']=[];checks=0
             for address in candidates:
                 row=snapshots.get(address)
@@ -565,7 +587,7 @@ def tick(*,providers=None,clock=time.time,force=False,manual_exits=None,manual_p
                 reason=entry_reason(row,state['observations'].get(address),observed,config) if address not in state['positions'] and address not in closed_this_cycle else None
                 if address in state['positions']:reason='Existing paper position is being monitored.'
                 elif address in closed_this_cycle or state['cooldowns'].get(address,0)>observed:reason='One-hour re-entry cooldown.'
-                elif brake:reason='Paper daily loss brake or incomplete position marks blocks new entries.'
+                elif brake:reason='Daily loss budget exhausted under conservative holding assumptions.' if risk['reason']=='daily_loss_limit' else 'Waiting for a confirmed daily equity baseline.'
                 elif not config['enabled']:reason='New paper buys are paused.'
                 elif config['trade_usd']==0:reason='Paper trade amount is zero.'
                 elif len(state['positions'])>=config['max_positions']:reason='Maximum paper positions reached.'
