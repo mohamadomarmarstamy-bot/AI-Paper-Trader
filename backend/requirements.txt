@@ -8,6 +8,7 @@ pandas>=2.2,<3.0
 numpy>=2.0,<3.0
 
 requests>=2.32
+cryptography>=46,<51
 
 lxml>=5.2
 html5lib>=1.1

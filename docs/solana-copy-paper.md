@@ -4,7 +4,9 @@
 
 ## Data connection
 
-Set `BIRDEYE_API_KEY` on the server. Do not put it in the browser, repository, URLs or chat. The key's plan must allow these read-only analytics endpoints on `public-api.birdeye.so`:
+Open **Profile** at `/meme-coins/profile` to save your name, optional public Solana wallet address and Birdeye API key. The wallet address is a profile detail; it does not change the fixed copied-trader cohort or connect a wallet. Never enter a seed phrase or wallet private key. Blank API-key input preserves the existing key; replace by pasting a new key, or explicitly remove it. Saving does not start copying or certify provider access.
+
+The owner-only, same-origin profile endpoint returns connection state, never the saved key. Credentials are Fernet-encrypted in a separate singleton profile table. A generated owner-readable-only encryption key is kept alongside the persistent database as `<DATABASE_PATH>.profile-key`; retain this file securely with the volume across redeployments, and back it up separately from database exports. Losing it requires replacing the API key in Profile. The browser never stores the key in local/session storage or repopulates it. Profile updates use revision checks to prevent stale-tab overwrites. An existing server `BIRDEYE_API_KEY` is used until a profile key is saved or explicitly removed; removal suppresses that fallback. Do not place API keys in the repository, URLs or chat. The key's plan must allow these read-only analytics endpoints on `public-api.birdeye.so`:
 
 - GET `/wallet/v2/leaderboard`
 - POST `/wallet/v2/pnl/details` (analytics, not execution)

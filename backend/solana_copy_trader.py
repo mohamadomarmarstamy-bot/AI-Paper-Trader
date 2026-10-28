@@ -36,7 +36,9 @@ class DataUnavailable(ValueError):
 
 
 def configured():
-    return bool(os.getenv('BIRDEYE_API_KEY', '').strip())
+    import solana_profile
+    try: return bool(solana_profile.api_key())
+    except solana_profile.Unavailable: return False
 
 
 def initial():
@@ -128,8 +130,11 @@ def configure(changes, expected_revision):
 class Birdeye:
     def request(self, path, *, params=None, payload=None):
         global _cooling_until
-        key = os.getenv('BIRDEYE_API_KEY', '').strip()
-        if not key: raise DataUnavailable('BIRDEYE_API_KEY is not configured. No wallets or trades are invented.')
+        import solana_profile
+        try: key = solana_profile.api_key()
+        except solana_profile.Unavailable:
+            raise DataUnavailable('Replace the saved API key in Profile.') from None
+        if not key: raise DataUnavailable('Add a Birdeye API key in Profile. No wallets or trades are invented.')
         with _lock:
             now = time.monotonic()
             while _calls and now-_calls[0] >= 60: _calls.popleft()

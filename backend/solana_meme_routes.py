@@ -1,7 +1,7 @@
 from pathlib import Path
 import json
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 from pro_ticker_http_security import require_same_origin
 from solana_meme_bot import public, configure, tick, manual_close, Conflict
@@ -10,6 +10,24 @@ from solana_meme_bot import public, configure, tick, manual_close, Conflict
 def build_router(*,require_session):
     router=APIRouter()
     import solana_copy_trader as copy_bot
+    import solana_profile as profile
+    @router.get('/meme-coins/profile')
+    def profile_page(request:Request):
+        require_session(request)
+        return FileResponse(Path(__file__).parent/'frontend'/'meme-profile.html',headers={'Cache-Control':'no-store'})
+    @router.get('/meme-coins/profile/status')
+    def profile_status(request:Request):
+        require_session(request)
+        return JSONResponse(profile.public(),headers={'Cache-Control':'no-store'})
+    @router.post('/meme-coins/profile')
+    async def profile_save(request:Request):
+        payload=await body(request)
+        try:
+            result=await run_in_threadpool(profile.save,payload)
+            return JSONResponse(result,headers={'Cache-Control':'no-store'})
+        except Conflict as error:raise HTTPException(409,str(error)) from None
+        except profile.Unavailable as error:raise HTTPException(503,str(error)) from None
+        except (ValueError,TypeError):raise HTTPException(422,'Invalid profile. Use a name up to 100 characters, a valid Solana wallet address, and an API key without spaces. Choose replace or remove.') from None
     @router.get('/meme-coins')
     @router.get('/meme-coins/trades')
     @router.get('/meme-coins/scanner')
