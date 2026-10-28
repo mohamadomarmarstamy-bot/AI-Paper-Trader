@@ -176,3 +176,5 @@ legacy points retain the original $1,000 basis. Funding changes are identified
 in the tooltip rather than presented as trading gains.
 
 History has its own authenticated route (/meme-coins/history), with completed-trade cards colored by net P/L (green wins, red losses, neutral flat). The journal/evaluation history moved there too. The home control toggles Start/Stop from the saved enabled flag; enabled is red Stop paper bot. Stop pauses new entries but preserves monitoring/exits for existing positions.
+
+History includes a separate Settings changes panel showing actual old/new values, actor, timestamp, automatic-evaluation reason and email status. Existing automatic changes are read from their permanent evaluation archive; manual changes are archived atomically from this release onward. No-op saves and no-change evaluations are excluded. The panel shows the latest 50 actual changes independently of the latest 20 evaluations. Manual audit entries do not enqueue automatic-change emails. Broker watchdog emails remain separate health alerts.

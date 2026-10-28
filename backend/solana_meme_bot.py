@@ -143,6 +143,7 @@ def configure(changes,expected_revision):
                 raise ValueError('Setting outside paper experiment bounds.')
     state,revision=load()
     if state.get('settings_revision',0)!=expected_revision:raise Conflict('Settings changed. Refresh before saving.')
+    audit_before={k:deepcopy(state['config'][k]) for k in changes if changes[k]!=state['config'][k]}
     if 'paper_capital_usd' in changes:
         added=changes['paper_capital_usd']-state['config']['paper_capital_usd']
         if added<0:raise ValueError('Virtual capital can only increase; existing results are preserved.')
@@ -165,6 +166,9 @@ def configure(changes,expected_revision):
         count=conn.execute('UPDATE solana_meme_paper_state SET state_json=?,revision=revision+1 WHERE id=1 AND revision=?',
                            (json.dumps(state,allow_nan=False),revision)).rowcount
         if count!=1:raise Conflict('Settings changed. Refresh before saving.')
+        if audit_before:
+            audit={'id':str(uuid.uuid4()),'at':time.time(),'actor':'You','type':'Manual update','before':audit_before,'after':{k:deepcopy(state['config'][k]) for k in audit_before}}
+            conn.execute('INSERT INTO solana_meme_manual_changes VALUES (?,?,?)',(audit['id'],audit['at'],json.dumps(audit,allow_nan=False)))
         conn.commit()
     return public()
 

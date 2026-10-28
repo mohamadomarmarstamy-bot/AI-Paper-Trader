@@ -40,6 +40,11 @@ class LearningTests(unittest.TestCase):
         self.assertEqual(self.state['learning']['change_count'],2)
         self.assertEqual(self.state['config']['minimum_m5_volume_usd'],50000)
         self.assertEqual(self.count('solana_meme_learning_evaluations'),2)
+        with database.get_connection() as conn:
+            result=learning.summary(conn)
+            self.assertEqual(result['settings_change_count'],2)
+            self.assertTrue(all(r['changed'] for r in result['settings_changes']))
+            self.assertTrue(all(r['actor']=='Bot' for r in result['settings_changes']))
     def test_no_evidence_and_no_improvement_still_count_fifty_without_email(self):
         self.process([self.row(i,False) for i in range(50)])
         self.assertEqual(self.state['learning']['batch_count'],1)
