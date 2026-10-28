@@ -109,16 +109,26 @@ def initialize(conn):
 def public():
     state,revision=load()
     positions=[];value=state['cash_usd'];complete=True
+    indicative=state['cash_usd'];indicative_complete=True;mark_times=[]
+    now=time.time()
     for address,p in state['positions'].items():
-        fresh=p.get('mark_available',True) and p.get('marked_at') is not None and 0<=time.time()-p['marked_at']<=120
+        fresh=p.get('mark_available',True) and p.get('marked_at') is not None and 0<=now-p['marked_at']<=120
         mark=p.get('marked_value_usd') if fresh else None
         if mark is None:complete=False
         else:value+=mark
-        positions.append({'mint':address,**p,'position_id':position_reference(address,p),'mark_fresh':fresh,'current_modeled_value_usd':mark})
+        last=p.get('marked_value_usd');at=p.get('marked_at')
+        known=learner.finite(last) and last>=0 and learner.finite(at) and 0<=at<=now
+        if known:indicative+=last;mark_times.append(at)
+        else:indicative_complete=False
+        positions.append({'mint':address,**p,'position_id':position_reference(address,p),'mark_fresh':fresh,'current_modeled_value_usd':mark,
+                          'last_known_value_usd':last if known else None})
     with closing(database.get_connection()) as conn:learning_summary=learner.summary(conn)
     return {'learning_email_configured':learning_mail.configured(),'learning_summary':learning_summary,'version':VERSION,'paper':True,'live_execution_enabled':False,'revision':state.get('settings_revision',0),
             **{k:v for k,v in state.items() if k not in ('positions','observations','cooldowns','discovery_batch','discovery_uses','discovery_offset','settings_revision','unavailable_until','watch_batch','watch_uses','watch_offset')},
             'positions':positions,'paper_equity_usd':round(value,4) if complete else None,
+            'valuation':{'missing_count':sum(p['current_modeled_value_usd'] is None for p in positions),
+                         'indicative_equity_usd':round(indicative,4) if indicative_complete else None,
+                         'oldest_mark_at':min(mark_times) if mark_times else None},
             'realized_pnl_usd':round(sum(p['pnl_usd'] for p in state['closed']),4),
             'server_time':time.time(),'monitoring_count':len(state['positions']),'scan_budget_minimum_seconds':effective_cycle_seconds(state['config'],len(state['positions'])),
             'unrealized_pnl_usd':round(sum(p['current_modeled_value_usd']-p['cost_usd'] for p in positions),4) if complete else None,
@@ -253,6 +263,14 @@ class ReadOnlyProviders:
         data=self._json(requests.get('https://api.dexscreener.com/token-pairs/v1/solana/'+address,timeout=3))
         if not isinstance(data,list) or len(data)>500:raise ValueError('Pair evidence unavailable.')
         return data
+
+    def pool_pairs(self,pair):
+        mint(pair)
+        take_dex_budget()
+        data=self._json(requests.get('https://api.dexscreener.com/latest/dex/pairs/solana/'+pair,timeout=3))
+        rows=data.get('pairs') if isinstance(data,dict) else None
+        if not isinstance(rows,list) or len(rows)>500:raise ValueError('Original pool evidence unavailable.')
+        return rows
 
     def rpc(self,method,params):
         if method not in ('getAccountInfo','getTokenLargestAccounts'):raise ValueError('Read-only RPC method required.')
@@ -463,6 +481,19 @@ def tick(*,providers=None,clock=time.time,force=False,manual_exits=None,manual_p
                         normalized=normalize_pair(r,address,observed,config['entry_mode']!='filtered' or address in state['positions'])
                         if address not in state['positions'] or normalized['pair']==state['positions'][address]['pair']:complete=True
                     except (ValueError,KeyError,TypeError):pass
+                # Token listings can omit an older held pool. Ask for that exact
+                # pool first, within the same four-request recovery budget.
+                held=state['positions'].get(address)
+                if not complete and held and recoveries<4 and hasattr(providers,'pool_pairs'):
+                    recoveries+=1
+                    try:
+                        rows=providers.pool_pairs(held['pair']);raw.extend(rows)
+                        for row in rows:
+                            try:
+                                normalized=normalize_pair(row,address,observed,True)
+                                if normalized['pair']==held['pair']:complete=True
+                            except (ValueError,KeyError,TypeError):pass
+                    except Exception:pass
                 if not complete and recoveries<4 and hasattr(providers,'token_pairs'):
                     recoveries+=1
                     try:raw.extend(providers.token_pairs(address))
