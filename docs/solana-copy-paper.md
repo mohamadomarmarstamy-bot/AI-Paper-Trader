@@ -46,3 +46,16 @@ Save an optional **Solscan Pro API key** in Profile. The encrypted key has the s
 The read-only adapter calls `https://pro-api.solscan.io/v2.0/account/defi/activities` using the `token` authentication header. Frozen time windows and bounded 100-row pages are buffered before interpretation, with a separate 30-call/minute local budget and 429 cooldown. Validate the wallet actor, swap type, signature, timestamp and positive token amounts. Prefer one aggregate swap over its direct route records; ambiguous multiple independent swaps/routes are not copied. Deduplicate canonical transaction/asset/direction events permanently through the existing journal. This intentionally misses unsupported transactions rather than inventing direction. The adapter never connects a wallet or submits a transaction. Wallet links lead to Solscan for inspection.
 
 Contracts: [Birdeye gainers](https://data.birdeye.so/docs/data-api/wallet-networth-pnl/get-trader-gainers-losers), [Solscan swap history](https://pro-api.solscan.io/pro-api-docs/v2.0/reference/v2-account-defi-activities), [Solscan authorization](https://pro-api.solscan.io/pro-api-docs/v2.0/docs).
+
+## Owner-requested research follows and read-only connection checks
+
+`POST /meme-coins/copy/connections` requires the owner session, same-origin JSON and an empty body. It performs bounded, fixed-host requests for Birdeye realized-profit discovery, wallet P/L, meme metadata and swap history, plus Solscan swap history. It saves only safe status summaries/counts, not credentials or raw provider payloads, and creates no trades. HTTP 401/403 errors now identify the denied Birdeye endpoint. A successful request does not certify profitability or an end-to-end fill.
+
+`POST /meme-coins/copy/seeds` accepts the current settings revision and enrolls the two specifically reviewed PAPER research wallets below, idempotently and at the current time. Existing cursors, lots, cash and histories are preserved. Solscan is chosen when configured; otherwise the source is Birdeye. Historical buys are never backfilled. These explicitly requested research follows are labeled separately from the automatic full-history qualification policy; their source reports are not independent audits or future-profit claims. They still require accessible swap history, meme metadata, fresh quotes, sufficient virtual cash and the existing deduplication/ledger rules.
+
+Reviewed on 2026-10-28, using KOL Explorer's publisher-reported 90-day closed-position data:
+
+- Mr. Frog — `4DdrfiDHpmx55i4SPssxVzS9ZaKLb8qr45NKY9Er9nNh`; approximately $377,000 realized, 4,763 closed positions. Source: https://kolexplorer.com/kol/mr-frog
+- Numero — `A3W8psibkTUvjxs4LRscbnjux6TFDXdvD4m4GsGpQ2KJ`; approximately $65,100 realized, 310 closed positions. Source: https://kolexplorer.com/kol/numero
+
+Source numbers are preserved as external research evidence, not the app's full-history P/L, sell count or win-rate fields. Automatic discovery continues independently when the provider plan permits it. Enrolling research follows cannot repair an invalid API key or missing endpoint entitlement; connection checks must report those blockers honestly.

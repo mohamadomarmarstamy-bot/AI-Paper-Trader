@@ -76,6 +76,7 @@ def metrics(state, now):
 
 
 def public():
+    from solana_copy_setup import connection_status
     state, _ = load(); now = time.time(); own = metrics(state, now)
     regular = regular_metrics(); baseline = state.get('comparison_baseline')
     delta = regular['net_usd']-baseline['net_usd'] if baseline and regular['net_usd'] is not None else None
@@ -87,7 +88,7 @@ def public():
         events = [json.loads(r[0]) for r in conn.execute('SELECT details_json FROM solana_copy_events ORDER BY rowid DESC LIMIT 100')] if exists else []
         closed = [json.loads(r[0]) for r in conn.execute('SELECT details_json FROM solana_copy_closes ORDER BY rowid DESC LIMIT 100')] if exists else []
         totals = conn.execute("SELECT COUNT(*),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')),0),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')>0),0) FROM solana_copy_closes").fetchone() if exists else (0,0,0)
-    return {'paper': True, 'live_execution_enabled': False, 'provider_configured': configured(),
+    return {'paper': True, 'live_execution_enabled': False, 'provider_configured': configured(),'connection_checks':connection_status(),
             'solscan_configured':solscan.configured(),'discovery':{k:v for k,v in state.get('discovery',{}).items() if k!='pending'},'last_polled':state.get('last_polled',{}),
             'config': state['config'], 'revision': state['settings_revision'], 'health': state['health'],
             'error': state['error'], 'started_at': state['started_at'], 'last_cycle': state['last_cycle'],
@@ -146,7 +147,7 @@ class Birdeye:
         kwargs = {'headers': {'X-API-KEY': key, 'x-chain': 'solana'}, 'timeout': 4, 'allow_redirects': False}
         try:
             response = requests.post('https://public-api.birdeye.so'+path, json=payload, **kwargs) if payload is not None else requests.get('https://public-api.birdeye.so'+path, params=params, **kwargs)
-            if response.status_code in (401,403): raise DataUnavailable('Wallet-data key or plan does not allow this endpoint. Check Birdeye ranking, PnL and trader-history access.')
+            if response.status_code in (401,403): raise DataUnavailable(f'Birdeye {path}: HTTP {response.status_code}; key or plan does not permit this endpoint.')
             if response.status_code == 429:
                 with _lock: _cooling_until = time.monotonic()+60
                 raise DataUnavailable('Wallet-data provider rate limit; retrying after cooldown.')

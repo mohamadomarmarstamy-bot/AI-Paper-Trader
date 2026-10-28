@@ -406,6 +406,36 @@ class EngineTests(unittest.TestCase):
     def test_daily_marked_loss_brake_blocks_new_entries(self):
         self.open();self.configure({'daily_loss_usd':10});self.now+=60;self.providers.price=.7
         result=self.tick();self.assertEqual(result['health'],'entry_brake');self.assertFalse(result['positions'])
+
+    def test_missing_holding_reserves_full_loss_but_does_not_freeze_remaining_budget(self):
+        self.open();self.configure({'daily_loss_usd':1000,'entry_mode':'explore','watchlist':[OTHER]})
+        row=self.providers.pairs([MINT])[0];row['baseToken']['address']=OTHER;row['pairAddress']='1'*31+'5'
+        self.providers.pairs=lambda addresses:[row] if OTHER in addresses else []
+        self.now+=60;result=self.tick()
+        self.assertEqual(len(result['positions']),2)
+        self.assertIsNone(result['paper_equity_usd']);self.assertIsNone(result['unrealized_pnl_usd'])
+        self.assertEqual(result['risk_guard']['missing_count'],1);self.assertTrue(result['risk_guard']['entries_allowed'])
+        self.assertLess(result['risk_guard']['conservative_drawdown_usd'],1000)
+        self.assertEqual(len(result['closed']),0)
+        self.assertIsNone(result['equity_history'][-1]['equity_usd'])
+
+    def test_missing_holding_floor_still_enforces_limit_and_friction(self):
+        self.open();state,_=bot.load();position=next(iter(state['positions'].values()))
+        position.update(mark_available=False,marked_value_usd=99999999)
+        state['config']['daily_loss_usd']=40
+        risk=bot.entry_risk(state,self.now)
+        self.assertFalse(risk['entries_allowed']);self.assertEqual(risk['equity_floor_usd'],state['cash_usd'])
+        self.assertAlmostEqual(risk['conservative_drawdown_usd'],50.1)
+        state['day']='2000-01-01';state['config']['daily_loss_usd']=1000
+        self.assertEqual(bot.entry_risk(state,self.now)['reason'],'daily_baseline_unknown')
+
+    def test_missing_holding_remaining_budget_must_cover_new_entry_friction(self):
+        self.open();self.configure({'daily_loss_usd':50.5,'entry_mode':'explore','watchlist':[OTHER]})
+        row=self.providers.pairs([MINT])[0];row['baseToken']['address']=OTHER;row['pairAddress']='1'*31+'5'
+        self.providers.pairs=lambda addresses:[row] if OTHER in addresses else []
+        self.now+=60;result=self.tick()
+        self.assertEqual(len(result['positions']),1)
+        self.assertIn('friction',result['candidates'][0]['reason'])
     def test_time_exit_and_restart_persistence(self):
         self.open();self.now+=1801
         self.assertEqual(len(bot.load()[0]['positions']),1)
