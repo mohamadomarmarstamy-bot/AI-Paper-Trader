@@ -120,26 +120,37 @@ policy, modeled net result, excursion and a plain-language note. All records
 are retained; the UI shows the latest 20 and lifetime counts. Older trades
 without captured entry features are not backfilled or invented.
 
-Automatic learning is opt-in. After at least 30 exploration closes under the
-same exit/size policy, including at least five wins, five losses and ten mints,
-one transparent liquidity/volume heuristic is frozen from the winning training
-examples. No settings change occurs yet. The next 20 *newly opened* exploration
-trades tagged with that candidate form its separate forward evaluation. A rule
-needs at least eight matching trades, five nonmatching trades, five mints,
-four matching winners, positive matching average net return and higher matching
-average return than both the baseline and nonmatching trades. Only then does it
-automatically set mode to liquidity/volume-only and apply its saved minimums.
-It does not change exit rules, trade sizing or loss limits. Settings revision
-advances so unsaved operator edits cannot overwrite the automatic change.
-Failed proposals leave exploration running; another proposal waits for 20 more
-closes. Pausing learning prevents promotion; changing exit/size policy invalidates
-the proposal. Analysis uses the latest 1,000 archived outcomes, training at most
-100, but the archive itself is not trimmed.
+Automatic learning now uses repeating, non-overlapping batches of exactly 50
+archived closed trades. A persisted SQLite row cursor survives restarts and
+prevents duplicate evaluation. Missing-feature outcomes still count toward the
+50 but are excluded from threshold comparisons. At least 40 comparable outcomes
+under the same exit/size policy and five mints are required. The first 30 usable
+outcomes select one liquidity/volume grid candidate; later outcomes in the batch
+are held out. A candidate requires ten training matches, five held-out matches,
+three matching mints and positive held-out average return above the baseline.
+This is a retrospective held-out diagnostic, not a new prospective validation
+or proof of profitability. Insufficient or unimproved evidence records no change.
+Only entry mode and liquidity/volume minimums may change; size, funding, exits,
+position cap and loss limits are unchanged. Every evaluation is permanently
+archived, and the UI shows the latest 20.
 
-This is an experimental selection heuristic, not a trained AI forecast or proof
-of profitability. Provider prices, omitted liquidity/sellability checks and the
-limited discovery sample can make simulated outcomes unrealistic. The forward
-comparison is diagnostic and does not establish statistical significance.
+Every tenth actual automatic settings change queues a ten-version review.
+Versions are stamped at position entry. Each version needs at least ten closed
+outcomes and three mints under the same exit/size policy; otherwise the review
+waits for evidence. The best observed average net return may restore an earlier
+version's thresholds if positive. Reviews compare different market periods and
+are not causal proof that one version is superior. A resulting settings change
+also counts toward the next ten-change group. Pausing automatic learning stops
+evaluations without deleting their cursor or trade history.
+
+Actual changes enqueue an email atomically with the state/evaluation update,
+using the app's existing RESEND_API_KEY and HEALTH_ALERT_EMAIL_TO/FROM destination.
+The separate learning email switch controls sending. Delivery retries use a
+stable provider idempotency key and frozen payload; accepted messages are not
+resent. Retries stop for operator attention after 23 hours of uncertain delivery,
+inside Resend's 24-hour idempotency window. Provider acceptance is shown as
+accepted, not inbox-delivered. Missing configuration leaves mail queued; failures
+never undo settings changes. No email is sent for an unchanged evaluation.
 
 ### Larger virtual portfolios and chart inspection
 

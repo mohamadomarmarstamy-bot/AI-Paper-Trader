@@ -11,6 +11,7 @@ import uuid
 import requests
 import database
 import solana_meme_learning as learner
+import solana_meme_mail as learning_mail
 
 MAX_SCAN_TOKENS = 20
 SCAN_SECONDS = 10
@@ -25,7 +26,7 @@ DEFAULTS = {'enabled':False, 'discover':True, 'watchlist':[], 'trade_usd':50,
             'daily_loss_usd':50, 'minimum_liquidity_usd':100000, 'minimum_m5_volume_usd':20000,
             'confirmation_enabled':True,'confirmation_seconds':45,
             'confirmation_min_percent':.5,'confirmation_max_percent':8,
-            'entry_mode':'filtered','auto_learning':False,'paper_capital_usd':1000}
+            'entry_mode':'filtered','auto_learning':False,'paper_capital_usd':1000,'learning_email_enabled':True}
 RULES = {'minimum_liquidity_usd':100000, 'minimum_m5_volume_usd':20000,
          'minimum_m5_transactions':40, 'minimum_buy_sell_ratio':1.2,
          'minimum_pair_age_minutes':30, 'maximum_pair_age_days':30,
@@ -108,7 +109,7 @@ def public():
         else:value+=mark
         positions.append({'mint':address,**p,'mark_fresh':fresh,'current_modeled_value_usd':mark})
     with closing(database.get_connection()) as conn:learning_summary=learner.summary(conn)
-    return {'learning_summary':learning_summary,'version':VERSION,'paper':True,'live_execution_enabled':False,'revision':state.get('settings_revision',0),
+    return {'learning_email_configured':learning_mail.configured(),'learning_summary':learning_summary,'version':VERSION,'paper':True,'live_execution_enabled':False,'revision':state.get('settings_revision',0),
             **{k:v for k,v in state.items() if k not in ('positions','observations','cooldowns','discovery_batch','discovery_uses','discovery_offset','settings_revision','unavailable_until')},
             'positions':positions,'paper_equity_usd':round(value,4) if complete else None,
             'realized_pnl_usd':round(sum(p['pnl_usd'] for p in state['closed']),4),
@@ -124,7 +125,7 @@ def configure(changes,expected_revision):
             or isinstance(expected_revision,bool) or not isinstance(expected_revision,int)):
         raise ValueError('Known configuration changes and revision required.')
     for key,value in changes.items():
-        if key in ('enabled','discover','confirmation_enabled','auto_learning'):
+        if key in ('enabled','discover','confirmation_enabled','auto_learning','learning_email_enabled'):
             if type(value) is not bool:raise ValueError('Boolean control required.')
         elif key=='entry_mode':
             if value not in ('filtered','explore','learned'):raise ValueError('Known paper entry mode required.')
@@ -310,7 +311,6 @@ def tick(*,providers=None,clock=time.time,force=False):
     state,revision=load();now=clock();config=state['config']
     if not force and not config['enabled'] and not state['positions']:return public()
     pending_outcomes=[]
-    with closing(database.get_connection()) as conn:past_outcomes=learner.recent(conn)
     owner=str(uuid.uuid4())
     with closing(database.get_connection()) as conn:
         initialize(conn)
@@ -404,7 +404,7 @@ def tick(*,providers=None,clock=time.time,force=False):
                         'pnl_usd':value-p['cost_usd'],'reason':reason,
                         'id':p.get('trade_id',str(uuid.uuid4())),'entry_features':p.get('entry_features',{}),
                         'entry_mode':p.get('entry_mode','filtered'),'exit_policy':p.get('exit_policy',{}),
-                        'learning_candidate_id':p.get('learning_candidate_id'),'peak_percent':p['peak_percent'],'low_percent':p.get('low_percent',0),
+                        'learning_candidate_id':p.get('learning_candidate_id'),'settings_version':p.get('settings_version','legacy'),'peak_percent':p['peak_percent'],'low_percent':p.get('low_percent',0),
                         'note':f"{'Win' if value>p['cost_usd'] else 'Loss' if value<p['cost_usd'] else 'Flat'}: {reason.replace('_',' ')} after {(observed-p['opened_at'])/60:.1f} min; modeled return {change:.2f}%.",'basis':'modeled provider observation; not a swap fill'})
                     pending_outcomes.append(state['closed'][-1])
                     state['closed']=state['closed'][-200:];del state['positions'][address]
@@ -445,7 +445,7 @@ def tick(*,providers=None,clock=time.time,force=False):
                     state['positions'][address]={'symbol':row['symbol'],'pair':row['pair'],'opened_at':observed,
                         'trade_id':str(uuid.uuid4()),'entry_features':{k:row.get(k) for k in ('liquidity_usd','volume_m5_usd','buys_m5','sells_m5','change_m5_percent','age_minutes')},
                         'entry_mode':config['entry_mode'],'exit_policy':learner.scope(config),
-                        'learning_candidate_id':state.get('learning',{}).get('proposal',{}).get('id'),
+                        'learning_candidate_id':None,'settings_version':state.get('learning',{}).get('active_version','legacy'),
                         'quantity':amount/(row['price_usd']*1.01),'cost_usd':cost,'entry_price_usd':row['price_usd'],
                         'entry_liquidity_usd':row['liquidity_usd'],'peak_percent':0.,'safety':safety,
                         **{k:config[k] for k in ('stop_percent','target_percent','trail_arm_percent','trail_percent','max_hold_minutes')}}
@@ -465,7 +465,6 @@ def tick(*,providers=None,clock=time.time,force=False):
     except Exception:
         for position in state['positions'].values():position['mark_available']=False
         state.update(health='data_unavailable',error='Provider unavailable or rate limited. No new paper entry; unresolved marks are unavailable.',last_cycle=clock())
-    learner.update(state,past_outcomes+pending_outcomes,clock())
     history=state.get('equity_history',[])
     recorded=clock()
     if not history or recorded-history[-1]['at']>=60:
@@ -480,6 +479,8 @@ def tick(*,providers=None,clock=time.time,force=False):
             if changed!=1:
                 conn.rollback();raise Conflict('Configuration changed during scan; simulated changes discarded.')
             learner.archive(conn,pending_outcomes)
+            learner.process(conn,state,clock())
+            conn.execute('UPDATE solana_meme_paper_state SET state_json=? WHERE id=1',(json.dumps(state,allow_nan=False),))
             conn.commit()
     finally:
         with closing(database.get_connection()) as conn:
@@ -490,5 +491,9 @@ def tick(*,providers=None,clock=time.time,force=False):
 async def worker():
     while True:
         try:await asyncio.to_thread(tick)
+        except Exception:pass
+        try:
+            state,_=await asyncio.to_thread(load)
+            if state['config']['learning_email_enabled']:await asyncio.to_thread(learning_mail.deliver_one)
         except Exception:pass
         await asyncio.sleep(SCAN_SECONDS)
