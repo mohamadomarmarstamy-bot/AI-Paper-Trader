@@ -9,7 +9,8 @@ SCHEMA='''CREATE TABLE IF NOT EXISTS solana_meme_learning_outcomes (
  id TEXT PRIMARY KEY, closed_at REAL NOT NULL, mint TEXT NOT NULL, pnl_usd REAL NOT NULL,
  details_json TEXT NOT NULL); CREATE INDEX IF NOT EXISTS solana_meme_learning_closed ON solana_meme_learning_outcomes(closed_at);
 CREATE TABLE IF NOT EXISTS solana_meme_learning_evaluations (id TEXT PRIMARY KEY, created_at REAL NOT NULL, changed INTEGER NOT NULL, details_json TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS solana_meme_learning_mail (id TEXT PRIMARY KEY, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, next_attempt REAL NOT NULL DEFAULT 0, lease_until REAL NOT NULL DEFAULT 0, first_attempt REAL, provider_id TEXT, error TEXT);'''
+CREATE TABLE IF NOT EXISTS solana_meme_learning_mail (id TEXT PRIMARY KEY, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, next_attempt REAL NOT NULL DEFAULT 0, lease_until REAL NOT NULL DEFAULT 0, first_attempt REAL, provider_id TEXT, error TEXT);
+CREATE TABLE IF NOT EXISTS solana_meme_manual_changes (id TEXT PRIMARY KEY,created_at REAL NOT NULL,details_json TEXT NOT NULL);'''
 
 
 def scope(config):
@@ -43,6 +44,14 @@ def summary(conn):
     if conn.execute("SELECT 1 FROM sqlite_master WHERE name='solana_meme_learning_evaluations'").fetchone():
         result['evaluations']=[{**json.loads(r[0]),'email_status':r[1]} for r in conn.execute('SELECT e.details_json,m.status FROM solana_meme_learning_evaluations e LEFT JOIN solana_meme_learning_mail m ON m.id=e.id ORDER BY e.rowid DESC LIMIT 20')]
         result['email_pending']=conn.execute("SELECT COUNT(*) FROM solana_meme_learning_mail WHERE status='pending'").fetchone()[0]
+    changes=[]
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='solana_meme_learning_evaluations'").fetchone():
+        changes += [{**json.loads(r[0]),'actor':'Bot','email_status':r[1]} for r in conn.execute('SELECT e.details_json,m.status FROM solana_meme_learning_evaluations e LEFT JOIN solana_meme_learning_mail m ON m.id=e.id WHERE e.changed=1 ORDER BY e.rowid DESC LIMIT 50')]
+        result['settings_change_count']=conn.execute('SELECT COUNT(*) FROM solana_meme_learning_evaluations WHERE changed=1').fetchone()[0]
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='solana_meme_manual_changes'").fetchone():
+        changes += [json.loads(r[0]) for r in conn.execute('SELECT details_json FROM solana_meme_manual_changes ORDER BY rowid DESC LIMIT 50')]
+        result['settings_change_count']=result.get('settings_change_count',0)+conn.execute('SELECT COUNT(*) FROM solana_meme_manual_changes').fetchone()[0]
+    result['settings_changes']=sorted(changes,key=lambda r:r['at'],reverse=True)[:50]
     return result
 
 

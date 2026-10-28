@@ -236,6 +236,18 @@ class EngineTests(unittest.TestCase):
         self.assertNotEqual(bot.public()['learning']['active_version'],first)
         self.assertEqual(bot.public()['learning'].get('change_count',0),0)
 
+    def test_manual_settings_changes_are_archived_without_noop_or_email(self):
+        self.configure({'minimum_liquidity_usd':12345})
+        result=bot.public()['learning_summary']
+        self.assertEqual(result['settings_change_count'],1)
+        change=result['settings_changes'][0]
+        self.assertEqual(change['before'],{'minimum_liquidity_usd':100000})
+        self.assertEqual(change['after'],{'minimum_liquidity_usd':12345})
+        self.assertEqual(change['actor'],'You')
+        self.configure({'minimum_liquidity_usd':12345})
+        self.assertEqual(bot.public()['learning_summary']['settings_change_count'],1)
+        with database.get_connection() as conn:self.assertEqual(conn.execute('SELECT COUNT(*) FROM solana_meme_learning_mail').fetchone()[0],0)
+
     def test_default_paused_makes_no_provider_requests(self):
         with patch.object(self.providers,'profiles',side_effect=AssertionError),patch.object(self.providers,'pairs',side_effect=AssertionError):
             self.assertEqual(self.tick()['health'],'paused')
