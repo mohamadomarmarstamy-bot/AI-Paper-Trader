@@ -520,7 +520,7 @@ def tick(*,providers=None,clock=time.time,force=False,manual_exits=None,manual_p
         with closing(database.get_connection()) as conn:
             conn.execute('UPDATE solana_meme_paper_state SET lease_owner=NULL,lease_until=0 WHERE id=1 AND lease_owner=?',(owner,));conn.commit()
     result=public()
-    if manual_exits is not None:result['manual_close_result']={'closed':closed_manual,'unresolved':[a for a in targeted if a in state['positions']],'not_current':[a for a in manual_exits if a not in targeted],'entries_paused':not state['config']['enabled']}
+    if manual_exits is not None:result['manual_close_result']={'closed':closed_manual,'unresolved':[a for a in state['positions'] if manual_pause or a in targeted],'not_current':[a for a in manual_exits if a not in targeted],'entries_paused':not state['config']['enabled']}
     return result
 
 

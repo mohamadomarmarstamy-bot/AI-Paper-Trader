@@ -290,6 +290,9 @@ class EngineTests(unittest.TestCase):
         result=bot.manual_close([{'mint':MINT,'position_id':first['position_id']}],False,providers=self.providers,clock=lambda:self.now)
         self.assertEqual(len(result['positions']),1);self.assertEqual(result['positions'][0]['mint'],OTHER)
         self.assertTrue(result['positions'][0]['mark_fresh'])
+        result=bot.manual_close([{'mint':MINT,'position_id':first['position_id']}],True,providers=self.providers,clock=lambda:self.now)
+        self.assertEqual(result['manual_close_result']['unresolved'],[OTHER])
+        self.assertFalse(result['config']['enabled'])
 
     def test_manual_close_discards_results_when_settings_change_during_lookup(self):
         result=self.open();position=result['positions'][0];before_cash=result['cash_usd']
