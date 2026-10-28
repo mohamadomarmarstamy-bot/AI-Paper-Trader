@@ -302,6 +302,34 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(len(bot.public()['positions']),1)
         self.assertEqual(bot.public()['learning_summary']['total'],0)
 
+    def test_configured_scan_size_and_interval_are_saved_and_validated(self):
+        self.configure({'scan_batch_size':37,'scan_interval_seconds':15})
+        state,_=bot.load();profiles=['1'*31+c for c in bot.ALPHABET]
+        self.assertEqual(len(bot.select_candidates(state,profiles,self.now)),37)
+        self.assertEqual(bot.public()['config']['scan_interval_seconds'],15)
+        self.assertEqual(bot.public()['rules']['cycle_seconds'],15)
+        for changes in ({'scan_batch_size':0},{'scan_batch_size':201},{'scan_batch_size':1.5},
+                        {'scan_interval_seconds':4},{'scan_interval_seconds':61},{'scan_interval_seconds':True}):
+            with self.assertRaises(ValueError):self.configure(changes)
+        self.configure({'scan_batch_size':1,'scan_interval_seconds':5})
+        self.assertGreaterEqual(bot.effective_cycle_seconds(bot.load()[0]['config'],1000),14)
+
+    def test_smaller_scan_batches_rotate_watchlist_and_retain_confirmation(self):
+        state=bot.initial();state['config'].update(scan_batch_size=1,scan_interval_seconds=5,watchlist=[MINT,OTHER],discover=False)
+        first=bot.select_candidates(state,[],self.now)
+        self.assertEqual(first,[MINT])
+        for _ in range(bot.batch_hold_cycles(state['config'])-1):self.assertEqual(bot.select_candidates(state,[],self.now),first)
+        self.assertEqual(bot.select_candidates(state,[],self.now),[OTHER])
+        self.assertGreaterEqual(bot.batch_hold_cycles(state['config'])*5,45)
+
+    def test_provider_budget_bounds_and_recovers_after_window(self):
+        with patch.object(bot,'_request_times',{}):
+            for _ in range(50):bot.take_dex_budget(profiles=True,clock=lambda:0)
+            with self.assertRaises(ValueError):bot.take_dex_budget(profiles=True,clock=lambda:0)
+            for _ in range(190):bot.take_dex_budget(clock=lambda:0)
+            with self.assertRaises(ValueError):bot.take_dex_budget(clock=lambda:0)
+            bot.take_dex_budget(profiles=True,clock=lambda:60)
+
     def test_default_paused_makes_no_provider_requests(self):
         with patch.object(self.providers,'profiles',side_effect=AssertionError),patch.object(self.providers,'pairs',side_effect=AssertionError):
             self.assertEqual(self.tick()['health'],'paused')
@@ -440,3 +468,15 @@ class OnChainTests(unittest.TestCase):
         self.assertEqual(bot.mint(MINT),MINT)
         for address in ('DOGE','0'*32,'2'*32,'1'*44):
             with self.assertRaises(ValueError):bot.mint(address)
+
+
+class WorkerScheduleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_worker_waits_using_saved_interval_and_cleans_up_event(self):
+        import asyncio
+        state=bot.initial();state['config'].update(scan_interval_seconds=17,learning_email_enabled=False)
+        async def stop(awaitable,timeout):
+            awaitable.close();self.assertGreater(timeout,15);self.assertLessEqual(timeout,17)
+            raise asyncio.CancelledError
+        with patch.object(bot,'tick',return_value={}),patch.object(bot,'load',return_value=(state,0)),patch.object(bot.asyncio,'wait_for',side_effect=stop):
+            with self.assertRaises(asyncio.CancelledError):await bot.worker()
+        self.assertIsNone(bot._worker_wake);self.assertIsNone(bot._worker_loop)

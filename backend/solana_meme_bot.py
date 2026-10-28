@@ -3,6 +3,9 @@ import asyncio
 from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+from collections import deque
+from threading import Lock
+from time import monotonic
 from decimal import Decimal
 import json
 import math
@@ -26,7 +29,7 @@ DEFAULTS = {'enabled':False, 'discover':True, 'watchlist':[], 'trade_usd':50,
             'daily_loss_usd':50, 'minimum_liquidity_usd':100000, 'minimum_m5_volume_usd':20000,
             'confirmation_enabled':True,'confirmation_seconds':45,
             'confirmation_min_percent':.5,'confirmation_max_percent':8,
-            'entry_mode':'filtered','auto_learning':False,'paper_capital_usd':1000,'learning_email_enabled':True}
+            'entry_mode':'filtered','auto_learning':False,'paper_capital_usd':1000,'learning_email_enabled':True,'scan_batch_size':20,'scan_interval_seconds':10}
 RULES = {'minimum_liquidity_usd':100000, 'minimum_m5_volume_usd':20000,
          'minimum_m5_transactions':40, 'minimum_buy_sell_ratio':1.2,
          'minimum_pair_age_minutes':30, 'maximum_pair_age_days':30,
@@ -110,14 +113,14 @@ def public():
         positions.append({'mint':address,**p,'position_id':position_reference(address,p),'mark_fresh':fresh,'current_modeled_value_usd':mark})
     with closing(database.get_connection()) as conn:learning_summary=learner.summary(conn)
     return {'learning_email_configured':learning_mail.configured(),'learning_summary':learning_summary,'version':VERSION,'paper':True,'live_execution_enabled':False,'revision':state.get('settings_revision',0),
-            **{k:v for k,v in state.items() if k not in ('positions','observations','cooldowns','discovery_batch','discovery_uses','discovery_offset','settings_revision','unavailable_until')},
+            **{k:v for k,v in state.items() if k not in ('positions','observations','cooldowns','discovery_batch','discovery_uses','discovery_offset','settings_revision','unavailable_until','watch_batch','watch_uses','watch_offset')},
             'positions':positions,'paper_equity_usd':round(value,4) if complete else None,
             'realized_pnl_usd':round(sum(p['pnl_usd'] for p in state['closed']),4),
-            'server_time':time.time(),'monitoring_count':len(state['positions']),
+            'server_time':time.time(),'monitoring_count':len(state['positions']),'scan_budget_minimum_seconds':effective_cycle_seconds(state['config'],len(state['positions'])),
             'unrealized_pnl_usd':round(sum(p['current_modeled_value_usd']-p['cost_usd'] for p in positions),4) if complete else None,
             'discovery_cooldown_count':sum(t>time.time() for t in state.get('unavailable_until',{}).values()),
             'realized_scope':'Latest 200 completed paper trades; older events may be excluded.',
-            'rules':{**RULES,'confirmation_enabled':state['config']['confirmation_enabled'],'confirmation_seconds':state['config']['confirmation_seconds'],'confirmation_change_range_percent':[state['config']['confirmation_min_percent'],state['config']['confirmation_max_percent']],**{k:state['config'][k] for k in ('minimum_liquidity_usd','minimum_m5_volume_usd')}},'limitations':LIMITATIONS}
+            'rules':{**RULES,'cycle_seconds':state['config']['scan_interval_seconds'],'scan_batch_size':state['config']['scan_batch_size'],'confirmation_enabled':state['config']['confirmation_enabled'],'confirmation_seconds':state['config']['confirmation_seconds'],'confirmation_change_range_percent':[state['config']['confirmation_min_percent'],state['config']['confirmation_max_percent']],**{k:state['config'][k] for k in ('minimum_liquidity_usd','minimum_m5_volume_usd')}},'limitations':LIMITATIONS}
 
 
 def configure(changes,expected_revision):
@@ -137,9 +140,9 @@ def configure(changes,expected_revision):
                     'target_percent':(5,100),'trail_arm_percent':(5,50),'trail_percent':(2,20),
                     'max_hold_minutes':(5,120),'daily_loss_usd':(10,100),
                     'minimum_liquidity_usd':(0,1000000000),'minimum_m5_volume_usd':(0,1000000000),
-                    'paper_capital_usd':(1000,1000000000),'confirmation_seconds':(10,180),'confirmation_min_percent':(0,20),'confirmation_max_percent':(.1,100)}
+                    'scan_batch_size':(1,200),'scan_interval_seconds':(5,60),'paper_capital_usd':(1000,1000000000),'confirmation_seconds':(10,180),'confirmation_min_percent':(0,20),'confirmation_max_percent':(.1,100)}
             low,high=limits[key]
-            if not low<=num(value)<=high or key in ('max_positions','max_hold_minutes','confirmation_seconds') and num(value)%1:
+            if not low<=num(value)<=high or key in ('max_positions','max_hold_minutes','confirmation_seconds','scan_batch_size','scan_interval_seconds') and num(value)%1:
                 raise ValueError('Setting outside paper experiment bounds.')
     state,revision=load()
     if state.get('settings_revision',0)!=expected_revision:raise Conflict('Settings changed. Refresh before saving.')
@@ -170,7 +173,30 @@ def configure(changes,expected_revision):
             audit={'id':str(uuid.uuid4()),'at':time.time(),'actor':'You','type':'Manual update','before':audit_before,'after':{k:deepcopy(state['config'][k]) for k in audit_before}}
             conn.execute('INSERT INTO solana_meme_manual_changes VALUES (?,?,?)',(audit['id'],audit['at'],json.dumps(audit,allow_nan=False)))
         conn.commit()
+    notify_worker()
     return public()
+
+
+_request_lock=Lock()
+_request_times={}
+_worker_loop=None
+_worker_wake=None
+
+
+def notify_worker():
+    if _worker_loop is not None and _worker_wake is not None:
+        try:_worker_loop.call_soon_threadsafe(_worker_wake.set)
+        except RuntimeError:pass
+
+
+def take_dex_budget(profiles=False,clock=monotonic):
+    now=clock();buckets=[('dex',240)]+([('profiles',50)] if profiles else [])
+    with _request_lock:
+        for key,limit in buckets:
+            q=_request_times.setdefault(key,deque())
+            while q and now-q[0]>=60:q.popleft()
+            if len(q)>=limit:raise ValueError('Provider request budget cooling down.')
+        for key,_ in buckets:_request_times[key].append(now)
 
 
 class ReadOnlyProviders:
@@ -180,6 +206,7 @@ class ReadOnlyProviders:
         if len(response.content)>2_000_000:raise ValueError('Provider response too large.')
         return response.json()
     def profiles(self):
+        take_dex_budget(profiles=True)
         data=self._json(requests.get('https://api.dexscreener.com/token-profiles/latest/v1',timeout=4))
         rows=data if isinstance(data,list) else [data]
         result=[]
@@ -191,11 +218,13 @@ class ReadOnlyProviders:
     def pairs(self,addresses):
         if not 1<=len(addresses)<=MAX_SCAN_TOKENS:raise ValueError('Bounded mint batch required.')
         for address in addresses:mint(address)
+        take_dex_budget()
         data=self._json(requests.get('https://api.dexscreener.com/tokens/v1/solana/'+','.join(addresses),timeout=4))
         if not isinstance(data,list) or len(data)>500:raise ValueError('Pair evidence unavailable.')
         return data
     def token_pairs(self,address):
         mint(address)
+        take_dex_budget()
         data=self._json(requests.get('https://api.dexscreener.com/token-pairs/v1/solana/'+address,timeout=3))
         if not isinstance(data,list) or len(data)>500:raise ValueError('Pair evidence unavailable.')
         return data
@@ -292,15 +321,38 @@ def entry_reason(row,previous,now,config=None):
     return None
 
 
+def effective_cycle_seconds(config,position_count):
+    # Reserve budget for every held batch, discovery, profile lookup and four recoveries.
+    calls=math.ceil((position_count+config['scan_batch_size'])/MAX_SCAN_TOKENS)+5
+    return max(config['scan_interval_seconds'],math.ceil(calls*60/240))
+
+
+def batch_hold_cycles(config):
+    interval=config['scan_interval_seconds']
+    return max(2,math.ceil(60/interval),math.ceil(config['confirmation_seconds']/interval)+2 if config['confirmation_enabled'] else 0)
+
+
+def select_watchlist(state):
+    watch=list(dict.fromkeys(state['config']['watchlist']));size=state['config']['scan_batch_size']
+    if len(watch)<=size:return watch
+    batch=[a for a in state.get('watch_batch',[]) if a in watch][:size]
+    if len(batch)!=size or state.get('watch_uses',batch_hold_cycles(state['config']))>=batch_hold_cycles(state['config']):
+        offset=state.get('watch_offset',0)%len(watch);batch=(watch[offset:]+watch[:offset])[:size]
+        state['watch_offset']=(offset+size)%len(watch);state['watch_uses']=0
+    state['watch_batch']=batch;state['watch_uses']=state.get('watch_uses',0)+1
+    return batch
+
+
 def select_candidates(state, profiles, now=None):
     """Keep a discovery batch for confirmation, then rotate beyond the first batch."""
-    priority=list(dict.fromkeys(state['config']['watchlist']))[:MAX_SCAN_TOKENS]
-    slots=MAX_SCAN_TOKENS-len(priority)
+    priority=select_watchlist(state)
+    slots=state['config']['scan_batch_size']-len(priority)
+    if not state['config']['discover']:return priority
     if not slots:return priority
     now=time.time() if now is None else now
     excluded={a for a,until in state.get('unavailable_until',{}).items() if until>now}
     batch=[a for a in state.get('discovery_batch',[]) if a not in priority and a not in excluded][:slots]
-    hold_scans=max(DISCOVERY_BATCH_SCANS,math.ceil(state['config']['confirmation_seconds']/SCAN_SECONDS)+2) if state['config']['confirmation_enabled'] else DISCOVERY_BATCH_SCANS
+    hold_scans=batch_hold_cycles(state['config'])
     if state.get('discovery_uses',hold_scans)>=hold_scans or not batch:
         pool=list(dict.fromkeys(a for a in profiles if a not in priority and a not in excluded))
         offset=state.get('discovery_offset',0)%len(pool) if pool else 0
@@ -348,11 +400,13 @@ def tick(*,providers=None,clock=time.time,force=False,manual_exits=None,manual_p
     providers=providers or ReadOnlyProviders()
     state['error']=None
     try:
-        candidates=list(dict.fromkeys(config['watchlist']))[:MAX_SCAN_TOKENS]
-        if manual_exits is not None:candidates=[]
-        if manual_exits is None and config['discover'] and (config['enabled'] or force):
-            try:candidates=select_candidates(state,providers.profiles(),now)
-            except Exception:state['error']='Discovery unavailable; existing positions/watchlist still monitored.'
+        candidates=[]
+        if manual_exits is None:
+            profiles=[]
+            if config['discover'] and (config['enabled'] or force):
+                try:profiles=providers.profiles()
+                except Exception:state['error']='Discovery unavailable; existing positions/watchlist still monitored.'
+            candidates=select_candidates(state,profiles,now) if config['enabled'] or force else select_watchlist(state)
         monitored=list(dict.fromkeys([*(targeted if manual_exits is not None else state['positions']),*candidates]))
         if not monitored:
             state.update(health='paused_entries_monitoring_exits' if not config['enabled'] else 'running' if manual_exits is not None else 'waiting_for_mints',last_cycle=now)
@@ -525,11 +579,19 @@ def tick(*,providers=None,clock=time.time,force=False,manual_exits=None,manual_p
 
 
 async def worker():
-    while True:
-        try:await asyncio.to_thread(tick)
-        except Exception:pass
-        try:
-            state,_=await asyncio.to_thread(load)
-            if state['config']['learning_email_enabled']:await asyncio.to_thread(learning_mail.deliver_one)
-        except Exception:pass
-        await asyncio.sleep(SCAN_SECONDS)
+    global _worker_loop,_worker_wake
+    loop=asyncio.get_running_loop();wake=asyncio.Event();_worker_loop=loop;_worker_wake=wake
+    try:
+        while True:
+            wake.clear();started=loop.time()
+            try:await asyncio.to_thread(tick)
+            except Exception:pass
+            try:
+                state,_=await asyncio.to_thread(load)
+                if state['config']['learning_email_enabled']:await asyncio.to_thread(learning_mail.deliver_one)
+            except Exception:state={'config':DEFAULTS}
+            delay=max(.1,effective_cycle_seconds(state['config'],len(state.get('positions',{})))-(loop.time()-started))
+            try:await asyncio.wait_for(wake.wait(),timeout=delay)
+            except asyncio.TimeoutError:pass
+    finally:
+        if _worker_wake is wake:_worker_loop=None;_worker_wake=None
