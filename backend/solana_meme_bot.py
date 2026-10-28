@@ -140,14 +140,13 @@ def configure(changes,expected_revision):
             if not isinstance(value,list) or len(value)>MAX_SCAN_TOKENS or len(set(value))!=len(value):raise ValueError('At most 20 distinct mint addresses.')
             for address in value:mint(address)
         else:
-            limits={'trade_usd':(5,200),'max_positions':(1,1000),'stop_percent':(3,20),
-                    'target_percent':(5,100),'trail_arm_percent':(5,50),'trail_percent':(2,20),
-                    'max_hold_minutes':(5,120),'daily_loss_usd':(10,100),
-                    'minimum_liquidity_usd':(0,1000000000),'minimum_m5_volume_usd':(0,1000000000),
-                    'scan_batch_size':(1,200),'scan_interval_seconds':(5,60),'paper_capital_usd':(1000,1000000000),'confirmation_seconds':(10,180),'confirmation_min_percent':(0,20),'confirmation_max_percent':(.1,100)}
-            low,high=limits[key]
-            if not low<=num(value)<=high or key in ('max_positions','max_hold_minutes','confirmation_seconds','scan_batch_size','scan_interval_seconds') and num(value)%1:
-                raise ValueError('Setting outside paper experiment bounds.')
+            value_num=num(value)
+            if value_num<0 or key.endswith('_percent') and value_num>100:
+                raise ValueError('Use nonnegative numbers; percentages cannot exceed 100%.')
+            if key in ('max_positions','scan_batch_size'):
+                if value_num%1:raise ValueError('Coin counts must be whole numbers.')
+                changes[key]=int(value_num)
+            else:changes[key]=value_num
     state,revision=load()
     if state.get('settings_revision',0)!=expected_revision:raise Conflict('Settings changed. Refresh before saving.')
     audit_before={k:deepcopy(state['config'][k]) for k in changes if changes[k]!=state['config'][k]}
@@ -163,10 +162,8 @@ def configure(changes,expected_revision):
     state['config'].update(changes)
     if manual_entry_change:state.setdefault('learning',{})['active_version']='manual-'+str(uuid.uuid4())
     state['settings_revision']=state.get('settings_revision',0)+1
-    if state['config']['trail_percent']>=state['config']['trail_arm_percent']:
-        raise ValueError('Trailing distance must be below its activation percentage.')
-    if state['config']['confirmation_min_percent']>=state['config']['confirmation_max_percent']:
-        raise ValueError('Minimum confirmation rise must be below its maximum.')
+    if state['config']['confirmation_min_percent']>state['config']['confirmation_max_percent']:
+        raise ValueError('Minimum confirmation rise cannot exceed its maximum.')
     state['health']='starting' if state['config']['enabled'] else 'paused_entries_monitoring_exits'
     with closing(database.get_connection()) as conn:
         initialize(conn)
@@ -351,12 +348,13 @@ def entry_reason(row,previous,now,config=None):
 
 def effective_cycle_seconds(config,position_count):
     # Reserve discovery's once-per-minute refresh separately from cycle requests.
-    calls=math.ceil((position_count+config['scan_batch_size'])/MAX_SCAN_TOKENS)+4
-    return max(config['scan_interval_seconds'],math.ceil(calls*60/(240-len(DISCOVERY_SEARCHES)-2)))
+    calls=(position_count+config['scan_batch_size']+MAX_SCAN_TOKENS-1)//MAX_SCAN_TOKENS+4
+    budget=240-len(DISCOVERY_SEARCHES)-2
+    return max(config['scan_interval_seconds'],(calls*60+budget-1)//budget)
 
 
 def batch_hold_cycles(config):
-    interval=config['scan_interval_seconds']
+    interval=max(1,config['scan_interval_seconds'])
     return max(2,math.ceil(60/interval),math.ceil(config['confirmation_seconds']/interval)+2 if config['confirmation_enabled'] else 0)
 
 
@@ -538,6 +536,7 @@ def tick(*,providers=None,clock=time.time,force=False,manual_exits=None,manual_p
                 elif address in closed_this_cycle or state['cooldowns'].get(address,0)>observed:reason='One-hour re-entry cooldown.'
                 elif brake:reason='Paper daily loss brake or incomplete position marks blocks new entries.'
                 elif not config['enabled']:reason='New paper buys are paused.'
+                elif config['trade_usd']==0:reason='Paper trade amount is zero.'
                 elif len(state['positions'])>=config['max_positions']:reason='Maximum paper positions reached.'
                 elif state['cash_usd']<config['trade_usd']+.10:reason='Insufficient virtual cash.'
                 entry_friction=config['trade_usd']+.20-config['trade_usd']*.99/1.01
