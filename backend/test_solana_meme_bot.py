@@ -248,6 +248,60 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(bot.public()['learning_summary']['settings_change_count'],1)
         with database.get_connection() as conn:self.assertEqual(conn.execute('SELECT COUNT(*) FROM solana_meme_learning_mail').fetchone()[0],0)
 
+    def test_manual_sell_is_idempotent_and_archived_without_reentry(self):
+        result=self.open();position=result['positions'][0];cash=result['cash_usd']
+        request=[{'mint':MINT,'position_id':position['position_id']}]
+        result=bot.manual_close(request,False,providers=self.providers,clock=lambda:self.now)
+        self.assertFalse(result['positions']);self.assertGreater(result['cash_usd'],cash)
+        self.assertEqual(result['closed'][-1]['reason'],'manual_sell')
+        self.assertEqual(result['closed'][-1]['exit_source'],'manual')
+        self.assertEqual(result['learning_summary']['total'],1)
+        self.assertFalse(bot.learner.usable(result['closed'][-1],bot.learner.scope(result['config'])))
+        cash=result['cash_usd']
+        again=bot.manual_close(request,False,providers=self.providers,clock=lambda:self.now)
+        self.assertEqual(again['cash_usd'],cash);self.assertFalse(again['manual_close_result']['closed'])
+        self.assertEqual(again['learning_summary']['total'],1)
+
+    def test_sell_all_pauses_and_reports_unresolved_without_fake_prices(self):
+        result=self.open();position=result['positions'][0]
+        self.providers.missing=True
+        request=[{'mint':MINT,'position_id':position['position_id']}]
+        result=bot.manual_close(request,True,providers=self.providers,clock=lambda:self.now)
+        self.assertFalse(result['config']['enabled']);self.assertEqual(len(result['positions']),1)
+        self.assertEqual(result['manual_close_result']['unresolved'],[MINT]);self.assertEqual(result['learning_summary']['total'],0)
+        self.providers.missing=False
+        result=bot.manual_close(request,True,providers=self.providers,clock=lambda:self.now)
+        self.assertFalse(result['positions']);self.assertEqual(result['closed'][-1]['reason'],'manual_sell_all')
+
+    def test_stale_manual_identity_cannot_close_a_new_position(self):
+        result=self.open();request=[{'mint':MINT,'position_id':'old-position'}]
+        result=bot.manual_close(request,False,providers=self.providers,clock=lambda:self.now)
+        self.assertEqual(len(result['positions']),1);self.assertEqual(result['manual_close_result']['not_current'],[MINT])
+        self.assertFalse(result['closed'])
+        for bad in ([{'mint':MINT,'position_id':'x','price':10}],[],[{'mint':'DOGE','position_id':'x'}]):
+            with self.assertRaises(ValueError):bot.manual_close(bad,False)
+
+    def test_manual_sell_does_not_mark_unrelated_holdings_unavailable(self):
+        result=self.open();first=result['positions'][0]
+        state,_=bot.load();second=dict(state['positions'][MINT]);second['trade_id']='second-instance'
+        state['positions'][OTHER]=second;state['cash_usd']-=second['cost_usd']
+        import json
+        with database.get_connection() as conn:conn.execute('UPDATE solana_meme_paper_state SET state_json=?',(json.dumps(state),));conn.commit()
+        result=bot.manual_close([{'mint':MINT,'position_id':first['position_id']}],False,providers=self.providers,clock=lambda:self.now)
+        self.assertEqual(len(result['positions']),1);self.assertEqual(result['positions'][0]['mint'],OTHER)
+        self.assertTrue(result['positions'][0]['mark_fresh'])
+        result=bot.manual_close([{'mint':MINT,'position_id':first['position_id']}],True,providers=self.providers,clock=lambda:self.now)
+        self.assertEqual(result['manual_close_result']['unresolved'],[OTHER])
+        self.assertFalse(result['config']['enabled'])
+
+    def test_manual_close_discards_results_when_settings_change_during_lookup(self):
+        result=self.open();position=result['positions'][0];before_cash=result['cash_usd']
+        self.providers.on_pairs=lambda:self.configure({'minimum_liquidity_usd':12345})
+        with self.assertRaises(bot.Conflict):bot.manual_close([{'mint':MINT,'position_id':position['position_id']}],False,providers=self.providers,clock=lambda:self.now)
+        self.assertEqual(bot.public()['cash_usd'],before_cash)
+        self.assertEqual(len(bot.public()['positions']),1)
+        self.assertEqual(bot.public()['learning_summary']['total'],0)
+
     def test_default_paused_makes_no_provider_requests(self):
         with patch.object(self.providers,'profiles',side_effect=AssertionError),patch.object(self.providers,'pairs',side_effect=AssertionError):
             self.assertEqual(self.tick()['health'],'paused')
@@ -352,11 +406,14 @@ class EngineTests(unittest.TestCase):
         app=FastAPI();app.include_router(build_router(require_session=auth))
         with TestClient(app) as client:
             self.assertEqual(client.get('/meme-coins').status_code,401)
+            self.assertEqual(client.post('/meme-coins/close',json={}).status_code,401)
             self.assertEqual(client.get('/meme-coins/status').status_code,401)
             for route in ('trades','scanner','settings','history'):self.assertEqual(client.get('/meme-coins/'+route).status_code,401)
             allowed=True
             for route in ('trades','scanner','settings','history'):self.assertEqual(client.get('/meme-coins/'+route).status_code,200)
             self.assertEqual(client.post('/meme-coins/config',json={}).status_code,403)
+            self.assertEqual(client.post('/meme-coins/close',json={}).status_code,403)
+            self.assertEqual(client.post('/meme-coins/close',headers={'Origin':'http://testserver'},json={'price':100}).status_code,422)
             response=client.post('/meme-coins/scan',headers={'Origin':'http://testserver'},json={'wallet':'anything'})
             self.assertEqual(response.status_code,422)
             self.assertEqual(client.get('/meme-coins/status').json()['live_execution_enabled'],False)

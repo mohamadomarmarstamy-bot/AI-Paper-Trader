@@ -107,7 +107,7 @@ def public():
         mark=p.get('marked_value_usd') if fresh else None
         if mark is None:complete=False
         else:value+=mark
-        positions.append({'mint':address,**p,'mark_fresh':fresh,'current_modeled_value_usd':mark})
+        positions.append({'mint':address,**p,'position_id':position_reference(address,p),'mark_fresh':fresh,'current_modeled_value_usd':mark})
     with closing(database.get_connection()) as conn:learning_summary=learner.summary(conn)
     return {'learning_email_configured':learning_mail.configured(),'learning_summary':learning_summary,'version':VERSION,'paper':True,'live_execution_enabled':False,'revision':state.get('settings_revision',0),
             **{k:v for k,v in state.items() if k not in ('positions','observations','cooldowns','discovery_batch','discovery_uses','discovery_offset','settings_revision','unavailable_until')},
@@ -314,7 +314,23 @@ def select_candidates(state, profiles, now=None):
     return priority+batch
 
 
-def tick(*,providers=None,clock=time.time,force=False):
+def position_reference(address,position):
+    return position.get('trade_id') or f"{address}:{position['opened_at']}"
+
+
+def manual_close(positions,pause_new_buys,*,providers=None,clock=time.time):
+    if type(pause_new_buys) is not bool or not isinstance(positions,list) or not 1<=len(positions)<=1000 or (not pause_new_buys and len(positions)!=1):
+        raise ValueError('Select one position or sell-all with entries paused.')
+    targets={}
+    for row in positions:
+        if not isinstance(row,dict) or set(row)!={'mint','position_id'}:raise ValueError('Position identity required.')
+        address=mint(row['mint']);ref=row['position_id']
+        if address in targets or not isinstance(ref,str) or not 1<=len(ref)<=128:raise ValueError('Distinct position identities required.')
+        targets[address]=ref
+    return tick(providers=providers,clock=clock,force=True,manual_exits=targets,manual_pause=pause_new_buys)
+
+
+def tick(*,providers=None,clock=time.time,force=False,manual_exits=None,manual_pause=False):
     state,revision=load();now=clock();config=state['config']
     if not force and not config['enabled'] and not state['positions']:return public()
     pending_outcomes=[]
@@ -324,16 +340,22 @@ def tick(*,providers=None,clock=time.time,force=False):
         if conn.execute('UPDATE solana_meme_paper_state SET lease_owner=?,lease_until=? WHERE id=1 AND lease_until<=?',
                         (owner,now+90,now)).rowcount!=1:raise Conflict('A scan is already running.')
         conn.commit()
+    pause_changed=manual_pause and config['enabled']
+    if pause_changed:
+        config['enabled']=False;state['settings_revision']=state.get('settings_revision',0)+1
+    closed_manual=[]
+    targeted={a for a,ref in (manual_exits or {}).items() if a in state['positions'] and position_reference(a,state['positions'][a])==ref}
     providers=providers or ReadOnlyProviders()
     state['error']=None
     try:
         candidates=list(dict.fromkeys(config['watchlist']))[:MAX_SCAN_TOKENS]
-        if config['discover'] and (config['enabled'] or force):
+        if manual_exits is not None:candidates=[]
+        if manual_exits is None and config['discover'] and (config['enabled'] or force):
             try:candidates=select_candidates(state,providers.profiles(),now)
             except Exception:state['error']='Discovery unavailable; existing positions/watchlist still monitored.'
-        monitored=list(dict.fromkeys([*state['positions'],*candidates]))
+        monitored=list(dict.fromkeys([*(targeted if manual_exits is not None else state['positions']),*candidates]))
         if not monitored:
-            state.update(health='waiting_for_mints',last_cycle=now)
+            state.update(health='paused_entries_monitoring_exits' if not config['enabled'] else 'running' if manual_exits is not None else 'waiting_for_mints',last_cycle=now)
         else:
             batches=[monitored[i:i+MAX_SCAN_TOKENS] for i in range(0,len(monitored),MAX_SCAN_TOKENS)]
             def fetch_batch(batch):
@@ -392,6 +414,7 @@ def tick(*,providers=None,clock=time.time,force=False):
             state['unavailable_until']=unavailable
             closed_this_cycle=set()
             for address,p in list(state['positions'].items()):
+                if manual_exits is not None and address not in targeted:continue
                 row=snapshots.get(address)
                 if not row:
                     p['mark_available']=False
@@ -400,7 +423,7 @@ def tick(*,providers=None,clock=time.time,force=False):
                 value=p['quantity']*row['price_usd']*.99-.10
                 change=(value/p['cost_usd']-1)*100
                 p.update(marked_value_usd=value,marked_at=observed,peak_percent=max(p['peak_percent'],change),low_percent=min(p.get('low_percent',0),change))
-                reason=('stop_loss' if change<=-p['stop_percent'] else 'take_profit' if change>=p['target_percent']
+                reason=('manual_sell_all' if manual_exits is not None and manual_pause else 'manual_sell' if manual_exits is not None else 'stop_loss' if change<=-p['stop_percent'] else 'take_profit' if change>=p['target_percent']
                         else 'profit_trail' if p['peak_percent']>=p['trail_arm_percent'] and p['peak_percent']-change>=p['trail_percent']
                         else 'liquidity_drop' if learner.finite(row['liquidity_usd']) and learner.finite(p['entry_liquidity_usd']) and row['liquidity_usd']<p['entry_liquidity_usd']*.5
                         else 'maximum_hold' if observed-p['opened_at']>=p['max_hold_minutes']*60 else None)
@@ -408,16 +431,17 @@ def tick(*,providers=None,clock=time.time,force=False):
                     value=max(0,value);state['cash_usd']+=value
                     state['closed'].append({'mint':address,'symbol':p['symbol'],'opened_at':p['opened_at'],
                         'closed_at':observed,'entry_usd':p['cost_usd'],'proceeds_usd':value,
-                        'pnl_usd':value-p['cost_usd'],'reason':reason,
+                        'pnl_usd':value-p['cost_usd'],'reason':reason,'exit_source':'manual' if manual_exits is not None else 'automatic',
                         'id':p.get('trade_id',str(uuid.uuid4())),'entry_features':p.get('entry_features',{}),
                         'entry_mode':p.get('entry_mode','filtered'),'exit_policy':p.get('exit_policy',{}),
                         'learning_candidate_id':p.get('learning_candidate_id'),'settings_version':p.get('settings_version','legacy'),'peak_percent':p['peak_percent'],'low_percent':p.get('low_percent',0),
                         'note':f"{'Win' if value>p['cost_usd'] else 'Loss' if value<p['cost_usd'] else 'Flat'}: {reason.replace('_',' ')} after {(observed-p['opened_at'])/60:.1f} min; modeled return {change:.2f}%.",'basis':'modeled provider observation; not a swap fill'})
                     pending_outcomes.append(state['closed'][-1])
+                    if manual_exits is not None:closed_manual.append(address)
                     state['closed']=state['closed'][-200:];del state['positions'][address]
                     state['cooldowns'][address]=observed+3600;closed_this_cycle.add(address)
             equity=state['cash_usd']+sum(p.get('marked_value_usd',0) for p in state['positions'].values())
-            marks_complete=all(address in snapshots for address in state['positions'])
+            marks_complete=all(address in snapshots or (manual_exits is not None and address not in targeted and p.get('mark_available',True) and 0<=observed-p.get('marked_at',0)<=120) for address,p in state['positions'].items())
             day=time.strftime('%Y-%m-%d',time.gmtime(observed))
             if state['day']!=day and marks_complete:state.update(day=day,day_equity=equity)
             brake=not marks_complete or state['day']!=day or equity-state['day_equity']<=-config['daily_loss_usd']
@@ -485,6 +509,9 @@ def tick(*,providers=None,clock=time.time,force=False):
                 (json.dumps(state,allow_nan=False),revision,owner,clock())).rowcount
             if changed!=1:
                 conn.rollback();raise Conflict('Configuration changed during scan; simulated changes discarded.')
+            if pause_changed:
+                audit={'id':str(uuid.uuid4()),'at':clock(),'actor':'You','type':'Sell all · pause entries','before':{'enabled':True},'after':{'enabled':False}}
+                conn.execute('INSERT INTO solana_meme_manual_changes VALUES (?,?,?)',(audit['id'],audit['at'],json.dumps(audit)))
             learner.archive(conn,pending_outcomes)
             learner.process(conn,state,clock())
             conn.execute('UPDATE solana_meme_paper_state SET state_json=? WHERE id=1',(json.dumps(state,allow_nan=False),))
@@ -492,7 +519,9 @@ def tick(*,providers=None,clock=time.time,force=False):
     finally:
         with closing(database.get_connection()) as conn:
             conn.execute('UPDATE solana_meme_paper_state SET lease_owner=NULL,lease_until=0 WHERE id=1 AND lease_owner=?',(owner,));conn.commit()
-    return public()
+    result=public()
+    if manual_exits is not None:result['manual_close_result']={'closed':closed_manual,'unresolved':[a for a in state['positions'] if manual_pause or a in targeted],'not_current':[a for a in manual_exits if a not in targeted],'entries_paused':not state['config']['enabled']}
+    return result
 
 
 async def worker():

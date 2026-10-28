@@ -58,7 +58,7 @@ def summary(conn):
 
 def usable(row,policy):
     f=row.get('entry_features',{})
-    return row.get('exit_policy')==policy and finite(row.get('pnl_usd')) and finite(row.get('entry_usd')) and row['entry_usd']>0 and all(finite(f.get(k)) and 0<=f[k]<=1e9 for k in ('liquidity_usd','volume_m5_usd'))
+    return row.get('exit_source','automatic')=='automatic' and row.get('exit_policy')==policy and finite(row.get('pnl_usd')) and finite(row.get('entry_usd')) and row['entry_usd']>0 and all(finite(f.get(k)) and 0<=f[k]<=1e9 for k in ('liquidity_usd','volume_m5_usd'))
 
 
 def average(rows):
