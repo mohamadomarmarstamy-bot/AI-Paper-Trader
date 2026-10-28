@@ -228,6 +228,14 @@ class EngineTests(unittest.TestCase):
         self.assertIsNotNone(result['paper_equity_usd'])
         self.assertEqual(result['candidates'][0]['mint'],fresh)
 
+    def test_manual_entry_settings_receive_separate_outcome_version(self):
+        self.configure({'minimum_liquidity_usd':12345})
+        first=bot.public()['learning']['active_version']
+        self.assertTrue(first.startswith('manual-'))
+        self.configure({'minimum_m5_volume_usd':300})
+        self.assertNotEqual(bot.public()['learning']['active_version'],first)
+        self.assertEqual(bot.public()['learning'].get('change_count',0),0)
+
     def test_default_paused_makes_no_provider_requests(self):
         with patch.object(self.providers,'profiles',side_effect=AssertionError),patch.object(self.providers,'pairs',side_effect=AssertionError):
             self.assertEqual(self.tick()['health'],'paused')

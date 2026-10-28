@@ -150,7 +150,10 @@ def configure(changes,expected_revision):
             state['cash_usd']+=added
             if state.get('day_equity') is not None:state['day_equity']+=added
             state['funding_events']=(state.get('funding_events',[])+[{'at':time.time(),'amount_usd':added,'capital_usd':changes['paper_capital_usd']}])[-100:]
+    entry_keys=('entry_mode','minimum_liquidity_usd','minimum_m5_volume_usd',*learner.POLICY_KEYS)
+    manual_entry_change=any(k in changes and changes[k]!=state['config'][k] for k in entry_keys)
     state['config'].update(changes)
+    if manual_entry_change:state.setdefault('learning',{})['active_version']='manual-'+str(uuid.uuid4())
     state['settings_revision']=state.get('settings_revision',0)+1
     if state['config']['trail_percent']>=state['config']['trail_arm_percent']:
         raise ValueError('Trailing distance must be below its activation percentage.')
