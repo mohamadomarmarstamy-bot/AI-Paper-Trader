@@ -448,6 +448,35 @@ class EngineTests(unittest.TestCase):
 
 
 class OnChainTests(unittest.TestCase):
+    def test_discovery_expands_short_profile_feed_and_deduplicates_cached_ids(self):
+        def address(n):
+            size=(n.bit_length()+7)//8;text=''
+            while n:n,r=divmod(n,58);text=bot.ALPHABET[r]+text
+            return '1'*(32-size)+text
+        addresses=[address(n) for n in range(1,221)]
+        calls=[]
+        def get(url,**kwargs):
+            calls.append(url)
+            if 'token-profiles' in url:
+                data=[{'chainId':'solana','tokenAddress':a} for a in addresses[:20]]
+            else:
+                index=bot.DISCOVERY_SEARCHES.index(kwargs['params']['q'])
+                data={'pairs':[{'chainId':'solana','baseToken':{'address':a}} for a in addresses[index*25:(index+1)*25]]+
+                      [{'chainId':'ethereum','baseToken':{'address':addresses[-1]}}, {'chainId':'solana','baseToken':{'address':'BAD'}}]}
+            return SimpleNamespace(content=b'{}',raise_for_status=lambda:None,json=lambda:data)
+        cache={'at':float('-inf'),'mints':{}}
+        with patch.object(bot,'_discovery_cache',cache),patch.object(bot,'_request_times',{}),patch.object(bot.requests,'get',side_effect=get),patch.object(bot,'monotonic',return_value=100):
+            found=bot.ReadOnlyProviders().profiles()
+            self.assertEqual(len(found),200)
+            state=bot.initial();state['config']['scan_batch_size']=100
+            self.assertEqual(len(bot.select_candidates(state,found)),100)
+            self.assertEqual(bot.ReadOnlyProviders().profiles(),found)
+            self.assertEqual(len(calls),10)
+        with patch.object(bot,'_discovery_cache',cache),patch.object(bot.requests,'get',side_effect=ValueError('offline')),patch.object(bot,'monotonic',return_value=161):
+            self.assertEqual(bot.ReadOnlyProviders().profiles(),found)
+        with patch.object(bot,'_discovery_cache',cache),patch.object(bot.requests,'get',side_effect=ValueError('offline')),patch.object(bot,'monotonic',return_value=3701):
+            with self.assertRaises(ValueError):bot.ReadOnlyProviders().profiles()
+
     def provider(self,*,authority=None,owner=bot.TOKEN_PROGRAM,amount='10'):
         p=bot.ReadOnlyProviders()
         def rpc(method,params):

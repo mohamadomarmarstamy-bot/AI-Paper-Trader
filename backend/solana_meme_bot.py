@@ -19,6 +19,9 @@ import solana_meme_mail as learning_mail
 MAX_SCAN_TOKENS = 20
 SCAN_SECONDS = 10
 DISCOVERY_BATCH_SCANS = 6
+DISCOVERY_SEARCHES = ('pump', 'meme', 'bonk', 'pepe', 'dog', 'cat', 'ai', 'solana')
+_discovery_lock = Lock()
+_discovery_cache = {'at':float('-inf'),'mints':{}}
 
 VERSION = 'solana_momentum_paper_v1'
 TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
@@ -40,7 +43,7 @@ RULES = {'minimum_liquidity_usd':100000, 'minimum_m5_volume_usd':20000,
 LIMITATIONS = [
     'PAPER simulation only: no wallet, signing key, swap submission, or real funds.',
     'DEX Screener prices are provider observations, not executable quotes; market timestamps are unavailable.',
-    'Discovery uses latest token profiles, a biased limited list; promotion is not a buy signal.',
+    'Discovery combines recent profiles and fixed meme-topic searches; coverage is limited and biased, and search matches do not verify meme status or safety.',
     'Filtered mode checks legacy SPL mints. Exploration/learned modes do not check token permissions or concentration; results are unverified simulations.',
     'Largest token accounts are not unique holders; pool vaults are not excluded. Concentration can cause false rejections.',
     'Mint/freeze checks do not establish safety, locked liquidity, sellability, or absence of insider/wash trading.',
@@ -206,15 +209,39 @@ class ReadOnlyProviders:
         if len(response.content)>2_000_000:raise ValueError('Provider response too large.')
         return response.json()
     def profiles(self):
-        take_dex_budget(profiles=True)
-        data=self._json(requests.get('https://api.dexscreener.com/token-profiles/latest/v1',timeout=4))
-        rows=data if isinstance(data,list) else [data]
-        result=[]
-        for row in rows[:100]:
-            if row.get('chainId')=='solana':
-                try:result.append(mint(row.get('tokenAddress')))
-                except ValueError:pass
-        return list(dict.fromkeys(result))
+        # Cache identifiers only. Entry/exit prices are fetched afresh each cycle.
+        # The latest-profile feed alone often contains only ~20 Solana mints.
+        with _discovery_lock:
+            now=monotonic()
+            if now-_discovery_cache['at']<60:
+                if not _discovery_cache['mints']:raise ValueError('Discovery sources unavailable.')
+                return list(_discovery_cache['mints'])
+            sources=[('token-profiles/latest/v1',None),('token-profiles/recent-updates/v1',None)]
+            sources += [('latest/dex/search',q) for q in DISCOVERY_SEARCHES]
+            def fetch(source):
+                path,query=source
+                try:
+                    take_dex_budget(profiles=query is None)
+                    kwargs={'timeout':4}
+                    if query is not None:kwargs['params']={'q':query}
+                    data=self._json(requests.get('https://api.dexscreener.com/'+path,**kwargs))
+                    rows=data.get('pairs',[]) if query is not None and isinstance(data,dict) else data
+                    if not isinstance(rows,list):return []
+                    found=[]
+                    for row in rows[:500]:
+                        if not isinstance(row,dict) or row.get('chainId')!='solana':continue
+                        try:found.append(mint(row.get('tokenAddress') if query is None else (row.get('baseToken') or {}).get('address')))
+                        except (ValueError,AttributeError):pass
+                    return found
+                except Exception:return []
+            with ThreadPoolExecutor(max_workers=5) as pool:
+                fresh=list(dict.fromkeys(a for rows in pool.map(fetch,sources) for a in rows))
+            previous=_discovery_cache['mints']
+            merged={a:now for a in fresh}
+            merged.update({a:at for a,at in previous.items() if a not in merged and now-at<3600})
+            _discovery_cache.update(at=now,mints=dict(list(merged.items())[:1000]))
+            if not merged:raise ValueError('Discovery sources unavailable.')
+            return list(_discovery_cache['mints'])
     def pairs(self,addresses):
         if not 1<=len(addresses)<=MAX_SCAN_TOKENS:raise ValueError('Bounded mint batch required.')
         for address in addresses:mint(address)
@@ -322,8 +349,9 @@ def entry_reason(row,previous,now,config=None):
 
 
 def effective_cycle_seconds(config,position_count):
-    # Reserve budget for every held batch, discovery, profile lookup and four recoveries.
-    calls=math.ceil((position_count+config['scan_batch_size'])/MAX_SCAN_TOKENS)+5
+    # Discovery refresh: two profile feeds + eight searches; four pool recoveries.
+    # Conservative even though discovery identifiers are cached for 60 seconds.
+    calls=math.ceil((position_count+config['scan_batch_size'])/MAX_SCAN_TOKENS)+14
     return max(config['scan_interval_seconds'],math.ceil(calls*60/240))
 
 
@@ -406,6 +434,7 @@ def tick(*,providers=None,clock=time.time,force=False,manual_exits=None,manual_p
             if config['discover'] and (config['enabled'] or force):
                 try:profiles=providers.profiles()
                 except Exception:state['error']='Discovery unavailable; existing positions/watchlist still monitored.'
+            state['discovery_available_count']=len(set(profiles)|set(config['watchlist']))
             candidates=select_candidates(state,profiles,now) if config['enabled'] or force else select_watchlist(state)
         monitored=list(dict.fromkeys([*(targeted if manual_exits is not None else state['positions']),*candidates]))
         if not monitored:
