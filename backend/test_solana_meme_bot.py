@@ -185,6 +185,49 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(bot.public()['learning_summary']['total'],1)
         self.assertFalse(bot.public()['closed'])
 
+    def test_virtual_funding_is_idempotent_and_not_daily_profit(self):
+        self.open();before=bot.public();day_before=bot.load()[0]['day_equity']
+        self.configure({'paper_capital_usd':100000,'max_positions':1000})
+        result=bot.public()
+        self.assertAlmostEqual(result['cash_usd']-before['cash_usd'],99000)
+        self.assertAlmostEqual(result['paper_equity_usd']-100000,before['paper_equity_usd']-1000)
+        self.assertAlmostEqual(bot.load()[0]['day_equity']-day_before,99000)
+        self.assertEqual(result['positions'],before['positions'])
+        self.configure({'paper_capital_usd':100000})
+        self.assertEqual(bot.public()['cash_usd'],result['cash_usd'])
+        self.assertEqual(len(bot.public()['funding_events']),1)
+        for change in ({'paper_capital_usd':1000},{'max_positions':1001},{'max_positions':2.5}):
+            with self.assertRaises(ValueError):self.configure(change)
+
+    def test_all_thousand_positions_are_monitored_without_starving_discovery(self):
+        self.configure({'enabled':True,'entry_mode':'explore','max_positions':1000,'paper_capital_usd':100000})
+        state,revision=bot.load()
+        addresses=[]
+        for i in range(1000):
+            n=i+1;encoded=''
+            while n:n,r=divmod(n,58);encoded=bot.ALPHABET[r]+encoded
+            addresses.append('1'*(32-((i+1).bit_length()+7)//8)+encoded)
+        state['positions']={a:{'symbol':'TEST','pair':PAIR,'opened_at':self.now,'quantity':10,'cost_usd':10,
+            'entry_liquidity_usd':200000,'peak_percent':0,'stop_percent':8,'target_percent':20,
+            'trail_arm_percent':12,'trail_percent':6,'max_hold_minutes':30} for a in addresses}
+        state['cash_usd']=90000
+        import json
+        with database.get_connection() as conn:conn.execute('UPDATE solana_meme_paper_state SET state_json=?',(json.dumps(state),));conn.commit()
+        calls=[];base=self.providers.pairs([MINT])[0]
+        def pairs(batch):
+            self.assertLessEqual(len(batch),20);calls.extend(batch)
+            return [{**base,'baseToken':{'address':a,'symbol':'TEST'},'priceUsd':'1.02'} for a in batch]
+        self.providers.pairs=pairs
+        fresh='1'*30+'zz'
+        self.providers.profiles=lambda:[fresh]
+        result=self.tick()
+        self.assertEqual(len(result['positions']),1000)
+        self.assertTrue(all(p['mark_fresh'] for p in result['positions']))
+        self.assertTrue(set(addresses)<=set(calls))
+        self.assertIn(fresh,calls)
+        self.assertIsNotNone(result['paper_equity_usd'])
+        self.assertEqual(result['candidates'][0]['mint'],fresh)
+
     def test_default_paused_makes_no_provider_requests(self):
         with patch.object(self.providers,'profiles',side_effect=AssertionError),patch.object(self.providers,'pairs',side_effect=AssertionError):
             self.assertEqual(self.tick()['health'],'paused')
@@ -243,7 +286,7 @@ class EngineTests(unittest.TestCase):
     def test_stale_revision_and_unknown_settings_are_rejected(self):
         self.configure({'trade_usd':100})
         with self.assertRaises(bot.Conflict):bot.configure({'enabled':True},0)
-        for changes in ({'private_key':'secret'},{'trade_usd':float('nan')},{'enabled':'true'},{'watchlist':['DOGE']},{'max_positions':100}):
+        for changes in ({'private_key':'secret'},{'trade_usd':float('nan')},{'enabled':'true'},{'watchlist':['DOGE']},{'max_positions':1001}):
             with self.assertRaises(ValueError):self.configure(changes)
     def test_manual_scan_while_paused_does_not_buy(self):
         self.configure({'watchlist':[MINT],'discover':False});self.tick(force=True)
@@ -266,6 +309,7 @@ class EngineTests(unittest.TestCase):
         rotated=bot.select_candidates(state,profiles)
         self.assertNotEqual(rotated,first)
         state['positions']={MINT:{}}
+        state['config']['watchlist']=[MINT]
         self.assertEqual(bot.select_candidates(state,profiles)[0],MINT)
 
     def test_missing_liquidity_retains_symbol_and_specific_reason(self):

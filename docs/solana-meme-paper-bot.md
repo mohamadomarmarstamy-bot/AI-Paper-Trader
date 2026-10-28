@@ -140,3 +140,26 @@ This is an experimental selection heuristic, not a trained AI forecast or proof
 of profitability. Provider prices, omitted liquidity/sellability checks and the
 limited discovery sample can make simulated outcomes unrealistic. The forward
 comparison is diagnostic and does not establish statistical significance.
+
+### Larger virtual portfolios and chart inspection
+
+The position cap accepts whole numbers from 1 to 1,000. Discovery remains a
+20-token batch; held positions no longer consume all discovery slots. Every
+holding is monitored in bounded 20-mint requests with at most eight concurrent
+requests. Missing observations remain unavailable and still block new entries;
+no capacity increase guarantees a fill or exactly 10-second completion at scale.
+
+Virtual capital is a saved cumulative funding amount (initially $1,000 for
+existing accounts). Increasing it adds only the difference to cash and the
+current day's equity baseline. Re-saving the same amount cannot credit twice.
+Existing positions, trade notes and P/L are preserved. Funding never counts as
+profit; reductions/withdrawals are not supported by this control. The owner
+requested $100,000 virtual capital and $50 buys; trade size is independent of the
+position cap. Existing daily loss and exit limits still apply.
+
+The home chart supports pointer dragging, hover, touch and left/right arrow
+inspection of actual saved snapshots, with exact value/time readouts and gaps
+for missing marks. Portfolio-value and funding-adjusted P/L views are available
+for one hour or 24 hours. Historical points capture their cumulative funding;
+legacy points retain the original $1,000 basis. Funding changes are identified
+in the tooltip rather than presented as trading gains.

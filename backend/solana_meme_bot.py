@@ -1,6 +1,7 @@
 """Isolated USD-denominated Solana paper simulator. No wallet or swap execution."""
 import asyncio
 from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from decimal import Decimal
 import json
@@ -24,7 +25,7 @@ DEFAULTS = {'enabled':False, 'discover':True, 'watchlist':[], 'trade_usd':50,
             'daily_loss_usd':50, 'minimum_liquidity_usd':100000, 'minimum_m5_volume_usd':20000,
             'confirmation_enabled':True,'confirmation_seconds':45,
             'confirmation_min_percent':.5,'confirmation_max_percent':8,
-            'entry_mode':'filtered','auto_learning':False}
+            'entry_mode':'filtered','auto_learning':False,'paper_capital_usd':1000}
 RULES = {'minimum_liquidity_usd':100000, 'minimum_m5_volume_usd':20000,
          'minimum_m5_transactions':40, 'minimum_buy_sell_ratio':1.2,
          'minimum_pair_age_minutes':30, 'maximum_pair_age_days':30,
@@ -111,7 +112,7 @@ def public():
             **{k:v for k,v in state.items() if k not in ('positions','observations','cooldowns','discovery_batch','discovery_uses','discovery_offset','settings_revision','unavailable_until')},
             'positions':positions,'paper_equity_usd':round(value,4) if complete else None,
             'realized_pnl_usd':round(sum(p['pnl_usd'] for p in state['closed']),4),
-            'server_time':time.time(),
+            'server_time':time.time(),'monitoring_count':len(state['positions']),
             'unrealized_pnl_usd':round(sum(p['current_modeled_value_usd']-p['cost_usd'] for p in positions),4) if complete else None,
             'discovery_cooldown_count':sum(t>time.time() for t in state.get('unavailable_until',{}).values()),
             'realized_scope':'Latest 200 completed paper trades; older events may be excluded.',
@@ -131,16 +132,23 @@ def configure(changes,expected_revision):
             if not isinstance(value,list) or len(value)>MAX_SCAN_TOKENS or len(set(value))!=len(value):raise ValueError('At most 20 distinct mint addresses.')
             for address in value:mint(address)
         else:
-            limits={'trade_usd':(5,200),'max_positions':(1,5),'stop_percent':(3,20),
+            limits={'trade_usd':(5,200),'max_positions':(1,1000),'stop_percent':(3,20),
                     'target_percent':(5,100),'trail_arm_percent':(5,50),'trail_percent':(2,20),
                     'max_hold_minutes':(5,120),'daily_loss_usd':(10,100),
                     'minimum_liquidity_usd':(0,1000000000),'minimum_m5_volume_usd':(0,1000000000),
-                    'confirmation_seconds':(10,180),'confirmation_min_percent':(0,20),'confirmation_max_percent':(.1,100)}
+                    'paper_capital_usd':(1000,1000000000),'confirmation_seconds':(10,180),'confirmation_min_percent':(0,20),'confirmation_max_percent':(.1,100)}
             low,high=limits[key]
             if not low<=num(value)<=high or key in ('max_positions','max_hold_minutes','confirmation_seconds') and num(value)%1:
                 raise ValueError('Setting outside paper experiment bounds.')
     state,revision=load()
     if state.get('settings_revision',0)!=expected_revision:raise Conflict('Settings changed. Refresh before saving.')
+    if 'paper_capital_usd' in changes:
+        added=changes['paper_capital_usd']-state['config']['paper_capital_usd']
+        if added<0:raise ValueError('Virtual capital can only increase; existing results are preserved.')
+        if added:
+            state['cash_usd']+=added
+            if state.get('day_equity') is not None:state['day_equity']+=added
+            state['funding_events']=(state.get('funding_events',[])+[{'at':time.time(),'amount_usd':added,'capital_usd':changes['paper_capital_usd']}])[-100:]
     state['config'].update(changes)
     state['settings_revision']=state.get('settings_revision',0)+1
     if state['config']['trail_percent']>=state['config']['trail_arm_percent']:
@@ -278,7 +286,7 @@ def entry_reason(row,previous,now,config=None):
 
 def select_candidates(state, profiles, now=None):
     """Keep a discovery batch for confirmation, then rotate beyond the first batch."""
-    priority=list(dict.fromkeys([*state['positions'],*state['config']['watchlist']]))[:MAX_SCAN_TOKENS]
+    priority=list(dict.fromkeys(state['config']['watchlist']))[:MAX_SCAN_TOKENS]
     slots=MAX_SCAN_TOKENS-len(priority)
     if not slots:return priority
     now=time.time() if now is None else now
@@ -312,19 +320,33 @@ def tick(*,providers=None,clock=time.time,force=False):
     providers=providers or ReadOnlyProviders()
     state['error']=None
     try:
-        candidates=list(dict.fromkeys([*state['positions'],*config['watchlist']]))[:MAX_SCAN_TOKENS]
+        candidates=list(dict.fromkeys(config['watchlist']))[:MAX_SCAN_TOKENS]
         if config['discover'] and (config['enabled'] or force):
             try:candidates=select_candidates(state,providers.profiles(),now)
             except Exception:state['error']='Discovery unavailable; existing positions/watchlist still monitored.'
-        if not candidates:
+        monitored=list(dict.fromkeys([*state['positions'],*candidates]))
+        if not monitored:
             state.update(health='waiting_for_mints',last_cycle=now)
         else:
-            raw=providers.pairs(candidates);observed=clock()
+            batches=[monitored[i:i+MAX_SCAN_TOKENS] for i in range(0,len(monitored),MAX_SCAN_TOKENS)]
+            def fetch_batch(batch):
+                try:return providers.pairs(batch)
+                except Exception:return []
+            if len(batches)==1:raw=fetch_batch(batches[0])
+            else:
+                with ThreadPoolExecutor(max_workers=8) as pool:raw=[r for rows in pool.map(fetch_batch,batches) for r in rows]
+            observed=clock()
             if not 0<=observed-now<=45:raise ValueError('Observation request exceeded cycle budget.')
+            def group(rows):
+                grouped={}
+                for r in rows:
+                    if isinstance(r,dict) and isinstance(r.get('baseToken'),dict):grouped.setdefault(r['baseToken'].get('address'),[]).append(r)
+                return grouped
+            grouped=group(raw)
             # Only incomplete/absent pool batches receive a bounded alternate-pool lookup.
             recoveries=0
-            for address in candidates:
-                matching=[r for r in raw if r.get('baseToken',{}).get('address')==address and r.get('chainId')=='solana']
+            for address in monitored:
+                matching=[r for r in grouped.get(address,[]) if r.get('chainId')=='solana']
                 complete=False
                 for r in matching:
                     try:
@@ -337,11 +359,12 @@ def tick(*,providers=None,clock=time.time,force=False):
                     except Exception:pass
             observed=clock()
             if not 0<=observed-now<=45:raise ValueError('Observation request exceeded cycle budget.')
+            grouped=group(raw)
             snapshots={};missing={}
-            for address in candidates:
+            for address in monitored:
                 valid=[]
-                for row in raw:
-                    if row.get('chainId')!='solana' or row.get('baseToken',{}).get('address')!=address:continue
+                for row in grouped.get(address,[]):
+                    if row.get('chainId')!='solana':continue
                     try:valid.append(normalize_pair(row,address,observed,config['entry_mode']!='filtered' or address in state['positions']))
                     except (ValueError,KeyError,TypeError) as error:
                         fields={'liquidity':'Liquidity data missing.','usd':'Liquidity data missing.',
@@ -448,7 +471,7 @@ def tick(*,providers=None,clock=time.time,force=False):
     if not history or recorded-history[-1]['at']>=60:
         available=all(p.get('mark_available',True) and 0<=recorded-p.get('marked_at',0)<=120 for p in state['positions'].values())
         marked=state['cash_usd']+sum(p.get('marked_value_usd',0) for p in state['positions'].values()) if available else None
-        history.append({'at':recorded,'equity_usd':round(marked,4) if marked is not None else None})
+        history.append({'at':recorded,'equity_usd':round(marked,4) if marked is not None else None,'capital_usd':config['paper_capital_usd']})
         state['equity_history']=history[-1440:]
     try:
         with closing(database.get_connection()) as conn:
