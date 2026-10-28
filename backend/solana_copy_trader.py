@@ -14,6 +14,7 @@ import uuid
 import requests
 import database
 import solana_meme_bot as bot
+import solana_copy_solscan as solscan
 
 CASH_MINTS = {'So11111111111111111111111111111111111111112',
               'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
@@ -87,6 +88,7 @@ def public():
         closed = [json.loads(r[0]) for r in conn.execute('SELECT details_json FROM solana_copy_closes ORDER BY rowid DESC LIMIT 100')] if exists else []
         totals = conn.execute("SELECT COUNT(*),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')),0),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')>0),0) FROM solana_copy_closes").fetchone() if exists else (0,0,0)
     return {'paper': True, 'live_execution_enabled': False, 'provider_configured': configured(),
+            'solscan_configured':solscan.configured(),'discovery':{k:v for k,v in state.get('discovery',{}).items() if k!='pending'},'last_polled':state.get('last_polled',{}),
             'config': state['config'], 'revision': state['settings_revision'], 'health': state['health'],
             'error': state['error'], 'started_at': state['started_at'], 'last_cycle': state['last_cycle'],
             'cash_usd': state['cash_usd'], **own, 'positions': [{**p,'mark_fresh':p.get('marked_at') is not None and 0<=now-p['marked_at']<=120 and p.get('mark_usd') is not None} for p in state['positions'].values()],
@@ -103,7 +105,7 @@ def configure(changes, expected_revision):
     for key, value in changes.items():
         if key == 'enabled':
             if type(value) is not bool: raise ValueError('Boolean required.')
-            if value and not configured(): raise DataUnavailable('Connect BIRDEYE_API_KEY on the server before starting. Wallet ranking and trade-history access are required.')
+            # An explicit start may wait for a key saved later in Profile.
         else:
             value = bot.num(value)
             if value < 0 or key == 'paper_capital_usd' and value == 0: raise ValueError('Use nonnegative numbers and positive virtual capital.')
@@ -116,7 +118,7 @@ def configure(changes, expected_revision):
     if changes.get('enabled') and not state['config']['enabled']:
         held={p['wallet'] for p in state['positions'].values()}
         for wallet in state['cursors']:
-            if wallet not in held: state['cursors'][wallet]={'at':time.time()}
+            if wallet not in held: state['cursors'][wallet]={'at':time.time(),'provider':state['cursors'][wallet].get('provider','birdeye')}
     state['config'].update(changes); state['settings_revision'] += 1
     state['health'] = 'starting' if state['config']['enabled'] else 'paused_entries_monitoring_sells'
     with closing(database.get_connection()) as conn:
@@ -155,27 +157,27 @@ class Birdeye:
         except DataUnavailable: raise
         except Exception: raise DataUnavailable('Wallet-data response unavailable or unsupported. No simulated signal created.') from None
 
-    def leaders(self):
-        rows = self.request('/wallet/v2/leaderboard', params={'sort_by':'realized_pnl','interval':'7d','pnl_method':'wac','min_realized_pnl':0,'limit':20})
-        if not isinstance(rows, list): raise DataUnavailable('Unsupported leaderboard response.')
-        selected = []
-        ranked=[]
-        for row in rows[:20]:
-            try:
-                if isinstance(row,dict):ranked.append((bot.num(row.get('realized_pnl',0)),row))
-            except (ValueError,TypeError):pass
-        for _,row in sorted(ranked,key=lambda item:item[0],reverse=True):
-            try:
-                address = bot.mint(row['owner'])
-                if bot.num(row['realized_pnl']) <= 0 or address in {r['wallet'] for r in selected}: continue
-                details = self.request('/wallet/v2/pnl/details', payload={'wallet':address,'duration':'all','position_scope':'cumulative','pnl_method':'wac','sort_by':'last_trade','limit':1})
-                summary = details['summary']; counts = summary['counts']; pnl = bot.num(summary['pnl']['realized_profit_usd']); win = bot.num(counts['win_rate'])
-                if pnl <= 0 or not .5 < win <= 1 or bot.num(counts['total_sell']) < 20: continue
-                selected.append({'wallet':address,'seven_day_realized_usd':bot.num(row['realized_pnl']), 'historical_realized_usd':pnl,'win_rate_percent':win*100,'sell_count':counts['total_sell']})
-            except DataUnavailable: raise
-            except (ValueError, KeyError, TypeError): continue
-            if len(selected) == 5: break
-        return selected
+    def qualify(self,row):
+        try:
+            address=bot.mint(row['address'])
+            profit=bot.num(row['realized_pnl'])
+            if profit<=0:return None
+            data=self.request('/wallet/v2/pnl/details',payload={'wallet':address,'duration':'all','position_scope':'cumulative','pnl_method':'wac','sort_by':'last_trade','limit':1})
+            summary=data['summary'];counts=summary['counts']
+            pnl=bot.num(summary['pnl']['realized_profit_usd']);win=bot.num(counts['win_rate']);sells=bot.num(counts['total_sell'])
+            if pnl<=0 or not .5<win<=1 or sells<20:return None
+            return {'wallet':address,'ranking_realized_usd':profit,'ranking_window':row.get('ranking_window','1W'),
+                    'seven_day_realized_usd':profit if row.get('ranking_window','1W')=='1W' else None,
+                    'historical_realized_usd':pnl,'win_rate_percent':win*100,'sell_count':sells}
+        except DataUnavailable:raise
+        except (ValueError,KeyError,TypeError):return None
+
+    def discover(self,state,clock):
+        import solana_copy_discovery as discovery
+        import solana_copy_solscan as solscan
+        try:discovery.advance(state,self,clock(),lambda:'solscan' if solscan.configured() else 'birdeye',clock=clock)
+        except DataUnavailable:raise
+        except (ValueError,KeyError,TypeError):raise DataUnavailable('Profitable-trader discovery response unsupported.') from None
 
     def meme(self, address):
         data=self.request('/defi/v3/token/meme/detail/single',params={'address':address})
@@ -184,6 +186,9 @@ class Birdeye:
         return isinstance(info,dict) and bool(info.get('source') or info.get('platform_id'))
 
     def trades(self, wallet, cursor, now):
+        if cursor.get('provider')=='solscan':
+            import solana_copy_solscan as solscan
+            return solscan.trades(wallet,cursor,now)
         window = cursor.get('window') or {'after':cursor['at']-2,'before':int(now),'offset':0}
         data = self.request('/trader/txs/seek_by_time', params={'address':wallet,'tx_type':'swap','after_time':int(window['after']), 'before_time':window['before'],'offset':window['offset'],'limit':100,'ui_amount_mode':'raw'})
         if not isinstance(data,dict) or not isinstance(data.get('items'),list) or not isinstance(data.get('hasNext'),bool): raise DataUnavailable('Unsupported wallet history pagination.')
@@ -211,7 +216,7 @@ def signals(rows, wallet):
                 if address in CASH_MINTS: continue
                 side = 'buy' if leg['type_swap'] == 'to' else 'sell'
                 raw_id = json.dumps([wallet,tx,row['ins_index'],row['inner_ins_index'],address,side],separators=(',',':'))
-                result.append({'id':hashlib.sha256(raw_id.encode()).hexdigest(),'wallet':wallet,'mint':address,'side':side,'source_at':timestamp,'tx_hash':tx,'instruction':str(row['ins_index'])+':'+str(row['inner_ins_index'])})
+                result.append({'id':hashlib.sha256(raw_id.encode()).hexdigest(),'wallet':wallet,'mint':address,'side':side,'source_at':timestamp,'tx_hash':tx,'instruction':str(row['ins_index'])+':'+str(row['inner_ins_index']),'source':row.get('source','birdeye')})
         except (KeyError, TypeError, ValueError): continue
     return sorted(result,key=lambda r:(r['source_at'],r['tx_hash'],r['instruction'],r['side']=='buy'))
 
@@ -270,25 +275,33 @@ def tick(*, provider=None, market=None, clock=time.time):
     events=[]; closes=[]; provider=provider or Birdeye(); market=market or bot.ReadOnlyProviders(); state['error']=None
     try:
         enabled=state['config']['enabled']; incoming=[]
+        connection_missing=enabled and isinstance(provider,Birdeye) and not configured()
+        if connection_missing:
+            enabled=False
+            state['error']='Automatic PAPER copying is enabled; waiting for a Birdeye data key in Profile.'
         if enabled and not state['started_at']:
             state['started_at']=now; state['copy_start_capital']=state['config']['paper_capital_usd']
         if state['started_at'] and not state['comparison_baseline']:
             baseline=regular_metrics(); own=metrics(state,now)
             if baseline['net_usd'] is not None and baseline['equity_usd']>0 and own['net_usd'] is not None and own['equity_usd']>0:
                 state['comparison_baseline']={**baseline,'copy_net_usd':own['net_usd'],'copy_equity_usd':own['equity_usd'],'at':now}
-        if enabled and not state['traders']:
+        if enabled and not state['traders'] and not hasattr(provider,'discover'):
             leaders=provider.leaders()
             enrolled=clock()
             state['traders']=[{**r,'selected_at':enrolled} for r in leaders]
             state['cursors']={r['wallet']:{'at':enrolled} for r in leaders}
             if not leaders: raise DataUnavailable('No ranked wallets meet the historical-profit and win-rate checks.')
-        watched={p['wallet'] for p in state['positions'].values()} | ({r['wallet'] for r in state['traders']} if enabled else set())
-        for wallet in sorted(watched):
+        watched={p['wallet'] for p in state['positions'].values()} | ({r['wallet'] for r in state['traders'] if r.get('active',True)} if enabled else set())
+        last_polled=state.setdefault('last_polled',{})
+        # Oldest first prevents a rate-limited large list starving its later wallets.
+        for wallet in sorted(watched,key=lambda w:(last_polled.get(w,0),w))[:3]:
+            last_polled[wallet]=clock()
             try:
                 rows,cursor=provider.trades(wallet,state['cursors'][wallet],clock())
                 gathered=state['cursors'][wallet].get('pending',[])+signals(rows,wallet)
                 if 'window' in cursor: cursor['pending']=gathered
                 else: incoming.extend(gathered)
+                cursor['provider']=state['cursors'][wallet].get('provider','birdeye')
                 state['cursors'][wallet]=cursor
             except DataUnavailable as error: state['error']=str(error)
         category_errors={}; checks=0
@@ -296,7 +309,7 @@ def tick(*, provider=None, market=None, clock=time.time):
             for address in dict.fromkeys(r['mint'] for r in incoming if r['side']=='buy' and 0<=clock()-r['source_at']<=90):
                 category=state['token_types'].get(address)
                 if category and clock()-category['at']<=86400:continue
-                if checks>=10 or clock()-now>100:
+                if checks>=2 or clock()-now>100:
                     category_errors[address]='Meme metadata request capacity reached; this signal was not filled.';continue
                 checks+=1
                 try:state['token_types'][address]={'is_meme':provider.meme(address),'at':clock()}
@@ -330,6 +343,7 @@ def tick(*, provider=None, market=None, clock=time.time):
                 signal['status']='sell_queued' if lots else 'observed'
                 signal['reason']='Close copied lots on the next observed price.' if lots else 'No copied holding for this wallet.'
             elif not enabled: signal['reason']='New copied buys paused.'
+            elif not any(r['wallet']==wallet and r.get('active',True) for r in state['traders']): signal['reason']='Trader no longer passes the historical checks; only exits monitored.'
             elif observed-signal['source_at'] > 90: signal['reason']='Signal arrived more than 90 seconds late.'
             elif latest_sell.get((wallet,mint),-1) >= signal['source_at']: signal['reason']='Trader already sold before detection.'
             elif state['config']['trade_usd'] <= 0: signal['reason']='Trade amount is zero.'
@@ -351,7 +365,10 @@ def tick(*, provider=None, market=None, clock=time.time):
         for key,p in list(state['positions'].items()):
             if p.get('pending_sell') and (p['mint'],p['pool']) in quotes:
                 closes.append(record_close(state,key,quotes[(p['mint'],p['pool'])],observed,'manual_sell' if p.get('manual_sell') else 'trader_sell'))
-        state['health']='running' if enabled else 'paused_entries_monitoring_sells'
+        if enabled and hasattr(provider,'discover'):
+            try:provider.discover(state,clock)
+            except DataUnavailable as error:state['error']=str(error)
+        state['health']='waiting_for_data_key' if connection_missing else ('running' if state['traders'] else 'searching_profitable_traders') if enabled else 'paused_entries_monitoring_sells'
         state['last_cycle']=observed
         own=metrics(state,observed); regular=regular_metrics(); baseline=state.get('comparison_baseline')
         if baseline and (not state['history'] or observed-state['history'][-1]['at']>=60):
