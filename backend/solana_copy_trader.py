@@ -116,6 +116,7 @@ def configure(changes, expected_revision):
     if added < 0: raise ValueError('Virtual capital can only increase.')
     state['cash_usd'] += added
     if changes.get('enabled') and not state['config']['enabled']:
+        if state.get('started_at'):state['buy_resume_at']=time.time()
         held={p['wallet'] for p in state['positions'].values()}
         for wallet in state['cursors']:
             if wallet not in held: state['cursors'][wallet]={'at':time.time(),'provider':state['cursors'][wallet].get('provider','birdeye')}
@@ -343,6 +344,7 @@ def tick(*, provider=None, market=None, clock=time.time):
                 signal['status']='sell_queued' if lots else 'observed'
                 signal['reason']='Close copied lots on the next observed price.' if lots else 'No copied holding for this wallet.'
             elif not enabled: signal['reason']='New copied buys paused.'
+            elif signal['source_at']<max(state.get('buy_resume_at',0),next((r.get('buy_resume_at',0) for r in state['traders'] if r['wallet']==wallet),0)): signal['reason']='Buy occurred before copying resumed.'
             elif not any(r['wallet']==wallet and r.get('active',True) for r in state['traders']): signal['reason']='Trader no longer passes the historical checks; only exits monitored.'
             elif observed-signal['source_at'] > 90: signal['reason']='Signal arrived more than 90 seconds late.'
             elif latest_sell.get((wallet,mint),-1) >= signal['source_at']: signal['reason']='Trader already sold before detection.'

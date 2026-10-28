@@ -115,6 +115,14 @@ class CopyTests(unittest.TestCase):
             with self.assertRaises(ValueError):self.config(change)
         with patch.object(copy,'configured',return_value=False):
             self.assertTrue(self.config({'enabled':True})['config']['enabled'])
+    def test_resume_held_wallet_does_not_backfill_paused_buys_but_retains_sells(self):
+        self.buy();self.config({'enabled':False});self.now+=10
+        self.source.rows=[trade(self.now-1,index=2)];self.config({'enabled':True})
+        result=self.tick();self.assertEqual(len(result['positions']),1)
+        self.assertEqual(result['events'][0]['reason'],'Buy occurred before copying resumed.')
+        self.source.rows=[trade(self.now-2,'sell',index=3)];self.now+=10
+        result=self.tick();self.assertEqual(result['positions'],[]);self.assertEqual(result['closed_count'],1)
+
     def test_missing_regular_marks_do_not_block_copy_and_shared_window_waits(self):
         self.baseline['net_usd']=None;self.baseline['equity_usd']=None
         data=self.buy();self.assertEqual(len(data['positions']),1);self.assertIsNone(data['comparison']['since'])

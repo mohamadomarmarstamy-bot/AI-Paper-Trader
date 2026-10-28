@@ -26,6 +26,7 @@ def advance(state, provider, now, choose_source, clock=None):
         address=row.get('address')
         existing=next((r for r in state['traders'] if r['wallet']==address),None)
         if existing:
+            if result and not existing.get('active',True):existing['buy_resume_at']=enrolled
             if result and not existing.get('active',True) and not any(p['wallet']==address for p in state['positions'].values()):
                 state['cursors'][address]={'at':enrolled,'provider':existing.get('trade_provider','birdeye')}
             existing['active']=result is not None
