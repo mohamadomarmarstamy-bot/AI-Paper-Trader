@@ -174,3 +174,5 @@ for missing marks. Portfolio-value and funding-adjusted P/L views are available
 for one hour or 24 hours. Historical points capture their cumulative funding;
 legacy points retain the original $1,000 basis. Funding changes are identified
 in the tooltip rather than presented as trading gains.
+
+History has its own authenticated route (/meme-coins/history), with completed-trade cards colored by net P/L (green wins, red losses, neutral flat). The journal/evaluation history moved there too. The home control toggles Start/Stop from the saved enabled flag; enabled is red Stop paper bot. Stop pauses new entries but preserves monitoring/exits for existing positions.

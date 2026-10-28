@@ -13,6 +13,7 @@ def build_router(*,require_session):
     @router.get('/meme-coins/trades')
     @router.get('/meme-coins/scanner')
     @router.get('/meme-coins/settings')
+    @router.get('/meme-coins/history')
     def page(request:Request):
         require_session(request)
         return FileResponse(Path(__file__).parent/'frontend'/'meme-coins.html')

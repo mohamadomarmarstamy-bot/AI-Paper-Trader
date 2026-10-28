@@ -341,9 +341,9 @@ class EngineTests(unittest.TestCase):
         with TestClient(app) as client:
             self.assertEqual(client.get('/meme-coins').status_code,401)
             self.assertEqual(client.get('/meme-coins/status').status_code,401)
-            for route in ('trades','scanner','settings'):self.assertEqual(client.get('/meme-coins/'+route).status_code,401)
+            for route in ('trades','scanner','settings','history'):self.assertEqual(client.get('/meme-coins/'+route).status_code,401)
             allowed=True
-            for route in ('trades','scanner','settings'):self.assertEqual(client.get('/meme-coins/'+route).status_code,200)
+            for route in ('trades','scanner','settings','history'):self.assertEqual(client.get('/meme-coins/'+route).status_code,200)
             self.assertEqual(client.post('/meme-coins/config',json={}).status_code,403)
             response=client.post('/meme-coins/scan',headers={'Origin':'http://testserver'},json={'wallet':'anything'})
             self.assertEqual(response.status_code,422)
