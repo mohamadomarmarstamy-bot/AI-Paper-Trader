@@ -19,7 +19,8 @@ import solana_meme_mail as learning_mail
 MAX_SCAN_TOKENS = 20
 SCAN_SECONDS = 10
 DISCOVERY_BATCH_SCANS = 6
-DISCOVERY_SEARCHES = ('pump', 'meme', 'bonk', 'pepe', 'dog', 'cat', 'ai', 'solana')
+DISCOVERY_SEARCHES = ('pump', 'meme', 'bonk', 'pepe', 'dog', 'cat', 'ai', 'solana',
+                      'inu', 'frog', 'trump', 'doge', 'shib', 'elon', 'moon', 'baby')
 _discovery_lock = Lock()
 _discovery_cache = {'at':float('-inf'),'mints':{}}
 
@@ -349,10 +350,9 @@ def entry_reason(row,previous,now,config=None):
 
 
 def effective_cycle_seconds(config,position_count):
-    # Discovery refresh: two profile feeds + eight searches; four pool recoveries.
-    # Conservative even though discovery identifiers are cached for 60 seconds.
-    calls=math.ceil((position_count+config['scan_batch_size'])/MAX_SCAN_TOKENS)+14
-    return max(config['scan_interval_seconds'],math.ceil(calls*60/240))
+    # Reserve discovery's once-per-minute refresh separately from cycle requests.
+    calls=math.ceil((position_count+config['scan_batch_size'])/MAX_SCAN_TOKENS)+4
+    return max(config['scan_interval_seconds'],math.ceil(calls*60/(240-len(DISCOVERY_SEARCHES)-2)))
 
 
 def batch_hold_cycles(config):

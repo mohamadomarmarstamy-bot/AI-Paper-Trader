@@ -467,11 +467,11 @@ class OnChainTests(unittest.TestCase):
         cache={'at':float('-inf'),'mints':{}}
         with patch.object(bot,'_discovery_cache',cache),patch.object(bot,'_request_times',{}),patch.object(bot.requests,'get',side_effect=get),patch.object(bot,'monotonic',return_value=100):
             found=bot.ReadOnlyProviders().profiles()
-            self.assertEqual(len(found),200)
+            self.assertEqual(len(found),220)
             state=bot.initial();state['config']['scan_batch_size']=100
             self.assertEqual(len(bot.select_candidates(state,found)),100)
             self.assertEqual(bot.ReadOnlyProviders().profiles(),found)
-            self.assertEqual(len(calls),10)
+            self.assertEqual(len(calls),2+len(bot.DISCOVERY_SEARCHES))
         with patch.object(bot,'_discovery_cache',cache),patch.object(bot.requests,'get',side_effect=ValueError('offline')),patch.object(bot,'monotonic',return_value=161):
             self.assertEqual(bot.ReadOnlyProviders().profiles(),found)
         with patch.object(bot,'_discovery_cache',cache),patch.object(bot.requests,'get',side_effect=ValueError('offline')),patch.object(bot,'monotonic',return_value=3701):
