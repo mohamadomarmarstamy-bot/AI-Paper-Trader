@@ -380,6 +380,29 @@ class EngineTests(unittest.TestCase):
         self.open();self.now+=60;self.providers.missing=True
         result=self.tick();self.assertEqual(len(result['positions']),1);self.assertIsNone(result['paper_equity_usd'])
         self.assertFalse(result['positions'][0]['mark_fresh']);self.assertEqual(len(result['closed']),0)
+        self.assertEqual(result['valuation']['missing_count'],1)
+        self.assertAlmostEqual(result['valuation']['indicative_equity_usd'],round(result['cash_usd']+result['positions'][0]['marked_value_usd'],4))
+        self.assertIsNone(result['unrealized_pnl_usd'])
+        self.assertIsNone(result['equity_history'][-1]['equity_usd'])
+
+    def test_exact_held_pool_lookup_recovers_omitted_token_listing(self):
+        self.open();good=self.providers.pairs([MINT]);self.providers.missing=True
+        calls=[]
+        def pool_pairs(pair):calls.append(pair);return good
+        self.providers.pool_pairs=pool_pairs
+        self.providers.token_pairs=lambda address:self.fail('Should not fetch token listing after exact-pool recovery.')
+        self.now+=60;result=self.tick()
+        self.assertEqual(calls,[PAIR]);self.assertTrue(result['positions'][0]['mark_fresh'])
+        self.assertIsNotNone(result['paper_equity_usd']);self.assertEqual(result['valuation']['missing_count'],0)
+
+    def test_wrong_mint_or_pool_in_direct_lookup_never_marks_or_closes(self):
+        self.open();good=self.providers.pairs([MINT]);good[0]['pairAddress']=OTHER
+        self.providers.pool_pairs=lambda pair:good
+        self.providers.missing=True;self.now+=1801
+        result=self.tick();self.assertIsNone(result['paper_equity_usd']);self.assertEqual(result['closed'],[])
+        self.assertEqual(len(result['positions']),1)
+        good[0]['pairAddress']=PAIR;good[0]['baseToken']['address']=OTHER
+        self.now+=60;result=self.tick();self.assertIsNone(result['paper_equity_usd']);self.assertEqual(result['closed'],[])
     def test_daily_marked_loss_brake_blocks_new_entries(self):
         self.open();self.configure({'daily_loss_usd':10});self.now+=60;self.providers.price=.7
         result=self.tick();self.assertEqual(result['health'],'entry_brake');self.assertFalse(result['positions'])
