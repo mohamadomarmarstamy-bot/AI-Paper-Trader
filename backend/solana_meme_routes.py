@@ -9,6 +9,7 @@ from solana_meme_bot import public, configure, tick, manual_close, Conflict
 
 def build_router(*,require_session):
     router=APIRouter()
+    import solana_copy_trader as copy_bot
     @router.get('/meme-coins')
     @router.get('/meme-coins/trades')
     @router.get('/meme-coins/scanner')
@@ -17,6 +18,29 @@ def build_router(*,require_session):
     def page(request:Request):
         require_session(request)
         return FileResponse(Path(__file__).parent/'frontend'/'meme-coins.html')
+    @router.get('/meme-coins/copy')
+    def copy_page(request:Request):
+        require_session(request)
+        return FileResponse(Path(__file__).parent/'frontend'/'copy-traders.html')
+    @router.get('/meme-coins/copy/status')
+    def copy_status(request:Request):
+        require_session(request)
+        return copy_bot.public()
+    @router.post('/meme-coins/copy/config')
+    async def copy_settings(request:Request):
+        payload=await body(request)
+        if not isinstance(payload,dict) or set(payload)!={'changes','expected_revision'}:raise HTTPException(422,'Settings and revision required.')
+        try:return await run_in_threadpool(copy_bot.configure,payload['changes'],payload['expected_revision'])
+        except Conflict as error:raise HTTPException(409,str(error)) from None
+        except copy_bot.DataUnavailable as error:raise HTTPException(503,str(error)) from None
+        except (ValueError,TypeError,KeyError,OverflowError):raise HTTPException(422,'Invalid copy-paper settings. Use finite nonnegative values and increase-only positive virtual capital.') from None
+    @router.post('/meme-coins/copy/close')
+    async def copy_close(request:Request):
+        payload=await body(request,262144)
+        if not isinstance(payload,dict) or set(payload)!={'positions','pause_new_buys','expected_revision'}:raise HTTPException(422,'Exact positions, pause control and revision required.')
+        try:return await run_in_threadpool(copy_bot.queue_exits,payload['positions'],payload['pause_new_buys'],payload['expected_revision'])
+        except Conflict as error:raise HTTPException(409,str(error)) from None
+        except (ValueError,TypeError,KeyError):raise HTTPException(422,'Invalid copied positions.') from None
     @router.get('/meme-coins/status')
     def saved(request:Request):
         require_session(request)
