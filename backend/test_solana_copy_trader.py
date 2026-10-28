@@ -114,7 +114,15 @@ class CopyTests(unittest.TestCase):
         for change in ({'trade_usd':-1},{'poll_seconds':float('inf')},{'enabled':1},{'wallet_url':'bad'}):
             with self.assertRaises(ValueError):self.config(change)
         with patch.object(copy,'configured',return_value=False):
-            with self.assertRaises(copy.DataUnavailable):self.config({'enabled':True})
+            self.assertTrue(self.config({'enabled':True})['config']['enabled'])
+    def test_resume_held_wallet_does_not_backfill_paused_buys_but_retains_sells(self):
+        self.buy();self.config({'enabled':False});self.now+=10
+        self.source.rows=[trade(self.now-1,index=2)];self.config({'enabled':True})
+        result=self.tick();self.assertEqual(len(result['positions']),1)
+        self.assertEqual(result['events'][0]['reason'],'Buy occurred before copying resumed.')
+        self.source.rows=[trade(self.now-2,'sell',index=3)];self.now+=10
+        result=self.tick();self.assertEqual(result['positions'],[]);self.assertEqual(result['closed_count'],1)
+
     def test_missing_regular_marks_do_not_block_copy_and_shared_window_waits(self):
         self.baseline['net_usd']=None;self.baseline['equity_usd']=None
         data=self.buy();self.assertEqual(len(data['positions']),1);self.assertIsNone(data['comparison']['since'])
@@ -147,13 +155,12 @@ class CopyTests(unittest.TestCase):
 class ProviderTests(unittest.TestCase):
     def test_ranking_requires_profit_winrate_and_enough_sells(self):
         provider=copy.Birdeye();calls=[]
-        def request(path,params=None,payload=None):
-            calls.append((path,params,payload))
-            if 'leaderboard' in path:return [{'owner':WALLET,'realized_pnl':100},{'owner':OTHER,'realized_pnl':-1}]
-            return {'summary':{'counts':{'win_rate':.7,'total_sell':30},'pnl':{'realized_profit_usd':1000}}}
-        provider.request=request;self.assertEqual(provider.leaders()[0]['wallet'],WALLET);self.assertEqual(calls[0][1]['sort_by'],'realized_pnl');self.assertEqual(calls[1][2]['position_scope'],'cumulative')
-        provider.request=lambda *a,**kw:[{'owner':WALLET,'realized_pnl':10}] if 'leaderboard' in a[0] else {'summary':{'counts':{'win_rate':.2,'total_sell':100},'pnl':{'realized_profit_usd':1000}}}
-        self.assertEqual(provider.leaders(),[])
+        provider.request=lambda path,**kw:calls.append((path,kw)) or {'summary':{'counts':{'win_rate':.7,'total_sell':30},'pnl':{'realized_profit_usd':1000}}}
+        row={'address':WALLET,'realized_pnl':100,'ranking_window':'1W'}
+        self.assertEqual(provider.qualify(row)['wallet'],WALLET)
+        self.assertEqual(calls[0][1]['payload']['position_scope'],'cumulative')
+        provider.request=lambda *a,**kw:{'summary':{'counts':{'win_rate':.2,'total_sell':100},'pnl':{'realized_profit_usd':1000}}}
+        self.assertIsNone(provider.qualify(row))
     def test_history_uses_frozen_pagination_window_and_checks_schema(self):
         provider=copy.Birdeye();calls=[]
         provider.request=lambda path,params: calls.append(params) or {'items':[],'hasNext':len(calls)==1}

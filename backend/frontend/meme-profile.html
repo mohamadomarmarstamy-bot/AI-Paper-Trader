@@ -13,8 +13,12 @@
 <p class="muted">Your public wallet address is a profile detail. Updating it does not move funds or change the traders being copied. Never enter a seed phrase or wallet private key.</p>
 <h2 style="margin-top:28px">Birdeye connection</h2><p id="profile-connection" class="muted">Checking saved connection…</p>
 <label>Birdeye API key<input id="profile-key" name="birdeye-api-key" type="password" maxlength="512" autocomplete="new-password" spellcheck="false" autocapitalize="off" placeholder="Paste a new key to connect or replace" aria-describedby="profile-key-help" disabled></label>
-<p id="profile-key-help" class="muted">Leave blank to keep the current key. Saved keys are encrypted on the server and are never displayed again. Saving a key does not start the bot.</p>
+<p id="profile-key-help" class="muted">Leave blank to keep the current key. Saved keys are encrypted on the server and are never displayed again. If PAPER copying is already enabled, saving a working Birdeye key lets discovery begin.</p>
 <label style="display:flex;align-items:center;margin:20px 0"><input id="profile-remove" type="checkbox" style="width:auto" disabled>Remove the current API key</label>
 <p class="muted">Birdeye access must include wallet rankings, wallet P/L, trade history and meme-token metadata. Saving confirms storage; provider access is checked when the copy bot runs.</p>
+<h2 style="margin-top:28px">Solscan swap history · optional</h2><p id="profile-solscan-connection" class="muted">Checking Solscan connection…</p>
+<label>Solscan Pro API key<input id="profile-solscan-key" name="solscan-api-key" type="password" maxlength="512" autocomplete="new-password" spellcheck="false" placeholder="Paste a Solscan API key" disabled></label>
+<label style="display:flex;align-items:center;margin:20px 0"><input id="profile-solscan-remove" type="checkbox" style="width:auto" disabled>Remove the Solscan API key</label>
+<p class="muted">Newly followed traders use Solscan swap history when this key is present. Birdeye is still required for profitable-trader discovery, wallet P/L and meme classification. Existing traders retain their original source to avoid duplicate copies. A saved key does not certify API access.</p>
 <div class="actions"><button id="profile-save" class="primary" type="submit" disabled>Save profile</button><button id="profile-reload" type="button">Reload saved profile</button><a href="/meme-coins/copy">Back to Copy traders →</a></div>
-</form></main><script src="/js/meme-profile.js?v=profile-v1"></script></body></html>
+</form></main><script src="/js/meme-profile.js?v=profile-solscan-v2"></script></body></html>

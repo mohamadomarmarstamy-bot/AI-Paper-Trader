@@ -1,10 +1,11 @@
 (() => {
   const $ = id => document.getElementById(id);
   let revision = null, busy = false, dirty = false;
-  const fields = ['profile-name', 'profile-wallet', 'profile-key', 'profile-remove', 'profile-save'];
+  const fields = ['profile-name', 'profile-wallet', 'profile-key', 'profile-remove', 'profile-solscan-key', 'profile-solscan-remove', 'profile-save'];
   function controls() {
     for (const id of fields) $(id).disabled = busy || revision === null;
     $('profile-key').disabled ||= $('profile-remove').checked;
+    $('profile-solscan-key').disabled ||= $('profile-solscan-remove').checked;
     $('profile-reload').disabled = busy;
   }
   function render(data) {
@@ -16,6 +17,9 @@
     $('profile-wallet').value = data.wallet_address;
     $('profile-key').value = '';
     $('profile-remove').checked = false;
+    $('profile-solscan-key').value = '';
+    $('profile-solscan-remove').checked = false;
+    $('profile-solscan-connection').textContent = data.solscan_error || (data.solscan_api_key_configured ? 'Solscan key saved · provider access checked when copying starts.' : 'Solscan not connected. Birdeye swap history is used without this optional key.');
     $('profile-connection').textContent = data.error || (data.api_key_configured
       ? `API key saved${data.api_key_source === 'server' ? ' in server settings' : ''} · provider access has not been verified here.`
       : 'No API key connected. Add a key below to set up Copy traders.');
@@ -25,6 +29,7 @@
     if (busy) return;
     busy = true; controls();
     $('profile-key').value = '';
+    $('profile-solscan-key').value = '';
     try {
       const response = await fetch('/meme-coins/profile/status', {credentials: 'same-origin', cache: 'no-store'});
       if (!response.ok) throw Error(`Profile unavailable (${response.status}).`);
@@ -40,6 +45,10 @@
     if ($('profile-remove').checked) $('profile-key').value = '';
     controls();
   };
+  $('profile-solscan-remove').onchange = () => {
+    if ($('profile-solscan-remove').checked) $('profile-solscan-key').value = '';
+    controls();
+  };
   $('profile-reload').onclick = () => {
     if (!dirty || confirm('Discard unsaved profile changes and reload?')) load();
   };
@@ -52,10 +61,13 @@
       wallet_address: $('profile-wallet').value,
       api_key: $('profile-key').value,
       remove_api_key: $('profile-remove').checked,
+      solscan_api_key: $('profile-solscan-key').value,
+      remove_solscan_api_key: $('profile-solscan-remove').checked,
       expected_revision: revision
     };
     // Never retain credentials in web storage or repopulate them after a request.
     $('profile-key').value = '';
+    $('profile-solscan-key').value = '';
     $('profile-status').textContent = 'Saving profile…';
     try {
       const response = await fetch('/meme-coins/profile', {
@@ -71,8 +83,8 @@
       $('profile-status').textContent = 'Profile saved. You can return to Copy traders.';
     } catch (error) {
       $('profile-status').textContent = `${error.message} If replacing the key, enter it again before retrying.`;
-    } finally { payload.api_key = ''; busy = false; controls(); }
+    } finally { payload.api_key = ''; payload.solscan_api_key = ''; busy = false; controls(); }
   };
-  window.addEventListener('pagehide', () => { $('profile-key').value = ''; });
+  window.addEventListener('pagehide', () => { $('profile-key').value = ''; $('profile-solscan-key').value = ''; });
   load();
 })();
