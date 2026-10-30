@@ -7896,7 +7896,16 @@ def submit_alpaca_auto_bracket_buy(
         try:
             stock_entry_snapshot = stock_momentum.settings()
             stock_entry_features = stock_momentum.features(
-                scanner_result, risk_check.get('quote') or {}, stock_entry_snapshot['settings'], symbol=normalized_symbol)
+                scanner_result, risk_check.get('quote') or {}, stock_entry_snapshot['settings'], symbol=normalized_symbol,
+                intraday_fetch=lambda name: __import__('stock_intraday').fetch(name,alpaca_market_data_request))
+            # Refresh admission and quote after the potentially slow data lookup.
+            # Setup/volume evidence can be cached; order price/risk must be current.
+            risk_check = validate_alpaca_paper_order_risk(symbol=normalized_symbol,shares=shares,side='buy',owner_manual_entry=False)
+            if not risk_check.get('approved'):
+                return {'success':False,'paper':True,'error':'Refreshed broker admission rejected this entry.','risk':risk_check}
+            stock_entry_features = stock_momentum.features(
+                scanner_result,risk_check.get('quote') or {},stock_entry_snapshot['settings'],symbol=normalized_symbol,
+                intraday_fetch=lambda _:stock_entry_features.get('intraday',{}))
             failed = stock_momentum.evaluate(stock_entry_features, stock_entry_snapshot['settings'], now=time.time())
         except Exception:
             return {'success':False,'paper':True,'error':'Stock entry settings or evidence unavailable; no order submitted.'}
@@ -12228,6 +12237,9 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 "retry_after_seconds": error.retry_after,
             })
             return cycle_result
+
+        from stock_auto_learning import enqueue_positions
+        enqueue_positions(positions)  # Background telemetry; no DB/network delay here.
 
         for position in positions:
             symbol = clean_symbol(
@@ -16731,6 +16743,13 @@ def auto_trader_intraday_momentum_research(
         symbol,
         alpaca_market_data_request,
     )
+
+@app.get("/auto-trader/stock-entry-timing")
+def auto_trader_stock_entry_timing(request: Request,symbol: str = Query(...,min_length=1,max_length=10)):
+    """Authenticated, read-only evidence used by automatic PAPER entry filters."""
+    require_app_session(request)
+    from stock_intraday import fetch
+    return {'paper':True,'symbol':symbol.upper(),**fetch(symbol.upper(),alpaca_market_data_request)}
 
 @app.get("/auto-trader/automated-momentum-research")
 def auto_trader_automated_momentum_research(

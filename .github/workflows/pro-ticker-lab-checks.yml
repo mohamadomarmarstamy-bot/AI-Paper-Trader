@@ -19,7 +19,7 @@ jobs:
       - name: Owner profile credential and copy-account tests
         run: python -m unittest discover -s backend -p 'test_solana*.py' -q
       - name: Stock momentum and 25-trade automatic settings checks
-        run: python -m unittest discover -s backend -p 'test_stock_auto_learning.py' -q
+        run: python -m unittest discover -s backend -p 'test_stock*.py' -q
       - name: Python syntax check (all Pro Ticker modules and tests)
         run: |
           python - <<'PY'
