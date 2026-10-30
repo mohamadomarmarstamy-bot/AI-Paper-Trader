@@ -1833,6 +1833,8 @@ async def lifespan(app: FastAPI):
     copy_paper_task = asyncio.create_task(copy_paper_worker())
     from stock_auto_learning import worker as stock_learning_worker
     stock_learning_task = asyncio.create_task(stock_learning_worker(_invalidate_auto_trader_settings_cache))
+    from stock_research import worker as stock_research_worker
+    stock_research_task = asyncio.create_task(stock_research_worker(alpaca_market_data_request,_invalidate_auto_trader_settings_cache))
     try:
         yield
     finally:
@@ -1845,6 +1847,7 @@ async def lifespan(app: FastAPI):
         meme_paper_task.cancel()
         copy_paper_task.cancel()
         stock_learning_task.cancel()
+        stock_research_task.cancel()
 
         for task in (
             refresh_task,
@@ -1855,6 +1858,7 @@ async def lifespan(app: FastAPI):
             meme_paper_task,
             copy_paper_task,
             stock_learning_task,
+            stock_research_task,
         ):
             try:
                 await task
@@ -11185,6 +11189,14 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                 dict,
             )
         ]
+
+        try:
+            from stock_research import enqueue_scanner
+            enqueue_scanner(scanner_results,{'score_min':AUTO_TRADER_ENTRY_SCORE_MIN,
+                'confidence_min':AUTO_TRADER_ENTRY_CONFIDENCE_MIN,'max_scanner_rank':AUTO_TRADER_MAX_ENTRY_SCANNER_RANK,
+                'max_atr_percent':AUTO_TRADER_MAX_ENTRY_ATR_PERCENT})
+        except Exception:
+            pass  # Research sampling must never interrupt position protection.
 
         # -------------------------------------------------
         # Scanner research observations.

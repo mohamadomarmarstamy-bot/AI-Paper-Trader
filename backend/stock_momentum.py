@@ -16,7 +16,7 @@ DEFAULTS={'stock_min_price_usd':2.,'stock_max_price_usd':20.,
          'stock_slippage_bps_per_side':10.,'stock_fee_bps_per_side':0.}
 RANGES={k:(0.,100. if k.endswith('_percent') else float('inf')) for k in DEFAULTS}
 PREFERENCES={'stock_filters_enabled':True,'stock_require_recent_news':False,'stock_auto_adjust_enabled':True,
-             'stock_intraday_enabled':True,'stock_require_entry_setup':True,'stock_auto_rollback_enabled':True}
+             'stock_intraday_enabled':True,'stock_require_entry_setup':True,'stock_auto_rollback_enabled':True,'stock_parallel_validation_enabled':True}
 _pool=ThreadPoolExecutor(max_workers=2,thread_name_prefix='stock-float')
 _lock=Lock();_cache={};_pending={}
 

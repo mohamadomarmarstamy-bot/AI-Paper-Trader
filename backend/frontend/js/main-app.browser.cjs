@@ -6,7 +6,7 @@ const path=require('node:path');
 const {randomUUID}=require('node:crypto');
 const {chromium}=require('playwright');
 const root=path.resolve(__dirname,'..');
-const defaults={position_size_percent:2,max_order_size_percent:2.5,max_position_size_percent:5,max_open_positions:50,stop_loss_percent:2,take_profit_percent:4,profit_lock_trigger_percent:.75,profit_lock_percent:.25,trailing_stop_percent:1,daily_profit_target_percent:5,daily_loss_limit_percent:1,stock_min_price_usd:2.0,stock_max_price_usd:20.0,stock_min_float_millions:0.0,stock_max_float_millions:20.0,stock_min_volume_ratio:2.0,stock_min_average_volume:250000.0,stock_max_spread_percent:0.5,stock_min_day_change_percent:2.0,stock_min_gap_percent:0.0,stock_max_atr_percent:8.0,stock_news_max_age_hours:24.0,stock_filters_enabled:true,stock_require_recent_news:false,stock_auto_adjust_enabled:true,stock_min_time_volume_ratio:1.5,stock_max_vwap_distance_percent:5,stock_slippage_bps_per_side:10,stock_fee_bps_per_side:0,stock_intraday_enabled:true,stock_require_entry_setup:true,stock_auto_rollback_enabled:true,pause_new_entries:true,notify_trade_events:true,notify_protection_events:true,notify_scanner_events:true};
+const defaults={position_size_percent:2,max_order_size_percent:2.5,max_position_size_percent:5,max_open_positions:50,stop_loss_percent:2,take_profit_percent:4,profit_lock_trigger_percent:.75,profit_lock_percent:.25,trailing_stop_percent:1,daily_profit_target_percent:5,daily_loss_limit_percent:1,stock_min_price_usd:2.0,stock_max_price_usd:20.0,stock_min_float_millions:0.0,stock_max_float_millions:20.0,stock_min_volume_ratio:2.0,stock_min_average_volume:250000.0,stock_max_spread_percent:0.5,stock_min_day_change_percent:2.0,stock_min_gap_percent:0.0,stock_max_atr_percent:8.0,stock_news_max_age_hours:24.0,stock_filters_enabled:true,stock_require_recent_news:false,stock_auto_adjust_enabled:true,stock_min_time_volume_ratio:1.5,stock_max_vwap_distance_percent:5,stock_slippage_bps_per_side:10,stock_fee_bps_per_side:0,stock_intraday_enabled:true,stock_require_entry_setup:true,stock_auto_rollback_enabled:true,stock_parallel_validation_enabled:true,pause_new_entries:true,notify_trade_events:true,notify_protection_events:true,notify_scanner_events:true};
 
 test('main app desktop/mobile settings, Jarvis actions, drawer and voice fallback',{timeout:120000},async()=>{
  let settings,revision,audit,profile,proposals,chatPosts,speechPosts,delaySpeech=false,releaseSpeech=null;
@@ -19,6 +19,7 @@ test('main app desktop/mobile settings, Jarvis actions, drawer and voice fallbac
   const url=new URL(req.url,'http://localhost');const send=(data,status=200)=>{res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(data));};
   if(req.method==='POST')assert.equal(req.headers.origin,origin);
   let body={};if(req.method==='POST'){const parts=[];for await(const chunk of req)parts.push(chunk);body=JSON.parse(Buffer.concat(parts).toString());}
+  if(url.pathname==='/auto-trader/stock-research')return send({success:true,paper:true,enabled:true,performance:{summary:{trades:2,gross_pnl_usd:10,estimated_net_pnl_usd:8,expectancy_usd:4,win_rate_percent:50},groups:{setup:[{label:'Breakout',trades:2,costed_trades:2,estimated_net_pnl_usd:8,expectancy_usd:4,win_rate_percent:50,profit_factor:1.5,sample_note:'Small sample'}],session:[],float:[]},basis:'Actual closed paper trades.',cost_model:{stock_slippage_bps_per_side:10,stock_fee_bps_per_side:0},coverage:{known_setup:2,known_time:2,known_float:1,missing_exit_dates_excluded:0}},parallel:{minimum_pairs:50,minimum_sessions:5,notional_usd:1000,basis:'Prospective paired quote markouts. No orders.',runtime:{last_tick:Date.now()/1000,last_error:null},trials:[{id:'trial',origin:'learner',state:'collecting',changes:{stock_min_time_volume_ratio:1.65},baseline:{stock_min_time_volume_ratio:1.5},stats:{matured_pairs:12,open:2,unavailable:1,sessions:2,symbols:5,different_decisions:4,baseline_shadow_pnl_usd:-10,candidate_shadow_pnl_usd:5,baseline_mean_percent:-.1,candidate_mean_percent:.05,improvement_percent:.15,baseline_selected:12,candidate_selected:8},decision:{reason:'More prospective evidence needed.'}}]}});
   if(url.pathname==='/auto-trader/settings'&&req.method==='GET')return send(snapshot());
   if(url.pathname==='/auto-trader/settings'&&req.method==='POST'){
    if(body.expected_revision!==revision)return send({detail:'Settings changed elsewhere. Refresh before saving.'},409);
@@ -40,7 +41,7 @@ test('main app desktop/mobile settings, Jarvis actions, drawer and voice fallbac
   if(url.pathname==='/jarvis/speech'){speechPosts++;if(delaySpeech)await new Promise(r=>{releaseSpeech=r;});return send({detail:'Synthetic speech failure'},503);}
   if(url.pathname==='/'){
    let html=fs.readFileSync(path.join(root,'index.html'),'utf8');
-   const tested=new Set(['app.js','jarvis.js','profile.js','settings.js','trade-activity.js','notifications.js']);
+   const tested=new Set(['app.js','jarvis.js','profile.js','settings.js','trade-activity.js','notifications.js','stock-research.js']);
    html=html.replace(/<script\b[^>]*src="([^"]+)"[^>]*><\/script>/g,(tag,src)=>tested.has(src.split('/').pop().split('?')[0])?tag:'');
    res.setHeader('Content-Type','text/html');res.end(html);return;
   }
@@ -64,6 +65,7 @@ test('main app desktop/mobile settings, Jarvis actions, drawer and voice fallbac
    });
    await page.goto(origin);await page.waitForFunction(()=>document.getElementById('jarvis-status-text').textContent==='Online · app tools connected');
    assert.equal(await page.evaluate(()=>window.API_URL),origin);
+   await page.locator('.nav-button[data-section="strategy-section"]').click();await page.getByText(/Saved results loaded/).waitFor();assert.match(await page.locator('#stock-cohort-setup').innerText(),/Breakout/);assert.match(await page.locator('#stock-parallel-trials').innerText(),/12 matured pairs/);await page.locator('#stock-research-window').selectOption('30');await page.getByText(/Saved results loaded/).waitFor();
    await page.locator('.nav-button[data-section="settings-section"]').click();
    await page.getByText('Saved settings loaded. Changes affect subsequent decisions.',{exact:true}).waitFor();
    assert.equal(await page.locator('#settings-section input[type=checkbox][disabled]').count(),0);

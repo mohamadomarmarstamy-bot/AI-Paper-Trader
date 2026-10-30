@@ -11,6 +11,7 @@ _observation_queue=Queue(maxsize=1)
 import app_controls as controls
 from stock_momentum import number
 import stock_learning_mail as review_mail
+import stock_research
 
 BATCH_SIZE=25
 SCHEMA='''CREATE TABLE IF NOT EXISTS stock_entry_evidence(order_id TEXT PRIMARY KEY,symbol TEXT NOT NULL,
@@ -24,7 +25,7 @@ CREATE TABLE IF NOT EXISTS stock_learning_experiments(change_id TEXT PRIMARY KEY
  baseline_mean REAL NOT NULL,state TEXT NOT NULL,result_json TEXT NOT NULL DEFAULT '{}');
 CREATE TABLE IF NOT EXISTS stock_exit_observations(trade_book_id INTEGER PRIMARY KEY,
  first_at REAL NOT NULL,last_at REAL NOT NULL,samples INTEGER NOT NULL,
- high_return REAL NOT NULL,low_return REAL NOT NULL,shadow_json TEXT NOT NULL);'''+review_mail.SCHEMA
+ high_return REAL NOT NULL,low_return REAL NOT NULL,shadow_json TEXT NOT NULL);'''+review_mail.SCHEMA+stock_research.SCHEMA
 
 
 def latest_id(conn):
@@ -262,6 +263,12 @@ def review():
         changes,report=plan(rows,current['settings']);change_id=None
         if locked:
             changes={};report.update(changed=False,reason='Follow-up experiment review: '+experiment['state']+'. No additional parameter experiment in this batch.')
+        if changes and 'position_size_percent' not in changes and current['settings']['stock_parallel_validation_enabled']:
+            trial_id=stock_research.propose(conn,current,changes,report)
+            changes=json.loads(conn.execute('SELECT changes_json FROM stock_shadow_trials WHERE id=?',(trial_id,)).fetchone()[0])
+            report.update(proposal={'trial_id':trial_id,'before':{key:current['settings'][key] for key in changes},'after':changes},
+                changed=False,reason='A filter proposal is waiting for an independent prospective comparison before it can change saved settings.')
+            changes={}
         if changes:
             receipt=controls._apply(conn,current,controls.validate(changes),str(uuid.uuid4()),'stock_auto_25')
             change_id=receipt['receipt']['id'];report.update(before=receipt['receipt']['before'],after=receipt['receipt']['after'])
