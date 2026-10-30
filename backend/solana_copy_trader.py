@@ -20,7 +20,7 @@ CASH_MINTS = {'So11111111111111111111111111111111111111112',
               'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
               'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'}
 DEFAULTS = {'enabled': False, 'trade_usd': 50, 'paper_capital_usd': 100000, 'poll_seconds': 10,'auto_discover':True,'max_active_traders':12,
-            'minimum_trader_hold_seconds':60,'reentry_cooldown_seconds':1800}
+            'minimum_trader_hold_seconds':60,'reentry_cooldown_seconds':0,'stop_loss_percent':20}
 SCHEMA = '''CREATE TABLE IF NOT EXISTS solana_copy_state (
  id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, state_json TEXT NOT NULL,
  lease_owner TEXT, lease_until REAL NOT NULL DEFAULT 0);
@@ -100,7 +100,7 @@ def public():
             'config': state['config'], 'revision': state['settings_revision'], 'health': state['health'],
             'error': state['error'], 'started_at': state['started_at'], 'last_cycle': state['last_cycle'],
             'public_rpc_enabled':state.get('public_rpc_enabled',False),'public_discovery':state.get('public_discovery',{}),
-            'entry_protection':{'one_open_position_per_coin':True,'reentry_cooldown_seconds':state['config']['reentry_cooldown_seconds']},'discovery_error':state.get('discovery_error'),
+            'entry_protection':{'one_open_position_per_coin':False,'copy_source_adds':True,'reentry_cooldown_seconds':0,'stop_loss_percent':state['config']['stop_loss_percent']},'discovery_error':state.get('discovery_error'),
             'rpc_coverage':{w:c.get('rpc_coverage') for w,c in state['cursors'].items() if c.get('provider')=='rpc'},
             'cash_usd': state['cash_usd'], **own, 'positions': [{**p,'mark_fresh':p.get('marked_at') is not None and 0<=now-p['marked_at']<=120 and p.get('mark_usd') is not None} for p in state['positions'].values()],
             'traders': state['traders'], 'events': events, 'closed': closed,
@@ -124,6 +124,7 @@ def configure(changes, expected_revision):
             value = bot.num(value)
             if value < 0 or key == 'paper_capital_usd' and value == 0: raise ValueError('Use nonnegative numbers and positive virtual capital.')
             if key=='max_active_traders' and (value<1 or value!=int(value)):raise ValueError('Maximum active traders must be a positive whole number.')
+            if key=='stop_loss_percent' and value>100:raise ValueError('Stop loss must be between 0 and 100 percent; zero disables it.')
             changes[key] = value
     state, revision = load()
     if state['settings_revision'] != expected_revision: raise bot.Conflict('Settings changed. Refresh before saving.')
@@ -313,6 +314,25 @@ def record_close(state, key, quote, now, reason):
     return {**p,'id':str(uuid.uuid4()),'closed_at':now,'exit_price_usd':quote['price'],'proceeds_usd':proceeds,'pnl_usd':proceeds-p['cost_usd'],'reason':reason}
 
 
+def mark_and_protect(state, quotes, observed, closes):
+    """Each copied lot has its own net-cost stop, independent of source history."""
+    stop=state['config']['stop_loss_percent']
+    for key,p in list(state['positions'].items()):
+        quote=holding_quote(p,quotes,observed)
+        if quote and quote['pool']!=p['pool']:
+            p.setdefault('entry_pool',p['pool'])
+            p.setdefault('pool_changes',[]).append({'from':p['pool'],'to':quote['pool'],'at':observed,'reason':'Original pool absent or inactive; active same-mint cash-quoted pool observed.'})
+            p['pool']=quote['pool']
+        p['mark_usd']=max(0,p['quantity']*quote['price']*.99-.1) if quote else None
+        p['marked_at']=quote['at'] if quote else None
+        if not quote:continue
+        reason=('manual_sell' if p.get('manual_sell') else 'trader_sell') if p.get('pending_sell') else None
+        if reason is None and stop>0 and p['mark_usd']<=p['cost_usd']*(1-stop/100):reason='stop_loss'
+        if reason:
+            if reason=='stop_loss':p['stop_loss_percent_at_exit']=stop
+            closes.append(record_close(state,key,quote,observed,reason))
+
+
 def tick(*, provider=None, market=None, clock=time.time):
     now=clock(); state,revision=load(); owner=str(uuid.uuid4())
     with closing(database.get_connection()) as conn:
@@ -321,14 +341,11 @@ def tick(*, provider=None, market=None, clock=time.time):
         conn.commit()
     events=[]; closes=[]; provider=provider or Birdeye(); market=market or bot.ReadOnlyProviders(); state['error']=None
     try:
-        cooldown=state['config']['reentry_cooldown_seconds']
-        state['mint_cooldowns']={mint:until for mint,until in state.get('mint_cooldowns',{}).items() if until>now}
-        if state.get('entry_guard_version')!=1:
-            with closing(database.get_connection()) as conn:
-                for row in conn.execute('SELECT closed_at,details_json FROM solana_copy_closes WHERE closed_at>?',(now-cooldown,)):
-                    closed=json.loads(row['details_json']);mint=closed['mint']
-                    state['mint_cooldowns'][mint]=max(state['mint_cooldowns'].get(mint,0),row['closed_at']+cooldown)
-            state['entry_guard_version']=1
+        # Fetch marks and protect existing lots BEFORE any potentially slow RPC
+        # polling. Missing prices never create synthetic fills or zero marks.
+        if state['positions']:
+            marks=prices([p['mint'] for p in state['positions'].values()],market,clock)
+            mark_and_protect(state,marks,clock(),closes)
         enabled=state['config']['enabled']; incoming=[]
         rpc_wallets={r['wallet'] for r in state['traders'] if state['cursors'].get(r['wallet'],{}).get('provider')=='rpc'}
         connection_missing=enabled and isinstance(provider,Birdeye) and not configured() and not state.get('public_rpc_enabled') and not rpc_wallets
@@ -379,14 +396,7 @@ def tick(*, provider=None, market=None, clock=time.time):
         observed=clock()
         if observed-now>150:raise DataUnavailable('Copy cycle exceeded observation budget.')
         quotes={key:q for key,q in quotes.items() if 0<=observed-q['at']<=45}
-        for p in state['positions'].values():
-            quote=holding_quote(p,quotes,observed)
-            if quote and quote['pool']!=p['pool']:
-                p.setdefault('entry_pool',p['pool'])
-                p.setdefault('pool_changes',[]).append({'from':p['pool'],'to':quote['pool'],'at':observed,'reason':'Original pool absent or inactive; active same-mint cash-quoted pool observed.'})
-                p['pool']=quote['pool']
-            p['mark_usd']=max(0,p['quantity']*quote['price']*.99-.1) if quote else None
-            p['marked_at']=quote['at'] if quote else None
+        mark_and_protect(state,quotes,observed,closes)
         with closing(database.get_connection()) as conn:
             ids=list({r['id'] for r in incoming}); known=set()
             for start in range(0,len(ids),500):
@@ -410,9 +420,6 @@ def tick(*, provider=None, market=None, clock=time.time):
             elif not any(r['wallet']==wallet and r.get('active',True) for r in state['traders']): signal['reason']='Trader no longer passes the historical checks; only exits monitored.'
             elif observed-signal['source_at'] > 90: signal['reason']='Signal arrived more than 90 seconds late.'
             elif latest_sell.get((wallet,mint),-1) >= signal['source_at']: signal['reason']='Trader already sold before detection.'
-            elif any(p['mint']==mint for p in state['positions'].values()):signal['reason']='Already holding this coin; repeated adds are not copied.'
-            elif state['config']['reentry_cooldown_seconds'] and observed<state.get('mint_cooldowns',{}).get(mint,0):signal['reason']='Coin is cooling down after a copied exit; no immediate re-entry.'
-            elif signal.get('source')=='solana_rpc_pump' and isinstance(signal.get('source_position_before'),(float,int)) and signal['source_position_before']>0:signal['reason']='Source wallet already held this coin; add-on purchase skipped.'
             elif state['config']['trade_usd'] <= 0: signal['reason']='Trade amount is zero.'
             elif state['cash_usd'] < state['config']['trade_usd']+.1: signal['reason']='Insufficient copy-paper cash.'
             else:
@@ -430,10 +437,7 @@ def tick(*, provider=None, market=None, clock=time.time):
                     p['mark_usd']=max(0,p['quantity']*quote['price']*.99-.1)
                     state['positions'][p['id']]=p; state['cash_usd']-=cost; signal['status']='paper_buy'; signal['reason']='Copied buy; no liquidity or volume gate.'
             events.append(signal)
-        for key,p in list(state['positions'].items()):
-            quote=holding_quote(p,quotes,observed)
-            if p.get('pending_sell') and quote:
-                closes.append(record_close(state,key,quote,observed,'manual_sell' if p.get('manual_sell') else 'trader_sell'))
+        mark_and_protect(state,quotes,observed,closes)
         if enabled and hasattr(provider,'discover') and now>=state.get('discovery_retry_at',0):
             try:
                 provider.discover(state,clock);state['discovery_error']=None

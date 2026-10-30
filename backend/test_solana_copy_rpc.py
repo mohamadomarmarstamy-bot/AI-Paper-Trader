@@ -111,5 +111,28 @@ class RpcTests(unittest.TestCase):
             with self.assertRaises(ValueError):rpc.request('sendTransaction',['anything'])
             post.assert_not_called()
 
+    def test_full_signature_page_is_backfilled_before_cursor_advances(self):
+        cursor={'provider':'rpc','at':self.now-100,'latest':'old-signature'}
+        newest=[{'signature':('2'+str(i)).ljust(88,'2'),'blockTime':self.now-i,'err':None,'confirmationStatus':'finalized'} for i in range(20)]
+        older={'signature':'3'*88,'blockTime':self.now-30,'err':None,'confirmationStatus':'finalized'}
+        calls=[]
+        def request(method,params):
+            calls.append((method,params))
+            if method=='getSignaturesForAddress':return [older] if 'before' in params[1] else newest
+            return tx(self.now-30,'sell',signature=params[0])
+        with patch.object(rpc,'request',side_effect=request):
+            rows,cur=rpc.trades(WALLET,cursor,self.now)
+            self.assertEqual(rows,[]);self.assertEqual(cur['latest'],'old-signature')
+            self.assertTrue(cur['rpc_coverage']['history_truncated'])
+            rows,cur=rpc.trades(WALLET,cur,self.now+10)
+            self.assertEqual(calls[1][1][1]['before'],newest[-1]['signature'])
+            self.assertEqual(rows[0]['tx_hash'],older['signature'])
+            self.assertEqual(rows[0]['base']['type_swap'],'from')
+            self.assertFalse(cur['rpc_coverage']['history_truncated'])
+            while 'window' in cur:
+                _,cur=rpc.trades(WALLET,cur,self.now+20)
+            self.assertEqual(cur['latest'],newest[0]['signature'])
+            self.assertEqual(cur['at'],self.now)
+
 
 if __name__=='__main__':unittest.main()
