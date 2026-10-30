@@ -57,6 +57,14 @@ class EntryQualityTests(unittest.TestCase):
             result["failed_requirements"],
         )
 
+    def test_live_scanner_field_names_cannot_silently_bypass_chase_guard(self):
+        for key in ('momentum_move_percent','change'):
+            with self.subTest(key=key):
+                result=evaluate(good_candidate(rsi=88.8,**{key:30.51}))
+                self.assertIn('overextended_momentum_chase_risk',result['failed_requirements'])
+        self.assertTrue(evaluate(good_candidate(rsi=75,momentum_move_percent=10,change=30))['passed'])
+        self.assertTrue(evaluate(good_candidate(rsi=75,one_day_change=10,momentum_move_percent=30))['passed'])
+
     def test_large_day_move_alone_does_not_trigger_chase_guard(self):
         result = evaluate(good_candidate(
             rsi=65,
@@ -184,6 +192,11 @@ class ActualEntryFlowTests(unittest.TestCase):
         self.assertFalse(result["passed"])
         self.assertEqual(calls, [])
         self.assertEqual(len(skipped["skipped_candidates"]), 1)
+
+    def test_live_scanner_chase_is_rejected_in_actual_entry_admission(self):
+        skipped,result,calls=self.admission(good_candidate(score=90,confidence=95,rsi=88.8,momentum_move_percent=30.51))
+        self.assertFalse(result['passed']);self.assertEqual(calls,[])
+        self.assertIn('overextended_momentum_chase_risk',skipped['skipped_candidates'][0]['failed_requirements'])
 
     def test_learning_regime_and_news_accumulate(self):
         _, result, calls = self.admission(good_candidate(score=84), regime="BEARISH", sentiment="NEGATIVE", learning={

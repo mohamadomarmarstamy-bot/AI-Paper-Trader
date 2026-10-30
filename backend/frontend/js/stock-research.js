@@ -5,6 +5,23 @@
  const money=v=>Number.isFinite(v)?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(v):'—';
  const pct=v=>Number.isFinite(v)?v.toFixed(2)+'%':'—';
  const text=(tag,value)=>{const node=document.createElement(tag);node.textContent=value;return node;};
+ function samplingReport(sampling){
+  let box=get('stock-research-sampling');
+  if(!box){box=document.createElement('section');box.id='stock-research-sampling';get('stock-parallel-trials').before(box);}
+  box.replaceChildren(text('h4','Opportunity collection'));
+  if(!sampling){box.append(text('p','Waiting for the first sampling breakdown. Zero recorded opportunities does not establish that rejected stocks lost money.'));return;}
+  const states={outside_session:'Outside the regular stock session',paused:'Prospective collection is paused',no_collecting_trials:'No current comparison is collecting',at_capacity:'Waiting for open observations to mature',late_session:'No new observations this close to the closing bell',waiting_for_scan:'Waiting for a fresh scanner batch',stale_scan:'Scanner batch expired; waiting for fresh data',already_sampled:'Eligible opportunities in this 15-minute window were already recorded',no_quality_candidates:'No candidates passed the shared scanner checks',sampled:'New opportunities recorded',no_opportunities_recorded:'This batch produced no qualifying opportunities'};
+  box.append(text('p',`${states[sampling.state]||'Checking candidates'} · checked ${new Date(sampling.updated_at*1000).toLocaleTimeString()}`));
+  const batch=sampling.last_batch;
+  if(!batch?.at)return;
+  box.append(text('p',`Latest batch ${new Date(batch.at*1000).toLocaleTimeString()}: ${batch.scanner_count} scanned → ${batch.quality_eligible} passed scanner checks → ${batch.selected} selected for detailed checks → ${batch.fresh_quotes} fresh entry quotes → ${batch.evaluated} filter evaluations → ${batch.recorded} recorded opportunities. ${batch.already_recorded} eligible candidates already had an observation in this window.`));
+  const labels={signal_not_buy:'Not a BUY signal',score_below_adjusted_minimum:'Scanner score below minimum',confidence_below_minimum:'Confidence below minimum',scanner_rank_above_maximum:'Scanner rank outside entry range',atr_above_maximum:'Volatility above limit',overextended_momentum_chase_risk:'Price already overextended',scanner_stale_or_freshness_unknown:'Scanner data stale or unavailable',fresh_entry_quote_unavailable:'Fresh bid/ask with size unavailable',refreshed_quote_unavailable:'Entry quote could not be refreshed',feature_lookup_failed:'Market evidence lookup failed',float_millions_missing_or_invalid:'Reported float unavailable',stock_max_float_millions:'Float exceeds configured maximum',stock_min_float_millions:'Float below configured minimum',stock_min_price_usd:'Price below configured minimum',stock_max_price_usd:'Price above configured maximum',stock_max_spread_percent:'Spread above configured maximum',intraday_evidence_missing_or_stale:'Intraday evidence missing or stale',stock_min_time_volume_ratio:'Same-time volume below minimum',completed_breakout_or_vwap_pullback_missing:'No completed breakout or VWAP pullback',stock_max_vwap_distance_percent:'Price too far above VWAP',settings_changed:'Settings changed during the lookup',duplicate_opportunity:'Opportunity already recorded'};
+  const label=reason=>labels[reason]||reason.replaceAll('_',' ');
+  const failures=Object.entries(batch.failures||{}).sort((a,b)=>b[1]-a[1]);
+  if(failures.length){box.append(text('p','Rejection counts for the latest batch; one candidate may fail several checks.'));const list=document.createElement('ul');for(const [reason,count] of failures.slice(0,10))list.append(text('li',`${label(reason)}: ${count}`));box.append(list);}
+  for(const example of batch.examples||[]){const reasons=example.baseline_failures?.length?example.baseline_failures.map(label).join(', '):label(example.state);box.append(text('p',`${example.symbol}: ${reasons}${example.float_source?' · Float: '+example.float_source:''}${example.intraday_reason?' · Intraday: '+example.intraday_reason.replaceAll('_',' '):''}`));}
+  box.append(text('p','Rejected candidates do not count as completed comparisons or trades. Missing evidence is never replaced with an assumed price or float.'));
+ }
  function metricsTable(rows){
   const wrap=document.createElement('div');wrap.style.overflowX='auto';const table=document.createElement('table');table.className='stock-research-table';
   const caption=text('caption','Actual closed automatic stock trades · estimated net results');table.append(caption);
@@ -23,6 +40,7 @@
   for(const key of ['setup','session','float']){const target=get('stock-cohort-'+key);target.replaceChildren();target.append(perf.groups[key].length?metricsTable(perf.groups[key]):text('p','No completed trades in this window. New evidence builds as automatic paper trades close.'));}
   get('stock-parallel-basis').textContent=data.parallel.basis;
   const health=data.parallel.runtime;get('stock-parallel-status').textContent=`Prospective comparison ${data.enabled?'enabled':'paused'} · minimum ${data.parallel.minimum_pairs} matured pairs across ${data.parallel.minimum_sessions} sessions. ${health?.last_error||(!health?'Waiting for the research worker.':'Last worker check: '+new Date(health.last_tick*1000).toLocaleString())}`;
+  samplingReport(data.parallel.sampling);
   const trials=get('stock-parallel-trials');trials.replaceChildren();
   if(!data.parallel.trials.length)trials.append(text('p','Comparisons will initialize from the current saved stock settings. No historical results are invented.'));
   for(const trial of data.parallel.trials){

@@ -173,6 +173,80 @@ class StockResearchTests(unittest.TestCase):
             conn.execute('DELETE FROM stock_entry_evidence');conn.commit()
             result=performance.report(conn,controls._snapshot(conn)['settings'],days=0)
         self.assertEqual(result['summary']['trades'],2);self.assertEqual(result['groups']['setup'][0]['label'],'Unknown / legacy setup')
+
+    def sample_candidate(self):
+        candidate={'symbol':'TEST','signal':'BUY','score':80,'confidence':80,'scanner_rank':1,'scanner_stale':False,
+            'atr_percent':4,'volume_ratio':3,'average_volume':500000,'momentum_move_percent':5}
+        criteria={'score_min':75,'confidence_min':70,'max_scanner_rank':10,'max_atr_percent':8}
+        with patch.object(research.time,'time',return_value=self.start):research.enqueue_scanner([candidate],criteria)
+        return candidate,criteria
+
+    def data_request(self):
+        return Mock(side_effect=lambda method,path,params:{'quotes':{symbol:{'bp':4.99,'ap':5,'bs':100,'as':100,
+            't':datetime.fromtimestamp(self.start,ET).isoformat()} for symbol in params['symbols'].split(',')}})
+
+    def test_rejection_diagnostics_explain_zero_pairs_without_weakening_float_filter(self):
+        self.sample_candidate();request=self.data_request()
+        with patch('stock_momentum.reported_float',return_value={'float_shares':25e6,'float_source':'reported float'}):research.step(request,now=self.start)
+        with closing(controls.connect()) as conn:
+            report=research.status(conn)['sampling'];batch=report['last_batch']
+            self.assertEqual(report['state'],'no_opportunities_recorded')
+            self.assertEqual(batch['scanner_count'],1);self.assertEqual(batch['evaluated'],1)
+            self.assertEqual(batch['recorded'],0);self.assertEqual(batch['failures']['stock_max_float_millions'],1)
+            self.assertEqual(batch['examples'][0]['float_source'],'reported float')
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM stock_shadow_opportunities').fetchone()[0],0)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM trade_book').fetchone()[0],0)
+        self.assertEqual(controls.snapshot()['settings']['stock_max_float_millions'],20)
+
+    def test_no_quote_and_base_quality_failures_remain_visible_and_do_not_create_pairs(self):
+        candidate,criteria=self.sample_candidate()
+        with patch('stock_momentum.features') as features:research.step(Mock(return_value={'quotes':{}}),now=self.start);features.assert_not_called()
+        with closing(controls.connect()) as conn:
+            batch=research.status(conn)['sampling']['last_batch']
+            self.assertEqual(batch['fresh_quotes'],0);self.assertEqual(batch['failures']['fresh_entry_quote_unavailable'],1)
+        candidate['scanner_rank']=42
+        with patch.object(research.time,'time',return_value=self.start):research.enqueue_scanner([candidate],criteria)
+        request=self.data_request();research.step(request,now=self.start)
+        request.assert_not_called()
+        with closing(controls.connect()) as conn:
+            report=research.status(conn)['sampling']
+            self.assertEqual(report['state'],'no_quality_candidates')
+            self.assertEqual(report['last_batch']['failures']['scanner_rank_above_maximum'],1)
+
+    def test_already_recorded_opportunity_avoids_duplicate_features_and_early_exit_quotes(self):
+        self.sample_candidate();request=self.data_request()
+        with patch('stock_momentum.reported_float',return_value={'float_shares':15e6}):research.step(request,now=self.start)
+        self.sample_candidate();request.reset_mock()
+        with patch('stock_momentum.features') as features:research.step(request,now=self.start+10);features.assert_not_called()
+        request.assert_not_called()
+        with closing(controls.connect()) as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM stock_shadow_opportunities').fetchone()[0],1)
+            report=research.status(conn)['sampling']
+            self.assertEqual(report['state'],'already_sampled');self.assertEqual(report['last_batch']['already_recorded'],1)
+
+    def test_idle_worker_keeps_latest_batch_evidence_with_explicit_age(self):
+        self.sample_candidate();research.step(Mock(return_value={'quotes':{}}),now=self.start)
+        research.step(Mock(),now=self.start+30)
+        with closing(controls.connect()) as conn:
+            report=research.status(conn)['sampling']
+            self.assertEqual(report['state'],'waiting_for_scan')
+            self.assertEqual(report['updated_at'],self.start+30);self.assertEqual(report['last_batch']['at'],self.start)
+
+    def test_one_failed_feature_lookup_does_not_starve_other_candidates(self):
+        candidate,criteria=self.sample_candidate()
+        with patch.object(research.time,'time',return_value=self.start):
+            research.enqueue_scanner([{**candidate,'symbol':'BAD'},candidate],criteria)
+        original=research.momentum.features
+        def lookup(*args,**kwargs):
+            if kwargs['symbol']=='BAD':raise RuntimeError('synthetic provider outage')
+            return original(*args,**kwargs)
+        with patch('stock_momentum.reported_float',return_value={'float_shares':15e6}),patch('stock_momentum.features',side_effect=lookup):
+            research.step(self.data_request(),now=self.start)
+        with closing(controls.connect()) as conn:
+            report=research.status(conn)['sampling']
+            self.assertEqual(report['last_batch']['recorded'],1)
+            self.assertEqual(report['last_batch']['failures']['feature_lookup_failed'],1)
+            self.assertEqual(conn.execute('SELECT symbol FROM stock_shadow_opportunities').fetchone()[0],'TEST')
     def test_fresh_quote_requires_current_real_bid_ask_and_sizes(self):
         stamp=datetime.fromtimestamp(self.start,ET).isoformat()
         raw={'bp':5,'ap':5.01,'bs':100,'as':100,'t':stamp}

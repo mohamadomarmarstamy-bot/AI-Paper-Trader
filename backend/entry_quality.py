@@ -7,7 +7,7 @@ This module never submits orders or learns parameters from trade outcomes.
 import math
 from typing import Any
 
-ENTRY_POLICY_VERSION = "entry_quality_v3_chase_guard"
+ENTRY_POLICY_VERSION = "entry_quality_v4_scanner_chase_guard"
 
 
 def finite_number(value: Any) -> float | None:
@@ -43,7 +43,11 @@ def evaluate_entry_quality(
     rank = finite_number(rank_value)
     atr = finite_number(candidate.get("atr_percent"))
     rsi = finite_number(candidate.get("rsi"))
-    one_day_change = finite_number(candidate.get("one_day_change"))
+    # Persisted learning rows name this one_day_change; live scanner rows use
+    # momentum_move_percent or change. Missing the alias silently disabled the
+    # chase guard in actual entry admission and prospective sampling.
+    one_day_change = next((value for key in ("one_day_change", "momentum_move_percent", "change")
+                           if (value := finite_number(candidate.get(key))) is not None), None)
 
     if str(candidate.get("signal", "")).strip().upper() != "BUY":
         failed.append("signal_not_buy")
