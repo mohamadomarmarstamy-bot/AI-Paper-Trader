@@ -19,7 +19,8 @@ import solana_copy_solscan as solscan
 CASH_MINTS = {'So11111111111111111111111111111111111111112',
               'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
               'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'}
-DEFAULTS = {'enabled': False, 'trade_usd': 50, 'paper_capital_usd': 100000, 'poll_seconds': 10}
+DEFAULTS = {'enabled': False, 'trade_usd': 50, 'paper_capital_usd': 100000, 'poll_seconds': 10,'auto_discover':True,'max_active_traders':12,
+            'minimum_trader_hold_seconds':60,'reentry_cooldown_seconds':1800}
 SCHEMA = '''CREATE TABLE IF NOT EXISTS solana_copy_state (
  id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, state_json TEXT NOT NULL,
  lease_owner TEXT, lease_until REAL NOT NULL DEFAULT 0);
@@ -60,7 +61,9 @@ def load():
         if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='solana_copy_state'").fetchone():
             return initial(), 0
         row = conn.execute('SELECT state_json,revision FROM solana_copy_state WHERE id=1').fetchone()
-    return (json.loads(row[0]), row[1]) if row else (initial(), 0)
+    if not row:return initial(),0
+    state=json.loads(row[0]);state['config']={**DEFAULTS,**state['config']}
+    return state,row[1]
 
 
 def regular_metrics():
@@ -92,7 +95,8 @@ def public():
             'solscan_configured':solscan.configured(),'discovery':{k:v for k,v in state.get('discovery',{}).items() if k!='pending'},'last_polled':state.get('last_polled',{}),
             'config': state['config'], 'revision': state['settings_revision'], 'health': state['health'],
             'error': state['error'], 'started_at': state['started_at'], 'last_cycle': state['last_cycle'],
-            'public_rpc_enabled':state.get('public_rpc_enabled',False),'discovery_error':state.get('discovery_error'),
+            'public_rpc_enabled':state.get('public_rpc_enabled',False),'public_discovery':state.get('public_discovery',{}),
+            'entry_protection':{'one_open_position_per_coin':True,'reentry_cooldown_seconds':state['config']['reentry_cooldown_seconds']},'discovery_error':state.get('discovery_error'),
             'rpc_coverage':{w:c.get('rpc_coverage') for w,c in state['cursors'].items() if c.get('provider')=='rpc'},
             'cash_usd': state['cash_usd'], **own, 'positions': [{**p,'mark_fresh':p.get('marked_at') is not None and 0<=now-p['marked_at']<=120 and p.get('mark_usd') is not None} for p in state['positions'].values()],
             'traders': state['traders'], 'events': events, 'closed': closed,
@@ -106,12 +110,13 @@ def configure(changes, expected_revision):
     if not isinstance(changes, dict) or not changes or not set(changes) <= set(DEFAULTS) or type(expected_revision) is not int:
         raise ValueError('Known settings and revision required.')
     for key, value in changes.items():
-        if key == 'enabled':
+        if key in ('enabled','auto_discover'):
             if type(value) is not bool: raise ValueError('Boolean required.')
             # An explicit start may wait for a key saved later in Profile.
         else:
             value = bot.num(value)
             if value < 0 or key == 'paper_capital_usd' and value == 0: raise ValueError('Use nonnegative numbers and positive virtual capital.')
+            if key=='max_active_traders' and (value<1 or value!=int(value)):raise ValueError('Maximum active traders must be a positive whole number.')
             changes[key] = value
     state, revision = load()
     if state['settings_revision'] != expected_revision: raise bot.Conflict('Settings changed. Refresh before saving.')
@@ -223,7 +228,8 @@ def signals(rows, wallet):
                 if address in CASH_MINTS: continue
                 side = 'buy' if leg['type_swap'] == 'to' else 'sell'
                 raw_id = json.dumps([wallet,tx,row['ins_index'],row['inner_ins_index'],address,side],separators=(',',':'))
-                result.append({'id':hashlib.sha256(raw_id.encode()).hexdigest(),'wallet':wallet,'mint':address,'side':side,'source_at':timestamp,'tx_hash':tx,'instruction':str(row['ins_index'])+':'+str(row['inner_ins_index']),'source':row.get('source','birdeye')})
+                result.append({'id':hashlib.sha256(raw_id.encode()).hexdigest(),'wallet':wallet,'mint':address,'side':side,'source_at':timestamp,'tx_hash':tx,'instruction':str(row['ins_index'])+':'+str(row['inner_ins_index']),'source':row.get('source','birdeye'),
+                    'source_position_before':row.get('source_position_before')})
         except (KeyError, TypeError, ValueError): continue
     return sorted(result,key=lambda r:(r['source_at'],r['tx_hash'],r['instruction'],r['side']=='buy'))
 
@@ -270,6 +276,7 @@ def queue_exits(ids, pause, expected_revision):
 def record_close(state, key, quote, now, reason):
     p=state['positions'].pop(key); proceeds=max(0,p['quantity']*quote['price']*.99-.1)
     state['cash_usd']+=proceeds
+    state.setdefault('mint_cooldowns',{})[p['mint']]=now+state['config']['reentry_cooldown_seconds']
     return {**p,'id':str(uuid.uuid4()),'closed_at':now,'exit_price_usd':quote['price'],'proceeds_usd':proceeds,'pnl_usd':proceeds-p['cost_usd'],'reason':reason}
 
 
@@ -281,9 +288,17 @@ def tick(*, provider=None, market=None, clock=time.time):
         conn.commit()
     events=[]; closes=[]; provider=provider or Birdeye(); market=market or bot.ReadOnlyProviders(); state['error']=None
     try:
+        cooldown=state['config']['reentry_cooldown_seconds']
+        state['mint_cooldowns']={mint:until for mint,until in state.get('mint_cooldowns',{}).items() if until>now}
+        if state.get('entry_guard_version')!=1:
+            with closing(database.get_connection()) as conn:
+                for row in conn.execute('SELECT closed_at,details_json FROM solana_copy_closes WHERE closed_at>?',(now-cooldown,)):
+                    closed=json.loads(row['details_json']);mint=closed['mint']
+                    state['mint_cooldowns'][mint]=max(state['mint_cooldowns'].get(mint,0),row['closed_at']+cooldown)
+            state['entry_guard_version']=1
         enabled=state['config']['enabled']; incoming=[]
         rpc_wallets={r['wallet'] for r in state['traders'] if state['cursors'].get(r['wallet'],{}).get('provider')=='rpc'}
-        connection_missing=enabled and isinstance(provider,Birdeye) and not configured() and not rpc_wallets
+        connection_missing=enabled and isinstance(provider,Birdeye) and not configured() and not state.get('public_rpc_enabled') and not rpc_wallets
         if connection_missing:
             enabled=False
             state['error']='Automatic PAPER copying is enabled; waiting for a Birdeye data key in Profile.'
@@ -358,6 +373,9 @@ def tick(*, provider=None, market=None, clock=time.time):
             elif not any(r['wallet']==wallet and r.get('active',True) for r in state['traders']): signal['reason']='Trader no longer passes the historical checks; only exits monitored.'
             elif observed-signal['source_at'] > 90: signal['reason']='Signal arrived more than 90 seconds late.'
             elif latest_sell.get((wallet,mint),-1) >= signal['source_at']: signal['reason']='Trader already sold before detection.'
+            elif any(p['mint']==mint for p in state['positions'].values()):signal['reason']='Already holding this coin; repeated adds are not copied.'
+            elif state['config']['reentry_cooldown_seconds'] and observed<state.get('mint_cooldowns',{}).get(mint,0):signal['reason']='Coin is cooling down after a copied exit; no immediate re-entry.'
+            elif signal.get('source')=='solana_rpc_pump' and isinstance(signal.get('source_position_before'),(float,int)) and signal['source_position_before']>0:signal['reason']='Source wallet already held this coin; add-on purchase skipped.'
             elif state['config']['trade_usd'] <= 0: signal['reason']='Trade amount is zero.'
             elif state['cash_usd'] < state['config']['trade_usd']+.1: signal['reason']='Insufficient copy-paper cash.'
             else:
@@ -383,7 +401,10 @@ def tick(*, provider=None, market=None, clock=time.time):
                 provider.discover(state,clock);state['discovery_error']=None
             except DataUnavailable as error:
                 state['discovery_error']=str(error);state['discovery_retry_at']=now+600
-                if not rpc_wallets:state['error']=str(error)
+                if not state.get('public_rpc_enabled') and not rpc_wallets:state['error']=str(error)
+        if enabled and state.get('public_rpc_enabled') and state['config']['auto_discover']:
+            from solana_copy_public_discovery import advance
+            advance(state,clock)
         state['health']='waiting_for_data_key' if connection_missing else 'data_unavailable' if state['error'] else ('running' if state['traders'] else 'searching_profitable_traders') if enabled else 'paused_entries_monitoring_sells'
         state['last_cycle']=observed
         own=metrics(state,observed); regular=regular_metrics(); baseline=state.get('comparison_baseline')

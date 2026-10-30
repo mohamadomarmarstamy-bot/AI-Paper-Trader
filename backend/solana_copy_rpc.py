@@ -80,14 +80,16 @@ def parse(transaction,wallet,signature):
         # Multi-swap transactions cannot establish a single intent reliably.
         if len(matched)!=1:return []
         index,address,quote,side=matched[0]
-        balances={}
+        balances={};pre_balances={}
         for key,sign in [('preTokenBalances',-1),('postTokenBalances',1)]:
             for row in meta[key]:
                 if row.get('owner')!=wallet:continue
                 amount=row['uiTokenAmount'];raw=amount['amount'];decimals=amount['decimals']
                 if not isinstance(raw,str) or not raw.isdigit() or len(raw)>40 or type(decimals) is not int or not 0<=decimals<=18:return []
                 token=mint(row['mint'])
-                balances[token]=balances.get(token,Decimal(0))+sign*Decimal(raw)/(Decimal(10)**decimals)
+                value=Decimal(raw)/(Decimal(10)**decimals)
+                balances[token]=balances.get(token,Decimal(0))+sign*value
+                if sign==-1:pre_balances[token]=pre_balances.get(token,Decimal(0))+value
         delta=balances.get(address,Decimal(0))
         if (side=='buy' and delta<=0) or (side=='sell' and delta>=0):return []
         # Ignore unrelated token gifts/transfers and ambiguous multi-asset flows.
@@ -95,7 +97,7 @@ def parse(transaction,wallet,signature):
         at=num(transaction['blockTime'])
         return [{'owner':wallet,'tx_hash':signature,'ins_index':index,'inner_ins_index':0,'block_unix_time':at,
                  'base':{'address':address,'type_swap':'to' if side=='buy' else 'from'},
-                 'quote':{'address':quote,'type_swap':'from' if side=='buy' else 'to'},'source':'solana_rpc_pump'}]
+                 'quote':{'address':quote,'type_swap':'from' if side=='buy' else 'to'},'source':'solana_rpc_pump','source_position_before':float(pre_balances.get(address,Decimal(0)))}]
     except (ValueError,TypeError,KeyError,IndexError,OverflowError):return []
 
 
