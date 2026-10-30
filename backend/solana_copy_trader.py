@@ -20,7 +20,8 @@ CASH_MINTS = {'So11111111111111111111111111111111111111112',
               'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
               'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'}
 DEFAULTS = {'enabled': False, 'trade_usd': 50, 'paper_capital_usd': 100000, 'poll_seconds': 10,'auto_discover':True,'max_active_traders':12,
-            'minimum_trader_hold_seconds':60,'reentry_cooldown_seconds':0,'stop_loss_percent':20}
+            'minimum_trader_hold_seconds':60,'reentry_cooldown_seconds':0,'stop_loss_percent':20,
+            'max_open_lots_per_coin':1,'stop_loss_cooldown_seconds':1800}
 SCHEMA = '''CREATE TABLE IF NOT EXISTS solana_copy_state (
  id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, state_json TEXT NOT NULL,
  lease_owner TEXT, lease_until REAL NOT NULL DEFAULT 0);
@@ -46,7 +47,8 @@ def configured():
 def initial():
     return {'config': deepcopy(DEFAULTS), 'cash_usd': 100000., 'positions': {}, 'traders': [],
             'cursors': {}, 'token_types': {}, 'started_at': None, 'last_cycle': None, 'health': 'paused',
-            'error': None, 'comparison_baseline': None, 'copy_start_capital': None, 'history': [], 'settings_revision': 0}
+            'error': None, 'comparison_baseline': None, 'copy_start_capital': None, 'history': [], 'settings_revision': 0,
+            'stop_loss_cooldowns': {}}
 
 
 def initialize(conn):
@@ -63,6 +65,18 @@ def load():
         row = conn.execute('SELECT state_json,revision FROM solana_copy_state WHERE id=1').fetchone()
     if not row:return initial(),0
     state=json.loads(row[0]);state['config']={**DEFAULTS,**state['config']}
+    if 'stop_loss_cooldowns' not in state:
+        # Upgrade once from actual archived stop closes, never other exits or
+        # the obsolete all-exit cooldown. Existing holdings are left intact.
+        duration=state['config']['stop_loss_cooldown_seconds'];now=time.time()
+        state['stop_loss_cooldowns']={}
+        with closing(database.get_connection()) as conn:
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='solana_copy_closes'").fetchone():
+                for r in conn.execute('SELECT details_json FROM solana_copy_closes WHERE closed_at>?',(now-duration,)):
+                    close=json.loads(r[0])
+                    if close.get('reason')=='stop_loss':
+                        mint=close['mint'];until=close['closed_at']+duration
+                        state['stop_loss_cooldowns'][mint]=max(until,state['stop_loss_cooldowns'].get(mint,0))
     return state,row[1]
 
 
@@ -100,7 +114,13 @@ def public():
             'config': state['config'], 'revision': state['settings_revision'], 'health': state['health'],
             'error': state['error'], 'started_at': state['started_at'], 'last_cycle': state['last_cycle'],
             'public_rpc_enabled':state.get('public_rpc_enabled',False),'public_discovery':state.get('public_discovery',{}),
-            'entry_protection':{'one_open_position_per_coin':False,'copy_source_adds':True,'reentry_cooldown_seconds':0,'stop_loss_percent':state['config']['stop_loss_percent']},'discovery_error':state.get('discovery_error'),
+            'entry_protection':{'one_open_position_per_coin':state['config']['max_open_lots_per_coin']==1,
+                'max_open_lots_per_coin':state['config']['max_open_lots_per_coin'],
+                'copy_source_adds':state['config']['max_open_lots_per_coin']>1,
+                'reentry_cooldown_seconds':state['config']['stop_loss_cooldown_seconds'],
+                'cooldown_trigger':'stop_loss','stop_loss_percent':state['config']['stop_loss_percent']},
+            'stop_loss_cooldowns':{mint:until for mint,until in state['stop_loss_cooldowns'].items() if until>now},
+            'discovery_error':state.get('discovery_error'),
             'rpc_coverage':{w:c.get('rpc_coverage') for w,c in state['cursors'].items() if c.get('provider')=='rpc'},
             'cash_usd': state['cash_usd'], **own, 'positions': [{**p,'mark_fresh':p.get('marked_at') is not None and 0<=now-p['marked_at']<=120 and p.get('mark_usd') is not None} for p in state['positions'].values()],
             'traders': state['traders'], 'events': events, 'closed': closed,
@@ -124,6 +144,7 @@ def configure(changes, expected_revision):
             value = bot.num(value)
             if value < 0 or key == 'paper_capital_usd' and value == 0: raise ValueError('Use nonnegative numbers and positive virtual capital.')
             if key=='max_active_traders' and (value<1 or value!=int(value)):raise ValueError('Maximum active traders must be a positive whole number.')
+            if key=='max_open_lots_per_coin' and (value<1 or value!=int(value)):raise ValueError('Maximum open lots per coin must be a positive whole number.')
             if key=='stop_loss_percent' and value>100:raise ValueError('Stop loss must be between 0 and 100 percent; zero disables it.')
             changes[key] = value
     state, revision = load()
@@ -310,7 +331,8 @@ def queue_exits(ids, pause, expected_revision):
 def record_close(state, key, quote, now, reason):
     p=state['positions'].pop(key); proceeds=max(0,p['quantity']*quote['price']*.99-.1)
     state['cash_usd']+=proceeds
-    state.setdefault('mint_cooldowns',{})[p['mint']]=now+state['config']['reentry_cooldown_seconds']
+    if reason=='stop_loss' and state['config']['stop_loss_cooldown_seconds']>0:
+        state['stop_loss_cooldowns'][p['mint']]=max(state['stop_loss_cooldowns'].get(p['mint'],0),now+state['config']['stop_loss_cooldown_seconds'])
     return {**p,'id':str(uuid.uuid4()),'closed_at':now,'exit_price_usd':quote['price'],'proceeds_usd':proceeds,'pnl_usd':proceeds-p['cost_usd'],'reason':reason}
 
 
@@ -398,6 +420,9 @@ def tick(*, provider=None, market=None, clock=time.time):
         if observed-now>150:raise DataUnavailable('Copy cycle exceeded observation budget.')
         quotes={key:q for key,q in quotes.items() if 0<=observed-q['at']<=45}
         mark_and_protect(state,quotes,observed,closes)
+        # Retain recently expired deadlines long enough to reject delayed
+        # signals originating during the cooldown; skipped buys never replay.
+        state['stop_loss_cooldowns']={mint:until for mint,until in state['stop_loss_cooldowns'].items() if until>=observed-90}
         with closing(database.get_connection()) as conn:
             ids=list({r['id'] for r in incoming}); known=set()
             for start in range(0,len(ids),500):
@@ -421,6 +446,11 @@ def tick(*, provider=None, market=None, clock=time.time):
             elif not any(r['wallet']==wallet and r.get('active',True) for r in state['traders']): signal['reason']='Trader no longer passes the historical checks; only exits monitored.'
             elif observed-signal['source_at'] > 90: signal['reason']='Signal arrived more than 90 seconds late.'
             elif latest_sell.get((wallet,mint),-1) >= signal['source_at']: signal['reason']='Trader already sold before detection.'
+            elif observed<state['stop_loss_cooldowns'].get(mint,0) or signal['source_at']<state['stop_loss_cooldowns'].get(mint,0):
+                signal['reason']='Coin is in stop-loss cooldown; this buy will not be replayed.'
+                signal['cooldown_until']=state['stop_loss_cooldowns'][mint]
+            elif sum(p['mint']==mint for p in state['positions'].values())>=state['config']['max_open_lots_per_coin']:
+                signal['reason']='Per-coin open-lot limit reached across all followed wallets; add-on skipped.'
             elif state['config']['trade_usd'] <= 0: signal['reason']='Trade amount is zero.'
             elif state['cash_usd'] < state['config']['trade_usd']+.1: signal['reason']='Insufficient copy-paper cash.'
             else:
@@ -436,7 +466,7 @@ def tick(*, provider=None, market=None, clock=time.time):
                     amount=state['config']['trade_usd']; cost=amount+.1
                     p={'id':signal['id'],'mint':mint,'wallet':wallet,'pool':quote['pool'],'symbol':quote['symbol'],'quantity':amount/(quote['price']*1.01),'cost_usd':cost,'entry_price_usd':quote['price'],'opened_at':observed,'source_at':signal['source_at'],'latency_seconds':signal['latency_seconds'],'tx_hash':signal['tx_hash'],'marked_at':quote['at'],'source':signal.get('source','birdeye')}
                     p['mark_usd']=max(0,p['quantity']*quote['price']*.99-.1)
-                    state['positions'][p['id']]=p; state['cash_usd']-=cost; signal['status']='paper_buy'; signal['reason']='Copied buy; no liquidity or volume gate.'
+                    state['positions'][p['id']]=p; state['cash_usd']-=cost; signal['status']='paper_buy'; signal['reason']='Copied buy within per-coin exposure and stop-loss cooldown rules; no liquidity or volume gate.'
             events.append(signal)
         mark_and_protect(state,quotes,observed,closes)
         if enabled and hasattr(provider,'discover') and now>=state.get('discovery_retry_at',0):
