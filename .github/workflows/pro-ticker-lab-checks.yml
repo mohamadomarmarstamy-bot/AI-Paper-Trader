@@ -20,6 +20,10 @@ jobs:
         run: python -m unittest discover -s backend -p 'test_solana*.py' -q
       - name: Stock momentum and 25-trade automatic settings checks
         run: python -m unittest discover -s backend -p 'test_stock*.py' -q
+      - name: Portfolio history outage recovery
+        run: |
+          python -m unittest discover -s backend -p 'test_portfolio_history_recovery.py' -q
+          node --test backend/frontend/js/portfolio.test.cjs
       - name: Python syntax check (all Pro Ticker modules and tests)
         run: |
           python - <<'PY'
