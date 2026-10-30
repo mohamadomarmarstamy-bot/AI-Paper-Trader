@@ -288,13 +288,13 @@ class CopyTests(unittest.TestCase):
         data=self.tick();self.assertEqual(data['closed_count'],1);self.assertEqual(data['positions'],[])
         deadline=data['stop_loss_cooldowns'][TOKEN]
         self.assertEqual(deadline,self.now+1800)
-        self.assertEqual(sum(e['reason'].startswith('Coin is in stop-loss cooldown') for e in data['events']),6)
+        self.assertEqual(sum(e['reason'].startswith('Coin is in protective-exit cooldown') for e in data['events']),6)
         # A different mint still trades during this mint's cooldown.
         self.now+=10;self.source.rows=[trade(self.now-1,token=OTHER,index=11)]
         self.assertEqual(self.tick()['positions'][0]['mint'],OTHER)
         # The state is reloaded from SQLite on every tick, including the stop.
         self.now=deadline+1;self.source.rows=[trade(deadline-1,index=12)]
-        data=self.tick();self.assertIn('stop-loss cooldown',data['events'][0]['reason'])
+        data=self.tick();self.assertIn('protective-exit cooldown',data['events'][0]['reason'])
         # Only a fresh, never-seen source buy after expiry can open this coin.
         self.now+=10;self.source.rows=[trade(self.now-1,index=13)]
         data=self.tick();self.assertEqual(len(data['positions']),2)
@@ -348,6 +348,93 @@ class CopyTests(unittest.TestCase):
             with self.assertRaises(ValueError):self.config({'stop_loss_percent':value})
         self.buy();self.config({'stop_loss_percent':0});self.now+=10;self.market.price=.2;self.source.rows=[]
         self.assertEqual(len(self.tick()['positions']),1)
+
+    def target_price(self,lot,gain):
+        return (lot['cost_usd']*(1+gain/100)+.1)/(lot['quantity']*.99)
+
+    def test_halves_at_20_40_80_and_restarts_do_not_repeat_a_stage(self):
+        lot=self.buy()['positions'][0];original_quantity=lot['quantity'];original_cost=lot['cost_usd']
+        for stage,target in enumerate((20,40,80),1):
+            self.now+=10;self.source.rows=[];self.market.price=self.target_price(lot,target+.001)
+            data=self.tick();self.assertEqual(len(data['positions']),1)
+            lot=data['positions'][0]
+            self.assertAlmostEqual(lot['quantity'],original_quantity/(2**stage))
+            self.assertAlmostEqual(lot['cost_usd'],original_cost/(2**stage))
+            self.assertEqual(lot['profit_take_stages'],stage)
+            self.assertEqual(lot['profit_take_next_percent'],target*2)
+            self.assertEqual(data['partial_exit_count'],stage);self.assertEqual(data['completed_lot_count'],0)
+            self.assertEqual(data['closed'][0]['reason'],'profit_take_half')
+            self.assertEqual(data['closed'][0]['lot_id'],lot['id'])
+            self.assertAlmostEqual(data['net_usd'],data['realized_pnl_usd']+lot['mark_usd']-lot['cost_usd'])
+            self.assertAlmostEqual(sum(c['cost_usd'] for c in data['closed'])+lot['cost_usd'],original_cost)
+            self.now+=10;again=self.tick();self.assertEqual(again['closed_count'],stage)
+        # Source sell closes only the remaining eighth, with one more exit fee.
+        self.now+=10;self.source.rows=[trade(self.now-1,'sell',index=20)]
+        data=self.tick();self.assertEqual(data['positions'],[]);self.assertEqual(data['closed_count'],4)
+        self.assertEqual(data['completed_lot_count'],1);self.assertEqual(data['partial_exit_count'],3)
+        self.assertAlmostEqual(data['closed_cost_usd'],original_cost)
+        self.assertAlmostEqual(sum(c['quantity'] for c in data['closed']),original_quantity)
+        self.assertAlmostEqual(data['cash_usd']-100000,data['realized_pnl_usd'])
+
+    def test_gap_trims_once_and_advances_to_next_unreached_level(self):
+        lot=self.buy()['positions'][0];self.now+=10;self.source.rows=[]
+        self.market.price=self.target_price(lot,100)
+        data=self.tick();self.assertEqual(data['closed_count'],1)
+        self.assertEqual(data['positions'][0]['profit_take_next_percent'],160)
+        for _ in range(3):self.now+=10;self.assertEqual(self.tick()['closed_count'],1)
+
+    def test_first_trim_arms_net_break_even_and_cooldown_but_does_not_free_slot(self):
+        lot=self.buy()['positions'][0];self.now+=10;self.source.rows=[];self.market.price=self.target_price(lot,20.01)
+        data=self.tick();runner=data['positions'][0];banked=data['realized_pnl_usd']
+        self.now+=10;self.source.rows=[trade(self.now-1,index=2)]
+        data=self.tick();self.assertEqual(len(data['positions']),1);self.assertIn('open-lot limit',data['events'][0]['reason'])
+        self.market.price=self.target_price(runner,-.001);self.now+=10;self.source.rows=[trade(self.now-1,index=3)]
+        data=self.tick();self.assertEqual(data['positions'],[])
+        self.assertEqual(data['closed'][0]['reason'],'profit_protection')
+        self.assertGreater(data['realized_pnl_usd'],banked-.01)
+        self.assertIn(TOKEN,data['stop_loss_cooldowns'])
+        self.assertIn('cooldown',data['events'][0]['reason'])
+
+    def test_partial_waits_for_quote_works_paused_offline_and_keeps_runner_protection_if_disabled(self):
+        lot=self.buy()['positions'][0];self.now+=10;self.market.price=self.target_price(lot,20.01)
+        self.source.rows=[];self.market.missing=True
+        self.assertEqual(self.tick()['closed_count'],0)
+        self.config({'enabled':False});self.source.missing=True;self.market.missing=False;self.now+=10
+        data=self.tick();self.assertEqual(data['partial_exit_count'],1)
+        runner=data['positions'][0];self.config({'profit_take_enabled':False})
+        self.now+=10;self.market.price=self.target_price(runner,80);self.assertEqual(self.tick()['closed_count'],1)
+        self.now+=10;self.market.price=self.target_price(runner,-1)
+        self.assertEqual(self.tick()['closed'][0]['reason'],'profit_protection')
+
+    def test_manual_and_source_exits_take_priority_over_a_profit_trim(self):
+        lot=self.buy()['positions'][0];copy.queue_exits([lot['id']],False,copy.public()['revision'])
+        self.now+=10;self.market.price=self.target_price(lot,50);self.source.rows=[]
+        data=self.tick();self.assertEqual(data['closed_count'],1);self.assertFalse(data['closed'][0]['partial_exit'])
+        self.assertEqual(data['closed'][0]['reason'],'manual_sell')
+
+    def test_profit_settings_validate_and_do_not_reset_an_existing_ladder(self):
+        for value in (0,-1,100.1,float('nan'),float('inf')):
+            with self.assertRaises(ValueError):self.config({'profit_take_first_percent':value})
+        with self.assertRaises(ValueError):self.config({'profit_take_enabled':1})
+        lot=self.buy()['positions'][0];self.config({'profit_take_first_percent':10})
+        self.now+=10;self.source.rows=[];self.market.price=self.target_price(lot,10.01)
+        data=self.tick();self.assertEqual(data['positions'][0]['profit_take_next_percent'],20)
+        self.config({'profit_take_first_percent':5});self.now+=10
+        self.assertEqual(self.tick()['closed_count'],1)
+
+    def test_partial_never_realizes_a_loss_due_to_tiny_slice_exit_charge(self):
+        self.config({'trade_usd':.1,'profit_take_first_percent':.01,'stop_loss_percent':0})
+        lot=self.buy()['positions'][0];self.now+=10;self.source.rows=[];self.market.price=self.target_price(lot,1)
+        data=self.tick();self.assertEqual(data['closed_count'],0);self.assertEqual(data['positions'][0]['quantity'],lot['quantity'])
+
+    def test_settings_race_rolls_back_partial_cash_quantity_and_journal_together(self):
+        before=self.buy();lot=before['positions'][0]
+        self.now+=10;self.source.rows=[];self.market.price=self.target_price(lot,20.01)
+        self.source.on_trade=lambda:self.config({'trade_usd':75})
+        with self.assertRaises(regular.Conflict):self.tick()
+        data=copy.public();self.assertEqual(data['closed_count'],0)
+        self.assertEqual(data['cash_usd'],before['cash_usd'])
+        self.assertEqual(data['positions'][0]['quantity'],lot['quantity'])
 
 
 class ProviderTests(unittest.TestCase):

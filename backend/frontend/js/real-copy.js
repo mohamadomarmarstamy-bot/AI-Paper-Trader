@@ -14,7 +14,7 @@
   $('rc-wallet-status').textContent=data.wallet.ownership_verified?(localAddress===data.wallet.address?'Phantom connected · ownership verified':'Wallet verified · reconnect Phantom on this device'):'Link Phantom with a message signature. No spending permission.';
   $('rc-connect').textContent=data.wallet.ownership_verified?'Reconnect Phantom':'Connect Phantom';
   $('rc-count').textContent=active.length;$('rc-size').textContent=money(c.trade_usd);$('rc-paper-return').textContent=Number.isFinite(s.performance.closed_return_percent)?`${s.performance.closed_return_percent>=0?'+':''}${s.performance.closed_return_percent.toFixed(2)}%`:'—';
-  $('rc-paper-profit').textContent=`${money(s.performance.realized_pnl_usd)} net · ${s.performance.closed_count} completed paper trades`;
+  $('rc-paper-profit').textContent=`${money(s.performance.realized_pnl_usd)} net · ${s.performance.closed_count} realized paper exits, including partial sales`;
   $('rc-sync').textContent=`Synced ${new Date(s.read_at*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} · revision ${s.settings_revision}`;
   $('rc-fingerprint').textContent=s.snapshot.slice(0,12);$('rc-guard').textContent=b.entry_protection.one_open_position_per_coin?'One position per coin':'Every fresh buy + add-ons';
   $('rc-cooldown').textContent=c.stop_loss_percent===0?'Off':`${c.stop_loss_percent??20}% per lot`;
