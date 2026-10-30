@@ -22,7 +22,8 @@ class StockLearningTests(unittest.TestCase):
             CREATE TABLE learning_outcomes(id INTEGER PRIMARY KEY,trade_book_id INTEGER UNIQUE,symbol TEXT,entry_price REAL,
             entry_score REAL,spread_percent REAL,realized_profit_loss REAL,realized_return_percent REAL,shares REAL,holding_seconds REAL,exit_reason TEXT);''')
             learning.initialize(conn)
-            conn.execute("INSERT INTO app_settings VALUES('stock_intraday_enabled','false','fixture')");conn.commit()
+            conn.execute("INSERT INTO app_settings VALUES('stock_intraday_enabled','false','fixture')")
+            conn.execute("INSERT INTO app_settings VALUES('stock_parallel_validation_enabled','false','fixture')");conn.commit()
         self.config=controls.snapshot()['settings']
 
     def add(self,start,count,*,pattern=False,entry_reason='auto_trader_entry',closed=True):

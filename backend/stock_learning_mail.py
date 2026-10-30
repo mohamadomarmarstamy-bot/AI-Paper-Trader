@@ -62,10 +62,15 @@ def compose(event):
                '', 'Settings changed:' if report.get('after') else 'No new filter or position-size change in this batch.']
         lines+=changes(report.get('before',{}),report.get('after',{}))
         lines+=['Reason: '+report['reason']]
+        if report.get('proposal'):
+            lines+=['Proposed only; not applied yet:']+changes(report['proposal']['before'],report['proposal']['after'])
         if report.get('cost_model'):
             model=report['cost_model'];lines.append(f"Extra cost assumptions per side: {model['stock_slippage_bps_per_side']:g} bps slippage + {model['stock_fee_bps_per_side']:g} bps fees.")
         lines+=['Symbols: '+', '.join(dict.fromkeys(report.get('symbols',[]))),
                 'Review reference: '+event['id']]
+    elif event.get('kind')=='promotion':
+        title='PAPER stocks: independently compared filter applied'
+        lines=[title]+changes(event['before'],event['after'])+['Reason: '+event['reason'],'Comparison reference: '+event['trial_id']]
     else:
         title='PAPER stocks: 25-trade follow-up rollback'
         lines=[title,'The filter experiment completed its 25 qualifying follow-up trades.']

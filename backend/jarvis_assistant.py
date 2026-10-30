@@ -222,6 +222,19 @@ def build_router(*,require_session,assistant,runtime,load_profile,save_profile,s
         from stock_auto_learning import status as stock_learning_status
         return JSONResponse({'success':True,'paper':True,**controls.snapshot(),'defaults':controls.ALL_DEFAULTS,
                              'stock_learning':stock_learning_status(),'runtime':clean_data(runtime())},headers={'Cache-Control':'no-store'})
+    @router.get('/auto-trader/stock-research')
+    def stock_research_report(request:Request,days:int=90):
+        require_session(request)
+        if days not in (0,7,30,90,365):raise HTTPException(422,'Choose 7, 30, 90, 365 days or 0 for the available history.')
+        from contextlib import closing
+        from stock_auto_learning import initialize
+        import stock_research
+        import stock_performance
+        with closing(controls.connect()) as conn:
+            initialize(conn)
+            config=controls._snapshot(conn)['settings']
+            return JSONResponse({'success':True,'paper':True,'enabled':config['stock_parallel_validation_enabled'],
+                'performance':stock_performance.report(conn,config,days=days),'parallel':stock_research.status(conn)},headers={'Cache-Control':'no-store'})
     @router.post('/auto-trader/settings')
     async def save_settings(request:Request):
         data=await body(request)

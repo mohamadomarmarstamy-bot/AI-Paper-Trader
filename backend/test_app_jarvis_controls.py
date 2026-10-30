@@ -202,6 +202,15 @@ class JarvisTests(unittest.TestCase):
         self.assertTrue(result['success'])
         self.assertEqual(ad['alpaca_paper_request'].call_args.kwargs['json_body']['stop_loss']['stop_price'],'97.00')
 
+    def test_stock_research_is_authenticated_read_only_and_validates_windows(self):
+        self.assertEqual(self.request('/auto-trader/stock-research',method='GET',headers={}).status_code,401)
+        self.assertEqual(self.request('/auto-trader/stock-research?days=-1',method='GET').status_code,422)
+        data=self.request('/auto-trader/stock-research?days=30',method='GET').json()
+        self.assertTrue(data['paper']);self.assertEqual(data['performance']['summary']['trades'],0)
+        self.assertEqual(data['parallel']['trials'],[])
+        self.assertEqual(controls.snapshot()['audit'],[])
+        self.provider.assert_not_called();self.read.assert_not_called()
+
     def test_every_editable_numeric_setting_has_a_production_consumer(self):
         import ast
         tree=ast.parse(Path(__file__).with_name('main.py').read_text(encoding='utf-8-sig'))
