@@ -316,7 +316,7 @@ def tick(*, provider=None, market=None, clock=time.time):
         if enabled:
             for address,is_rpc in dict.fromkeys((r['mint'],r['wallet'] in rpc_wallets and r.get('source')=='solana_rpc_pump') for r in incoming if r['side']=='buy' and 0<=clock()-r['source_at']<=90):
                 if is_rpc:
-                    state['token_types']['rpc:'+address]={'is_meme':True,'at':clock(),'basis':'Supported Pump/PumpSwap instruction; token meme status is not independently verified.'}
+                    state['token_types']['rpc:'+address]={'platform_supported':True,'at':clock(),'basis':'Supported Pump/PumpSwap instruction; token meme status is not independently verified.'}
                     continue
                 category=state['token_types'].get(address)
                 if category and clock()-category['at']<=86400:continue
@@ -364,7 +364,8 @@ def tick(*, provider=None, market=None, clock=time.time):
                 category=state['token_types'].get(('rpc:' if wallet in rpc_wallets and signal.get('source')=='solana_rpc_pump' else '')+mint)
                 if not category or observed-category['at']>86400:
                     signal['reason']=category_errors.get(mint,'Meme category observation unavailable.'); events.append(signal); continue
-                if not category['is_meme']:
+                eligible=category.get('platform_supported',False) if wallet in rpc_wallets and signal.get('source')=='solana_rpc_pump' else category.get('is_meme',False)
+                if not eligible:
                     signal['reason']='Provider does not identify this token as a meme coin.'; events.append(signal); continue
                 quote=next((q for (a,_),q in quotes.items() if a==mint),None)
                 if not quote: signal['reason']='No current positive pool price. No fill invented.'
