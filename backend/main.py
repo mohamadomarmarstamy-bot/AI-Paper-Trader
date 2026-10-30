@@ -11190,10 +11190,13 @@ def run_auto_trader_cycle() -> dict[str, Any]:
             )
         ]
 
-        from stock_research import enqueue_scanner
-        enqueue_scanner(scanner_results,{'score_min':AUTO_TRADER_ENTRY_SCORE_MIN,
-            'confidence_min':AUTO_TRADER_ENTRY_CONFIDENCE_MIN,'max_scanner_rank':AUTO_TRADER_MAX_ENTRY_SCANNER_RANK,
-            'max_atr_percent':AUTO_TRADER_MAX_ENTRY_ATR_PERCENT})
+        try:
+            from stock_research import enqueue_scanner
+            enqueue_scanner(scanner_results,{'score_min':AUTO_TRADER_ENTRY_SCORE_MIN,
+                'confidence_min':AUTO_TRADER_ENTRY_CONFIDENCE_MIN,'max_scanner_rank':AUTO_TRADER_MAX_ENTRY_SCANNER_RANK,
+                'max_atr_percent':AUTO_TRADER_MAX_ENTRY_ATR_PERCENT})
+        except Exception:
+            pass  # Research sampling must never interrupt position protection.
 
         # -------------------------------------------------
         # Scanner research observations.
