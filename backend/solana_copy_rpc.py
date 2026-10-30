@@ -116,7 +116,9 @@ def trades(wallet,cursor,now):
         options={'limit':SIGNATURE_PAGE_SIZE,'commitment':'confirmed'}
         if cursor.get('latest'):options['until']=cursor['latest']
         if window is not None:options['before']=window['scan_before']
+        requested=time.monotonic()
         data=request('getSignaturesForAddress',[wallet,options])
+        received_at=now+max(0,time.monotonic()-requested)
         if not isinstance(data,list) or len(data)>SIGNATURE_PAGE_SIZE:raise DataUnavailable('Unsupported public RPC signature list.')
         queue=[]
         for row in data:
@@ -125,7 +127,7 @@ def trades(wallet,cursor,now):
             if row.get('err') is None and row.get('confirmationStatus') in ('confirmed','finalized'):
                 if row.get('blockTime') is None:raise DataUnavailable('RPC transaction time not available yet.')
                 at=num(row['blockTime'])
-                if at>now+5:raise DataUnavailable('RPC transaction time is ahead of this server.')
+                if at>received_at+5:raise DataUnavailable('RPC transaction time is ahead of this server.')
                 if at>=cursor['at']-2:queue.append(row)
         if window is None:
             window={'queue':[],'at':now,'newest':data[0]['signature'] if data else cursor.get('latest'),
