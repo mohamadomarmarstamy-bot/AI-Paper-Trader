@@ -154,6 +154,16 @@ class RpcTests(unittest.TestCase):
             self.assertEqual(len(rows),1);self.assertEqual(rows[0]['base']['type_swap'],'from')
             self.assertNotIn('window',cur);self.assertEqual(cur['latest'],failed[0]['signature'])
 
+    def test_signature_time_check_accounts_for_slow_response_but_rejects_future_clock(self):
+        cursor={'provider':'rpc','at':self.now-10}
+        row={'signature':'2'*88,'blockTime':self.now+7,'err':None,'confirmationStatus':'confirmed'}
+        with patch.object(rpc.time,'monotonic',side_effect=[0,7]),patch.object(rpc,'request',side_effect=[ [row],tx(self.now+7)]):
+            signals,updated=rpc.trades(WALLET,cursor,self.now)
+            self.assertEqual(len(signals),1)
+        row['blockTime']=self.now+30
+        with patch.object(rpc.time,'monotonic',side_effect=[0,7]),patch.object(rpc,'request',return_value=[row]):
+            with self.assertRaises(copy.DataUnavailable):rpc.trades(WALLET,cursor,self.now)
+
     def test_transaction_timeout_keeps_successfully_decoded_prefix_and_retries_only_remaining(self):
         cursor={'provider':'rpc','at':self.now-10}
         signatures=[{'signature':str(i)*88,'blockTime':self.now-i,'err':None,'confirmationStatus':'confirmed'} for i in (2,3,4)]
