@@ -65,6 +65,7 @@ class CopyTests(unittest.TestCase):
         self.assertEqual(copy.public()['cash_usd'],data['cash_usd'])
         self.now+=86401;self.tick();self.assertEqual(len(copy.public()['positions']),1)
     def test_source_sell_closes_all_copied_lots_and_persists_accounting(self):
+        self.config({'max_open_lots_per_coin':2})
         self.buy();self.now+=10;self.source.rows=[trade(self.now-2,index=2)];self.tick()
         self.assertEqual(len(copy.public()['positions']),2)
         self.now+=10;self.market.price=3;self.source.rows=[trade(self.now-1,'sell',index=3)]
@@ -200,27 +201,32 @@ class CopyTests(unittest.TestCase):
         self.assertEqual(client.post('/meme-coins/copy/close',headers={'Origin':'http://testserver'},json={'price':2}).status_code,422)
 
 
-    def test_six_distinct_add_transactions_each_create_a_lot_but_replays_do_not(self):
+    def test_six_distinct_adds_only_open_one_lot_and_never_replay(self):
         self.start();self.now+=10
         self.source.rows=[trade(self.now-6+i,index=i+1,tx=str(i+2)*88) for i in range(6)]
-        data=self.tick();self.assertEqual(len(data['positions']),6);self.assertAlmostEqual(data['cash_usd'],100000-6*50.1)
-        self.assertEqual(sum(e['status']=='paper_buy' for e in data['events']),6)
+        data=self.tick();self.assertEqual(len(data['positions']),1);self.assertAlmostEqual(data['cash_usd'],100000-50.1)
+        self.assertEqual(sum(e['status']=='paper_buy' for e in data['events']),1)
+        self.assertEqual(sum('open-lot limit' in e['reason'] for e in data['events']),5)
         self.tick();self.assertEqual(copy.public()['cash_usd'],data['cash_usd'])
+        self.now+=10;self.source.rows=[trade(self.now-1,'sell',index=9)];self.tick()
+        self.source.rows=[trade(self.now-16+i,index=i+1,tx=str(i+2)*88) for i in range(6)]
+        self.assertEqual(self.tick()['positions'],[])
 
-    def test_same_coin_from_second_wallet_gets_its_own_lot(self):
+    def test_same_coin_limit_applies_across_wallets(self):
         self.buy();state,_=copy.load()
         state['traders'].append({'wallet':OTHER,'selected_at':self.now,'active':True})
         state['cursors'][OTHER]={'at':self.now}
         with closing(database.get_connection()) as conn:conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1',(json.dumps(state),));conn.commit()
         self.now+=10;self.source.rows=[trade(self.now-1,wallet=OTHER,index=2)]
-        self.assertEqual(len(self.tick()['positions']),2)
+        data=self.tick();self.assertEqual(len(data['positions']),1)
+        self.assertIn('across all followed wallets',data['events'][0]['reason'])
 
     def test_new_buy_after_exit_is_copied_without_cooldown(self):
         self.buy();self.now+=10;self.source.rows=[trade(self.now-1,'sell',index=2)];self.tick()
         self.now+=10;self.source.rows=[trade(self.now-1,index=3)];data=self.tick()
         self.assertEqual(len(data['positions']),1)
         self.now+=1801;self.source.rows=[trade(self.now-1,index=4)]
-        self.assertEqual(len(self.tick()['positions']),2)
+        self.assertEqual(len(self.tick()['positions']),1)
 
     def test_legacy_cooldown_does_not_block_new_buys(self):
         self.buy();self.now+=10;self.source.rows=[trade(self.now-1,'sell',index=2)];self.tick()
@@ -264,6 +270,7 @@ class CopyTests(unittest.TestCase):
         self.assertEqual(data['closed'][0]['exit_price_usd'],.2)
 
     def test_addon_lots_stop_individually_and_real_workspace_inherits_rule(self):
+        self.config({'max_open_lots_per_coin':2})
         self.buy();self.now+=10;self.market.price=2.4;self.source.rows=[trade(self.now-1,index=2)];self.tick()
         self.now+=10;self.market.price=1.9;self.source.rows=[];data=self.tick()
         self.assertEqual(len(data['positions']),1);self.assertEqual(data['closed_count'],1)
@@ -273,6 +280,68 @@ class CopyTests(unittest.TestCase):
         live=solana_real_copy.public();self.assertFalse(live['live_execution_enabled'])
         self.assertEqual(live['paper_sync']['blueprint']['settings']['stop_loss_percent'],20)
         self.assertFalse(live['paper_sync']['blueprint']['entry_protection']['one_open_position_per_coin'])
+        self.assertEqual(live['paper_sync']['blueprint']['settings']['stop_loss_cooldown_seconds'],1800)
+
+    def test_spacecat_pattern_stops_once_blocks_rebuys_and_other_coins_continue(self):
+        self.buy();self.now+=10;self.market.price=1.4
+        self.source.rows=[trade(self.now-1,index=i+2,tx=str(i+3)*88) for i in range(6)]
+        data=self.tick();self.assertEqual(data['closed_count'],1);self.assertEqual(data['positions'],[])
+        deadline=data['stop_loss_cooldowns'][TOKEN]
+        self.assertEqual(deadline,self.now+1800)
+        self.assertEqual(sum(e['reason'].startswith('Coin is in stop-loss cooldown') for e in data['events']),6)
+        # A different mint still trades during this mint's cooldown.
+        self.now+=10;self.source.rows=[trade(self.now-1,token=OTHER,index=11)]
+        self.assertEqual(self.tick()['positions'][0]['mint'],OTHER)
+        # The state is reloaded from SQLite on every tick, including the stop.
+        self.now=deadline+1;self.source.rows=[trade(deadline-1,index=12)]
+        data=self.tick();self.assertIn('stop-loss cooldown',data['events'][0]['reason'])
+        # Only a fresh, never-seen source buy after expiry can open this coin.
+        self.now+=10;self.source.rows=[trade(self.now-1,index=13)]
+        data=self.tick();self.assertEqual(len(data['positions']),2)
+        self.assertEqual(data['closed_count'],1)
+
+    def test_missing_quote_does_not_free_a_coin_slot_and_source_exit_has_no_cooldown(self):
+        self.buy();self.now+=10;self.market.missing=True;self.source.rows=[trade(self.now-1,index=2)]
+        data=self.tick();self.assertEqual(len(data['positions']),1)
+        self.assertIn('open-lot limit',data['events'][0]['reason'])
+        self.market.missing=False;self.now+=10;self.source.rows=[trade(self.now-1,'sell',index=3)]
+        data=self.tick();self.assertEqual(data['stop_loss_cooldowns'],{})
+        self.now+=10;self.source.rows=[trade(self.now-1,index=4)]
+        self.assertEqual(len(self.tick()['positions']),1)
+
+    def test_upgrade_seeds_only_recent_stop_closes_and_preserves_live_lot(self):
+        self.buy();self.now+=10;self.market.price=1.4;self.source.rows=[];self.tick()
+        state,_=copy.load();state.pop('stop_loss_cooldowns')
+        state['config'].pop('max_open_lots_per_coin');state['config'].pop('stop_loss_cooldown_seconds')
+        state['config']['reentry_cooldown_seconds']=0
+        with closing(database.get_connection()) as conn:
+            conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1',(json.dumps(state),));conn.commit()
+        loaded,_=copy.load();self.assertEqual(loaded['stop_loss_cooldowns'][TOKEN],self.now+1800)
+        self.assertEqual(loaded['config']['max_open_lots_per_coin'],1)
+        self.now+=10;self.source.rows=[trade(self.now-1,index=2)]
+        self.assertEqual(self.tick()['positions'],[])
+        # Migration ignores ordinary losing source/manual exits.
+        state,_=copy.load();state.pop('stop_loss_cooldowns')
+        with closing(database.get_connection()) as conn:
+            conn.execute("UPDATE solana_copy_closes SET details_json=json_set(details_json,'$.reason','trader_sell')")
+            conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1',(json.dumps(state),));conn.commit()
+        self.assertEqual(copy.load()[0]['stop_loss_cooldowns'],{})
+
+    def test_raising_limit_is_explicit_existing_lots_are_not_liquidated(self):
+        self.config({'max_open_lots_per_coin':3});self.buy()
+        self.now+=10;self.source.rows=[trade(self.now-1,index=2),trade(self.now-1,index=3)];self.tick()
+        self.config({'max_open_lots_per_coin':1});self.now+=10;self.source.rows=[trade(self.now-1,index=4)]
+        data=self.tick();self.assertEqual(len(data['positions']),3);self.assertEqual(data['closed_count'],0)
+        self.assertIn('open-lot limit',data['events'][0]['reason'])
+        for value in (-1,0,1.5,float('nan'),float('inf')):
+            with self.assertRaises(ValueError):self.config({'max_open_lots_per_coin':value})
+        with self.assertRaises(ValueError):self.config({'stop_loss_cooldown_seconds':-1})
+
+    def test_zero_future_stop_cooldown_does_not_block_a_new_buy(self):
+        self.config({'stop_loss_cooldown_seconds':0});self.buy();self.now+=10;self.market.price=1.4
+        self.source.rows=[trade(self.now-1,index=2)]
+        data=self.tick();self.assertEqual(data['closed_count'],1);self.assertEqual(len(data['positions']),1)
+        self.assertEqual(data['stop_loss_cooldowns'],{})
 
     def test_stop_setting_validation_and_zero_disables(self):
         for value in (-1,100.01,float('nan'),float('inf')):
