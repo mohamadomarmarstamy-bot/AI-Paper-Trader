@@ -33,6 +33,7 @@ def tx(at,side='buy',signature='2'*88):
 
 class RpcTests(unittest.TestCase):
     def setUp(self):
+        p=patch('solana_copy_public_discovery.advance');p.start();self.addCleanup(p.stop)
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
         p=patch.object(database,'DATABASE_PATH',Path(temp.name)/'test.sqlite3');p.start();self.addCleanup(p.stop)
         self.now=1800000000.
