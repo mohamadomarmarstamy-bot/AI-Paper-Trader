@@ -152,10 +152,12 @@ def public():
         else:indicative_complete=False
         positions.append({'mint':address,**p,'position_id':position_reference(address,p),'mark_fresh':fresh,'current_modeled_value_usd':mark,
                           'last_known_value_usd':last if known else None})
-    with closing(database.get_connection()) as conn:learning_summary=learner.summary(conn)
+    with closing(database.get_connection()) as conn:
+        learning_summary=learner.summary(conn)
+        daily_pnl=learner.daily_pnl(conn,now)
     return {'learning_email_configured':learning_mail.configured(),'learning_summary':learning_summary,'version':VERSION,'paper':True,'live_execution_enabled':False,'revision':state.get('settings_revision',0),
             **{k:v for k,v in state.items() if k not in ('positions','observations','cooldowns','discovery_batch','discovery_uses','discovery_offset','settings_revision','unavailable_until','watch_batch','watch_uses','watch_offset')},
-            'positions':positions,'paper_equity_usd':round(value,4) if complete else None,'risk_guard':entry_risk(state,now),
+            'positions':positions,'paper_equity_usd':round(value,4) if complete else None,'risk_guard':entry_risk(state,now),'daily_pnl':daily_pnl,
             'valuation':{'missing_count':sum(p['current_modeled_value_usd'] is None for p in positions),
                          'indicative_equity_usd':round(indicative,4) if indicative_complete else None,
                          'oldest_mark_at':min(mark_times) if mark_times else None},

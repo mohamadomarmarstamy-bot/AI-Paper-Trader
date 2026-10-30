@@ -2,6 +2,8 @@
 import json
 import math
 import uuid
+from datetime import datetime, time as datetime_time, timedelta
+from zoneinfo import ZoneInfo
 from statistics import mean
 
 POLICY_KEYS=('trade_usd','stop_percent','target_percent','trail_arm_percent','trail_percent','max_hold_minutes')
@@ -35,6 +37,23 @@ def archive(conn,rows):
 def recent(conn,limit=1000):
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='solana_meme_learning_outcomes'").fetchone():return []
     return [json.loads(r[0]) for r in reversed(conn.execute('SELECT details_json FROM solana_meme_learning_outcomes ORDER BY closed_at DESC,id DESC LIMIT ?',(limit,)).fetchall())]
+
+
+def daily_pnl(conn,now):
+    """Calendar-day closed-trade P/L; a read-only view, independent of risk anchors."""
+    zone=ZoneInfo('America/New_York')
+    day=datetime.fromtimestamp(now,zone).date()
+    start=datetime.combine(day,datetime_time.min,tzinfo=zone).timestamp()
+    end=datetime.combine(day+timedelta(days=1),datetime_time.min,tzinfo=zone).timestamp()
+    total=count=wins=losses=0
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='solana_meme_learning_outcomes'").fetchone():
+        total,count,wins,losses=conn.execute(
+            'SELECT COALESCE(SUM(pnl_usd),0),COUNT(*),COALESCE(SUM(pnl_usd>0),0),COALESCE(SUM(pnl_usd<0),0) '
+            'FROM solana_meme_learning_outcomes WHERE closed_at>=? AND closed_at<? AND closed_at<=?',
+            (start,end,now)).fetchone()
+    return {'date':day.isoformat(),'timezone':'America/New_York','starts_at':start,'resets_at':end,
+            'realized_pnl_usd':round(total,4),'closed_count':count,'wins':wins,'losses':losses,
+            'basis':'Closed PAPER trades after modeled costs, by exit time. Open P/L is excluded. History and the loss guard are unchanged.'}
 
 
 def summary(conn):

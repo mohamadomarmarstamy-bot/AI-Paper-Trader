@@ -1,4 +1,6 @@
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 import tempfile
 import unittest
@@ -24,6 +26,34 @@ class LearningTests(unittest.TestCase):
             learning.archive(conn,rows);learning.process(conn,self.state,10000);conn.commit()
     def count(self,table):
         with database.get_connection() as conn:return conn.execute('SELECT COUNT(*) FROM '+table).fetchone()[0]
+
+    def test_daily_pnl_uses_all_archived_exits_and_resets_at_eastern_midnight(self):
+        zone=ZoneInfo('America/New_York')
+        now=datetime(2026,10,29,23,59,59,tzinfo=zone).timestamp()
+        start=datetime(2026,10,29,tzinfo=zone).timestamp()
+        end=datetime(2026,10,30,tzinfo=zone).timestamp()
+        rows=[self.row(i,closed_at=start+i,pnl_usd=-1) for i in range(250)]
+        rows+=[self.row(300,closed_at=start-1,pnl_usd=999),self.row(301,closed_at=end,pnl_usd=20)]
+        with database.get_connection() as conn:
+            learning.archive(conn,rows);learning.archive(conn,rows)
+            before=learning.daily_pnl(conn,now)
+            self.assertEqual(before['closed_count'],250);self.assertEqual(before['realized_pnl_usd'],-250)
+            self.assertEqual(before['losses'],250);self.assertEqual(before['resets_at'],end)
+            after=learning.daily_pnl(conn,end)
+            self.assertEqual(after['realized_pnl_usd'],20);self.assertEqual(after['closed_count'],1)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM solana_meme_learning_outcomes').fetchone()[0],252)
+        # Reporting never changes funding, positions, or the loss anchor.
+        self.assertEqual(self.state['cash_usd'],1000);self.assertIsNone(self.state['day_equity'])
+
+    def test_daily_pnl_zero_day_and_daylight_saving_boundaries(self):
+        zone=ZoneInfo('America/New_York')
+        with database.get_connection() as conn:
+            for month,day,hours in [(3,8,23),(11,1,25),(10,29,24)]:
+                now=datetime(2026,month,day,12,tzinfo=zone).timestamp()
+                result=learning.daily_pnl(conn,now)
+                self.assertEqual(result['resets_at']-result['starts_at'],hours*3600)
+                self.assertEqual(result['realized_pnl_usd'],0);self.assertEqual(result['closed_count'],0)
+                self.assertEqual(result['timezone'],'America/New_York')
     def test_fifty_boundary_repeats_without_duplicate_evaluations_or_mail(self):
         self.process([self.row(i,i%2==0) for i in range(49)])
         self.assertEqual(self.count('solana_meme_learning_evaluations'),0)
