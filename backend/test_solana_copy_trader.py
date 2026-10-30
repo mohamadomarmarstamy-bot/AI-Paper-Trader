@@ -116,6 +116,23 @@ class CopyTests(unittest.TestCase):
         self.assertEqual(data['valuation']['cash_and_priced_holdings_usd'],99949.9)
         self.assertEqual(data['valuation']['unpriced_holdings'],1)
 
+    def test_closed_return_uses_net_earnings_and_all_completed_entry_costs(self):
+        self.buy();self.now+=10;self.market.price=3;self.source.rows=[trade(self.now-1,'sell',index=2)]
+        data=self.tick();self.assertAlmostEqual(data['closed_cost_usd'],50.1)
+        self.assertAlmostEqual(data['closed_return_percent'],data['realized_pnl_usd']/50.1*100)
+        # The 100-row UI history limit must not truncate the earnings denominator.
+        with closing(database.get_connection()) as conn:
+            for i in range(110):
+                row={**data['closed'][0],'id':'synthetic-'+str(i),'pnl_usd':-1,'cost_usd':10}
+                conn.execute('INSERT INTO solana_copy_closes(id,closed_at,details_json) VALUES(?,?,?)',(row['id'],self.now,json.dumps(row)))
+            conn.commit()
+        data=copy.public();self.assertEqual(len(data['closed']),100);self.assertEqual(data['closed_count'],111)
+        self.assertAlmostEqual(data['closed_cost_usd'],1150.1)
+        self.assertAlmostEqual(data['closed_return_percent'],data['realized_pnl_usd']/1150.1*100)
+        self.assertAlmostEqual(data['average_closed_pnl_usd'],data['realized_pnl_usd']/111)
+    def test_return_without_completed_trades_is_not_invented(self):
+        data=self.buy();self.assertIsNone(data['closed_return_percent']);self.assertIsNone(data['average_closed_pnl_usd'])
+
     def test_non_meme_and_missing_prices_do_not_fill(self):
         self.start();self.now+=10;self.source.rows=[trade(self.now-1)];self.source.is_meme=False
         self.assertEqual(self.tick()['positions'],[])
