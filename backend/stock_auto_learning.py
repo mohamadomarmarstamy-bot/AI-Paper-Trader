@@ -10,6 +10,7 @@ from queue import Queue, Empty, Full
 _observation_queue=Queue(maxsize=1)
 import app_controls as controls
 from stock_momentum import number
+import stock_learning_mail as review_mail
 
 BATCH_SIZE=25
 SCHEMA='''CREATE TABLE IF NOT EXISTS stock_entry_evidence(order_id TEXT PRIMARY KEY,symbol TEXT NOT NULL,
@@ -23,7 +24,7 @@ CREATE TABLE IF NOT EXISTS stock_learning_experiments(change_id TEXT PRIMARY KEY
  baseline_mean REAL NOT NULL,state TEXT NOT NULL,result_json TEXT NOT NULL DEFAULT '{}');
 CREATE TABLE IF NOT EXISTS stock_exit_observations(trade_book_id INTEGER PRIMARY KEY,
  first_at REAL NOT NULL,last_at REAL NOT NULL,samples INTEGER NOT NULL,
- high_return REAL NOT NULL,low_return REAL NOT NULL,shadow_json TEXT NOT NULL);'''
+ high_return REAL NOT NULL,low_return REAL NOT NULL,shadow_json TEXT NOT NULL);'''+review_mail.SCHEMA
 
 
 def latest_id(conn):
@@ -254,6 +255,8 @@ def review():
         experiment,locked=evaluate_experiment(conn,current)
         rows=outcomes(conn,state['cursor'],BATCH_SIZE)
         if len(rows)<BATCH_SIZE:
+            if experiment and experiment.get('changed'):
+                review_mail.enqueue(conn,'rollback-'+experiment['change_id'],{'kind':'rollback',**experiment})
             conn.execute('UPDATE stock_learning_state SET status=?,last_error=NULL WHERE id=1',(f"Next automatic review: {len(rows)}/25 completed stock trades",));conn.commit()
             return experiment if experiment and experiment.get('changed') else None
         changes,report=plan(rows,current['settings']);change_id=None
@@ -269,8 +272,13 @@ def review():
                     (change_id,receipt['receipt']['created_at'],receipt['revision'],json.dumps(receipt['settings']),
                      json.dumps(receipt['receipt']['before']),json.dumps(receipt['receipt']['after']),report['estimated_net_mean_return_percent'],'pending'))
         report.update(outcome_ids=[r['id'] for r in rows],symbols=[r['symbol'] for r in rows])
+        batch_id=str(uuid.uuid4());reviewed_at=datetime.now(timezone.utc).isoformat()
+        batch_number=conn.execute('SELECT COUNT(*)+1 FROM stock_learning_batches').fetchone()[0]
+        if experiment and experiment.get('changed'):report['rollback']=experiment
         conn.execute('INSERT INTO stock_learning_batches VALUES(?,?,?,?,?)',
-            (str(uuid.uuid4()),rows[-1]['id'],datetime.now(timezone.utc).isoformat(),json.dumps(report,allow_nan=False),change_id))
+            (batch_id,rows[-1]['id'],reviewed_at,json.dumps(report,allow_nan=False),change_id))
+        review_mail.enqueue(conn,'batch-'+batch_id,{'id':batch_id,'kind':'batch','batch_number':batch_number,
+            'reviewed_at':reviewed_at,'report':report,'rollback':report.get('rollback')})
         conn.execute('UPDATE stock_learning_state SET cursor=?,status=?,last_error=NULL WHERE id=1',
             (rows[-1]['id'],'Applied automatic settings change' if changes else report['reason']))
         conn.commit()
@@ -281,13 +289,13 @@ def review():
 def status():
     with closing(controls.connect()) as conn:
         initialize(conn);state=dict(conn.execute('SELECT * FROM stock_learning_state WHERE id=1').fetchone())
-        rows=conn.execute('SELECT created_at,report_json,change_id FROM stock_learning_batches ORDER BY rowid DESC LIMIT 10').fetchall()
+        rows=conn.execute("SELECT b.created_at,b.report_json,b.change_id,m.state AS email_status FROM stock_learning_batches b LEFT JOIN stock_learning_mail m ON m.id='batch-'||b.id ORDER BY b.rowid DESC LIMIT 10").fetchall()
         experiments=conn.execute('SELECT * FROM stock_learning_experiments ORDER BY rowid DESC LIMIT 10').fetchall()
-        return {**state,'experiments':[{'change_id':e['change_id'],'created_at':e['created_at'],'state':e['state'],
+        return {**state,'email':review_mail.summary(conn),'experiments':[{'change_id':e['change_id'],'created_at':e['created_at'],'state':e['state'],
                 'before':json.loads(e['before_json']),'after':json.loads(e['after_json']),
                 'followup_count':len(experiment_rows(conn,e)) if e['state']=='pending' else len(json.loads(e['result_json']).get('outcome_ids',[])),
                 'result':json.loads(e['result_json'])} for e in experiments],'batch_size':BATCH_SIZE,'pending_closed_count':len(outcomes(conn,state['cursor'],BATCH_SIZE)),
-                'reviews':[{**json.loads(r['report_json']),'created_at':r['created_at'],'change_id':r['change_id']} for r in rows]}
+                'reviews':[{**json.loads(r['report_json']),'created_at':r['created_at'],'change_id':r['change_id'],'email_status':r['email_status']} for r in rows]}
 
 
 async def worker(invalidate):
@@ -303,4 +311,7 @@ async def worker(invalidate):
                 with closing(controls.connect()) as conn:
                     initialize(conn);conn.execute("UPDATE stock_learning_state SET last_error='Automatic review failed; retrying. No uncommitted change was applied.' WHERE id=1");conn.commit()
             except Exception:pass
+        try:
+            await asyncio.to_thread(review_mail.deliver_one)
+        except Exception:pass  # A committed review survives provider/network failures.
         await asyncio.sleep(30)

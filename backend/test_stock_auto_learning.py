@@ -204,6 +204,95 @@ class StockLearningTests(unittest.TestCase):
         learning.review();self.assertEqual(controls.snapshot()['settings']['stock_min_volume_ratio'],2)
 
 
+    def test_batch_mail_waits_for_25_is_atomic_and_does_not_duplicate_after_restart(self):
+        self.add(0,24);learning.review()
+        with closing(controls.connect()) as conn:self.assertEqual(conn.execute('SELECT COUNT(*) FROM stock_learning_mail').fetchone()[0],0)
+        self.add(24,1);learning.review();learning.review()
+        with closing(controls.connect()) as conn:
+            rows=conn.execute('SELECT * FROM stock_learning_mail').fetchall()
+            self.assertEqual(len(rows),1)
+            event=json.loads(rows[0]['event_json']);self.assertEqual(event['batch_number'],1)
+            self.assertEqual(event['report']['before'],{'position_size_percent':2})
+            self.assertEqual(event['report']['after'],{'position_size_percent':1.8})
+        self.assertEqual(learning.status()['reviews'][0]['email_status'],'pending')
+
+    def test_mail_insert_failure_rolls_back_setting_review_and_cursor(self):
+        self.add(0,25)
+        with patch.object(learning.review_mail,'enqueue',side_effect=RuntimeError('queue write failed')),self.assertRaises(RuntimeError):learning.review()
+        self.assertEqual(controls.snapshot()['settings']['position_size_percent'],2)
+        self.assertEqual(learning.status()['pending_closed_count'],25)
+        self.assertEqual(learning.status()['reviews'],[])
+        learning.review();self.assertEqual(learning.status()['email']['pending'],1)
+
+    def test_no_change_review_also_queues_report_and_rollback_is_in_same_batch_email(self):
+        self.add(0,25,pattern=True);learning.review();self.add(25,25);learning.review()
+        with closing(controls.connect()) as conn:
+            events=[json.loads(row['event_json']) for row in conn.execute('SELECT * FROM stock_learning_mail ORDER BY rowid')]
+        self.assertEqual(len(events),2)
+        self.assertEqual(events[1]['report']['rollback']['after'],{'stock_min_volume_ratio':2})
+        subject,body=learning.review_mail.compose(events[1])
+        self.assertIn('review #2',subject);self.assertIn('2.2 -> 2.0',body)
+        self.assertIn('Automatic filter rollback',body)
+
+    def test_profitable_unchanged_batch_emails_honest_no_change_reason(self):
+        self.add(0,25)
+        with closing(controls.connect()) as conn:
+            conn.execute('UPDATE learning_outcomes SET realized_profit_loss=1,realized_return_percent=1');conn.commit()
+        learning.review()
+        with closing(controls.connect()) as conn:event=json.loads(conn.execute('SELECT event_json FROM stock_learning_mail').fetchone()[0])
+        subject,body=learning.review_mail.compose(event)
+        self.assertIn('No new filter or position-size change',body)
+        self.assertIn('Broker-recorded P/L: $25.00',body)
+        self.assertIn('Estimated net P/L: $20.00',body)
+
+
+    def test_rollback_between_ordinary_batch_boundaries_queues_its_own_email(self):
+        self.add(0,25,pattern=True);self.add(25,10,closed=False);learning.review()
+        with closing(controls.connect()) as conn:
+            conn.execute("UPDATE trade_book SET status='CLOSED'");conn.commit()
+        self.add(35,15);learning.review()
+        self.assertEqual(learning.status()['experiments'][0]['followup_count'],15)
+        self.add(50,10);learning.review()
+        with closing(controls.connect()) as conn:
+            events=[json.loads(row['event_json']) for row in conn.execute('SELECT * FROM stock_learning_mail ORDER BY rowid')]
+        self.assertEqual([e['kind'] for e in events],['batch','batch','rollback'])
+        self.assertEqual(learning.status()['pending_closed_count'],10)
+        learning.review();self.assertEqual(learning.status()['email']['pending'],3)
+        subject,body=learning.review_mail.compose(events[-1])
+        self.assertIn('follow-up rollback',subject);self.assertIn('2.2 -> 2.0',body)
+
+    def test_mail_provider_retry_freezes_payload_and_key_then_never_resends_acceptance(self):
+        self.add(0,25);learning.review()
+        env={'RESEND_API_KEY':'synthetic','HEALTH_ALERT_EMAIL_TO':'owner@example.com','HEALTH_ALERT_EMAIL_FROM':'bot@example.com'}
+        mail=learning.review_mail;post=Mock(side_effect=TimeoutError)
+        with patch.dict('os.environ',env):
+            self.assertFalse(mail.deliver_one(clock=lambda:10000,post=post))
+            first=deepcopy(post.call_args.kwargs)
+            self.assertFalse(mail.deliver_one(clock=lambda:10030,post=post));self.assertEqual(post.call_count,1)
+            response=Mock();response.json.return_value={'id':'provider-accepted'};post.side_effect=None;post.return_value=response
+            with patch.dict('os.environ',{'HEALTH_ALERT_EMAIL_TO':'changed@example.com'}):
+                self.assertTrue(mail.deliver_one(clock=lambda:10061,post=post))
+            self.assertEqual(post.call_args.kwargs['json'],first['json'])
+            self.assertEqual(post.call_args.kwargs['headers']['Idempotency-Key'],first['headers']['Idempotency-Key'])
+            self.assertIn('Position size: 2.0 -> 1.8 % of equity',first['json']['text'])
+            self.assertFalse(mail.deliver_one(clock=lambda:20000,post=post));self.assertEqual(post.call_count,2)
+        self.assertEqual(learning.status()['reviews'][0]['email_status'],'accepted')
+
+    def test_mail_configuration_lease_and_expired_uncertain_attempt_preserve_report(self):
+        self.add(0,25);learning.review();post=Mock()
+        with patch.dict('os.environ',{},clear=True):self.assertFalse(learning.review_mail.deliver_one(post=post))
+        post.assert_not_called();self.assertEqual(learning.status()['email']['pending'],1)
+        env={'RESEND_API_KEY':'synthetic','HEALTH_ALERT_EMAIL_TO':'owner@example.com','HEALTH_ALERT_EMAIL_FROM':'bot@example.com'}
+        with closing(controls.connect()) as conn:
+            conn.execute('UPDATE stock_learning_mail SET lease_until=200');conn.commit()
+        with patch.dict('os.environ',env):
+            self.assertFalse(learning.review_mail.deliver_one(clock=lambda:100,post=post));post.assert_not_called()
+            with closing(controls.connect()) as conn:
+                conn.execute('UPDATE stock_learning_mail SET first_attempt=1,lease_until=0');conn.commit()
+            self.assertFalse(learning.review_mail.deliver_one(clock=lambda:90000,post=post));post.assert_not_called()
+        self.assertEqual(learning.status()['email']['attention'],1)
+
+
 class MomentumTests(unittest.TestCase):
     def setUp(self):self.config={**deepcopy(controls.ALL_DEFAULTS),'stock_intraday_enabled':False}
     def test_float_is_not_shares_outstanding_and_missing_enabled_evidence_blocks(self):
