@@ -1,5 +1,17 @@
 # Solana copy PAPER experiment
 
+## Current policy — October 30, 2026: copy fresh buys with a per-lot loss stop
+
+The owner replaced the earlier one-position/add-on/cooldown policy: every newly detected eligible supported buy gets its own configured-dollar PAPER lot, including add-ons, coins already held, and purchases by a second followed wallet. Signal identity deduplication remains; repeated polling does not repeat a fill. Only prospective signals with current prices are admitted; stale (>90-second), already-sold-before-detection, unsupported, paused, or unfunded buys remain unfilled. Historical skipped buys are never replayed. The retained `reentry_cooldown_seconds` setting is legacy compatibility data and no longer gates entries; public entry protection reports zero cooldown.
+
+`stop_loss_percent` defaults to 20 and accepts 0–100 (0 disables it). Every lot, including pre-existing holdings, closes when current modeled net exit proceeds are at or below `cost_usd * (1 - stop_loss_percent / 100)`. A $50 buy has $50.10 total modeled cost, so the 20% loss target is about $10.02. Marks already include 1% modeled exit slippage and $0.10 exit charge. Stops use a current eligible exact-mint quote, never an entry fallback, a stale quote, zero, or a historical invented execution. Missing prices leave the holding unresolved. Price gaps, polling, and provider delays may produce losses above 20%; enabling protection does not retroactively cap older losses.
+
+Existing positions are priced and checked before source-wallet polling; protection also runs while entries are paused or the wallet-history source is unavailable. Stop closes are recorded with reason `stop_loss`, actual observation time, observed exit price, and the configured threshold. Add-on lots stop independently; source sells still close all copied lots for that source wallet and coin. The settings form exposes the threshold, and the locked Real Copy Trade workspace inherits the canonical rules without enabling real execution.
+
+Full 20-signature public-RPC pages are now paged backwards before decoding and advancing the frozen cursor, so a busy wallet does not silently drop older signatures in the same observation window. This protects future coverage; it does not reconstruct gaps already skipped by older releases. Source provider errors and unsupported transactions can still limit coverage.
+
+The older sections below describe prior releases where their entry-policy wording differs.
+
 `/meme-coins/copy` is a separate virtual account with $100,000 capital and $50 per copied buy by default. It has its own state, permanent signal/close archives, cash, positions, start/stop and settings. It never connects a wallet, signs a transaction, or submits a swap. The existing scanner, its positions, learning batches and settings remain independent.
 
 ## Data connection

@@ -16,8 +16,8 @@
   $('rc-count').textContent=active.length;$('rc-size').textContent=money(c.trade_usd);$('rc-paper-return').textContent=Number.isFinite(s.performance.closed_return_percent)?`${s.performance.closed_return_percent>=0?'+':''}${s.performance.closed_return_percent.toFixed(2)}%`:'—';
   $('rc-paper-profit').textContent=`${money(s.performance.realized_pnl_usd)} net · ${s.performance.closed_count} completed paper trades`;
   $('rc-sync').textContent=`Synced ${new Date(s.read_at*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} · revision ${s.settings_revision}`;
-  $('rc-fingerprint').textContent=s.snapshot.slice(0,12);$('rc-guard').textContent=b.entry_protection.one_open_position_per_coin?'One position per coin':'Review required';
-  $('rc-cooldown').textContent=`${Number((c.reentry_cooldown_seconds/60).toFixed(1))} min`;
+  $('rc-fingerprint').textContent=s.snapshot.slice(0,12);$('rc-guard').textContent=b.entry_protection.one_open_position_per_coin?'One position per coin':'Every fresh buy + add-ons';
+  $('rc-cooldown').textContent=c.stop_loss_percent===0?'Off':`${c.stop_loss_percent??20}% per lot`;
   $('rc-discovery').textContent=c.auto_discover?'Automatic':'Paused';
   $('rc-feed').textContent=s.source_error?`Paper feed: ${s.source_error}`:`Paper feed · ${s.source_health.replaceAll('_',' ')}`;
   const roster=$('rc-roster');roster.replaceChildren();for(const [i,t]of active.entries()){const row=node('div','', 'rc-trader'),avatar=node('span',(t.name||t.wallet).slice(0,2).toUpperCase(),'rc-avatar');avatar.style.setProperty('--rc-hue',String((i*47+230)%360));const info=node('div','');info.append(node('strong',t.name||short(t.wallet)),node('small',short(t.wallet)));const badge=node('span',t.trade_provider==='rpc'?'Chain feed':'Provider feed','rc-pill');row.append(avatar,info,badge);roster.append(row);}if(!active.length)roster.append(node('p','Waiting for the paper roster.'));

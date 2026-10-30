@@ -111,9 +111,10 @@ def trades(wallet,cursor,now):
     from solana_meme_bot import mint,num
     wallet=mint(wallet);cursor=deepcopy(cursor)
     window=cursor.get('window')
-    if window is None:
+    if window is None or window.get('scan_before'):
         options={'limit':20,'commitment':'confirmed'}
         if cursor.get('latest'):options['until']=cursor['latest']
+        if window is not None:options['before']=window['scan_before']
         data=request('getSignaturesForAddress',[wallet,options])
         if not isinstance(data,list) or len(data)>20:raise DataUnavailable('Unsupported public RPC signature list.')
         queue=[]
@@ -125,8 +126,20 @@ def trades(wallet,cursor,now):
                 at=num(row['blockTime'])
                 if at>now+5:raise DataUnavailable('RPC transaction time is ahead of this server.')
                 if at>=cursor['at']-2:queue.append(row)
-        window={'queue':list(reversed(queue)),'at':now,'newest':data[0]['signature'] if data else cursor.get('latest'),
-                'seen':len(data),'unsupported':0,'decoded':0,'truncated':len(data)==20}
+        if window is None:
+            window={'queue':[],'at':now,'newest':data[0]['signature'] if data else cursor.get('latest'),
+                    'seen':0,'unsupported':0,'decoded':0,'truncated':False}
+        # A full newest page is not a complete history window. Page backwards
+        # to the previous cursor/time boundary before advancing or decoding.
+        window['queue']=list(reversed(queue))+window['queue']
+        window['seen']+=len(data)
+        reached_boundary=any(isinstance(r.get('blockTime'),(int,float)) and r['blockTime']<cursor['at']-2 for r in data)
+        window['scan_before']=data[-1]['signature'] if len(data)==20 and not reached_boundary else None
+        window['truncated']=bool(window['scan_before'])
+        if window['scan_before']:
+            coverage={'checked_at':now,'signatures_seen':window['seen'],'decoded_swaps':window['decoded'],
+                      'unsupported_transactions':window['unsupported'],'history_truncated':True,'queued':len(window['queue'])}
+            return [],{**cursor,'window':window,'rpc_coverage':coverage}
     rows=[]
     for row in window['queue'][:4]:
         tx=request('getTransaction',[row['signature'],{'encoding':'jsonParsed','commitment':'confirmed','maxSupportedTransactionVersion':1}])

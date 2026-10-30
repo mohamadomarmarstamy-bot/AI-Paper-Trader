@@ -66,13 +66,7 @@ class CopyTests(unittest.TestCase):
         self.now+=86401;self.tick();self.assertEqual(len(copy.public()['positions']),1)
     def test_source_sell_closes_all_copied_lots_and_persists_accounting(self):
         self.buy();self.now+=10;self.source.rows=[trade(self.now-2,index=2)];self.tick()
-        # New repeated adds are blocked; retain a pre-update duplicate lot to
-        # verify that its real paper accounting still closes correctly.
-        self.assertEqual(len(copy.public()['positions']),1)
-        state,_=copy.load();legacy=deepcopy(next(iter(state['positions'].values())));legacy['id']='a'*64
-        state['positions'][legacy['id']]=legacy;state['cash_usd']-=legacy['cost_usd']
-        with closing(database.get_connection()) as conn:
-            conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1',(json.dumps(state),));conn.commit()
+        self.assertEqual(len(copy.public()['positions']),2)
         self.now+=10;self.market.price=3;self.source.rows=[trade(self.now-1,'sell',index=3)]
         data=self.tick();self.assertEqual(len(data['positions']),0);self.assertEqual(data['closed_count'],2)
         self.assertAlmostEqual(data['cash_usd']-100000,data['realized_pnl_usd']);self.assertEqual(data['wins'],2)
@@ -206,40 +200,85 @@ class CopyTests(unittest.TestCase):
         self.assertEqual(client.post('/meme-coins/copy/close',headers={'Origin':'http://testserver'},json={'price':2}).status_code,422)
 
 
-    def test_six_distinct_add_transactions_create_only_one_coin_position(self):
+    def test_six_distinct_add_transactions_each_create_a_lot_but_replays_do_not(self):
         self.start();self.now+=10
         self.source.rows=[trade(self.now-6+i,index=i+1,tx=str(i+2)*88) for i in range(6)]
-        data=self.tick();self.assertEqual(len(data['positions']),1);self.assertAlmostEqual(data['cash_usd'],99949.9)
-        self.assertEqual(sum(e['status']=='paper_buy' for e in data['events']),1)
-        self.assertEqual(sum('Already holding' in e['reason'] for e in data['events']),5)
+        data=self.tick();self.assertEqual(len(data['positions']),6);self.assertAlmostEqual(data['cash_usd'],100000-6*50.1)
+        self.assertEqual(sum(e['status']=='paper_buy' for e in data['events']),6)
         self.tick();self.assertEqual(copy.public()['cash_usd'],data['cash_usd'])
 
-    def test_same_coin_from_second_wallet_is_not_stacked(self):
+    def test_same_coin_from_second_wallet_gets_its_own_lot(self):
         self.buy();state,_=copy.load()
         state['traders'].append({'wallet':OTHER,'selected_at':self.now,'active':True})
         state['cursors'][OTHER]={'at':self.now}
         with closing(database.get_connection()) as conn:conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1',(json.dumps(state),));conn.commit()
         self.now+=10;self.source.rows=[trade(self.now-1,wallet=OTHER,index=2)]
-        self.assertEqual(len(self.tick()['positions']),1)
+        self.assertEqual(len(self.tick()['positions']),2)
 
-    def test_exit_cooldown_survives_reload_and_requires_a_new_future_signal(self):
+    def test_new_buy_after_exit_is_copied_without_cooldown(self):
         self.buy();self.now+=10;self.source.rows=[trade(self.now-1,'sell',index=2)];self.tick()
         self.now+=10;self.source.rows=[trade(self.now-1,index=3)];data=self.tick()
-        self.assertEqual(data['positions'],[]);self.assertIn('cooling down',data['events'][0]['reason'])
+        self.assertEqual(len(data['positions']),1)
         self.now+=1801;self.source.rows=[trade(self.now-1,index=4)]
-        self.assertEqual(len(self.tick()['positions']),1)
+        self.assertEqual(len(self.tick()['positions']),2)
 
-    def test_first_upgrade_bootstraps_cooldown_from_recent_legacy_closes(self):
+    def test_legacy_cooldown_does_not_block_new_buys(self):
         self.buy();self.now+=10;self.source.rows=[trade(self.now-1,'sell',index=2)];self.tick()
-        state,_=copy.load();state.pop('entry_guard_version');state.pop('mint_cooldowns')
+        state,_=copy.load();state['mint_cooldowns']={TOKEN:self.now+1800};state['config']['reentry_cooldown_seconds']=1800
         with closing(database.get_connection()) as conn:conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1',(json.dumps(state),));conn.commit()
         self.now+=10;self.source.rows=[trade(self.now-1,index=3)]
-        self.assertEqual(self.tick()['positions'],[])
+        self.assertEqual(len(self.tick()['positions']),1)
 
-    def test_supported_source_add_is_skipped_even_without_a_copied_position(self):
+    def test_supported_source_add_is_copied_even_without_a_copied_position(self):
         self.start();self.now+=10;row=trade(self.now-1);row.update(source='solana_rpc_pump',source_position_before=100)
-        self.source.rows=[row];data=self.tick();self.assertEqual(data['positions'],[])
-        self.assertIn('Source wallet already held',data['events'][0]['reason'])
+        self.source.rows=[row];data=self.tick();self.assertEqual(len(data['positions']),1)
+        self.assertEqual(data['events'][0]['status'],'paper_buy')
+
+    def test_twenty_percent_stop_uses_net_cost_and_works_with_source_offline_and_paused(self):
+        data=self.buy();lot=data['positions'][0];self.config({'enabled':False});self.source.missing=True
+        self.now+=10;self.market.price=(lot['cost_usd']*.8001+.1)/(lot['quantity']*.99)
+        self.assertEqual(len(self.tick()['positions']),1)
+        self.now+=10;self.market.price=(lot['cost_usd']*.7999+.1)/(lot['quantity']*.99)
+        data=self.tick();self.assertEqual(data['positions'],[]);self.assertEqual(data['closed'][0]['reason'],'stop_loss')
+        self.assertAlmostEqual(data['closed'][0]['pnl_usd'],-10.02501)
+        self.assertAlmostEqual(data['cash_usd']-100000,data['realized_pnl_usd'])
+        self.now+=10;self.tick();self.assertEqual(copy.public()['closed_count'],1)
+
+    def test_stop_checks_run_before_wallet_polling_and_allow_gap_losses(self):
+        self.buy();self.now+=10;self.market.price=.2
+        def inspect():
+            self.assertEqual(len(self.market_calls),1)
+            raise copy.DataUnavailable('source offline')
+        original=self.market.pairs;self.market_calls=[]
+        self.market.pairs=lambda addresses:self.market_calls.append(addresses) or original(addresses)
+        self.source.on_trade=inspect
+        data=self.tick();self.assertEqual(data['closed_count'],1)
+        self.assertLess(data['closed'][0]['pnl_usd'],-40)
+        self.assertEqual(data['closed'][0]['stop_loss_percent_at_exit'],20)
+
+    def test_stop_needs_current_price_and_recovers_without_backdating(self):
+        self.buy();self.source.rows=[];self.now+=10;self.market.price=.2;self.market.missing=True
+        data=self.tick();self.assertEqual(len(data['positions']),1);self.assertEqual(data['closed_count'],0)
+        self.market.missing=False;self.now+=10;data=self.tick()
+        self.assertEqual(data['closed_count'],1);self.assertEqual(data['closed'][0]['closed_at'],self.now)
+        self.assertEqual(data['closed'][0]['exit_price_usd'],.2)
+
+    def test_addon_lots_stop_individually_and_real_workspace_inherits_rule(self):
+        self.buy();self.now+=10;self.market.price=2.4;self.source.rows=[trade(self.now-1,index=2)];self.tick()
+        self.now+=10;self.market.price=1.9;self.source.rows=[];data=self.tick()
+        self.assertEqual(len(data['positions']),1);self.assertEqual(data['closed_count'],1)
+        self.assertEqual(data['positions'][0]['entry_price_usd'],2)
+        self.assertEqual(data['closed'][0]['entry_price_usd'],2.4)
+        import solana_real_copy
+        live=solana_real_copy.public();self.assertFalse(live['live_execution_enabled'])
+        self.assertEqual(live['paper_sync']['blueprint']['settings']['stop_loss_percent'],20)
+        self.assertFalse(live['paper_sync']['blueprint']['entry_protection']['one_open_position_per_coin'])
+
+    def test_stop_setting_validation_and_zero_disables(self):
+        for value in (-1,100.01,float('nan'),float('inf')):
+            with self.assertRaises(ValueError):self.config({'stop_loss_percent':value})
+        self.buy();self.config({'stop_loss_percent':0});self.now+=10;self.market.price=.2;self.source.rows=[]
+        self.assertEqual(len(self.tick()['positions']),1)
 
 
 class ProviderTests(unittest.TestCase):
