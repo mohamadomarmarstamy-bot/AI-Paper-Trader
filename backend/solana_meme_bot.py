@@ -46,7 +46,7 @@ LIMITATIONS = [
     'PAPER simulation only: no wallet, signing key, swap submission, or real funds.',
     'DEX Screener prices are provider observations, not executable quotes; market timestamps are unavailable.',
     'Discovery combines recent profiles and fixed meme-topic searches; coverage is limited and biased, and search matches do not verify meme status or safety.',
-    'Filtered mode checks legacy SPL mints. Exploration/learned modes do not check token permissions or concentration; results are unverified simulations.',
+    'Filtered mode checks legacy SPL mints. Learned mode requires market activity and momentum but does not check token permissions or concentration. Exploration observes without spending virtual cash.',
     'Largest token accounts are not unique holders; pool vaults are not excluded. Concentration can cause false rejections.',
     'Mint/freeze checks do not establish safety, locked liquidity, sellability, or absence of insider/wash trading.',
     'Costs are assumptions. Real slippage, priority fees, MEV, taxes, liquidity loss and failed exits can be worse.',
@@ -200,11 +200,14 @@ def configure(changes,expected_revision):
             state['cash_usd']+=added
             if state.get('day_equity') is not None:state['day_equity']+=added
             state['funding_events']=(state.get('funding_events',[])+[{'at':time.time(),'amount_usd':added,'capital_usd':changes['paper_capital_usd']}])[-100:]
-    entry_keys=('entry_mode','minimum_liquidity_usd','minimum_m5_volume_usd',*learner.POLICY_KEYS)
+    entry_keys=('entry_mode','minimum_liquidity_usd','minimum_m5_volume_usd','confirmation_enabled','confirmation_seconds','confirmation_min_percent','confirmation_max_percent',*learner.POLICY_KEYS)
     manual_entry_change=any(k in changes and changes[k]!=state['config'][k] for k in entry_keys)
     if changes.get('enabled') and not state['config']['enabled']:state['inactivity_enabled_at']=time.time()
     state['config'].update(changes)
-    if manual_entry_change:state.setdefault('learning',{})['active_version']='manual-'+str(uuid.uuid4())
+    if manual_entry_change:
+        state.setdefault('learning',{})['active_version']='manual-'+str(uuid.uuid4())
+        state['learning'].pop('forward_proposal',None)
+        state['learning'].pop('eligible_buffer',None)
     state['settings_revision']=state.get('settings_revision',0)+1
     if state['config']['confirmation_min_percent']>state['config']['confirmation_max_percent']:
         raise ValueError('Minimum confirmation rise cannot exceed its maximum.')
@@ -379,10 +382,10 @@ def normalize_pair(row,address,now,price_only=False):
 
 def entry_reason(row,previous,now,config=None):
     config=config or DEFAULTS
-    if config['entry_mode']=='explore':return None
-    if config['entry_mode']=='learned':
-        if not learner.matches({'entry_features':row},{'liquidity_usd':config['minimum_liquidity_usd'],'volume_m5_usd':config['minimum_m5_volume_usd']}):return 'Learned liquidity/volume minimums not met or unavailable.'
-        return None
+    if config['entry_mode']=='explore':return 'Shadow exploration only; no virtual cash committed.'
+    if not all(learner.finite(row.get(k)) for k in ('liquidity_usd','age_minutes','volume_m5_usd','buys_m5','sells_m5','change_m5_percent')):
+        return 'Complete recent market evidence required before entry.'
+    if row['liquidity_usd']<=0 or row['volume_m5_usd']<=0:return 'Positive liquidity and recent volume required before entry.'
     if row['liquidity_usd']<config['minimum_liquidity_usd']:return f"Liquidity below ${config['minimum_liquidity_usd']:,.0f}."
     if not 30<=row['age_minutes']<=30*1440:return 'Pair age outside 30 minutes–30 days.'
     if row['volume_m5_usd']<config['minimum_m5_volume_usd']:return f"Five-minute volume below ${config['minimum_m5_volume_usd']:,.0f}."
@@ -396,6 +399,17 @@ def entry_reason(row,previous,now,config=None):
     move=(row['price_usd']/previous['price_usd']-1)*100
     if not config['confirmation_min_percent']<=move<=config['confirmation_max_percent']:return f"No confirmed continuation, or price has run too far to chase. Required rise: {config['confirmation_min_percent']:g}%–{config['confirmation_max_percent']:g}%."
     return None
+
+
+def holding_snapshot(position,rows):
+    """Exact mint only; an alternate needs observable liquidity and activity."""
+    original=[r for r in rows if r['pair']==position['pair'] and not r.get('inactive_pool')]
+    if original:return max(original,key=lambda r:r['liquidity_usd'] or 0)
+    cash={'So11111111111111111111111111111111111111112','EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v','Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'}
+    active=[r for r in rows if r.get('quote_mint') in cash and
+            all(learner.finite(r.get(k)) and r[k]>0 for k in ('liquidity_usd','volume_m5_usd')) and
+            all(learner.finite(r.get(k)) for k in ('buys_m5','sells_m5')) and r['buys_m5']+r['sells_m5']>0]
+    return max(active,key=lambda r:r['liquidity_usd'],default=None)
 
 
 def effective_cycle_seconds(config,position_count):
@@ -507,13 +521,19 @@ def tick(*,providers=None,clock=time.time,force=False,manual_exits=None,manual_p
             grouped=group(raw)
             # Only incomplete/absent pool batches receive a bounded alternate-pool lookup.
             recoveries=0
-            for address in monitored:
+            # Rotate the bounded recovery budget so missing early holdings do
+            # not permanently starve later holdings and discovery.
+            recovery_offset=state.get('recovery_offset',0)%len(monitored)
+            recovery_order=monitored[recovery_offset:]+monitored[:recovery_offset]
+            state['recovery_offset']=(recovery_offset+2)%len(monitored)
+            for address in recovery_order:
                 matching=[r for r in grouped.get(address,[]) if r.get('chainId')=='solana']
                 complete=False
                 for r in matching:
                     try:
                         normalized=normalize_pair(r,address,observed,config['entry_mode']!='filtered' or address in state['positions'])
-                        if address not in state['positions'] or normalized['pair']==state['positions'][address]['pair']:complete=True
+                        inactive=r.get('liquidity','unknown') is None and (r.get('volume') or {}).get('m5')==0
+                        if not inactive and (address not in state['positions'] or normalized['pair']==state['positions'][address]['pair']):complete=True
                     except (ValueError,KeyError,TypeError):pass
                 # Token listings can omit an older held pool. Ask for that exact
                 # pool first, within the same four-request recovery budget.
@@ -525,7 +545,8 @@ def tick(*,providers=None,clock=time.time,force=False,manual_exits=None,manual_p
                         for row in rows:
                             try:
                                 normalized=normalize_pair(row,address,observed,True)
-                                if normalized['pair']==held['pair']:complete=True
+                                inactive=row.get('liquidity','unknown') is None and (row.get('volume') or {}).get('m5')==0
+                                if normalized['pair']==held['pair'] and not inactive:complete=True
                             except (ValueError,KeyError,TypeError):pass
                     except Exception:pass
                 if not complete and recoveries<4 and hasattr(providers,'token_pairs'):
@@ -540,7 +561,11 @@ def tick(*,providers=None,clock=time.time,force=False,manual_exits=None,manual_p
                 valid=[]
                 for row in grouped.get(address,[]):
                     if row.get('chainId')!='solana':continue
-                    try:valid.append(normalize_pair(row,address,observed,config['entry_mode']!='filtered' or address in state['positions']))
+                    try:
+                        normalized=normalize_pair(row,address,observed,config['entry_mode']!='filtered' or address in state['positions'])
+                        normalized['quote_mint']=(row.get('quoteToken') or {}).get('address')
+                        normalized['inactive_pool']=row.get('liquidity','unknown') is None and (row.get('volume') or {}).get('m5')==0
+                        valid.append(normalized)
                     except (ValueError,KeyError,TypeError) as error:
                         fields={'liquidity':'Liquidity data missing.','usd':'Liquidity data missing.',
                                 'priceUsd':'Price data missing.','pairCreatedAt':'Pool age missing.',
@@ -549,9 +574,9 @@ def tick(*,providers=None,clock=time.time,force=False,manual_exits=None,manual_p
                         missing[address]={'symbol':str(row.get('baseToken',{}).get('symbol',''))[:24],
                             'reason':fields.get(error.args[0] if isinstance(error,KeyError) else '', 'Pool metrics incomplete or invalid.')}
                         continue
-                # Open positions stay pinned to their original pool, not a new unrelated price.
                 if address in state['positions']:
-                    valid=[r for r in valid if r['pair']==state['positions'][address]['pair']]
+                    selected=holding_snapshot(state['positions'][address],valid)
+                    valid=[selected] if selected else []
                 if valid:snapshots[address]=max(valid,key=lambda r:r['liquidity_usd'] if learner.finite(r['liquidity_usd']) else -1)
             unavailable={a:t for a,t in state.get('unavailable_until',{}).items() if t>observed}
             for address in candidates:
@@ -566,12 +591,16 @@ def tick(*,providers=None,clock=time.time,force=False,manual_exits=None,manual_p
                     p['mark_available']=False
                     continue
                 p['mark_available']=True
+                if row['pair']!=p['pair']:
+                    p.setdefault('entry_pair',p['pair'])
+                    p['pool_changes']=(p.get('pool_changes',[])+[{'from':p['pair'],'to':row['pair'],'at':observed,'reason':'Active exact-mint pool recovery'}])[-20:]
+                    p['pair']=row['pair']
                 value=p['quantity']*row['price_usd']*.99-.10
                 change=(value/p['cost_usd']-1)*100
                 p.update(marked_value_usd=value,marked_at=observed,peak_percent=max(p['peak_percent'],change),low_percent=min(p.get('low_percent',0),change))
                 reason=('manual_sell_all' if manual_exits is not None and manual_pause else 'manual_sell' if manual_exits is not None else 'stop_loss' if change<=-p['stop_percent'] else 'take_profit' if change>=p['target_percent']
                         else 'profit_trail' if p['peak_percent']>=p['trail_arm_percent'] and p['peak_percent']-change>=p['trail_percent']
-                        else 'liquidity_drop' if learner.finite(row['liquidity_usd']) and learner.finite(p['entry_liquidity_usd']) and row['liquidity_usd']<p['entry_liquidity_usd']*.5
+                        else 'liquidity_drop' if row['pair']==p.get('entry_pair',p['pair']) and learner.finite(row['liquidity_usd']) and learner.finite(p['entry_liquidity_usd']) and row['liquidity_usd']<p['entry_liquidity_usd']*.5
                         else 'maximum_hold' if observed-p['opened_at']>=p['max_hold_minutes']*60 else None)
                 if reason:
                     value=max(0,value);state['cash_usd']+=value
@@ -580,6 +609,7 @@ def tick(*,providers=None,clock=time.time,force=False,manual_exits=None,manual_p
                         'pnl_usd':value-p['cost_usd'],'reason':reason,'exit_source':'manual' if manual_exits is not None else 'automatic',
                         'id':p.get('trade_id',str(uuid.uuid4())),'entry_features':p.get('entry_features',{}),
                         'entry_mode':p.get('entry_mode','filtered'),'exit_policy':p.get('exit_policy',{}),
+                        'entry_pair':p.get('entry_pair',p['pair']),'exit_pair':row['pair'],'pool_changes':p.get('pool_changes',[]),
                         'learning_candidate_id':p.get('learning_candidate_id'),'settings_version':p.get('settings_version','legacy'),'peak_percent':p['peak_percent'],'low_percent':p.get('low_percent',0),
                         'note':f"{'Win' if value>p['cost_usd'] else 'Loss' if value<p['cost_usd'] else 'Flat'}: {reason.replace('_',' ')} after {(observed-p['opened_at'])/60:.1f} min; modeled return {change:.2f}%.",'basis':'modeled provider observation; not a swap fill'})
                     pending_outcomes.append(state['closed'][-1])
@@ -608,7 +638,7 @@ def tick(*,providers=None,clock=time.time,force=False,manual_exits=None,manual_p
                 entry_friction=config['trade_usd']+.20-config['trade_usd']*.99/1.01
                 if reason is None and equity-state['day_equity']-entry_friction<=-config['daily_loss_usd']:
                     reason='Remaining daily paper-loss budget cannot cover modeled entry/exit friction.'
-                safety={'status':'Not checked in PAPER exploration/learned mode'}
+                safety={'status':'Token permissions/concentration not checked in learned PAPER mode'}
                 if reason is None and config['entry_mode']=='filtered':
                     if checks>=3:reason='On-chain check budget reached; retry next cycle.'
                     else:
@@ -629,7 +659,7 @@ def tick(*,providers=None,clock=time.time,force=False,manual_exits=None,manual_p
                         'entry_liquidity_usd':row['liquidity_usd'],'peak_percent':0.,'safety':safety,
                         **{k:config[k] for k in ('stop_percent','target_percent','trail_arm_percent','trail_percent','max_hold_minutes')}}
                     p=state['positions'][address];p.update(marked_at=observed,marked_value_usd=max(0,p['quantity']*row['price_usd']*.99-.10))
-                    state['cash_usd']-=cost;equity-=cost-p['marked_value_usd'];reason='PAPER buy simulated after momentum and on-chain checks.' if config['entry_mode']=='filtered' else 'PAPER exploration buy simulated; token checks not performed.'
+                    state['cash_usd']-=cost;equity-=cost-p['marked_value_usd'];reason='PAPER buy simulated after momentum and on-chain checks.' if config['entry_mode']=='filtered' else 'PAPER buy simulated after market activity and momentum checks; token permissions not checked.'
                 expiry=max(180,config['confirmation_seconds']+60)
                 baseline=state['observations'].get(address)
                 if not baseline or baseline['pair']!=row['pair'] or observed-baseline['observed_at']>expiry:baseline=row
