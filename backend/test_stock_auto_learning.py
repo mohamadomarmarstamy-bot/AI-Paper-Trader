@@ -30,7 +30,8 @@ class StockLearningTests(unittest.TestCase):
             won=pattern and i%2==0
             features={'captured_at':time.time(),'price':5.,'float_shares':15e6,
                       'volume_ratio':5. if won else 3. if i%4==1 else 2.1,
-                      'average_volume':500000.,'spread_percent':.2,'day_change_percent':5.,'atr_percent':4.}
+                      'average_volume':500000.,'spread_percent':.2,'day_change_percent':5.,'atr_percent':4.,
+                      'time_volume_ratio':5. if won else 3. if i%4==1 else 1.55,'vwap_distance_percent':2.}
             order='entry-'+str(i)
             learning.record_entry(order,'S'+str(i%6),features,controls.snapshot())
             with closing(controls.connect()) as conn:
@@ -106,6 +107,14 @@ class StockLearningTests(unittest.TestCase):
             self.assertFalse(result['success']);self.assertIn('stock_max_float_millions',result['stock_entry_gate']['failed_requirements'])
             ns['alpaca_paper_request'].assert_not_called()
 
+
+
+    def test_new_same_time_volume_filter_is_actually_adjusted_when_intraday_mode_is_on(self):
+        current=controls.snapshot();controls.update({'stock_intraday_enabled':True},expected_revision=current['revision'],request_id=str(uuid.uuid4()))
+        self.add(0,25,pattern=True);report=learning.review()
+        self.assertEqual(report['after'],{'stock_min_time_volume_ratio':1.65})
+        self.assertEqual(controls.snapshot()['settings']['stock_min_time_volume_ratio'],1.65)
+        self.assertEqual(controls.snapshot()['settings']['stock_min_volume_ratio'],2)
 
     def test_filter_experiment_rolls_back_after_25_new_revision_entries(self):
         self.add(0,25,pattern=True);learning.review()
