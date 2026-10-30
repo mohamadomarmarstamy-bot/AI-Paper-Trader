@@ -35,11 +35,24 @@ CREATE TABLE IF NOT EXISTS stock_shadow_decisions(
  candidate_accept INTEGER NOT NULL,baseline_failures TEXT NOT NULL,candidate_failures TEXT NOT NULL,
  PRIMARY KEY(trial_id,opportunity_id));
 CREATE INDEX IF NOT EXISTS stock_shadow_open_idx ON stock_shadow_opportunities(state,due_at);
-CREATE TABLE IF NOT EXISTS stock_research_runtime(id INTEGER PRIMARY KEY CHECK(id=1),last_tick REAL,last_error TEXT);'''
+CREATE TABLE IF NOT EXISTS stock_research_runtime(id INTEGER PRIMARY KEY CHECK(id=1),last_tick REAL,last_error TEXT);
+CREATE TABLE IF NOT EXISTS stock_research_sampling(id INTEGER PRIMARY KEY CHECK(id=1),updated_at REAL NOT NULL,
+ state TEXT NOT NULL,details_json TEXT NOT NULL);'''
 
 
 def initialize(conn):
     conn.executescript(SCHEMA)
+
+
+def sampling_state(state,now,details=None):
+    """One bounded latest batch; worker health alone cannot explain zero pairs."""
+    with closing(controls.connect()) as conn:
+        if details is None:
+            conn.execute("INSERT INTO stock_research_sampling VALUES(1,?,?, '{}') ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at,state=excluded.state",(now,state))
+        else:
+            conn.execute('INSERT INTO stock_research_sampling VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at,state=excluded.state,details_json=excluded.details_json',
+                         (now,state,json.dumps(details,allow_nan=False)))
+        conn.commit()
 
 
 def enqueue_scanner(candidates,criteria):
@@ -102,9 +115,11 @@ def quotes(request,symbols,now,*,clock=None):
     return result
 
 
-def record_opportunity(conn,trials,symbol,features,quote,now):
+def record_opportunity(conn,trials,symbol,features,quote,now,*,diagnostic=None):
     bucket=int(now//HORIZON)
-    if conn.execute('SELECT 1 FROM stock_shadow_opportunities WHERE symbol=? AND bucket=?',(symbol,bucket)).fetchone():return None
+    if conn.execute('SELECT 1 FROM stock_shadow_opportunities WHERE symbol=? AND bucket=?',(symbol,bucket)).fetchone():
+        if diagnostic is not None:diagnostic.update(state='duplicate')
+        return None
     decisions=[]
     for trial in trials:
         if now<trial['created_at']:continue
@@ -113,6 +128,11 @@ def record_opportunity(conn,trials,symbol,features,quote,now):
         decisions.append((trial['id'],not bf,not cf,bf,cf))
     # Keep failed evidence visible through trial counters only when at least
     # one arm can act; a missing quote is never replaced with a scanner close.
+    if diagnostic is not None:
+        diagnostic.update(state='accepted' if any(base or candidate for _,base,candidate,_,_ in decisions) else 'filters_rejected',
+            baseline_failures=sorted({reason for _,_,_,bf,_ in decisions for reason in bf}),
+            candidate_failures=sorted({reason for _,_,_,_,cf in decisions for reason in cf}),
+            float_source=features.get('float_source'),intraday_reason=(features.get('intraday') or {}).get('reason'))
     if not any(base or candidate for _,base,candidate,_,_ in decisions):return None
     ident=str(uuid.uuid4())
     conn.execute('INSERT INTO stock_shadow_opportunities(id,symbol,bucket,entered_at,due_at,ask,bid,features_json) VALUES(?,?,?,?,?,?,?,?)',
@@ -231,27 +251,56 @@ def step(request,*,now=None):
         conn.commit()
         trials=[dict(t) for t in conn.execute("SELECT * FROM stock_shadow_trials WHERE state='collecting' AND baseline_revision=? ORDER BY created_at DESC LIMIT 4",(current['revision'],))]
         active=[dict(r) for r in conn.execute("SELECT id,symbol,due_at FROM stock_shadow_opportunities WHERE state='open'")]
-    if local.weekday()>=5 or not 570<=local.hour*60+local.minute<=965:return bool(promoted)
-    observed=quotes(request,[r['symbol'] for r in active if stamp<=r['due_at']+GRACE],stamp,clock=clock)
+    def finish(state,details=None):
+        sampling_state(state,clock(),details);return bool(promoted)
+    if local.weekday()>=5 or not 570<=local.hour*60+local.minute<=965:return finish('outside_session')
+    observed=quotes(request,[r['symbol'] for r in active if r['due_at']<=stamp<=r['due_at']+GRACE],stamp,clock=clock)
     with closing(controls.connect()) as conn:
         settle(conn,observed,clock());conn.commit()
-    if not current['settings']['stock_parallel_validation_enabled'] or not trials or len(active)>=100 or local.hour*60+local.minute>=940:return bool(promoted)
+    if not current['settings']['stock_parallel_validation_enabled']:return finish('paused')
+    if not trials:return finish('no_collecting_trials')
+    if len(active)>=100:return finish('at_capacity')
+    if local.hour*60+local.minute>=940:return finish('late_session')
     try:candidates,criteria,queued_at=_queue.get_nowait()
-    except Empty:return bool(promoted)
-    if not 0<=stamp-queued_at<=180:return bool(promoted)
+    except Empty:return finish('waiting_for_scan')
+    if not 0<=stamp-queued_at<=180:return finish('stale_scan')
     from entry_quality import evaluate_entry_quality
-    eligible=[c for c in candidates if evaluate_entry_quality(c,**criteria)['passed'] and isinstance(c.get('symbol'),str)]
+    details={'at':stamp,'scanner_count':len(candidates),'quality_eligible':0,'already_recorded':0,
+             'selected':0,'fresh_quotes':0,'evaluated':0,'recorded':0,'failures':{},'examples':[]}
+    def reject(reason):details['failures'][reason]=details['failures'].get(reason,0)+1
+    eligible=[]
+    for candidate in candidates:
+        quality=evaluate_entry_quality(candidate,**criteria)
+        if quality['passed'] and isinstance(candidate.get('symbol'),str):eligible.append(candidate)
+        else:
+            for reason in quality['failed_requirements']:reject(reason)
+    # A previously admitted opportunity already has frozen decisions and its
+    # exit quote will be sampled separately. Do not spend feature/quote work on
+    # it again during the same 15-minute bucket.
+    details['quality_eligible']=len(eligible)
+    with closing(controls.connect()) as conn:
+        recorded={r['symbol'] for r in conn.execute('SELECT symbol FROM stock_shadow_opportunities WHERE bucket=?',(int(stamp//HORIZON),))}
+    details['already_recorded']=sum(c['symbol'] in recorded for c in eligible)
+    eligible=list({c['symbol']:c for c in eligible if c['symbol'] not in recorded}.values())
     global _rotation
-    if not eligible:return bool(promoted)
+    if not eligible:return finish('already_sampled' if details['already_recorded'] else 'no_quality_candidates',details)
     selected=(eligible+eligible)[_rotation%len(eligible):_rotation%len(eligible)+min(3,len(eligible))];_rotation+=3
+    details['selected']=len(selected)
     entry_quotes=quotes(request,[c['symbol'] for c in selected],stamp,clock=clock)
     for candidate in selected:
         symbol=candidate['symbol'];quote=entry_quotes.get(symbol)
-        if not quote:continue
-        values=momentum.features(candidate,quote,current['settings'],symbol=symbol,clock=clock,
-            intraday_fetch=lambda name:stock_intraday.fetch(name,request,clock=clock))
+        attempt={'symbol':symbol};details['examples'].append(attempt)
+        if not quote:
+            reject('fresh_entry_quote_unavailable');attempt['state']='fresh_entry_quote_unavailable';continue
+        details['fresh_quotes']+=1
+        try:
+            values=momentum.features(candidate,quote,current['settings'],symbol=symbol,clock=clock,
+                intraday_fetch=lambda name:stock_intraday.fetch(name,request,clock=clock))
+        except Exception:
+            reject('feature_lookup_failed');attempt['state']='feature_lookup_failed';continue
         refreshed=quotes(request,[symbol],clock(),clock=clock).get(symbol)
-        if not refreshed:continue
+        if not refreshed:
+            reject('refreshed_quote_unavailable');attempt['state']='refreshed_quote_unavailable';continue
         quote=refreshed;entered_at=clock()
         values.update(price=quote['ask'],spread_percent=quote['spread_percent'],captured_at=entered_at,quote_at=quote['at'])
         vwap=momentum.number((values.get('intraday') or {}).get('vwap'))
@@ -261,9 +310,16 @@ def step(request,*,now=None):
             # Evidence fetched outside locks; recheck the saved revision before
             # admitting an opportunity to the frozen prospective cohort.
             if controls._snapshot(conn)['revision']==current['revision']:
-                record_opportunity(conn,trials,symbol,values,quote,entered_at)
+                details['evaluated']+=1
+                opportunity=record_opportunity(conn,trials,symbol,values,quote,entered_at,diagnostic=attempt)
+                if opportunity:details['recorded']+=1
+                elif attempt.get('state')=='filters_rejected':
+                    for reason in attempt.get('baseline_failures',[]):reject(reason)
+                elif attempt.get('state')=='duplicate':reject('duplicate_opportunity')
+            else:
+                reject('settings_changed');attempt['state']='settings_changed'
             conn.commit()
-    return bool(promoted)
+    return finish('sampled' if details['recorded'] else 'no_opportunities_recorded',details)
 
 
 def status(conn):
@@ -273,7 +329,10 @@ def status(conn):
             'changes':json.loads(row['changes_json']),'baseline':{k:json.loads(row['baseline_json'])[k] for k in json.loads(row['changes_json'])},
             'stats':trial_stats(conn,row),'decision':json.loads(row['decision_json'])})
     runtime=conn.execute('SELECT * FROM stock_research_runtime WHERE id=1').fetchone()
-    return {'runtime':dict(runtime) if runtime else None,'trials':trials,'minimum_pairs':MIN_PAIRS,'minimum_sessions':MIN_DAYS,'notional_usd':NOTIONAL,
+    sampling=conn.execute('SELECT * FROM stock_research_sampling WHERE id=1').fetchone()
+    diagnostic={**dict(sampling),'last_batch':json.loads(sampling['details_json'])} if sampling else None
+    if diagnostic:diagnostic.pop('details_json',None)
+    return {'runtime':dict(runtime) if runtime else None,'sampling':diagnostic,'trials':trials,'minimum_pairs':MIN_PAIRS,'minimum_sessions':MIN_DAYS,'notional_usd':NOTIONAL,
         'horizon_minutes':15,'basis':'Prospective paired 15-minute quote markouts: entry ask, later bid, plus extra estimated costs. Same opportunity/time for both filters; a rejected opportunity earns zero. Uses the same fixed base scanner-quality gate for both arms; does not reproduce production adaptive/regime/news score adjustments, portfolio capacity, protective exits or executable fills. No orders. Late/missing quotes are excluded and counted. IEX is one venue. Seeded challengers are research-only; learned proposals need independent future evidence before promotion.'}
 
 
