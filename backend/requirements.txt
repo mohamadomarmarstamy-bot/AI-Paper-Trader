@@ -9,6 +9,7 @@ numpy>=2.0,<3.0
 
 requests>=2.32
 cryptography>=46,<51
+tzdata>=2025.2
 
 lxml>=5.2
 html5lib>=1.1

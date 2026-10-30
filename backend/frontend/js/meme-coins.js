@@ -65,6 +65,11 @@
   const expanded=new Set([...document.querySelectorAll('details[data-row-key][open]')].map(n=>n.dataset.rowKey));
   function detail(el,key,address,extra){const d=document.createElement('details');d.dataset.rowKey=key;d.open=expanded.has(key);d.append(text('summary','Details'),text('p',address));if(extra)d.append(text('p',extra));el.append(d);}
   const current=Number.isFinite(data.paper_equity_usd),indicative=data.valuation?.indicative_equity_usd;
+  const daily=data.daily_pnl;
+  $('meme-daily-pnl').textContent=Number.isFinite(daily?.realized_pnl_usd)?money(daily.realized_pnl_usd):'Loading…';
+  tone($('meme-daily-pnl'),daily?.realized_pnl_usd);
+  $('meme-daily-summary').textContent=daily?`${daily.closed_count} closed trades · ${daily.wins} wins · ${daily.losses} losses · ${daily.date} ET`:'Closed PAPER trades after modeled costs';
+  $('meme-daily-reset').textContent='Resets automatically at midnight Eastern Time · open P/L excluded';
   const estimated=!current&&Number.isFinite(indicative),equity=current?data.paper_equity_usd:estimated?indicative:null;
   const missing=data.valuation?.missing_count??data.positions.filter(p=>!p.mark_fresh).length;
   const lastTime=data.valuation?.oldest_mark_at?new Date(data.valuation.oldest_mark_at*1000).toLocaleString():'unknown';
