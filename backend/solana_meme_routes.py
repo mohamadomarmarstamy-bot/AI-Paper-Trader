@@ -12,6 +12,9 @@ def build_router(*,require_session):
     import solana_copy_trader as copy_bot
     import solana_profile as profile
     import solana_real_copy as real_copy
+    @router.get('/real-copy.css')
+    def real_copy_style():
+        return FileResponse(Path(__file__).parent/'frontend'/'real-copy.css',media_type='text/css')
     @router.get('/real-copy/status')
     def real_copy_status(request:Request):
         require_session(request)

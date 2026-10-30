@@ -67,6 +67,11 @@ class RealCopyTests(unittest.TestCase):
         unchanged=paper.load();self.assertEqual(real.public()['paper_sync']['snapshot'],first['paper_sync']['snapshot']);self.assertEqual(paper.load(),unchanged)
         paper.configure({'trade_usd':150},0)
         second=real.public();self.assertEqual(second['paper_sync']['blueprint']['settings']['trade_usd'],150);self.assertNotEqual(first['paper_sync']['snapshot'],second['paper_sync']['snapshot']);self.assertFalse(second['can_start'])
+    def test_real_workspace_stylesheet_is_served_by_production_router(self):
+        response=self.client.get('/real-copy.css')
+        self.assertEqual(response.status_code,200);self.assertIn('text/css',response.headers['content-type'])
+        self.assertIn('#real-copy-section .rc-hero',response.text)
+
     def test_http_auth_origin_body_and_hard_execution_lock(self):
         self.allowed=False;self.assertEqual(self.client.get('/real-copy/status').status_code,401)
         self.assertEqual(self.client.post('/real-copy/start',json={}).status_code,401)
