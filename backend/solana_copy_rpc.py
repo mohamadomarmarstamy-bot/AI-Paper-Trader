@@ -33,14 +33,19 @@ def request(method,params):
             with _lock:_cooldown=time.monotonic()+60
             raise DataUnavailable('Public Solana RPC rate limited; retrying after cooldown.')
         if response.status_code in (401,403):raise DataUnavailable('Public Solana RPC denied access from this server. Wallet connection cannot grant RPC access.')
-        response.raise_for_status()
+        if response.status_code!=200:raise DataUnavailable(f'Public Solana RPC {method}: HTTP {response.status_code}; retrying automatically.')
         if len(response.content)>2_000_000:raise ValueError()
         data=response.json()
         if isinstance(data,dict) and method=='getTransaction' and isinstance(data.get('error'),dict) and data['error'].get('code')==-32015:
             return {'unsupported_transaction_version':True}
+        if isinstance(data,dict) and isinstance(data.get('error'),dict):
+            code=data['error'].get('code')
+            if type(code) is int:raise DataUnavailable(f'Public Solana RPC {method}: provider error {code}; retrying automatically.')
         if not isinstance(data,dict) or data.get('error') or 'result' not in data:raise ValueError()
         return data['result']
     except DataUnavailable:raise
+    except requests.Timeout:raise DataUnavailable(f'Public Solana RPC {method} timed out; retrying automatically.') from None
+    except requests.ConnectionError:raise DataUnavailable(f'Public Solana RPC {method} connection failed; retrying automatically.') from None
     except Exception:raise DataUnavailable('Public Solana RPC history unavailable or unsupported. No copy fill created.') from None
 
 
