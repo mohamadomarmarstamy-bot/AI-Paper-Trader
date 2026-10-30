@@ -11,9 +11,12 @@ DEFAULTS={'stock_min_price_usd':2.,'stock_max_price_usd':20.,
          'stock_min_float_millions':0.,'stock_max_float_millions':20.,
          'stock_min_volume_ratio':2.,'stock_min_average_volume':250000.,
          'stock_max_spread_percent':.5,'stock_min_day_change_percent':2.,
-         'stock_min_gap_percent':0.,'stock_max_atr_percent':8.,'stock_news_max_age_hours':24.}
+         'stock_min_gap_percent':0.,'stock_max_atr_percent':8.,'stock_news_max_age_hours':24.,
+         'stock_min_time_volume_ratio':1.5,'stock_max_vwap_distance_percent':5.,
+         'stock_slippage_bps_per_side':10.,'stock_fee_bps_per_side':0.}
 RANGES={k:(0.,100. if k.endswith('_percent') else float('inf')) for k in DEFAULTS}
-PREFERENCES={'stock_filters_enabled':True,'stock_require_recent_news':False,'stock_auto_adjust_enabled':True}
+PREFERENCES={'stock_filters_enabled':True,'stock_require_recent_news':False,'stock_auto_adjust_enabled':True,
+             'stock_intraday_enabled':True,'stock_require_entry_setup':True,'stock_auto_rollback_enabled':True}
 _pool=ThreadPoolExecutor(max_workers=2,thread_name_prefix='stock-float')
 _lock=Lock();_cache={};_pending={}
 
@@ -67,7 +70,7 @@ def settings():
     return app_controls.snapshot()
 
 
-def features(candidate,quote,config,*,symbol,clock=time.time,float_fetch=None):
+def features(candidate,quote,config,*,symbol,clock=time.time,float_fetch=None,intraday_fetch=None):
     result={'price':number(quote.get('ask')),'spread_percent':number(quote.get('spread_percent')),
             'volume_ratio':number(candidate.get('volume_ratio')),'average_volume':number(candidate.get('average_volume')),
             'day_change_percent':number(candidate.get('momentum_move_percent',candidate.get('one_day_change',candidate.get('change')))),
@@ -80,6 +83,13 @@ def features(candidate,quote,config,*,symbol,clock=time.time,float_fetch=None):
     plausible=price is not None and price>0 and price>=config['stock_min_price_usd'] and (not config['stock_max_price_usd'] or price<=config['stock_max_price_usd'])
     if config['stock_filters_enabled'] and plausible and (config['stock_min_float_millions'] or config['stock_max_float_millions']):
         result.update((float_fetch or reported_float)(symbol))
+    if config['stock_filters_enabled'] and config['stock_intraday_enabled'] and plausible:
+        intraday=(intraday_fetch or (lambda _: {'available':False,'reason':'intraday_adapter_missing'}))(symbol)
+        result['intraday']=intraday
+        result['time_volume_ratio']=number(intraday.get('time_volume_ratio'))
+        result['entry_setup']=intraday.get('setup')
+        vwap=number(intraday.get('vwap'))
+        result['vwap_distance_percent']=(price/vwap-1)*100 if vwap and vwap>0 else None
     return result
 
 
@@ -98,7 +108,19 @@ def evaluate(values,config,*,now):
         ('float_millions','stock_min_float_millions',True),('float_millions','stock_max_float_millions',False),
         ('volume_ratio','stock_min_volume_ratio',True),('average_volume','stock_min_average_volume',True),
         ('spread_percent','stock_max_spread_percent',False),('day_change_percent','stock_min_day_change_percent',True),
-        ('gap_percent','stock_min_gap_percent',True),('atr_percent','stock_max_atr_percent',False)]:bound(field,key,lower)
+        ('gap_percent','stock_min_gap_percent',True),('atr_percent','stock_max_atr_percent',False)]:
+        if key=='stock_min_volume_ratio' and config['stock_intraday_enabled']:continue
+        bound(field,key,lower)
+    if config['stock_intraday_enabled']:
+        intraday=values.get('intraday') or {}
+        at=number(intraday.get('as_of'))
+        bar_at=number(intraday.get('latest_bar_at'))
+        if not intraday.get('available') or at is None or not 0<=now-at<=90 or bar_at is None or not 300<=now-bar_at<=900:
+            failed.append('intraday_evidence_missing_or_stale')
+        bound('time_volume_ratio','stock_min_time_volume_ratio',True)
+        bound('vwap_distance_percent','stock_max_vwap_distance_percent',False)
+        if config['stock_require_entry_setup'] and values.get('entry_setup') not in ('breakout','vwap_pullback'):
+            failed.append('completed_breakout_or_vwap_pullback_missing')
     if config['stock_require_recent_news'] and config['stock_news_max_age_hours']:
         at=number(values.get('news_latest_at'))
         if at is None or not 0<=now-at<=config['stock_news_max_age_hours']*3600:failed.append('recent_news_missing')
