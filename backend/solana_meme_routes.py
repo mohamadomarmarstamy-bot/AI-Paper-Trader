@@ -11,6 +11,40 @@ def build_router(*,require_session):
     router=APIRouter()
     import solana_copy_trader as copy_bot
     import solana_profile as profile
+    import solana_real_copy as real_copy
+    @router.get('/real-copy/status')
+    def real_copy_status(request:Request):
+        require_session(request)
+        return JSONResponse(real_copy.public(),headers={'Cache-Control':'no-store'})
+    @router.post('/real-copy/challenge')
+    async def real_copy_challenge(request:Request):
+        payload=await body(request)
+        if not isinstance(payload,dict) or set(payload)!={'wallet_address','expected_revision'}:raise HTTPException(422,'Public wallet and revision required.')
+        try:return await run_in_threadpool(real_copy.challenge,payload['wallet_address'],payload['expected_revision'],request.headers['origin'])
+        except Conflict as error:raise HTTPException(409,str(error)) from None
+        except (ValueError,TypeError):raise HTTPException(422,'Invalid public wallet challenge.') from None
+    @router.post('/real-copy/verify')
+    async def real_copy_verify(request:Request):
+        payload=await body(request)
+        if not isinstance(payload,dict) or set(payload)!={'challenge_id','signature'}:raise HTTPException(422,'Message signature required.')
+        try:
+            await run_in_threadpool(real_copy.verify,payload['challenge_id'],payload['signature'],request.headers['origin'])
+            return real_copy.public()
+        except Conflict as error:raise HTTPException(409,str(error)) from None
+        except (ValueError,TypeError):raise HTTPException(422,'Ownership verification failed or expired. Connect again.') from None
+    @router.post('/real-copy/unlink')
+    async def real_copy_unlink(request:Request):
+        payload=await body(request)
+        if not isinstance(payload,dict) or set(payload)!={'expected_revision'}:raise HTTPException(422,'Wallet revision required.')
+        try:
+            await run_in_threadpool(real_copy.unlink,payload['expected_revision'])
+            return real_copy.public()
+        except Conflict as error:raise HTTPException(409,str(error)) from None
+        except (ValueError,TypeError):raise HTTPException(422,'Invalid wallet revision.') from None
+    @router.post('/real-copy/start')
+    async def real_copy_start(request:Request):
+        await body(request)
+        raise HTTPException(423,'Live execution is locked. This release cannot sign or submit trades.')
     @router.get('/meme-coins/profile')
     def profile_page(request:Request):
         require_session(request)

@@ -45,7 +45,7 @@
         href="style.css?v=fast-movers-v1"
     >
 
-<style>.stock-research-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:.75rem;margin:1rem 0}.stock-research-stat{display:flex;flex-direction:column;gap:.4rem;padding:1rem;background:rgba(110,140,200,.08);border:1px solid rgba(150,170,210,.15);border-radius:12px}.stock-research-stat span{font-size:.8rem;color:#aebbd0}.stock-research-stat strong{font-size:1.2rem}.stock-research-table{width:100%;border-collapse:collapse;font-size:.85rem}.stock-research-table caption{text-align:left;color:#aebbd0;padding:.75rem 0}.stock-research-table th,.stock-research-table td{text-align:left;padding:.75rem;border-bottom:1px solid rgba(150,170,210,.15);vertical-align:top}.stock-research-table th{white-space:nowrap}.stock-trial{margin:1rem 0}#stock-profitability-lab{margin-bottom:1.5rem;min-width:0;max-width:100%}#stock-profitability-lab p{line-height:1.6}</style></head>
+<style>.stock-research-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:.75rem;margin:1rem 0}.stock-research-stat{display:flex;flex-direction:column;gap:.4rem;padding:1rem;background:rgba(110,140,200,.08);border:1px solid rgba(150,170,210,.15);border-radius:12px}.stock-research-stat span{font-size:.8rem;color:#aebbd0}.stock-research-stat strong{font-size:1.2rem}.stock-research-table{width:100%;border-collapse:collapse;font-size:.85rem}.stock-research-table caption{text-align:left;color:#aebbd0;padding:.75rem 0}.stock-research-table th,.stock-research-table td{text-align:left;padding:.75rem;border-bottom:1px solid rgba(150,170,210,.15);vertical-align:top}.stock-research-table th{white-space:nowrap}.stock-trial{margin:1rem 0}#stock-profitability-lab{margin-bottom:1.5rem;min-width:0;max-width:100%}#stock-profitability-lab p{line-height:1.6}</style><link rel="stylesheet" href="real-copy.css?v=real-copy-v1"></head>
 
 <body>
     <a
@@ -98,6 +98,7 @@
                     <span>Notifications</span>
                     <span id="notification-badge" class="notification-badge hidden" aria-label="Unread notifications">0</span>
                 </button>
+                <button type="button" class="nav-button" data-section="real-copy-section" aria-controls="real-copy-section"><span aria-hidden="true">✦</span><span>Real Copy Trade</span></button>
                 <a class="nav-button" href="/meme-coins"><span aria-hidden="true">🪙</span><span>Meme Coins · Solana</span></a>
                 <button type="button" class="nav-button" data-section="scanner-section" aria-controls="scanner-section"><span aria-hidden="true">🔎</span><span>Scanner</span></button>
                 <button type="button" class="nav-button" data-section="pro-ticker-manual-section" aria-controls="pro-ticker-manual-section"><span aria-hidden="true">🧪</span><span>Pro Ticker</span></button>
@@ -1147,6 +1148,14 @@
                 </section>
 
 
+<section id="real-copy-section" class="app-section hidden" aria-labelledby="rc-title" hidden>
+<div class="rc-top"><div><p class="rc-eyebrow">Solana · next chapter</p><h2 id="rc-title">Real Copy Trade<span>.</span></h2></div><button id="rc-refresh" type="button">↻ Refresh</button></div>
+<div class="rc-layout"><article class="rc-panel rc-hero"><div><span class="rc-pill rc-lock">● Live execution locked</span><h3 class="rc-hero-title">Paper does the homework.<br>Your next move stays yours.</h3><p>Your paper roster and rules, always in sync. Link Phantom now. Trading stays off.</p></div><div><div class="rc-actions"><button id="rc-start" type="button" disabled>Start live copying · locked</button><a class="rc-link" href="/meme-coins/copy">Open paper copier ↗</a></div><small>Live execution is not implemented in this release.</small></div></article>
+<article class="rc-panel"><div class="rc-row"><span class="rc-wallet-icon" aria-hidden="true">P</span><span class="rc-pill">Phantom · Solana</span></div><h3 class="rc-wallet" id="rc-wallet-address">No wallet linked</h3><p class="rc-muted" id="rc-wallet-status">Link Phantom with a message signature. No spending permission.</p><div class="rc-actions"><button type="button" id="rc-connect" class="rc-primary" disabled>Connect Phantom</button><button type="button" id="rc-unlink" disabled>Unlink</button></div><small>We never ask for your seed phrase or private key.</small></article></div>
+<p id="rc-message" role="status" aria-live="polite"></p>
+<div class="rc-stats"><article class="rc-stat"><p>Following the paper roster</p><strong id="rc-count">—</strong><p>Shared wallet selections</p></article><article class="rc-stat"><p>Inherited paper trade size</p><strong id="rc-size">—</strong><p>Preview only · no live allocation</p></article><article class="rc-stat"><p>Paper return on completed-trade spend</p><strong id="rc-paper-return">—</strong><p id="rc-paper-profit">Waiting for paper results</p></article></div>
+<div class="rc-layout"><article class="rc-panel"><div class="rc-row"><h3>The playbook</h3><span class="rc-pill">Synced from paper</span></div><dl class="rc-policy"><div><dt>Repeat-entry guard</dt><dd id="rc-guard">—</dd></div><div><dt>Re-entry cooldown</dt><dd id="rc-cooldown">—</dd></div><div><dt>Wallet discovery</dt><dd id="rc-discovery">—</dd></div><div><dt>Live trades</dt><dd>0 · execution locked</dd></div></dl><p class="rc-note">Shares current copy rules, researched wallets and recorded paper results. A separate adaptive copy-strategy learner is not implemented. Paper balances and trades stay in the paper account.</p><div class="rc-foot"><span id="rc-sync">Waiting for sync</span><span>Snapshot <code id="rc-fingerprint">—</code></span></div><p class="rc-note" id="rc-feed">Waiting for paper feed</p></article><article class="rc-panel"><div class="rc-row"><h3>Your research roster</h3><span class="rc-pill">Auto-sync</span></div><div class="rc-list" id="rc-roster"></div><p class="rc-note">Research follows. Reported performance is not independently audited.</p></article><article class="rc-panel rc-span"><div class="rc-row"><h3>From the paper feed</h3><span class="rc-pill">Read-only preview</span></div><div class="rc-list" id="rc-signals"></div></article></div>
+</section>
 <section id="pro-ticker-manual-section" class="app-section hidden" aria-labelledby="pro-ticker-manual-title" hidden>
 
 <div class="pt-hero">
@@ -1900,6 +1909,7 @@
     <script src="js/search.js?v=entry-diagnostics-v1"></script>
     <script src="js/watchlist.js"></script>
     <script src="js/portfolio.js?v=history-recovery-v1"></script>
+    <script src="js/real-copy.js?v=real-copy-v1"></script>
     <script src="js/pro-ticker-manual.js"></script>
     <script src="js/pro-ticker-release.js"></script>
     <script src="js/pro-ticker-workspace.js?v=entry-settings-v1"></script>
@@ -2010,6 +2020,7 @@ document.addEventListener(
 
                 window.scrollTo({ top: 0, behavior: "smooth" });
 
+                if (sectionId === "real-copy-section") window.loadRealCopyTrade?.();
                 if (sectionId === "settings-section") window.loadMainSettings?.();
                 if (sectionId === "strategy-section") window.loadStockResearch?.();
                 if (sectionId === "dashboard-section") {
