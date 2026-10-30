@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import hashlib
 import json
+import math
 import os
 from threading import Lock
 import time
@@ -21,7 +22,8 @@ CASH_MINTS = {'So11111111111111111111111111111111111111112',
               'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'}
 DEFAULTS = {'enabled': False, 'trade_usd': 50, 'paper_capital_usd': 100000, 'poll_seconds': 10,'auto_discover':True,'max_active_traders':12,
             'minimum_trader_hold_seconds':60,'reentry_cooldown_seconds':0,'stop_loss_percent':20,
-            'max_open_lots_per_coin':1,'stop_loss_cooldown_seconds':1800}
+            'max_open_lots_per_coin':1,'stop_loss_cooldown_seconds':1800,
+            'profit_take_enabled':True,'profit_take_first_percent':20}
 SCHEMA = '''CREATE TABLE IF NOT EXISTS solana_copy_state (
  id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, state_json TEXT NOT NULL,
  lease_owner TEXT, lease_until REAL NOT NULL DEFAULT 0);
@@ -74,7 +76,7 @@ def load():
             if conn.execute("SELECT 1 FROM sqlite_master WHERE name='solana_copy_closes'").fetchone():
                 for r in conn.execute('SELECT details_json FROM solana_copy_closes WHERE closed_at>?',(now-duration,)):
                     close=json.loads(r[0])
-                    if close.get('reason')=='stop_loss':
+                    if close.get('reason') in ('stop_loss','profit_protection'):
                         mint=close['mint'];until=close['closed_at']+duration
                         state['stop_loss_cooldowns'][mint]=max(until,state['stop_loss_cooldowns'].get(mint,0))
     return state,row[1]
@@ -109,6 +111,7 @@ def public():
         events = [json.loads(r[0]) for r in conn.execute('SELECT details_json FROM solana_copy_events ORDER BY rowid DESC LIMIT 100')] if exists else []
         closed = [json.loads(r[0]) for r in conn.execute('SELECT details_json FROM solana_copy_closes ORDER BY rowid DESC LIMIT 100')] if exists else []
         totals = conn.execute("SELECT COUNT(*),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')),0),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')>0),0),COALESCE(SUM(json_extract(details_json,'$.cost_usd')),0),COALESCE(SUM(json_extract(details_json,'$.cost_usd')>0),0) FROM solana_copy_closes").fetchone() if exists else (0,0,0,0,0)
+        partial_count=conn.execute("SELECT COUNT(*) FROM solana_copy_closes WHERE json_extract(details_json,'$.partial_exit')=1").fetchone()[0] if exists else 0
     return {'inactivity_alert':idle_summary('copy'),'paper': True, 'live_execution_enabled': False, 'provider_configured': configured(),'connection_checks':connection_status(),
             'solscan_configured':solscan.configured(),'discovery':{k:v for k,v in state.get('discovery',{}).items() if k!='pending'},'last_polled':state.get('last_polled',{}),
             'config': state['config'], 'revision': state['settings_revision'], 'health': state['health'],
@@ -118,13 +121,17 @@ def public():
                 'max_open_lots_per_coin':state['config']['max_open_lots_per_coin'],
                 'copy_source_adds':state['config']['max_open_lots_per_coin']>1,
                 'reentry_cooldown_seconds':state['config']['stop_loss_cooldown_seconds'],
-                'cooldown_trigger':'stop_loss','stop_loss_percent':state['config']['stop_loss_percent']},
+                'cooldown_trigger':'stop_loss_or_profit_protection','stop_loss_percent':state['config']['stop_loss_percent'],
+                'profit_take_enabled':state['config']['profit_take_enabled'],
+                'profit_take_first_percent':state['config']['profit_take_first_percent'],
+                'profit_take_fraction':.5,'profit_take_level_multiplier':2,'runner_break_even_after_trim':True},
             'stop_loss_cooldowns':{mint:until for mint,until in state['stop_loss_cooldowns'].items() if until>now},
             'discovery_error':state.get('discovery_error'),
             'rpc_coverage':{w:c.get('rpc_coverage') for w,c in state['cursors'].items() if c.get('provider')=='rpc'},
             'cash_usd': state['cash_usd'], **own, 'positions': [{**p,'mark_fresh':p.get('marked_at') is not None and 0<=now-p['marked_at']<=120 and p.get('mark_usd') is not None} for p in state['positions'].values()],
             'traders': state['traders'], 'events': events, 'closed': closed,
             'closed_count': totals[0], 'realized_pnl_usd': totals[1], 'wins': totals[2],
+            'partial_exit_count':partial_count,'completed_lot_count':totals[0]-partial_count,
             'closed_cost_usd':totals[3] if totals[4]==totals[0] else None,
             'closed_return_percent':100*totals[1]/totals[3] if totals[0] and totals[4]==totals[0] and totals[3]>0 else None,
             'average_closed_pnl_usd':totals[1]/totals[0] if totals[0] else None,
@@ -137,7 +144,7 @@ def configure(changes, expected_revision):
     if not isinstance(changes, dict) or not changes or not set(changes) <= set(DEFAULTS) or type(expected_revision) is not int:
         raise ValueError('Known settings and revision required.')
     for key, value in changes.items():
-        if key in ('enabled','auto_discover'):
+        if key in ('enabled','auto_discover','profit_take_enabled'):
             if type(value) is not bool: raise ValueError('Boolean required.')
             # An explicit start may wait for a key saved later in Profile.
         else:
@@ -146,6 +153,7 @@ def configure(changes, expected_revision):
             if key=='max_active_traders' and (value<1 or value!=int(value)):raise ValueError('Maximum active traders must be a positive whole number.')
             if key=='max_open_lots_per_coin' and (value<1 or value!=int(value)):raise ValueError('Maximum open lots per coin must be a positive whole number.')
             if key=='stop_loss_percent' and value>100:raise ValueError('Stop loss must be between 0 and 100 percent; zero disables it.')
+            if key=='profit_take_first_percent' and not 0<value<=100:raise ValueError('First profit-taking gain must be above 0 and at most 100 percent.')
             changes[key] = value
     state, revision = load()
     if state['settings_revision'] != expected_revision: raise bot.Conflict('Settings changed. Refresh before saving.')
@@ -328,15 +336,28 @@ def queue_exits(ids, pause, expected_revision):
     return public()
 
 
-def record_close(state, key, quote, now, reason):
-    p=state['positions'].pop(key); proceeds=max(0,p['quantity']*quote['price']*.99-.1)
+def record_close(state, key, quote, now, reason, fraction=1):
+    """Allocate entry costs once; each realized slice pays its own exit charge."""
+    p=state['positions'][key];quantity=p['quantity']*fraction;cost=p['cost_usd']*fraction
+    proceeds=max(0,quantity*quote['price']*.99-.1)
+    row={**deepcopy(p),'lot_id':p['id'],'id':str(uuid.uuid4()),'quantity':quantity,'cost_usd':cost,
+         'mark_usd':proceeds,'closed_at':now,'exit_price_usd':quote['price'],'proceeds_usd':proceeds,
+         'pnl_usd':proceeds-cost,'reason':reason,'partial_exit':fraction<1}
+    if fraction<1:
+        p.setdefault('original_quantity',p['quantity']);p.setdefault('original_cost_usd',p['cost_usd'])
+        p['quantity']-=quantity;p['cost_usd']-=cost
+        p['realized_pnl_usd']=p.get('realized_pnl_usd',0)+row['pnl_usd']
+        p['realized_proceeds_usd']=p.get('realized_proceeds_usd',0)+proceeds
+        p['mark_usd']=max(0,p['quantity']*quote['price']*.99-.1)
+        row['remaining_quantity']=p['quantity'];row['remaining_cost_usd']=p['cost_usd']
+    else:state['positions'].pop(key)
     state['cash_usd']+=proceeds
-    if reason=='stop_loss' and state['config']['stop_loss_cooldown_seconds']>0:
+    if reason in ('stop_loss','profit_protection') and state['config']['stop_loss_cooldown_seconds']>0:
         state['stop_loss_cooldowns'][p['mint']]=max(state['stop_loss_cooldowns'].get(p['mint'],0),now+state['config']['stop_loss_cooldown_seconds'])
-    return {**p,'id':str(uuid.uuid4()),'closed_at':now,'exit_price_usd':quote['price'],'proceeds_usd':proceeds,'pnl_usd':proceeds-p['cost_usd'],'reason':reason}
+    return row
 
 
-def mark_and_protect(state, quotes, observed, closes):
+def mark_and_protect(state, quotes, observed, closes, *, allow_profit_takes=False):
     """Each copied lot has its own net-cost stop, independent of source history."""
     stop=state['config']['stop_loss_percent']
     for key,p in list(state['positions'].items()):
@@ -349,10 +370,26 @@ def mark_and_protect(state, quotes, observed, closes):
         p['marked_at']=quote['at'] if quote else None
         if not quote:continue
         reason=('manual_sell' if p.get('manual_sell') else 'trader_sell') if p.get('pending_sell') else None
+        if reason is None and p.get('profit_take_stages',0)>0 and p['mark_usd']<=p['cost_usd']:reason='profit_protection'
         if reason is None and stop>0 and p['mark_usd']<=p['cost_usd']*(1-stop/100):reason='stop_loss'
         if reason:
             if reason=='stop_loss':p['stop_loss_percent_at_exit']=stop
             closes.append(record_close(state,key,quote,observed,reason))
+            continue
+        if not allow_profit_takes or not state['config']['profit_take_enabled'] or p.get('profit_take_exhausted'):continue
+        target=p.get('profit_take_next_percent',state['config']['profit_take_first_percent'])
+        gain=100*(p['mark_usd']/p['cost_usd']-1)
+        half_proceeds=max(0,p['quantity']*.5*quote['price']*.99-.1)
+        if gain<target or half_proceeds<=p['cost_usd']*.5:continue
+        # A gap across multiple levels trims once at this observed price.
+        # Advance above the observed gain, so repeated marks cannot drain it.
+        next_target=target*2
+        while math.isfinite(next_target) and next_target<=gain:next_target*=2
+        p['profit_take_stages']=p.get('profit_take_stages',0)+1
+        p['profit_take_last_gain_percent']=gain
+        if math.isfinite(next_target):p['profit_take_next_percent']=next_target
+        else:p['profit_take_exhausted']=True;p.pop('profit_take_next_percent',None)
+        closes.append(record_close(state,key,quote,observed,'profit_take_half',fraction=.5))
 
 
 def tick(*, provider=None, market=None, clock=time.time):
@@ -447,7 +484,7 @@ def tick(*, provider=None, market=None, clock=time.time):
             elif observed-signal['source_at'] > 90: signal['reason']='Signal arrived more than 90 seconds late.'
             elif latest_sell.get((wallet,mint),-1) >= signal['source_at']: signal['reason']='Trader already sold before detection.'
             elif observed<state['stop_loss_cooldowns'].get(mint,0) or signal['source_at']<state['stop_loss_cooldowns'].get(mint,0):
-                signal['reason']='Coin is in stop-loss cooldown; this buy will not be replayed.'
+                signal['reason']='Coin is in protective-exit cooldown; this buy will not be replayed.'
                 signal['cooldown_until']=state['stop_loss_cooldowns'][mint]
             elif sum(p['mint']==mint for p in state['positions'].values())>=state['config']['max_open_lots_per_coin']:
                 signal['reason']='Per-coin open-lot limit reached across all followed wallets; add-on skipped.'
@@ -468,7 +505,7 @@ def tick(*, provider=None, market=None, clock=time.time):
                     p['mark_usd']=max(0,p['quantity']*quote['price']*.99-.1)
                     state['positions'][p['id']]=p; state['cash_usd']-=cost; signal['status']='paper_buy'; signal['reason']='Copied buy within per-coin exposure and stop-loss cooldown rules; no liquidity or volume gate.'
             events.append(signal)
-        mark_and_protect(state,quotes,observed,closes)
+        mark_and_protect(state,quotes,observed,closes,allow_profit_takes=True)
         if enabled and hasattr(provider,'discover') and now>=state.get('discovery_retry_at',0):
             try:
                 provider.discover(state,clock);state['discovery_error']=None
