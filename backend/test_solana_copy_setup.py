@@ -22,7 +22,7 @@ class SetupTests(unittest.TestCase):
     def test_research_seeds_are_attributed_prospective_and_idempotent(self):
         with patch.object(solscan,'configured',return_value=True),patch.object(setup.time,'time',return_value=1000):
             first=setup.seed_wallets(0)
-            self.assertEqual(len(first['traders']),3);self.assertEqual(first['positions'],[]);self.assertEqual(first['cash_usd'],100000)
+            self.assertEqual(len(first['traders']),4);self.assertEqual(first['positions'],[]);self.assertEqual(first['cash_usd'],100000)
             for trader in first['traders']:
                 self.assertEqual(trader['selected_at'],1000);self.assertEqual(trader['trade_provider'],'solscan')
                 self.assertEqual(trader['qualification'],'owner_requested_research_seed')
@@ -34,7 +34,7 @@ class SetupTests(unittest.TestCase):
                 conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1',(json.dumps(state),));conn.commit()
             setup.seed_wallets(0)
             self.assertEqual(copy.load()[0]['cursors'][first['traders'][0]['wallet']]['at'],1050)
-            self.assertEqual(len(copy.load()[0]['traders']),3)
+            self.assertEqual(len(copy.load()[0]['traders']),4)
             with self.assertRaises(Conflict):setup.seed_wallets(9)
 
     def test_new_reviewed_follow_uses_rpc_and_retains_attributed_equal_stake_evidence(self):
@@ -49,7 +49,13 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(trader['research_evidence']['reported_equal_stake_multiple_90d'],1.53)
         self.assertEqual(trader['research_evidence']['reviewed_on'],'2026-10-30')
         self.assertEqual(copy.load()[0]['cursors'][trader['wallet']]['provider'],'rpc')
-        self.assertFalse(any(t['name']=='Solkrow' for t in data['traders']))
+        solkrow=next(t for t in data['traders'] if t['name']=='Solkrow')
+        self.assertEqual(solkrow['wallet'],'ApRnQN2HkbCn7W2WWiT2FEKvuKJp9LugRyAE1a9Hdz1')
+        self.assertEqual(solkrow['trade_provider'],'rpc');self.assertTrue(solkrow['active'])
+        self.assertEqual(solkrow['research_evidence']['reported_equal_stake_multiple_90d'],1.38)
+        self.assertEqual(solkrow['research_evidence']['reported_sample_trades'],1547)
+        self.assertEqual(len(solkrow['research_evidence']['copy_source_sample_signatures']),3)
+        self.assertFalse(any(t['name'] in ('Vein','Casino','Beaver','Rambo','Ansem','Marker') for t in data['traders']))
 
     def test_connection_checks_persist_safe_results_without_account_mutation(self):
         with closing(database.get_connection()) as conn:copy.initialize(conn)
