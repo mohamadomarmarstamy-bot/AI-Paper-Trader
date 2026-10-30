@@ -65,7 +65,7 @@ test('main app desktop/mobile settings, Jarvis actions, drawer and voice fallbac
    });
    await page.goto(origin);await page.waitForFunction(()=>document.getElementById('jarvis-status-text').textContent==='Online · app tools connected');
    assert.equal(await page.evaluate(()=>window.API_URL),origin);
-   await page.locator('.nav-button[data-section="strategy-section"]').click();await page.getByText(/Saved results loaded/).waitFor();assert.match(await page.locator('#stock-cohort-setup').innerText(),/Breakout/);assert.match(await page.locator('#stock-parallel-trials').innerText(),/12 matured pairs/);await page.locator('#stock-research-window').selectOption('30');await page.getByText(/Saved results loaded/).waitFor();
+   assert.match(await page.locator('.main-nav .nav-button[data-section="real-copy-section"]').innerText(),/Real Copy Trade/);await page.locator('.nav-button[data-section="real-copy-section"]').click();assert.equal(await page.locator('#real-copy-section').isVisible(),true);await page.locator('.nav-button[data-section="strategy-section"]').click();await page.getByText(/Saved results loaded/).waitFor();assert.match(await page.locator('#stock-cohort-setup').innerText(),/Breakout/);assert.match(await page.locator('#stock-parallel-trials').innerText(),/12 matured pairs/);await page.locator('#stock-research-window').selectOption('30');await page.getByText(/Saved results loaded/).waitFor();
    await page.locator('.nav-button[data-section="settings-section"]').click();
    await page.getByText('Saved settings loaded. Changes affect subsequent decisions.',{exact:true}).waitFor();
    assert.equal(await page.locator('#settings-section input[type=checkbox][disabled]').count(),0);
