@@ -427,7 +427,33 @@ class EngineTests(unittest.TestCase):
         self.assertFalse(risk['entries_allowed']);self.assertEqual(risk['equity_floor_usd'],state['cash_usd'])
         self.assertAlmostEqual(risk['conservative_drawdown_usd'],50.1)
         state['day']='2000-01-01';state['config']['daily_loss_usd']=1000
+        carried=bot.entry_risk(state,self.now)
+        self.assertTrue(carried['entries_allowed']);self.assertTrue(carried['baseline_carried_forward'])
+        self.assertAlmostEqual(carried['conservative_drawdown_usd'],50.1)
+        state['day_equity']=None
         self.assertEqual(bot.entry_risk(state,self.now)['reason'],'daily_baseline_unknown')
+
+    def test_midnight_missing_marks_carries_budget_without_reset_or_fictional_marks(self):
+        self.open();self.configure({'daily_loss_usd':1000,'entry_mode':'explore','watchlist':[OTHER]})
+        before,_=bot.load();anchor=before['day'];baseline=before['day_equity']
+        row=self.providers.pairs([MINT])[0];row['baseToken']['address']=OTHER;row['pairAddress']='1'*31+'5'
+        self.providers.pairs=lambda addresses:[row] if OTHER in addresses else []
+        self.now+=86400;result=self.tick()
+        self.assertEqual(len(result['positions']),2)
+        self.assertEqual(result['day'],anchor);self.assertEqual(result['day_equity'],baseline)
+        self.assertTrue(result['risk_guard']['baseline_carried_forward'])
+        self.assertIsNone(result['paper_equity_usd']);self.assertFalse(result['closed'])
+        state,_=bot.load();state['config']['daily_loss_usd']=40
+        self.assertEqual(bot.entry_risk(state,self.now)['reason'],'daily_loss_limit')
+        state['day']='2999-01-01'
+        self.assertEqual(bot.entry_risk(state,self.now)['reason'],'daily_baseline_unknown')
+
+    def test_complete_marks_establish_new_daily_anchor_after_midnight(self):
+        self.open();self.configure({'max_hold_minutes':100000,'daily_loss_usd':1000})
+        before,_=bot.load();self.now+=86400;result=self.tick()
+        self.assertNotEqual(result['day'],before['day'])
+        self.assertFalse(result['risk_guard']['baseline_carried_forward'])
+        self.assertAlmostEqual(result['day_equity'],result['paper_equity_usd'],places=3)
 
     def test_missing_holding_remaining_budget_must_cover_new_entry_friction(self):
         self.open();self.configure({'daily_loss_usd':50.5,'entry_mode':'explore','watchlist':[OTHER]})

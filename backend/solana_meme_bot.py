@@ -7,6 +7,7 @@ from collections import deque
 from threading import Lock
 from time import monotonic
 from decimal import Decimal
+from datetime import date
 import json
 import math
 import time
@@ -50,7 +51,7 @@ LIMITATIONS = [
     'Mint/freeze checks do not establish safety, locked liquidity, sellability, or absence of insider/wash trading.',
     'Costs are assumptions. Real slippage, priority fees, MEV, taxes, liquidity loss and failed exits can be worse.',
     'Stops are sampled every 10 seconds and cannot guarantee a price. Missing observations leave exits unresolved.',
-    'Daily loss brake uses a conservative equity floor from the confirmed UTC daily baseline; unavailable long-only holdings count as a full loss for entry risk only.',
+    'Loss brake uses a conservative equity floor from the last confirmed UTC baseline; if prices are missing across midnight, the same budget carries forward without a daily reset until complete marks return. Unpriced holdings count as a full loss for entry risk only.',
 ]
 SCHEMA = '''CREATE TABLE IF NOT EXISTS solana_meme_paper_state (
  id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL,
@@ -116,11 +117,19 @@ def entry_risk(state,now):
         else:missing+=1  # Reserve the full loss of this already-paid holding.
     today=time.strftime('%Y-%m-%d',time.gmtime(now))
     baseline=state.get('day_equity')
-    known=state.get('day')==today and learner.finite(baseline)
+    # Missing marks must not reset the budget, nor freeze it forever at midnight.
+    # Keep charging losses against the last confirmed anchor until a complete
+    # portfolio observation can establish a new day's baseline in tick().
+    anchor_day=state.get('day')
+    try:valid_day=date.fromisoformat(anchor_day).isoformat()==anchor_day
+    except (TypeError,ValueError):valid_day=False
+    known=valid_day and anchor_day<=today and learner.finite(baseline) and baseline>=0
+    carried=known and anchor_day!=today
     limit=state['config']['daily_loss_usd']
     drawdown=max(0,baseline-floor) if known else None
     allowed=known and floor-baseline>-limit
     return {'equity_floor_usd':floor,'missing_count':missing,
+            'baseline_day':anchor_day if known else None,'baseline_carried_forward':carried,
             'daily_loss_limit_usd':limit,'conservative_drawdown_usd':round(drawdown,4) if known else None,
             'remaining_usd':round(max(0,limit-drawdown),4) if known else None,
             'entries_allowed':allowed,'reason':None if allowed else 'daily_loss_limit' if known else 'daily_baseline_unknown',
