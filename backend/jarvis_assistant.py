@@ -219,7 +219,9 @@ def build_router(*,require_session,assistant,runtime,load_profile,save_profile,s
     @router.get('/auto-trader/settings')
     def settings(request:Request):
         require_session(request)
-        return JSONResponse({'success':True,'paper':True,**controls.snapshot(),'runtime':clean_data(runtime())},headers={'Cache-Control':'no-store'})
+        from stock_auto_learning import status as stock_learning_status
+        return JSONResponse({'success':True,'paper':True,**controls.snapshot(),'defaults':controls.ALL_DEFAULTS,
+                             'stock_learning':stock_learning_status(),'runtime':clean_data(runtime())},headers={'Cache-Control':'no-store'})
     @router.post('/auto-trader/settings')
     async def save_settings(request:Request):
         data=await body(request)
@@ -231,6 +233,12 @@ def build_router(*,require_session,assistant,runtime,load_profile,save_profile,s
                 result=await run_in_threadpool(controls.update,data,expected_revision=controls.snapshot()['revision'],request_id=str(uuid.uuid4()))
             assistant.invalidate();return result
         except (ValueError,controls.Conflict) as exc:raise error(exc) from None
+    @router.get('/auto-trader/stock-float/{symbol}')
+    async def stock_float(symbol:str,request:Request):
+        require_session(request)
+        if not re.fullmatch(r'[A-Z][A-Z0-9.\-]{0,9}',symbol):raise HTTPException(422,'A stock symbol is required.')
+        from stock_momentum import reported_float
+        return JSONResponse({'symbol':symbol,'paper':True,**await run_in_threadpool(reported_float,symbol)},headers={'Cache-Control':'no-store'})
     @router.post('/auto-trader/settings/undo/{change_id}')
     async def undo_settings(change_id:str,request:Request):
         data=await body(request)

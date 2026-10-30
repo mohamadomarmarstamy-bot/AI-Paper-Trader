@@ -6,13 +6,13 @@ const path=require('node:path');
 const {randomUUID}=require('node:crypto');
 const {chromium}=require('playwright');
 const root=path.resolve(__dirname,'..');
-const defaults={position_size_percent:2,max_order_size_percent:2.5,max_position_size_percent:5,max_open_positions:50,stop_loss_percent:2,take_profit_percent:4,profit_lock_trigger_percent:.75,profit_lock_percent:.25,trailing_stop_percent:1,daily_profit_target_percent:5,daily_loss_limit_percent:1,pause_new_entries:true,notify_trade_events:true,notify_protection_events:true,notify_scanner_events:true};
+const defaults={position_size_percent:2,max_order_size_percent:2.5,max_position_size_percent:5,max_open_positions:50,stop_loss_percent:2,take_profit_percent:4,profit_lock_trigger_percent:.75,profit_lock_percent:.25,trailing_stop_percent:1,daily_profit_target_percent:5,daily_loss_limit_percent:1,stock_min_price_usd:2.0,stock_max_price_usd:20.0,stock_min_float_millions:0.0,stock_max_float_millions:20.0,stock_min_volume_ratio:2.0,stock_min_average_volume:250000.0,stock_max_spread_percent:0.5,stock_min_day_change_percent:2.0,stock_min_gap_percent:0.0,stock_max_atr_percent:8.0,stock_news_max_age_hours:24.0,stock_filters_enabled:true,stock_require_recent_news:false,stock_auto_adjust_enabled:true,pause_new_entries:true,notify_trade_events:true,notify_protection_events:true,notify_scanner_events:true};
 
 test('main app desktop/mobile settings, Jarvis actions, drawer and voice fallback',{timeout:120000},async()=>{
  let settings,revision,audit,profile,proposals,chatPosts,speechPosts,delaySpeech=false,releaseSpeech=null;
  const reset=()=>{settings={...defaults};revision='0';audit=[];profile={preferred_name:'Omar',address_as:'Sir',language:'en-US',voice:'cedar',timezone:'America/New_York',wake_phrase:'Hey Jarvis',voice_activation:false,automatic_greeting:false};proposals=new Map();chatPosts=[];speechPosts=0;};reset();
  const runtime={automatic_trader_enabled:false,scanner_health:'disabled'};
- const snapshot=()=>({success:true,paper:true,settings:{...settings},revision,audit:[...audit],runtime});
+ const snapshot=()=>({success:true,paper:true,settings:{...settings},defaults:{...defaults},stock_learning:{pending_closed_count:12,reviews:[{created_at:new Date().toISOString(),changed:true,wins:8,losses:17,realized_pnl_usd:-25,reason:"Losing batch risk reduction",before:{position_size_percent:2},after:{position_size_percent:1.8},comparisons:[]}]},revision,audit:[...audit],runtime});
  const mutate=(changes,actor='settings')=>{const before=Object.fromEntries(Object.keys(changes).map(k=>[k,settings[k]]));Object.assign(settings,changes);revision=String(Number(revision)+1);const receipt={id:randomUUID(),before,after:changes,actor,created_at:new Date().toISOString(),revision_after:revision};audit.unshift(receipt);return {...snapshot(),receipt,effect:'Subsequent decisions only; existing orders are unchanged.'};};
  let origin;
  const server=http.createServer(async(req,res)=>{
@@ -68,8 +68,9 @@ test('main app desktop/mobile settings, Jarvis actions, drawer and voice fallbac
    await page.getByText('Saved settings loaded. Changes affect subsequent decisions.',{exact:true}).waitFor();
    assert.equal(await page.locator('#settings-section input[type=checkbox][disabled]').count(),0);
    assert.equal(await page.locator('#settings-section').getByText('Not connected yet',{exact:true}).count(),0);
+   assert.equal(await page.locator('#setting-stock-max-float-millions').inputValue(),'20');assert.equal(await page.locator('#setting-stock-min-price-usd').inputValue(),'2');assert.match(await page.locator('#stock-learning-status').innerText(),/12\/25/);assert.match(await page.locator('#stock-learning-reviews').innerText(),/2 → 1.8/);await page.locator('#setting-stock-max-float-millions').fill('18');
    await page.locator('#setting-stop-loss-percent').fill('3');await page.getByRole('button',{name:'Save Trading Settings',exact:true}).click();
-   await page.getByText(/Settings saved\./).waitFor();assert.equal(settings.stop_loss_percent,3);
+   await page.getByText(/Settings saved\./).waitFor();assert.equal(settings.stop_loss_percent,3);assert.equal(settings.stock_max_float_millions,18);
    await page.getByRole('button',{name:'Undo last settings change',exact:true}).click();
    await page.waitForFunction(()=>document.getElementById('setting-stop-loss-percent').value==='2');assert.equal(settings.stop_loss_percent,2);
    await page.locator('#setting-stop-loss-percent').fill('4');mutate({take_profit_percent:5},'other_tab');

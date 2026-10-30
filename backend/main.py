@@ -1831,6 +1831,8 @@ async def lifespan(app: FastAPI):
     meme_paper_task = asyncio.create_task(meme_paper_worker())
     from solana_copy_trader import worker as copy_paper_worker
     copy_paper_task = asyncio.create_task(copy_paper_worker())
+    from stock_auto_learning import worker as stock_learning_worker
+    stock_learning_task = asyncio.create_task(stock_learning_worker(_invalidate_auto_trader_settings_cache))
     try:
         yield
     finally:
@@ -1842,6 +1844,7 @@ async def lifespan(app: FastAPI):
         manual_scanner_task.cancel()
         meme_paper_task.cancel()
         copy_paper_task.cancel()
+        stock_learning_task.cancel()
 
         for task in (
             refresh_task,
@@ -1851,6 +1854,7 @@ async def lifespan(app: FastAPI):
             manual_scanner_task,
             meme_paper_task,
             copy_paper_task,
+            stock_learning_task,
         ):
             try:
                 await task
@@ -7882,6 +7886,24 @@ def submit_alpaca_auto_bracket_buy(
             "risk": risk_check,
         }
 
+    stock_entry_features = None
+    stock_entry_snapshot = None
+    if manual_request_id is None and automatic_entries_paused():
+        return {'success':False,'paper':True,'automatic':True,'entries_paused':True,
+                'error':'New automatic paper entries are paused.'}
+    if manual_request_id is None:
+        import stock_momentum
+        try:
+            stock_entry_snapshot = stock_momentum.settings()
+            stock_entry_features = stock_momentum.features(
+                scanner_result, risk_check.get('quote') or {}, stock_entry_snapshot['settings'], symbol=normalized_symbol)
+            failed = stock_momentum.evaluate(stock_entry_features, stock_entry_snapshot['settings'], now=time.time())
+        except Exception:
+            return {'success':False,'paper':True,'error':'Stock entry settings or evidence unavailable; no order submitted.'}
+        if failed:
+            return {'success':False,'paper':True,'error':'Stock momentum filters rejected this entry: '+', '.join(failed),
+                    'stock_entry_gate':{'passed':False,'failed_requirements':failed,'features':stock_entry_features}}
+
     stop_price = round(
         reference_price
         * (
@@ -7979,6 +8001,15 @@ def submit_alpaca_auto_bracket_buy(
             raise RuntimeError(
                 "Alpaca returned an invalid automatic order response."
             )
+
+        if stock_entry_features is not None and payload.get('id'):
+            try:
+                from stock_auto_learning import record_entry as record_stock_entry
+                record_stock_entry(payload['id'],normalized_symbol,stock_entry_features,stock_entry_snapshot)
+            except Exception as evidence_error:
+                add_auto_trader_log('stock_entry_evidence_error',symbol=normalized_symbol,
+                    message='PAPER order accepted, but its stock learning snapshot could not be saved. Do not resubmit.',
+                    details={'order_id':payload['id'],'error':clean_error_message(evidence_error)})
 
         latest_order = (
             wait_for_alpaca_paper_order(
@@ -8156,6 +8187,8 @@ def submit_alpaca_auto_bracket_buy(
                         )
 
                     entry_event_details = {
+                        "stock_entry_features": stock_entry_features,
+                        "stock_settings_revision": stock_entry_snapshot['revision'] if stock_entry_snapshot else None,
                         "strategy_version": strategy_version,
                         "score": scanner_result.get(
                             "score"
@@ -12736,6 +12769,9 @@ def run_auto_trader_cycle() -> dict[str, Any]:
                         news_context
                     )
                 )
+
+                from stock_momentum import news_timestamp
+                candidate['stock_news_latest_at'] = news_timestamp(news_context)
 
                 if (
                     news_score.get("sentiment")
@@ -23343,7 +23379,7 @@ def jarvis_app_runtime():
         "automation_allowed":auto_trader_automation_allowed(),
         "automatic_entries_paused":automatic_entries_paused(),
         "scanner_health":status.get("health"),"last_scan_at":status.get("last_scan_at"),
-        "error_logging":True,"health_monitoring":True,"model_training":False,"strategy_experiments":False,
+        "error_logging":True,"health_monitoring":True,"model_training":False,"strategy_experiments":get_app_setting('stock_auto_adjust_enabled')!='false',
         "settings_effect":"Subsequent decisions only; existing native orders and manual premarket protection retain their saved settings."}
 
 

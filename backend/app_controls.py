@@ -6,6 +6,7 @@ import json
 import math
 import uuid
 import database
+import stock_momentum
 
 DEFAULTS = {'position_size_percent':2.0,'max_order_size_percent':2.5,
  'max_position_size_percent':5.0,'max_open_positions':50,'stop_loss_percent':2.0,
@@ -17,6 +18,9 @@ RANGES = {'position_size_percent':(.1,100),'max_order_size_percent':(.1,100),
  'trailing_stop_percent':(.1,50),'daily_profit_target_percent':(.1,100),'daily_loss_limit_percent':(.1,100)}
 PREFERENCES={'pause_new_entries':True,'notify_trade_events':True,
  'notify_protection_events':True,'notify_scanner_events':True}
+DEFAULTS.update(stock_momentum.DEFAULTS)
+RANGES.update(stock_momentum.RANGES)
+PREFERENCES.update(stock_momentum.PREFERENCES)
 ALL_DEFAULTS={**DEFAULTS,**PREFERENCES}
 EFFECT='Applies to subsequent PAPER decisions. Existing orders/positions are unchanged; this does not enable an automation service.'
 SCHEMA='''CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at TEXT NOT NULL);
@@ -92,6 +96,25 @@ def snapshot():
         return result
 
 
+def _apply(conn,current,changes,request_id,actor):
+    """Shared atomic write path, also used by the bounded stock experiment."""
+    proposed={**current['settings'],**changes}
+    if set(changes)&{'position_size_percent','max_order_size_percent','max_position_size_percent'}:
+        if proposed['position_size_percent']>min(proposed['max_order_size_percent'],proposed['max_position_size_percent']):
+            raise ValueError('Position size cannot exceed maximum order or position size; change related limits together.')
+    for low,high in [('stock_min_price_usd','stock_max_price_usd'),('stock_min_float_millions','stock_max_float_millions')]:
+        if proposed[high] and proposed[low]>proposed[high]:raise ValueError('Minimum must not exceed its enabled maximum.')
+    stamp=datetime.now(timezone.utc).isoformat()
+    before={key:current['settings'][key] for key in changes}
+    conn.executemany('INSERT INTO app_settings VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at',
+        [(key,'true' if value is True else 'false' if value is False else format(value,'.12g'),stamp) for key,value in changes.items()])
+    saved=_snapshot(conn);change_id=str(uuid.uuid4())
+    encoded=json.dumps(changes,sort_keys=True,separators=(',',':'))
+    conn.execute('INSERT INTO app_settings_audit VALUES (?,?,?,?,?,?,?,?)',
+        (change_id,request_id,actor,stamp,encoded,json.dumps(before),json.dumps(changes),saved['revision']))
+    return {'success':True,'paper':True,**saved,'receipt':receipt(conn.execute('SELECT * FROM app_settings_audit WHERE id=?',(change_id,)).fetchone())}
+
+
 def update(changes,*,expected_revision,request_id,actor='settings',jarvis_request_id=None):
     changes=validate(changes);request_id=identity(request_id)
     encoded=json.dumps(changes,sort_keys=True,separators=(',',':'))
@@ -103,18 +126,7 @@ def update(changes,*,expected_revision,request_id,actor='settings',jarvis_reques
             return {'success':True,'paper':True,**_snapshot(conn),'receipt':receipt(prior)}
         current=_snapshot(conn)
         if expected_revision!=current['revision']:raise Conflict('Settings changed elsewhere. Refresh before saving.')
-        proposed={**current['settings'],**changes}
-        if set(changes)&{'position_size_percent','max_order_size_percent','max_position_size_percent'}:
-            if proposed['position_size_percent']>min(proposed['max_order_size_percent'],proposed['max_position_size_percent']):
-                raise ValueError('Position size cannot exceed maximum order or position size; change related limits together.')
-        stamp=datetime.now(timezone.utc).isoformat()
-        before={key:current['settings'][key] for key in changes}
-        conn.executemany('INSERT INTO app_settings VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at',
-            [(key,'true' if value is True else 'false' if value is False else format(value,'.12g'),stamp) for key,value in changes.items()])
-        saved=_snapshot(conn);change_id=str(uuid.uuid4())
-        conn.execute('INSERT INTO app_settings_audit VALUES (?,?,?,?,?,?,?,?)',
-            (change_id,request_id,actor,stamp,encoded,json.dumps(before),json.dumps(changes),saved['revision']))
-        result={'success':True,'paper':True,**saved,'receipt':receipt(conn.execute('SELECT * FROM app_settings_audit WHERE id=?',(change_id,)).fetchone())}
+        result=_apply(conn,current,changes,request_id,actor)
         if jarvis_request_id:
             conn.execute('UPDATE jarvis_requests SET receipt_json=? WHERE id=?',(json.dumps(result),jarvis_request_id))
         conn.commit()
