@@ -73,9 +73,12 @@ def regular_metrics():
 
 
 def metrics(state, now):
-    complete = all(p.get('marked_at') is not None and 0 <= now-p['marked_at'] <= 120 and p.get('mark_usd') is not None for p in state['positions'].values())
-    equity = state['cash_usd'] + sum(p.get('mark_usd') or 0 for p in state['positions'].values()) if complete else None
-    return {'equity_usd': equity, 'net_usd': equity-state['config']['paper_capital_usd'] if equity is not None else None}
+    fresh=[p for p in state['positions'].values() if p.get('marked_at') is not None and 0<=now-p['marked_at']<=120 and p.get('mark_usd') is not None]
+    missing=len(state['positions'])-len(fresh)
+    subtotal=state['cash_usd']+sum(p['mark_usd'] for p in fresh)
+    equity=subtotal if not missing else None
+    return {'equity_usd':equity,'net_usd':equity-state['config']['paper_capital_usd'] if equity is not None else None,
+            'valuation':{'complete':not missing,'unpriced_holdings':missing,'priced_holdings':len(fresh),'cash_and_priced_holdings_usd':subtotal}}
 
 
 def public():
@@ -250,9 +253,34 @@ def prices(addresses, provider, clock):
             if row['chainId'] != 'solana': continue
             address=bot.mint(row['baseToken']['address']); pair=bot.mint(row['pairAddress']); price=bot.num(row['priceUsd'])
             if address not in addresses or price <= 0: continue
-            result[(address,pair)]={'price':price,'pool':pair,'symbol':str(row['baseToken'].get('symbol') or address[:6])[:80],'at':received}
+            result[(address,pair)]={'price':price,'pool':pair,'symbol':str(row['baseToken'].get('symbol') or address[:6])[:80],'at':received,
+                'quote_mint':(row.get('quoteToken') or {}).get('address'),
+                'liquidity_usd':(row.get('liquidity') or {}).get('usd'),
+                'volume_m5_usd':(row.get('volume') or {}).get('m5'),
+                'trades_m5':sum((row.get('txns') or {}).get('m5',{}).get(k,0) for k in ('buys','sells')),
+                'inactive_pool':row.get('liquidity','unknown') is None and (row.get('volume') or {}).get('m5')==0}
         except (ValueError,KeyError,TypeError): continue
     return result
+
+
+def holding_quote(position,quotes,now):
+    """Recover fungible-token marks from an observed active same-mint pool.
+
+    A price-only alternate is insufficient: require a known cash quote, positive
+    published liquidity, and trading in the last five minutes. No stale marks,
+    entry price, symbol matching or another mint can supply a liquidation mark.
+    """
+    exact=quotes.get((position['mint'],position['pool']))
+    if exact and not exact.get('inactive_pool') and 0<=now-exact['at']<=45:return exact
+    candidates=[]
+    for (address,pair),quote in quotes.items():
+        if address!=position['mint'] or pair==position['pool'] or quote.get('quote_mint') not in CASH_MINTS:continue
+        try:
+            if bot.num(quote.get('liquidity_usd'))<=0 or bot.num(quote.get('volume_m5_usd'))<=0 or bot.num(quote.get('trades_m5'))<=0:continue
+            if not 0<=now-quote['at']<=45:continue
+            candidates.append(quote)
+        except (ValueError,TypeError,KeyError):continue
+    return max(candidates,key=lambda q:(float(q['liquidity_usd']),q['pool']),default=None)
 
 
 def queue_exits(ids, pause, expected_revision):
@@ -347,7 +375,11 @@ def tick(*, provider=None, market=None, clock=time.time):
         if observed-now>150:raise DataUnavailable('Copy cycle exceeded observation budget.')
         quotes={key:q for key,q in quotes.items() if 0<=observed-q['at']<=45}
         for p in state['positions'].values():
-            quote=quotes.get((p['mint'],p['pool']))
+            quote=holding_quote(p,quotes,observed)
+            if quote and quote['pool']!=p['pool']:
+                p.setdefault('entry_pool',p['pool'])
+                p.setdefault('pool_changes',[]).append({'from':p['pool'],'to':quote['pool'],'at':observed,'reason':'Original pool absent or inactive; active same-mint cash-quoted pool observed.'})
+                p['pool']=quote['pool']
             p['mark_usd']=max(0,p['quantity']*quote['price']*.99-.1) if quote else None
             p['marked_at']=quote['at'] if quote else None
         with closing(database.get_connection()) as conn:
@@ -394,8 +426,9 @@ def tick(*, provider=None, market=None, clock=time.time):
                     state['positions'][p['id']]=p; state['cash_usd']-=cost; signal['status']='paper_buy'; signal['reason']='Copied buy; no liquidity or volume gate.'
             events.append(signal)
         for key,p in list(state['positions'].items()):
-            if p.get('pending_sell') and (p['mint'],p['pool']) in quotes:
-                closes.append(record_close(state,key,quotes[(p['mint'],p['pool'])],observed,'manual_sell' if p.get('manual_sell') else 'trader_sell'))
+            quote=holding_quote(p,quotes,observed)
+            if p.get('pending_sell') and quote:
+                closes.append(record_close(state,key,quote,observed,'manual_sell' if p.get('manual_sell') else 'trader_sell'))
         if enabled and hasattr(provider,'discover') and now>=state.get('discovery_retry_at',0):
             try:
                 provider.discover(state,clock);state['discovery_error']=None
