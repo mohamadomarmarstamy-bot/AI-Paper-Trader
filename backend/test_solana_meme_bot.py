@@ -107,6 +107,39 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(result['positions'][0]['pair'],PAIR)
         self.assertFalse(result['positions'][0]['mark_fresh'])
 
+    def test_active_same_mint_alternate_recovers_and_records_pool(self):
+        self.open();good=self.providers.pairs([MINT])
+        good[0].update(pairAddress=OTHER,quoteToken={'address':'So11111111111111111111111111111111111111112'})
+        self.providers.pairs=lambda addresses:good
+        self.now+=10;result=self.tick()
+        p=result['positions'][0]
+        self.assertTrue(p['mark_fresh']);self.assertEqual(p['pair'],OTHER)
+        self.assertEqual(p['entry_pair'],PAIR);self.assertEqual(p['pool_changes'][0]['from'],PAIR)
+
+    def test_learned_mode_keeps_confirmation_activity_and_momentum_checks(self):
+        config={**bot.DEFAULTS,'entry_mode':'learned'}
+        row=bot.normalize_pair(self.providers.pairs([MINT])[0],MINT,self.now,True)
+        self.assertIn('second observation',bot.entry_reason(row,None,self.now,config))
+        previous={**row,'observed_at':self.now-60,'price_usd':.99}
+        self.assertIsNone(bot.entry_reason(row,previous,self.now,config))
+        for changes in ({'buys_m5':0,'sells_m5':0},{'volume_m5_usd':None},{'change_m5_percent':-99},{'change_m5_percent':80},{'age_minutes':1}):
+            self.assertIsNotNone(bot.entry_reason({**row,**changes},previous,self.now,config))
+
+    def test_alternate_without_activity_is_unpriced_even_with_positive_price(self):
+        self.open();good=self.providers.pairs([MINT])
+        good[0].update(pairAddress=OTHER,quoteToken={'address':'So11111111111111111111111111111111111111112'},volume={'m5':0})
+        self.providers.pairs=lambda addresses:good
+        self.now+=1801;result=self.tick()
+        self.assertIsNone(result['paper_equity_usd']);self.assertFalse(result['closed'])
+        self.assertEqual(result['positions'][0]['pair'],PAIR)
+
+    def test_recovery_budget_rotates_past_unresolved_first_holdings(self):
+        self.configure({'enabled':True,'entry_mode':'explore','discover':False,'watchlist':[MINT,OTHER,PAIR]})
+        self.providers.pairs=lambda addresses:[]
+        calls=[];self.providers.token_pairs=lambda address:calls.append(address) or []
+        self.tick();self.now+=10;self.tick()
+        self.assertTrue({MINT,OTHER,PAIR}<=set(calls))
+
     def test_confirmation_metadata_and_equity_history_are_saved(self):
         self.configure({'enabled':True,'watchlist':[MINT],'discover':False})
         result=self.tick();queue=result['candidates'][0]
@@ -151,15 +184,14 @@ class EngineTests(unittest.TestCase):
         for _ in range(19):self.assertEqual(bot.select_candidates(state,profiles,self.now),first)
         self.assertNotEqual(bot.select_candidates(state,profiles,self.now),first)
 
-    def test_exploration_buys_price_only_without_entry_or_token_checks(self):
+    def test_exploration_observes_price_only_without_spending_cash(self):
         self.configure({'enabled':True,'watchlist':[MINT],'discover':False,'entry_mode':'explore','auto_learning':True})
         self.providers.pairs=lambda addresses:[{'chainId':'solana','pairAddress':PAIR,'baseToken':{'address':MINT,'symbol':'TEST'},'priceUsd':'1'}]
         self.providers.failure='Active mint or freeze authority.'
-        result=self.tick();self.assertEqual(len(result['positions']),1)
+        result=self.tick();self.assertEqual(len(result['positions']),0)
         self.assertEqual(self.providers.checks,0)
-        self.assertIsNone(result['positions'][0]['entry_features']['liquidity_usd'])
-        self.assertEqual(result['positions'][0]['entry_mode'],'explore')
-        self.assertLess(result['positions'][0]['current_modeled_value_usd'],50)
+        self.assertEqual(result['cash_usd'],1000)
+        self.assertIn('Shadow',result['candidates'][0]['reason'])
 
     def test_exploration_keeps_cash_position_pause_and_missing_price_limits(self):
         self.configure({'watchlist':[MINT],'discover':False,'entry_mode':'explore'})
@@ -171,7 +203,7 @@ class EngineTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.configure({'entry_mode':'live'})
 
     def test_archived_notes_survive_closed_list_trimming_and_are_idempotent(self):
-        self.configure({'entry_mode':'explore','auto_learning':True});self.open()
+        self.configure({'entry_mode':'learned','auto_learning':True});self.open()
         self.now+=60;self.providers.price=.8
         result=self.tick();self.assertEqual(result['learning_summary']['total'],1)
         note=result['learning_summary']['notes'][0]
@@ -408,7 +440,7 @@ class EngineTests(unittest.TestCase):
         result=self.tick();self.assertEqual(result['health'],'entry_brake');self.assertFalse(result['positions'])
 
     def test_missing_holding_reserves_full_loss_but_does_not_freeze_remaining_budget(self):
-        self.open();self.configure({'daily_loss_usd':1000,'entry_mode':'explore','watchlist':[OTHER]})
+        self.open();self.configure({'daily_loss_usd':1000,'entry_mode':'learned','confirmation_enabled':False,'watchlist':[OTHER]})
         row=self.providers.pairs([MINT])[0];row['baseToken']['address']=OTHER;row['pairAddress']='1'*31+'5'
         self.providers.pairs=lambda addresses:[row] if OTHER in addresses else []
         self.now+=60;result=self.tick()
@@ -434,7 +466,7 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(bot.entry_risk(state,self.now)['reason'],'daily_baseline_unknown')
 
     def test_midnight_missing_marks_carries_budget_without_reset_or_fictional_marks(self):
-        self.open();self.configure({'daily_loss_usd':1000,'entry_mode':'explore','watchlist':[OTHER]})
+        self.open();self.configure({'daily_loss_usd':1000,'entry_mode':'learned','confirmation_enabled':False,'watchlist':[OTHER]})
         before,_=bot.load();anchor=before['day'];baseline=before['day_equity']
         row=self.providers.pairs([MINT])[0];row['baseToken']['address']=OTHER;row['pairAddress']='1'*31+'5'
         self.providers.pairs=lambda addresses:[row] if OTHER in addresses else []
@@ -456,7 +488,7 @@ class EngineTests(unittest.TestCase):
         self.assertAlmostEqual(result['day_equity'],result['paper_equity_usd'],places=3)
 
     def test_missing_holding_remaining_budget_must_cover_new_entry_friction(self):
-        self.open();self.configure({'daily_loss_usd':50.5,'entry_mode':'explore','watchlist':[OTHER]})
+        self.open();self.configure({'daily_loss_usd':50.5,'entry_mode':'learned','confirmation_enabled':False,'watchlist':[OTHER]})
         row=self.providers.pairs([MINT])[0];row['baseToken']['address']=OTHER;row['pairAddress']='1'*31+'5'
         self.providers.pairs=lambda addresses:[row] if OTHER in addresses else []
         self.now+=60;result=self.tick()
