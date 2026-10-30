@@ -1,5 +1,11 @@
 # Solana copy PAPER experiment
 
+## Public RPC backlog recovery — October 30, 2026
+
+Signature pages now explicitly request up to 1,000 entries instead of 20, within Solana's documented maximum and the same request-rate/body-size limits. Large streams of failed transactions are counted and excluded before transaction decoding. Full pages still require pagination to the existing cursor/time boundary; neither the follow cursor nor historical holdings are reset. Failed-transaction counts for a window started before this update are labeled incomplete (at least the displayed count).
+
+Signature-list requests have an eight-second timeout; individual transaction requests retain five seconds. If a decode request fails or a recent confirmed transaction is not yet available, the fetched history page and successfully decoded prefix are retained, with only the unresolved suffix retried. The original cursor remains in force until that frozen window completes, and pending signals are not released early. Error details and successful coverage timestamps appear in the copy workspace. Other wallets retain the existing oldest-poll-first scheduling and error isolation; existing lots are marked/protected before wallet polling. No immediate retries bypass RPC cooldowns, failed transactions never become copy signals, stale buys remain unfilled, and provider availability is not guaranteed.
+
 ## Current policy — October 30, 2026: copy fresh buys with a per-lot loss stop
 
 The owner replaced the earlier one-position/add-on/cooldown policy: every newly detected eligible supported buy gets its own configured-dollar PAPER lot, including add-ons, coins already held, and purchases by a second followed wallet. Signal identity deduplication remains; repeated polling does not repeat a fill. Only prospective signals with current prices are admitted; stale (>90-second), already-sold-before-detection, unsupported, paused, or unfunded buys remain unfilled. Historical skipped buys are never replayed. The retained `reentry_cooldown_seconds` setting is legacy compatibility data and no longer gates entries; public entry protection reports zero cooldown.

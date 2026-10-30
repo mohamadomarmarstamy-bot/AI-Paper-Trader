@@ -93,7 +93,9 @@ class RpcTests(unittest.TestCase):
             self.assertEqual(len(last),1);self.assertNotIn('window',finished)
             self.assertEqual(finished['at'],self.now)
         with patch.object(rpc,'request',side_effect=[rows,None]):
-            with self.assertRaises(copy.DataUnavailable):rpc.trades(WALLET,cursor,self.now)
+            result,retry=rpc.trades(WALLET,cursor,self.now)
+            self.assertEqual(result,[]);self.assertEqual(retry['at'],cursor['at'])
+            self.assertEqual(len(retry['window']['queue']),len(rows));self.assertIn('not available yet',retry['rpc_coverage']['error'])
         self.assertEqual(cursor,{'provider':'rpc','at':self.now-10})
 
     def test_source_change_is_idempotent_and_does_not_erase_cursor_or_open_lots(self):
@@ -120,7 +122,7 @@ class RpcTests(unittest.TestCase):
             calls.append((method,params))
             if method=='getSignaturesForAddress':return [older] if 'before' in params[1] else newest
             return tx(self.now-30,'sell',signature=params[0])
-        with patch.object(rpc,'request',side_effect=request):
+        with patch.object(rpc,'SIGNATURE_PAGE_SIZE',20),patch.object(rpc,'request',side_effect=request):
             rows,cur=rpc.trades(WALLET,cursor,self.now)
             self.assertEqual(rows,[]);self.assertEqual(cur['latest'],'old-signature')
             self.assertTrue(cur['rpc_coverage']['history_truncated'])
@@ -133,6 +135,57 @@ class RpcTests(unittest.TestCase):
                 _,cur=rpc.trades(WALLET,cur,self.now+20)
             self.assertEqual(cur['latest'],newest[0]['signature'])
             self.assertEqual(cur['at'],self.now)
+
+    def test_thousand_failed_signatures_do_not_require_fifty_poll_cycles_or_become_swaps(self):
+        cursor={'provider':'rpc','at':self.now-200}
+        failed=[{'signature':('2'+str(i)).ljust(88,'2'),'blockTime':self.now-1-i/20,
+                 'err':{'InstructionError':[0,'Custom']},'confirmationStatus':'confirmed'} for i in range(1000)]
+        good={'signature':'3'*88,'blockTime':self.now-60,'err':None,'confirmationStatus':'confirmed'}
+        def request(method,params):
+            if method=='getSignaturesForAddress':
+                self.assertEqual(params[1]['limit'],1000)
+                return [good] if 'before' in params[1] else failed
+            self.assertEqual(params[0],'3'*88);return tx(self.now-60,'sell',signature='3'*88)
+        with patch.object(rpc,'request',side_effect=request):
+            rows,cur=rpc.trades(WALLET,cursor,self.now)
+            self.assertEqual(rows,[]);self.assertEqual(cur['rpc_coverage']['failed_transactions'],1000)
+            self.assertTrue(cur['rpc_coverage']['failed_count_complete']);self.assertEqual(cur['rpc_coverage']['queued'],0)
+            rows,cur=rpc.trades(WALLET,cur,self.now+10)
+            self.assertEqual(len(rows),1);self.assertEqual(rows[0]['base']['type_swap'],'from')
+            self.assertNotIn('window',cur);self.assertEqual(cur['latest'],failed[0]['signature'])
+
+    def test_transaction_timeout_keeps_successfully_decoded_prefix_and_retries_only_remaining(self):
+        cursor={'provider':'rpc','at':self.now-10}
+        signatures=[{'signature':str(i)*88,'blockTime':self.now-i,'err':None,'confirmationStatus':'confirmed'} for i in (2,3,4)]
+        calls=[];failed=[True]
+        def request(method,params):
+            if method=='getSignaturesForAddress':return signatures
+            calls.append(params[0])
+            if params[0]=='3'*88 and failed[0]:raise copy.DataUnavailable('timeout')
+            return tx(self.now-2,signature=params[0])
+        with patch.object(rpc,'request',side_effect=request):
+            rows,cur=rpc.trades(WALLET,cursor,self.now)
+            self.assertEqual(len(rows),1);self.assertEqual(cur['rpc_coverage']['error'],'timeout')
+            self.assertEqual(len(cur['window']['queue']),2);self.assertEqual(cursor,{'provider':'rpc','at':self.now-10})
+            failed[0]=False;rows,cur=rpc.trades(WALLET,cur,self.now+10)
+            self.assertEqual(len(rows),2);self.assertNotIn('window',cur)
+            self.assertEqual(calls.count('4'*88),1);self.assertEqual(calls.count('3'*88),2)
+
+    def test_partial_window_does_not_buy_before_later_source_sell_is_decoded(self):
+        self.enroll();self.now+=10;failed=[True]
+        signatures=[{'signature':str(i)*88,'blockTime':self.now-(3-i),'err':None,'confirmationStatus':'confirmed'} for i in (3,2)]
+        def request(method,params):
+            if method=='getSignaturesForAddress':return signatures
+            if params[0]=='3'*88 and failed[0]:raise copy.DataUnavailable('timeout')
+            return tx(self.now-1,'sell' if params[0]=='3'*88 else 'buy',signature=params[0])
+        with patch.object(rpc,'request',side_effect=request),patch.object(copy.Birdeye,'discover',side_effect=copy.DataUnavailable('offline')):
+            result=copy.tick(market=Market(),clock=lambda:self.now)
+            self.assertFalse(result['positions']);self.assertEqual(result['health'],'data_unavailable')
+            self.assertEqual(len(copy.load()[0]['cursors'][WALLET]['pending']),1)
+            failed[0]=False;self.now+=10
+            result=copy.tick(market=Market(),clock=lambda:self.now)
+            self.assertFalse(result['positions']);self.assertFalse(result['closed'])
+            self.assertTrue(any(e['side']=='buy' and e['reason']=='Trader already sold before detection.' for e in result['events']))
 
 
 if __name__=='__main__':unittest.main()

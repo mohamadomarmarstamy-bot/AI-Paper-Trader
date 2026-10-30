@@ -376,6 +376,7 @@ def tick(*, provider=None, market=None, clock=time.time):
                 else: incoming.extend(gathered)
                 cursor['provider']=state['cursors'][wallet].get('provider','birdeye')
                 state['cursors'][wallet]=cursor
+                if cursor.get('rpc_coverage',{}).get('error'):state['error']=cursor['rpc_coverage']['error']
             except DataUnavailable as error: state['error']=str(error)
         category_errors={}; checks=0
         if enabled:
