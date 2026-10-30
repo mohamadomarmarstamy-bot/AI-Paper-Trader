@@ -93,7 +93,7 @@ def public():
         exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name='solana_copy_events'").fetchone()
         events = [json.loads(r[0]) for r in conn.execute('SELECT details_json FROM solana_copy_events ORDER BY rowid DESC LIMIT 100')] if exists else []
         closed = [json.loads(r[0]) for r in conn.execute('SELECT details_json FROM solana_copy_closes ORDER BY rowid DESC LIMIT 100')] if exists else []
-        totals = conn.execute("SELECT COUNT(*),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')),0),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')>0),0) FROM solana_copy_closes").fetchone() if exists else (0,0,0)
+        totals = conn.execute("SELECT COUNT(*),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')),0),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')>0),0),COALESCE(SUM(json_extract(details_json,'$.cost_usd')),0),COALESCE(SUM(json_extract(details_json,'$.cost_usd')>0),0) FROM solana_copy_closes").fetchone() if exists else (0,0,0,0,0)
     return {'paper': True, 'live_execution_enabled': False, 'provider_configured': configured(),'connection_checks':connection_status(),
             'solscan_configured':solscan.configured(),'discovery':{k:v for k,v in state.get('discovery',{}).items() if k!='pending'},'last_polled':state.get('last_polled',{}),
             'config': state['config'], 'revision': state['settings_revision'], 'health': state['health'],
@@ -104,6 +104,9 @@ def public():
             'cash_usd': state['cash_usd'], **own, 'positions': [{**p,'mark_fresh':p.get('marked_at') is not None and 0<=now-p['marked_at']<=120 and p.get('mark_usd') is not None} for p in state['positions'].values()],
             'traders': state['traders'], 'events': events, 'closed': closed,
             'closed_count': totals[0], 'realized_pnl_usd': totals[1], 'wins': totals[2],
+            'closed_cost_usd':totals[3] if totals[4]==totals[0] else None,
+            'closed_return_percent':100*totals[1]/totals[3] if totals[0] and totals[4]==totals[0] and totals[3]>0 else None,
+            'average_closed_pnl_usd':totals[1]/totals[0] if totals[0] else None,
             'comparison': {'since': baseline['at'] if baseline else None, 'copy_change_usd':own_delta, 'copy_return_percent': own_return,
                            'regular_return_percent': regular_return, 'regular_change_usd': delta},
             'history': state['history'], 'server_time': now}
