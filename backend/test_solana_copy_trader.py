@@ -86,6 +86,36 @@ class CopyTests(unittest.TestCase):
         data=self.tick();self.assertEqual(len(data['positions']),1);self.assertIsNone(data['equity_usd']);self.assertEqual(data['closed_count'],0)
         self.assertIn('pending_sell',data['positions'][0]);self.now+=10;self.market.pool=POOL;self.source.rows=[]
         data=self.tick();self.assertEqual(data['closed_count'],1)
+    def test_active_same_mint_pool_recovers_queued_exit_and_keeps_original_entry(self):
+        data=self.buy();quantity=data['positions'][0]['quantity'];self.now+=10
+        original=self.market.pairs
+        self.market.pairs=lambda addresses:[{**r,'pairAddress':OTHER,'priceUsd':'0.2','quoteToken':{'address':SOL},'liquidity':{'usd':2000},'volume':{'m5':100},'txns':{'m5':{'buys':0,'sells':3}}} for r in original(addresses)]
+        self.source.rows=[trade(self.now-1,'sell',index=2)]
+        data=self.tick();self.assertEqual(data['positions'],[]);self.assertEqual(data['closed_count'],1)
+        closed=data['closed'][0];self.assertEqual(closed['entry_pool'],POOL);self.assertEqual(closed['pool'],OTHER)
+        self.assertEqual(closed['entry_price_usd'],2);self.assertEqual(closed['quantity'],quantity)
+        self.assertEqual(closed['pool_changes'][0]['from'],POOL)
+        self.assertAlmostEqual(closed['proceeds_usd'],quantity*.2*.99-.1)
+        self.assertAlmostEqual(data['net_usd'],closed['pnl_usd']);self.assertTrue(data['valuation']['complete'])
+    def test_price_only_inactive_wrong_mint_or_uncashed_alternates_do_not_close(self):
+        data=self.buy();self.now+=10;self.source.rows=[trade(self.now-1,'sell',index=2)]
+        base={'chainId':'solana','pairAddress':OTHER,'baseToken':{'address':TOKEN,'symbol':'COIN'},'priceUsd':'0.2','quoteToken':{'address':SOL},'liquidity':{'usd':2000},'volume':{'m5':100},'txns':{'m5':{'buys':1,'sells':3}}}
+        for changes in ({'baseToken':{'address':WALLET}}, {'quoteToken':{'address':OTHER}}, {'liquidity':None}, {'volume':{'m5':0}}, {'txns':{'m5':{'buys':0,'sells':0}}}):
+            self.market.pairs=lambda addresses,changes=changes:[{**base,**changes}]
+            data=self.tick();self.assertEqual(data['closed_count'],0);self.assertIsNone(data['equity_usd'])
+        self.assertEqual(data['valuation']['unpriced_holdings'],1)
+        self.assertEqual(data['valuation']['cash_and_priced_holdings_usd'],data['cash_usd'])
+    def test_inactive_original_pool_price_cannot_close_queued_exit(self):
+        self.buy();self.now+=10;self.source.rows=[trade(self.now-1,'sell',index=2)]
+        original=self.market.pairs
+        self.market.pairs=lambda addresses:[{**r,'liquidity':None,'volume':{'m5':0}} for r in original(addresses)]
+        data=self.tick();self.assertEqual(data['closed_count'],0);self.assertIsNone(data['equity_usd'])
+    def test_unpriced_holdings_stay_excluded_from_total_and_partial_subtotal(self):
+        data=self.buy();self.market.missing=True;self.now+=10;data=self.tick()
+        self.assertIsNone(data['equity_usd']);self.assertIsNone(data['net_usd']);self.assertFalse(data['valuation']['complete'])
+        self.assertEqual(data['valuation']['cash_and_priced_holdings_usd'],99949.9)
+        self.assertEqual(data['valuation']['unpriced_holdings'],1)
+
     def test_non_meme_and_missing_prices_do_not_fill(self):
         self.start();self.now+=10;self.source.rows=[trade(self.now-1)];self.source.is_meme=False
         self.assertEqual(self.tick()['positions'],[])
