@@ -1,0 +1,104 @@
+{
+  "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P": {
+    "name": "pump",
+    "source": "https://github.com/pump-fun/pump-public-docs/blob/main/idl/pump.json",
+    "instructions": {
+      "66063d1201daebea": {
+        "name": "buy",
+        "user": 6,
+        "mint": 2,
+        "quote": null
+      },
+      "c2ab1c46684d5b2f": {
+        "name": "buy_exact_quote_in_v2",
+        "user": 13,
+        "mint": 1,
+        "quote": 2
+      },
+      "e1f7501ed5b38488": {
+        "name": "buy_exact_quote_in_v3",
+        "user": 8,
+        "mint": 1,
+        "quote": 2
+      },
+      "38fc74089edfcd5f": {
+        "name": "buy_exact_sol_in",
+        "user": 6,
+        "mint": 2,
+        "quote": null
+      },
+      "b817ee6167c5d33d": {
+        "name": "buy_v2",
+        "user": 13,
+        "mint": 1,
+        "quote": 2
+      },
+      "07051dc4f5176550": {
+        "name": "buy_v3",
+        "user": 8,
+        "mint": 1,
+        "quote": 2
+      },
+      "33e685a4017f83ad": {
+        "name": "sell",
+        "user": 6,
+        "mint": 2,
+        "quote": null
+      },
+      "5df6823ce7e940b2": {
+        "name": "sell_v2",
+        "user": 13,
+        "mint": 1,
+        "quote": 2
+      },
+      "1c92de7726c469d5": {
+        "name": "sell_v3",
+        "user": 8,
+        "mint": 1,
+        "quote": 2
+      }
+    }
+  },
+  "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA": {
+    "name": "pump_amm",
+    "source": "https://github.com/pump-fun/pump-public-docs/blob/main/idl/pump_amm.json",
+    "instructions": {
+      "66063d1201daebea": {
+        "name": "buy",
+        "user": 1,
+        "mint": 3,
+        "quote": 4
+      },
+      "c62e1552b4d9e870": {
+        "name": "buy_exact_quote_in",
+        "user": 1,
+        "mint": 3,
+        "quote": 4
+      },
+      "c2ab1c46684d5b2f": {
+        "name": "buy_exact_quote_in_v2",
+        "user": 1,
+        "mint": 3,
+        "quote": 4
+      },
+      "b817ee6167c5d33d": {
+        "name": "buy_v2",
+        "user": 1,
+        "mint": 3,
+        "quote": 4
+      },
+      "33e685a4017f83ad": {
+        "name": "sell",
+        "user": 1,
+        "mint": 3,
+        "quote": 4
+      },
+      "5df6823ce7e940b2": {
+        "name": "sell_v2",
+        "user": 1,
+        "mint": 3,
+        "quote": 4
+      }
+    }
+  }
+}

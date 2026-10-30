@@ -40,6 +40,8 @@ def check_connections():
     check('Birdeye swap history',lambda:provider.trades(wallet,{'at':now-60},now))
     check('Solscan swap history',lambda:solscan.request({'address':wallet,'activity_type[]':['ACTIVITY_TOKEN_SWAP','ACTIVITY_AGG_TOKEN_SWAP'],
                 'from_time':int(now)-86400,'to_time':int(now),'page':1,'page_size':10,'sort_by':'block_time','sort_order':'desc'}))
+    import solana_copy_rpc
+    check('Public Solana wallet history · no key',lambda:solana_copy_rpc.request('getSignaturesForAddress',[wallet,{'limit':1,'commitment':'confirmed'}]))
     report={'checked_at':time.time(),'checks':checks,'paper_only':True,'orders_submitted':0}
     with closing(database.get_connection()) as conn:
         conn.execute('CREATE TABLE IF NOT EXISTS solana_copy_connection_checks(id INTEGER PRIMARY KEY CHECK(id=1),report_json TEXT NOT NULL)')
@@ -54,7 +56,7 @@ def seed_wallets(expected_revision):
     if type(expected_revision) is not int:raise ValueError('Revision required.')
     state,revision=copy.load()
     if expected_revision!=state['settings_revision']:raise Conflict('Copy settings changed. Reload before following wallets.')
-    source='solscan' if solscan.configured() else 'birdeye'
+    source='rpc' if state.get('public_rpc_enabled') else 'solscan' if solscan.configured() else 'birdeye'
     now=time.time()
     for seed in SEEDS:
         wallet=mint(seed['wallet'])
@@ -70,5 +72,30 @@ def seed_wallets(expected_revision):
         copy.initialize(conn)
         if conn.execute('UPDATE solana_copy_state SET state_json=?,revision=revision+1 WHERE id=1 AND revision=?',
                         (json.dumps(state,allow_nan=False),revision)).rowcount!=1:raise Conflict('Copy cycle changed. Retry following wallets.')
+        conn.commit()
+    return copy.public()
+
+
+def enable_public_rpc(expected_revision):
+    """Explicit prospective source change; never migrate a wallet with open lots."""
+    import solana_copy_trader as copy
+    from solana_meme_bot import Conflict
+    state,revision=copy.load()
+    if type(expected_revision) is not int or expected_revision!=state['settings_revision']:
+        raise Conflict('Copy settings changed. Refresh before selecting the public source.')
+    held={p['wallet'] for p in state['positions'].values()}
+    targets=[r for r in state['traders'] if state['cursors'][r['wallet']].get('provider')!='rpc']
+    if any(r['wallet'] in held for r in targets):raise ValueError('Close existing copied lots before changing their wallet source.')
+    now=time.time()
+    for trader in targets:
+        trader.update(trade_provider='rpc',buy_resume_at=now)
+        state['cursors'][trader['wallet']]={'provider':'rpc','at':now}
+    state['config']['enabled']=True
+    state.update(public_rpc_enabled=True,error=None,health='starting',discovery_retry_at=0)
+    state['settings_revision']+=1
+    with closing(database.get_connection()) as conn:
+        copy.initialize(conn)
+        if conn.execute('UPDATE solana_copy_state SET state_json=?,revision=revision+1 WHERE id=1 AND revision=?',
+                        (json.dumps(state,allow_nan=False),revision)).rowcount!=1:raise Conflict('Copy cycle changed. Refresh and retry.')
         conn.commit()
     return copy.public()

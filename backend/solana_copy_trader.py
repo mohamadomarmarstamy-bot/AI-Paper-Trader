@@ -92,6 +92,8 @@ def public():
             'solscan_configured':solscan.configured(),'discovery':{k:v for k,v in state.get('discovery',{}).items() if k!='pending'},'last_polled':state.get('last_polled',{}),
             'config': state['config'], 'revision': state['settings_revision'], 'health': state['health'],
             'error': state['error'], 'started_at': state['started_at'], 'last_cycle': state['last_cycle'],
+            'public_rpc_enabled':state.get('public_rpc_enabled',False),'discovery_error':state.get('discovery_error'),
+            'rpc_coverage':{w:c.get('rpc_coverage') for w,c in state['cursors'].items() if c.get('provider')=='rpc'},
             'cash_usd': state['cash_usd'], **own, 'positions': [{**p,'mark_fresh':p.get('marked_at') is not None and 0<=now-p['marked_at']<=120 and p.get('mark_usd') is not None} for p in state['positions'].values()],
             'traders': state['traders'], 'events': events, 'closed': closed,
             'closed_count': totals[0], 'realized_pnl_usd': totals[1], 'wins': totals[2],
@@ -177,7 +179,7 @@ class Birdeye:
     def discover(self,state,clock):
         import solana_copy_discovery as discovery
         import solana_copy_solscan as solscan
-        try:discovery.advance(state,self,clock(),lambda:'solscan' if solscan.configured() else 'birdeye',clock=clock)
+        try:discovery.advance(state,self,clock(),lambda:'rpc' if state.get('public_rpc_enabled') else 'solscan' if solscan.configured() else 'birdeye',clock=clock)
         except DataUnavailable:raise
         except (ValueError,KeyError,TypeError):raise DataUnavailable('Profitable-trader discovery response unsupported.') from None
 
@@ -188,6 +190,9 @@ class Birdeye:
         return isinstance(info,dict) and bool(info.get('source') or info.get('platform_id'))
 
     def trades(self, wallet, cursor, now):
+        if cursor.get('provider')=='rpc':
+            import solana_copy_rpc
+            return solana_copy_rpc.trades(wallet,cursor,now)
         if cursor.get('provider')=='solscan':
             import solana_copy_solscan as solscan
             return solscan.trades(wallet,cursor,now)
@@ -277,7 +282,8 @@ def tick(*, provider=None, market=None, clock=time.time):
     events=[]; closes=[]; provider=provider or Birdeye(); market=market or bot.ReadOnlyProviders(); state['error']=None
     try:
         enabled=state['config']['enabled']; incoming=[]
-        connection_missing=enabled and isinstance(provider,Birdeye) and not configured()
+        rpc_wallets={r['wallet'] for r in state['traders'] if state['cursors'].get(r['wallet'],{}).get('provider')=='rpc'}
+        connection_missing=enabled and isinstance(provider,Birdeye) and not configured() and not rpc_wallets
         if connection_missing:
             enabled=False
             state['error']='Automatic PAPER copying is enabled; waiting for a Birdeye data key in Profile.'
@@ -308,7 +314,10 @@ def tick(*, provider=None, market=None, clock=time.time):
             except DataUnavailable as error: state['error']=str(error)
         category_errors={}; checks=0
         if enabled:
-            for address in dict.fromkeys(r['mint'] for r in incoming if r['side']=='buy' and 0<=clock()-r['source_at']<=90):
+            for address,is_rpc in dict.fromkeys((r['mint'],r['wallet'] in rpc_wallets and r.get('source')=='solana_rpc_pump') for r in incoming if r['side']=='buy' and 0<=clock()-r['source_at']<=90):
+                if is_rpc:
+                    state['token_types']['rpc:'+address]={'is_meme':True,'at':clock(),'basis':'Supported Pump/PumpSwap instruction; token meme status is not independently verified.'}
+                    continue
                 category=state['token_types'].get(address)
                 if category and clock()-category['at']<=86400:continue
                 if checks>=2 or clock()-now>100:
@@ -352,7 +361,7 @@ def tick(*, provider=None, market=None, clock=time.time):
             elif state['config']['trade_usd'] <= 0: signal['reason']='Trade amount is zero.'
             elif state['cash_usd'] < state['config']['trade_usd']+.1: signal['reason']='Insufficient copy-paper cash.'
             else:
-                category=state['token_types'].get(mint)
+                category=state['token_types'].get(('rpc:' if wallet in rpc_wallets and signal.get('source')=='solana_rpc_pump' else '')+mint)
                 if not category or observed-category['at']>86400:
                     signal['reason']=category_errors.get(mint,'Meme category observation unavailable.'); events.append(signal); continue
                 if not category['is_meme']:
@@ -361,17 +370,20 @@ def tick(*, provider=None, market=None, clock=time.time):
                 if not quote: signal['reason']='No current positive pool price. No fill invented.'
                 else:
                     amount=state['config']['trade_usd']; cost=amount+.1
-                    p={'id':signal['id'],'mint':mint,'wallet':wallet,'pool':quote['pool'],'symbol':quote['symbol'],'quantity':amount/(quote['price']*1.01),'cost_usd':cost,'entry_price_usd':quote['price'],'opened_at':observed,'source_at':signal['source_at'],'latency_seconds':signal['latency_seconds'],'tx_hash':signal['tx_hash'],'marked_at':quote['at']}
+                    p={'id':signal['id'],'mint':mint,'wallet':wallet,'pool':quote['pool'],'symbol':quote['symbol'],'quantity':amount/(quote['price']*1.01),'cost_usd':cost,'entry_price_usd':quote['price'],'opened_at':observed,'source_at':signal['source_at'],'latency_seconds':signal['latency_seconds'],'tx_hash':signal['tx_hash'],'marked_at':quote['at'],'source':signal.get('source','birdeye')}
                     p['mark_usd']=max(0,p['quantity']*quote['price']*.99-.1)
                     state['positions'][p['id']]=p; state['cash_usd']-=cost; signal['status']='paper_buy'; signal['reason']='Copied buy; no liquidity or volume gate.'
             events.append(signal)
         for key,p in list(state['positions'].items()):
             if p.get('pending_sell') and (p['mint'],p['pool']) in quotes:
                 closes.append(record_close(state,key,quotes[(p['mint'],p['pool'])],observed,'manual_sell' if p.get('manual_sell') else 'trader_sell'))
-        if enabled and hasattr(provider,'discover'):
-            try:provider.discover(state,clock)
-            except DataUnavailable as error:state['error']=str(error)
-        state['health']='waiting_for_data_key' if connection_missing else ('running' if state['traders'] else 'searching_profitable_traders') if enabled else 'paused_entries_monitoring_sells'
+        if enabled and hasattr(provider,'discover') and now>=state.get('discovery_retry_at',0):
+            try:
+                provider.discover(state,clock);state['discovery_error']=None
+            except DataUnavailable as error:
+                state['discovery_error']=str(error);state['discovery_retry_at']=now+600
+                if not rpc_wallets:state['error']=str(error)
+        state['health']='waiting_for_data_key' if connection_missing else 'data_unavailable' if state['error'] else ('running' if state['traders'] else 'searching_profitable_traders') if enabled else 'paused_entries_monitoring_sells'
         state['last_cycle']=observed
         own=metrics(state,observed); regular=regular_metrics(); baseline=state.get('comparison_baseline')
         if baseline and (not state['history'] or observed-state['history'][-1]['at']>=60):
