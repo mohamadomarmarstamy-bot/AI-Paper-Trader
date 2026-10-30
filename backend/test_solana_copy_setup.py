@@ -22,7 +22,7 @@ class SetupTests(unittest.TestCase):
     def test_research_seeds_are_attributed_prospective_and_idempotent(self):
         with patch.object(solscan,'configured',return_value=True),patch.object(setup.time,'time',return_value=1000):
             first=setup.seed_wallets(0)
-            self.assertEqual(len(first['traders']),2);self.assertEqual(first['positions'],[]);self.assertEqual(first['cash_usd'],100000)
+            self.assertEqual(len(first['traders']),3);self.assertEqual(first['positions'],[]);self.assertEqual(first['cash_usd'],100000)
             for trader in first['traders']:
                 self.assertEqual(trader['selected_at'],1000);self.assertEqual(trader['trade_provider'],'solscan')
                 self.assertEqual(trader['qualification'],'owner_requested_research_seed')
@@ -34,8 +34,22 @@ class SetupTests(unittest.TestCase):
                 conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1',(json.dumps(state),));conn.commit()
             setup.seed_wallets(0)
             self.assertEqual(copy.load()[0]['cursors'][first['traders'][0]['wallet']]['at'],1050)
-            self.assertEqual(len(copy.load()[0]['traders']),2)
+            self.assertEqual(len(copy.load()[0]['traders']),3)
             with self.assertRaises(Conflict):setup.seed_wallets(9)
+
+    def test_new_reviewed_follow_uses_rpc_and_retains_attributed_equal_stake_evidence(self):
+        with closing(database.get_connection()) as conn:
+            copy.initialize(conn)
+            state=copy.initial();state['public_rpc_enabled']=True
+            import json
+            conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1',(json.dumps(state),));conn.commit()
+        data=setup.seed_wallets(0);trader=next(t for t in data['traders'] if t['name']=='Iceman')
+        self.assertEqual(trader['wallet'],'DVMkhiQe1D8yenuEgsW44NjRn9LfVQjGEpZcez5x7Mff')
+        self.assertEqual(trader['trade_provider'],'rpc');self.assertIsNone(trader['historical_realized_usd'])
+        self.assertEqual(trader['research_evidence']['reported_equal_stake_multiple_90d'],1.53)
+        self.assertEqual(trader['research_evidence']['reviewed_on'],'2026-10-30')
+        self.assertEqual(copy.load()[0]['cursors'][trader['wallet']]['provider'],'rpc')
+        self.assertFalse(any(t['name']=='Solkrow' for t in data['traders']))
 
     def test_connection_checks_persist_safe_results_without_account_mutation(self):
         with closing(database.get_connection()) as conn:copy.initialize(conn)

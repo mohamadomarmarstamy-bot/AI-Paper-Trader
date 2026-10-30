@@ -12,6 +12,14 @@ SEEDS = (
     {'name':'Numero','wallet':'A3W8psibkTUvjxs4LRscbnjux6TFDXdvD4m4GsGpQ2KJ',
      'source_url':'https://kolexplorer.com/kol/numero','reported_realized_usd':65100,
      'reported_win_rate_percent':61.6,'reported_closed_positions':310},
+    {'name':'Iceman','wallet':'DVMkhiQe1D8yenuEgsW44NjRn9LfVQjGEpZcez5x7Mff',
+     'source_url':'https://kolexplorer.com/kol/iceman','reported_realized_usd':84600,
+     'reported_win_rate_percent':39.8,'reported_closed_positions':1620,'reviewed_on':'2026-10-30',
+     'reported_realized_7d_usd':2100,'reported_realized_30d_usd':22800,
+     'reported_equal_stake_multiple_90d':1.53,'reported_profitable_weeks':5,'reported_weeks_sample':8,
+     'reported_median_hold_seconds':104,'reported_reliability_score':69,
+     'copy_source_check':'Recent successful Pump/PumpSwap sell decoded by the same read-only copier on 2026-10-30.',
+     'review_note':'Positive reported 7/30/90-day realized P/L and equal-stake history. Low win rate; results depend on larger winners. Historical provider figures do not include copying delays or modeled execution costs.'},
 )
 BONK='DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263'
 
@@ -64,7 +72,7 @@ def seed_wallets(expected_revision):
     for seed in SEEDS:
         wallet=mint(seed['wallet'])
         if any(r['wallet']==wallet for r in state['traders']):continue
-        evidence={**deepcopy(seed),'window':'90d','reviewed_on':'2026-10-28',
+        evidence={**deepcopy(seed),'window':'90d','reviewed_on':seed.get('reviewed_on','2026-10-28'),
                   'basis':'KOL Explorer historical report; not independently audited or full-history provider qualification.'}
         state['traders'].append({'wallet':wallet,'name':seed['name'],'active':True,'selected_at':now,'trade_provider':source,
             'qualification':'owner_requested_research_seed','research_evidence':evidence,
