@@ -59,3 +59,16 @@ Reviewed on 2026-10-28, using KOL Explorer's publisher-reported 90-day closed-po
 - Numero — `A3W8psibkTUvjxs4LRscbnjux6TFDXdvD4m4GsGpQ2KJ`; approximately $65,100 realized, 310 closed positions. Source: https://kolexplorer.com/kol/numero
 
 Source numbers are preserved as external research evidence, not the app's full-history P/L, sell count or win-rate fields. Automatic discovery continues independently when the provider plan permits it. Enrolling research follows cannot repair an invalid API key or missing endpoint entitlement; connection checks must report those blockers honestly.
+
+
+## Phantom and key-free PAPER source
+
+Profile supports the injected Phantom Solana provider on HTTPS and Phantom’s mobile browser. Connect reads the public address into the form; Save profile persists it. Account changes update the unsaved form, and disconnecting never deletes the saved address. This is not wallet ownership authentication. No message signing, spend authority, secret seed, or transaction submission is requested. Advanced API keys remain encrypted and optional for key-free mode.
+
+Enable key-free PAPER copying explicitly migrates followed wallets without open lots to public Solana RPC, preserving cash/history and resetting only those source cursors prospectively. A wallet with open copied lots cannot change source. Existing RPC cursors are preserved on repeated clicks. New research follows use RPC after this mode is selected. Phantom itself does not supply blockchain history or rankings.
+
+The RPC client permits only getSignaturesForAddress/getTransaction at https://api.mainnet.solana.com, with fixed host, no redirects, five-second requests, response-size checks, 100 requests/minute and a 60-second cooldown on 429. It takes up to 20 recent signatures per wallet window and reads four transactions per wallet per cycle. Results are buffered until a frozen window is complete; unsupported transactions and truncated windows are visible in status. Unsupported programs and ambiguous multi-swap routes are skipped. This limited public endpoint has no production availability guarantee.
+
+The parser recognizes only pinned Pump.fun/PumpSwap buy/sell discriminators and IDL account indexes from https://github.com/pump-fun/pump-public-docs/tree/main/idl (snapshot 2026-10-30). It requires a successful transaction, matching signature, signed followed-wallet user account, supported cash quote, and matching net owned token balance change. Transfers, unrelated token flows and multi-swap transactions are skipped. Platform provenance does not independently establish meme status, safety, sellability or trader profitability. It is displayed separately from Birdeye’s meme classification. A fresh DEX Screener price is still required for every PAPER fill; missing original-pool exits remain unresolved.
+
+The optional Birdeye profit-discovery failure is now separate from followed-wallet polling errors, so denied rankings cannot stop public-RPC follows or claim their data works. Connection tests cover the public endpoint as well as the advanced providers, without creating orders.

@@ -1,12 +1,15 @@
 (() => {
   const $ = id => document.getElementById(id);
   let revision = null, busy = false, dirty = false;
+  let phantom = null;
   const fields = ['profile-name', 'profile-wallet', 'profile-key', 'profile-remove', 'profile-solscan-key', 'profile-solscan-remove', 'profile-save'];
   function controls() {
     for (const id of fields) $(id).disabled = busy || revision === null;
     $('profile-key').disabled ||= $('profile-remove').checked;
     $('profile-solscan-key').disabled ||= $('profile-solscan-remove').checked;
     $('profile-reload').disabled = busy;
+    $('profile-phantom-connect').disabled = busy || revision === null;
+    $('profile-phantom-disconnect').disabled = busy || !phantom?.isConnected;
   }
   function render(data) {
     if (!Number.isInteger(data.revision) || typeof data.name !== 'string' || typeof data.wallet_address !== 'string' || typeof data.api_key_configured !== 'boolean') {
@@ -41,6 +44,34 @@
     } finally { busy = false; controls(); }
   }
   $('profile-form').addEventListener('input', () => { dirty = true; });
+  function connectedWallet(publicKey) {
+    const wallet=publicKey?.toString();
+    if(typeof wallet!=='string'||!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(wallet))throw Error('Invalid wallet address.');
+    $('profile-wallet').value=wallet;dirty=true;
+    $('profile-phantom-status').textContent='Phantom connected · public address only. Save profile to remember this wallet. PAPER copying uses separate read-only chain data.';
+  }
+  $('profile-phantom-connect').onclick=async()=>{
+    if(busy||revision===null)return;
+    const provider=window.phantom?.solana;
+    if(!provider?.isPhantom){$('profile-phantom-status').textContent='Phantom was not detected. Use its browser extension on desktop, or open this app inside Phantom’s mobile browser.';return;}
+    busy=true;controls();
+    try {
+      if(phantom!==provider){
+        phantom=provider;
+        provider.on('accountChanged',key=>{if(key){try{connectedWallet(key);}catch{$('profile-phantom-status').textContent='Wallet address unavailable.';}}else{$('profile-phantom-status').textContent='Phantom disconnected. Your saved profile has not changed.';}controls();});
+        provider.on('disconnect',()=>{$('profile-phantom-status').textContent='Phantom disconnected. Your saved profile has not changed.';controls();});
+      }
+      const result=await provider.connect();connectedWallet(result.publicKey);
+    }catch(error){$('profile-phantom-status').textContent=error.code===4001?'Connection declined. Profile unchanged.':'Phantom connection failed. Unlock Phantom and try again.';}
+    finally{busy=false;controls();}
+  };
+  $('profile-phantom-disconnect').onclick=async()=>{
+    if(busy||!phantom)return;
+    busy=true;controls();
+    try{await phantom.disconnect();$('profile-phantom-status').textContent='Phantom disconnected. Your saved public address stays in your profile.';}
+    catch{$('profile-phantom-status').textContent='Could not disconnect Phantom. Disconnect this app in Phantom settings.';}
+    finally{busy=false;controls();}
+  };
   $('profile-remove').onchange = () => {
     if ($('profile-remove').checked) $('profile-key').value = '';
     controls();

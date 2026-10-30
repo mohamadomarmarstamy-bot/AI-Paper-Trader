@@ -46,8 +46,10 @@ test('Profile desktop/mobile save, reload, write-only key, removal and stale-tab
       key = ''; solscanKey = ''; reject = false;
       const page = await browser.newPage({viewport:{width,height:1000}}), errors = [];
       page.on('pageerror', error => errors.push(error.message));
+      await page.addInitScript(()=>{const listeners={};window.phantom={solana:{isPhantom:true,isConnected:false,on:(event,fn)=>{listeners[event]=fn;},connect:async function(){this.isConnected=true;return {publicKey:{toString:()=> '1'.repeat(31)+'2'}};},disconnect:async function(){this.isConnected=false;listeners.disconnect?.();},signMessage:()=>{throw Error('Signing must never be requested');},signAndSendTransaction:()=>{throw Error('Transactions must never be requested');}}};window.phantomAccountChanged=()=>listeners.accountChanged({toString:()=> '1'.repeat(31)+'3'});});
       await page.goto(`http://127.0.0.1:${server.address().port}/meme-coins/profile`);
       await page.getByText('Profile loaded.', {exact:true}).waitFor();
+      const beforeConnect=requests.length;await page.getByRole('button',{name:'Connect Phantom',exact:true}).click();await page.getByText(/Phantom connected · public address only/).waitFor();assert.equal(await page.locator('#profile-wallet').inputValue(),'1'.repeat(31)+'2');assert.equal(requests.length,beforeConnect);await page.evaluate(()=>window.phantomAccountChanged());assert.equal(await page.locator('#profile-wallet').inputValue(),'1'.repeat(31)+'3');await page.getByRole('button',{name:'Disconnect Phantom',exact:true}).click();assert.equal(await page.locator('#profile-wallet').inputValue(),'1'.repeat(31)+'3');await page.getByText('Advanced data providers · optional for public RPC copying',{exact:true}).click();
       await page.getByLabel('Name', {exact:true}).fill('Omar');
       await page.getByLabel('Wallet address · Solana', {exact:true}).fill('1'.repeat(31)+'2');
       await page.getByLabel('Birdeye API key', {exact:true}).fill('synthetic-browser-key');
@@ -66,6 +68,7 @@ test('Profile desktop/mobile save, reload, write-only key, removal and stale-tab
       await page.getByRole('button', {name:'Save profile',exact:true}).click();
       await page.getByText('Profile saved. You can return to Copy traders.', {exact:true}).waitFor();
       assert.equal(key, 'synthetic-browser-key');
+      await page.getByText('Advanced data providers · optional for public RPC copying',{exact:true}).click();
       await page.getByLabel('Solscan Pro API key',{exact:true}).fill('solscan-browser-test');
       await page.locator('#profile-key').fill('replacement-browser-key');
       await page.getByRole('button', {name:'Save profile',exact:true}).click();

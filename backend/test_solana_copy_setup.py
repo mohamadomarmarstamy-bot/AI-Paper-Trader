@@ -9,6 +9,7 @@ import database
 import solana_copy_setup as setup
 import solana_copy_trader as copy
 import solana_copy_solscan as solscan
+import solana_copy_rpc as rpc
 from solana_meme_bot import Conflict
 from solana_meme_routes import build_router
 
@@ -39,9 +40,9 @@ class SetupTests(unittest.TestCase):
     def test_connection_checks_persist_safe_results_without_account_mutation(self):
         with closing(database.get_connection()) as conn:copy.initialize(conn)
         before=copy.load()
-        with patch.object(copy.Birdeye,'request',side_effect=copy.DataUnavailable('Birdeye /trader/gainers-losers: HTTP 403; access denied.')),patch.object(solscan,'request',return_value=[]):
+        with patch.object(copy.Birdeye,'request',side_effect=copy.DataUnavailable('Birdeye /trader/gainers-losers: HTTP 403; access denied.')),patch.object(solscan,'request',return_value=[]),patch.object(rpc,'request',return_value=[]):
             report=setup.check_connections()
-        self.assertEqual(len(report['checks']),5);self.assertEqual(report['orders_submitted'],0)
+        self.assertEqual(len(report['checks']),6);self.assertEqual(report['orders_submitted'],0)
         self.assertFalse(report['checks'][0]['ok']);self.assertTrue(report['checks'][-1]['ok'])
         self.assertEqual(setup.connection_status(),report);self.assertEqual(copy.load(),before)
 
@@ -60,6 +61,9 @@ class SetupTests(unittest.TestCase):
             check.assert_called_once()
         self.assertEqual(client.post('/meme-coins/copy/seeds',json={'wallet':'untrusted'},headers=headers).status_code,422)
         self.assertEqual(client.post('/meme-coins/copy/seeds',json={'expected_revision':0},headers=headers).status_code,200)
+        self.assertEqual(client.post('/meme-coins/copy/public-rpc',json={'expected_revision':0}).status_code,403)
+        self.assertEqual(client.post('/meme-coins/copy/public-rpc',json={'expected_revision':0,'url':'untrusted'},headers=headers).status_code,422)
+        self.assertEqual(client.post('/meme-coins/copy/public-rpc',json={'expected_revision':0},headers=headers).status_code,200)
 
 
 if __name__=='__main__':unittest.main()
