@@ -13,6 +13,7 @@ import time
 import requests
 
 ENDPOINT='https://api.mainnet.solana.com'
+SIGNATURE_PAGE_SIZE=1000
 PROGRAMS=json.loads(Path(__file__).with_name('solana_copy_pump_instructions.json').read_text())
 _lock=Lock();_calls=deque();_cooldown=0
 
@@ -28,7 +29,7 @@ def request(method,params):
         if now<_cooldown or len(_calls)>=100:raise DataUnavailable('Public Solana RPC cooling down; retrying automatically.')
         _calls.append(now)
     try:
-        response=requests.post(ENDPOINT,json={'jsonrpc':'2.0','id':1,'method':method,'params':params},timeout=5,allow_redirects=False)
+        response=requests.post(ENDPOINT,json={'jsonrpc':'2.0','id':1,'method':method,'params':params},timeout=8 if method=='getSignaturesForAddress' else 5,allow_redirects=False)
         if response.status_code==429:
             with _lock:_cooldown=time.monotonic()+60
             raise DataUnavailable('Public Solana RPC rate limited; retrying after cooldown.')
@@ -112,11 +113,11 @@ def trades(wallet,cursor,now):
     wallet=mint(wallet);cursor=deepcopy(cursor)
     window=cursor.get('window')
     if window is None or window.get('scan_before'):
-        options={'limit':20,'commitment':'confirmed'}
+        options={'limit':SIGNATURE_PAGE_SIZE,'commitment':'confirmed'}
         if cursor.get('latest'):options['until']=cursor['latest']
         if window is not None:options['before']=window['scan_before']
         data=request('getSignaturesForAddress',[wallet,options])
-        if not isinstance(data,list) or len(data)>20:raise DataUnavailable('Unsupported public RPC signature list.')
+        if not isinstance(data,list) or len(data)>SIGNATURE_PAGE_SIZE:raise DataUnavailable('Unsupported public RPC signature list.')
         queue=[]
         for row in data:
             if not isinstance(row,dict) or not isinstance(row.get('signature'),str) or not 64<=len(row['signature'])<=128:
@@ -128,29 +129,35 @@ def trades(wallet,cursor,now):
                 if at>=cursor['at']-2:queue.append(row)
         if window is None:
             window={'queue':[],'at':now,'newest':data[0]['signature'] if data else cursor.get('latest'),
-                    'seen':0,'unsupported':0,'decoded':0,'truncated':False}
+                    'seen':0,'failed':0,'unsupported':0,'decoded':0,'truncated':False}
         # A full newest page is not a complete history window. Page backwards
         # to the previous cursor/time boundary before advancing or decoding.
         window['queue']=list(reversed(queue))+window['queue']
         window['seen']+=len(data)
+        window.setdefault('failed_count_complete','failed' in window)
+        window['failed']=window.get('failed',0)+sum(row.get('err') is not None for row in data)
         reached_boundary=any(isinstance(r.get('blockTime'),(int,float)) and r['blockTime']<cursor['at']-2 for r in data)
-        window['scan_before']=data[-1]['signature'] if len(data)==20 and not reached_boundary else None
+        window['scan_before']=data[-1]['signature'] if len(data)==SIGNATURE_PAGE_SIZE and not reached_boundary else None
         window['truncated']=bool(window['scan_before'])
         if window['scan_before']:
-            coverage={'checked_at':now,'signatures_seen':window['seen'],'decoded_swaps':window['decoded'],
+            coverage={'checked_at':now,'signatures_seen':window['seen'],'failed_transactions':window.get('failed',0),'failed_count_complete':window.get('failed_count_complete',False),'decoded_swaps':window['decoded'],
                       'unsupported_transactions':window['unsupported'],'history_truncated':True,'queued':len(window['queue'])}
             return [],{**cursor,'window':window,'rpc_coverage':coverage}
-    rows=[]
+    rows=[];processed=0;partial_error=None
     for row in window['queue'][:4]:
-        tx=request('getTransaction',[row['signature'],{'encoding':'jsonParsed','commitment':'confirmed','maxSupportedTransactionVersion':1}])
-        if tx is None:
-            if now-row['blockTime']<=180:raise DataUnavailable('RPC confirmed transaction is not available yet; retrying.')
-            parsed=[]
-        else:parsed=parse(tx,wallet,row['signature'])
+        try:
+            tx=request('getTransaction',[row['signature'],{'encoding':'jsonParsed','commitment':'confirmed','maxSupportedTransactionVersion':1}])
+            if tx is None:
+                if now-row['blockTime']<=180:raise DataUnavailable('RPC confirmed transaction is not available yet; retrying.')
+                parsed=[]
+            else:parsed=parse(tx,wallet,row['signature'])
+        except DataUnavailable as error:
+            partial_error=str(error);break
         window['decoded']+=len(parsed);window['unsupported']+=not bool(parsed)
-        rows.extend(parsed)
-    window['queue']=window['queue'][4:]
-    coverage={'checked_at':now,'signatures_seen':window['seen'],'decoded_swaps':window['decoded'],
+        rows.extend(parsed);processed+=1
+    window['queue']=window['queue'][processed:]
+    coverage={'checked_at':now,'signatures_seen':window['seen'],'failed_transactions':window.get('failed',0),'failed_count_complete':window.get('failed_count_complete',False),'decoded_swaps':window['decoded'],
               'unsupported_transactions':window['unsupported'],'history_truncated':window['truncated'],'queued':len(window['queue'])}
+    if partial_error:coverage['error']=partial_error
     if window['queue']:return rows,{**cursor,'window':window,'rpc_coverage':coverage}
     return rows,{'at':window['at'],'latest':window['newest'],'provider':'rpc','rpc_coverage':coverage}
