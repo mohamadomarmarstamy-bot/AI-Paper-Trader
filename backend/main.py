@@ -5457,7 +5457,7 @@ def fetch_alpaca_portfolio_history() -> list[dict[str, Any]]:
     )
 
     if not isinstance(payload, dict):
-        return []
+        raise ValueError("Alpaca returned malformed portfolio history.")
 
     timestamps = payload.get(
         "timestamp"
@@ -5477,7 +5477,7 @@ def fetch_alpaca_portfolio_history() -> list[dict[str, Any]]:
             list,
         )
     ):
-        return []
+        raise ValueError("Alpaca returned malformed portfolio history.")
 
     history: list[dict[str, Any]] = []
 
@@ -15290,24 +15290,16 @@ def auto_trader_daily_pl_diagnostic(
     }
 
 @app.get("/portfolio-history")
-def portfolio_history(
-    request: Request,
-) -> Any:
-    require_app_session(
-        request
-    )
-
+def portfolio_history(request: Request) -> Any:
+    require_app_session(request)
     try:
-        return _portfolio_history_cache.get(fetch_alpaca_portfolio_history)
-
+        return JSONResponse(_portfolio_history_cache.get(fetch_alpaca_portfolio_history),headers={'Cache-Control':'no-store','X-Portfolio-History-Status':'fresh'})
     except Exception as error:
-        print(
-            "Alpaca PAPER portfolio-history error: "
-            f"{clean_error_message(error)}"
-        )
-
-        return []
-
+        print('Alpaca PAPER portfolio-history error: '+clean_error_message(error))
+        saved=_portfolio_history_cache.get_last_successful()
+        if saved:
+            return JSONResponse(saved,headers={'Cache-Control':'no-store','X-Portfolio-History-Status':'stale'})
+        raise HTTPException(status_code=503,detail='Portfolio history is temporarily unavailable. Retrying shortly.',headers={'Retry-After':'15'})
 
 
 @app.get("/account/non-trade-activities")

@@ -317,6 +317,7 @@
                             </button>
                         </div>
 
+                        <p id="portfolio-chart-summary" class="stat-caption" aria-live="polite">Loading broker equity history…</p>
                         <div
                             id="portfolio-chart"
                             class="portfolio-chart"
@@ -1889,7 +1890,7 @@
     <script src="js/day-trader.js?v=intraday-v1"></script>
     <script src="js/search.js?v=entry-diagnostics-v1"></script>
     <script src="js/watchlist.js"></script>
-    <script src="js/portfolio.js"></script>
+    <script src="js/portfolio.js?v=history-recovery-v1"></script>
     <script src="js/pro-ticker-manual.js"></script>
     <script src="js/pro-ticker-release.js"></script>
     <script src="js/pro-ticker-workspace.js?v=entry-settings-v1"></script>
@@ -2000,7 +2001,7 @@ document.addEventListener(
                 window.scrollTo({ top: 0, behavior: "smooth" });
 
                 if (sectionId === "settings-section") window.loadMainSettings?.();
-                if (sectionId === "performance-section") {
+                if (sectionId === "dashboard-section") {
                     window.setTimeout(() => window.loadPortfolioChart?.(), 80);
                 }
 

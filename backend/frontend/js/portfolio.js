@@ -4,6 +4,9 @@ let portfolioChart = null;
 let portfolioSeries = null;
 let portfolioResizeObserver = null;
 let activePortfolioRequest = null;
+let portfolioLastData = [];
+let portfolioRetryTimer = null;
+let portfolioRetryCount = 0;
 
 const PORTFOLIO_CHART_HEIGHT = 350;
 const PORTFOLIO_REQUEST_TIMEOUT_MS = 15_000;
@@ -137,6 +140,7 @@ async function loadPortfolioChart() {
         }
     }
 
+    window.clearTimeout(portfolioRetryTimer);
     cancelPortfolioRequest();
 
     const requestController =
@@ -186,14 +190,17 @@ async function loadPortfolioChart() {
             );
         }
 
+        if (activePortfolioRequest !== requestController) return;
         const data =
             normalizePortfolioHistory(
                 payload
             );
 
-        portfolioSeries.setData(
-            data
-        );
+        const firstLoad = portfolioLastData.length === 0;
+        portfolioLastData = data;
+        portfolioRetryCount = 0;
+        portfolioSeries.setData(data);
+        updatePortfolioSummary(data,response.headers?.get('X-Portfolio-History-Status')==='stale');
 
         if (data.length === 0) {
             showPortfolioMessage(
@@ -205,53 +212,19 @@ async function loadPortfolioChart() {
 
         clearPortfolioMessage();
 
-        portfolioChart
-            .timeScale()
-            .fitContent();
+        if (firstLoad) portfolioChart.timeScale().fitContent();
+        if(response.headers?.get('X-Portfolio-History-Status')==='stale'){
+            showPortfolioMessage('Broker history is temporarily unavailable. Showing the last successful history; retrying shortly.');
+            schedulePortfolioRetry();
+        }
     } catch (error) {
-        if (
-            error?.name ===
-            "AbortError"
-        ) {
-            console.warn(
-                "Portfolio history request was cancelled or timed out."
-            );
-
-            showPortfolioMessage(
-                "The portfolio history request timed out.",
-                true
-            );
-
-            return;
-        }
-
-        console.error(
-            "Portfolio chart error:",
-            error
-        );
-
-        portfolioSeries?.setData(
-            []
-        );
-
-        showPortfolioMessage(
-            "Could not load portfolio history.",
-            true
-        );
+        if(activePortfolioRequest !== requestController) return;
+        const message=error?.name==='AbortError'?'Portfolio history request timed out.':String(error?.message||'Portfolio history unavailable.');
+        showPortfolioMessage(message+(portfolioLastData.length?' Showing the last successful history.':'' )+' Retrying shortly.',true);
+        schedulePortfolioRetry();
     } finally {
-        window.clearTimeout(
-            timeoutId
-        );
-
-        if (
-            activePortfolioRequest ===
-            requestController
-        ) {
-            activePortfolioRequest =
-                null;
-        }
-
-        clearPortfolioLoadingState();
+        window.clearTimeout(timeoutId);
+        if(activePortfolioRequest === requestController){activePortfolioRequest=null;clearPortfolioLoadingState();}
     }
 }
 
@@ -263,7 +236,8 @@ function addPortfolioLineSeries(
         lineWidth: 3,
         priceLineVisible: false,
         lastValueVisible: true,
-        title: "Portfolio Value",
+        title: "Paper equity",
+        priceFormat:{type:'custom',minMove:.01,formatter:value=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2}).format(value)},
     };
 
     if (
@@ -322,12 +296,12 @@ function normalizePortfolioHistory(
                 point.time
             );
 
-        const value =
-            Number(point.value);
+        if(point.value===null || point.value===undefined || typeof point.value==='boolean' || String(point.value).trim()==='') continue;
+        const value = Number(point.value);
 
         if (
-            !Number.isFinite(time) ||
-            !Number.isFinite(value)
+            !Number.isFinite(time) || time<=0 ||
+            !Number.isFinite(value) || value<0
         ) {
             continue;
         }
@@ -545,9 +519,7 @@ function clearPortfolioLoadingState() {
         "aria-busy"
     );
 
-    container.removeAttribute(
-        "aria-label"
-    );
+    container.setAttribute('aria-label','Portfolio value over time');
 }
 
 
@@ -627,6 +599,8 @@ function cancelPortfolioRequest() {
 
 
 function destroyPortfolioChart() {
+    window.clearTimeout(portfolioRetryTimer);
+    portfolioLastData=[];
     cancelPortfolioRequest();
 
     portfolioResizeObserver
@@ -699,5 +673,19 @@ document.addEventListener(
     "DOMContentLoaded",
     () => {
         loadPortfolioChart();
+        window.setInterval(()=>{if(!document.hidden && !document.getElementById('dashboard-section')?.hidden && !activePortfolioRequest) loadPortfolioChart();},60000);
+        document.addEventListener('visibilitychange',()=>{if(!document.hidden && !document.getElementById('dashboard-section')?.hidden && !activePortfolioRequest) loadPortfolioChart();});
     }
 );
+
+function schedulePortfolioRetry(){
+    window.clearTimeout(portfolioRetryTimer);
+    portfolioRetryTimer=window.setTimeout(()=>{if(!document.hidden && !document.getElementById('dashboard-section')?.hidden) return loadPortfolioChart();},Math.min(60000,15000*2**Math.min(portfolioRetryCount++,2)));
+}
+
+function updatePortfolioSummary(data,stale=false){
+    const label=document.getElementById('portfolio-chart-summary');if(!label)return;
+    if(!data.length){label.textContent='No broker equity snapshots yet.';return;}
+    const point=data[data.length-1];
+    label.textContent=(stale?'Saved history · ':'')+'Daily PAPER account equity · latest snapshot '+new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'}).format(new Date(point.time*1000))+' · '+new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(point.value)+'. Current account value may differ.';
+}
