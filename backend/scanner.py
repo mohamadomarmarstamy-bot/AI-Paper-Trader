@@ -787,7 +787,8 @@ def analyze_stock(
     if price < MINIMUM_PRICE:
         return None
 
-    average_volume = safe_float(volumes.tail(20).mean())
+    # Compare the latest session with 20 preceding sessions, excluding itself.
+    average_volume = safe_float(volumes.iloc[:-1].tail(20).mean())
     latest_volume = safe_float(volumes.iloc[-1])
 
     if average_volume is None or latest_volume is None:
@@ -1011,6 +1012,8 @@ def analyze_stock(
         "macd_histogram": round(macd_histogram, 4),
         "volume_ratio": round(volume_ratio, 2),
         "average_volume": int(round(average_volume)),
+        "gap_percent": percentage_change(safe_float(history['Open'].iloc[-1]),previous_close) if 'Open' in history and safe_float(history['Open'].iloc[-1]) is not None else None,
+        "latest_volume": int(round(latest_volume)),
         "atr": round(atr, 2),
         "atr_percent": round(atr_percent, 2),
         "stop_loss": trade_plan["stop_loss"],

@@ -208,7 +208,11 @@ class JarvisTests(unittest.TestCase):
         used={node.args[0].value for node in ast.walk(tree) if isinstance(node,ast.Call)
             and isinstance(node.func,ast.Name) and node.func.id=='get_auto_trader_setting'
             and node.args and isinstance(node.args[0],ast.Constant)}
-        self.assertTrue(set(controls.DEFAULTS)<=used)
+        import stock_momentum
+        self.assertTrue(set(controls.DEFAULTS)-set(stock_momentum.DEFAULTS)<=used)
+        bracket=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='submit_alpaca_auto_bracket_buy')
+        calls={n.func.attr for n in ast.walk(bracket) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and isinstance(n.func.value,ast.Name) and n.func.value.id=='stock_momentum'}
+        self.assertTrue({'settings','features','evaluate'}<=calls)
 
 
     def test_stated_old_value_must_match_before_a_literal_change_applies(self):

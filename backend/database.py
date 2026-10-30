@@ -7596,6 +7596,7 @@ def set_learning_recommendation_active(
 
 
 # Settings that the application explicitly supports.
+import stock_momentum as _stock_momentum_settings
 SUPPORTED_APP_SETTINGS = frozenset({
     "pause_new_entries",
     "position_size_percent",
@@ -7609,7 +7610,7 @@ SUPPORTED_APP_SETTINGS = frozenset({
     "trailing_stop_percent",
     "daily_profit_target_percent",
     "daily_loss_limit_percent",
-})
+}) | frozenset(_stock_momentum_settings.DEFAULTS) | frozenset(_stock_momentum_settings.PREFERENCES)
 
 # Inclusive validation bounds for numerical settings.
 NUMERIC_APP_SETTING_RANGES = {
@@ -7624,6 +7625,7 @@ NUMERIC_APP_SETTING_RANGES = {
     "trailing_stop_percent": (0.1, 50.0),
     "daily_profit_target_percent": (0.1, 100.0),
     "daily_loss_limit_percent": (0.1, 100.0),
+    **_stock_momentum_settings.RANGES,
 }
 
 
@@ -7656,7 +7658,7 @@ def _normalize_app_setting_value(key: str, value: str) -> str:
     if type(value) is not str:
         raise ValueError("Application setting value must be a string.")
 
-    if key == "pause_new_entries":
+    if key == "pause_new_entries" or key in _stock_momentum_settings.PREFERENCES:
         if value not in {"true", "false"}:
             raise ValueError(
                 "pause_new_entries must be 'true' or 'false'."
