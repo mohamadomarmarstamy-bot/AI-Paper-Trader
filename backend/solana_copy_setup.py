@@ -32,6 +32,7 @@ def check_connections():
             data=call()
             checks.append({'name':name,'ok':True,'detail':'Read-only API request succeeded.',
                            'rows':len(data) if isinstance(data,list) else None})
+            return data
         except copy.DataUnavailable as error:checks.append({'name':name,'ok':False,'detail':str(error)})
         except Exception:checks.append({'name':name,'ok':False,'detail':'Response schema unavailable or unsupported.'})
     check('Birdeye profit discovery',lambda:provider.request('/trader/gainers-losers',params={'type':'1W','sort_by':'realized_pnl','min_realized_pnl':1000,'limit':1,'offset':0}))
@@ -41,7 +42,9 @@ def check_connections():
     check('Solscan swap history',lambda:solscan.request({'address':wallet,'activity_type[]':['ACTIVITY_TOKEN_SWAP','ACTIVITY_AGG_TOKEN_SWAP'],
                 'from_time':int(now)-86400,'to_time':int(now),'page':1,'page_size':10,'sort_by':'block_time','sort_order':'desc'}))
     import solana_copy_rpc
-    check('Public Solana wallet history · no key',lambda:solana_copy_rpc.request('getSignaturesForAddress',[wallet,{'limit':1,'commitment':'confirmed'}]))
+    history=check('Public Solana wallet history · no key',lambda:solana_copy_rpc.request('getSignaturesForAddress',[wallet,{'limit':1,'commitment':'confirmed'}]))
+    if isinstance(history,list) and history and isinstance(history[0],dict) and isinstance(history[0].get('signature'),str):
+        check('Public Solana transaction details · no key',lambda:solana_copy_rpc.request('getTransaction',[history[0]['signature'],{'encoding':'jsonParsed','commitment':'confirmed','maxSupportedTransactionVersion':1}]))
     report={'checked_at':time.time(),'checks':checks,'paper_only':True,'orders_submitted':0}
     with closing(database.get_connection()) as conn:
         conn.execute('CREATE TABLE IF NOT EXISTS solana_copy_connection_checks(id INTEGER PRIMARY KEY CHECK(id=1),report_json TEXT NOT NULL)')
