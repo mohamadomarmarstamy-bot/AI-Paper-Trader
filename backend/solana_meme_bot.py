@@ -137,6 +137,7 @@ def entry_risk(state,now):
 
 
 def public():
+    from crypto_idle_alerts import summary as idle_summary
     state,revision=load()
     positions=[];value=state['cash_usd'];complete=True
     indicative=state['cash_usd'];indicative_complete=True;mark_times=[]
@@ -155,7 +156,7 @@ def public():
     with closing(database.get_connection()) as conn:
         learning_summary=learner.summary(conn)
         daily_pnl=learner.daily_pnl(conn,now)
-    return {'learning_email_configured':learning_mail.configured(),'learning_summary':learning_summary,'version':VERSION,'paper':True,'live_execution_enabled':False,'revision':state.get('settings_revision',0),
+    return {'inactivity_alert':idle_summary('auto'),'learning_email_configured':learning_mail.configured(),'learning_summary':learning_summary,'version':VERSION,'paper':True,'live_execution_enabled':False,'revision':state.get('settings_revision',0),
             **{k:v for k,v in state.items() if k not in ('positions','observations','cooldowns','discovery_batch','discovery_uses','discovery_offset','settings_revision','unavailable_until','watch_batch','watch_uses','watch_offset')},
             'positions':positions,'paper_equity_usd':round(value,4) if complete else None,'risk_guard':entry_risk(state,now),'daily_pnl':daily_pnl,
             'valuation':{'missing_count':sum(p['current_modeled_value_usd'] is None for p in positions),
@@ -201,6 +202,7 @@ def configure(changes,expected_revision):
             state['funding_events']=(state.get('funding_events',[])+[{'at':time.time(),'amount_usd':added,'capital_usd':changes['paper_capital_usd']}])[-100:]
     entry_keys=('entry_mode','minimum_liquidity_usd','minimum_m5_volume_usd',*learner.POLICY_KEYS)
     manual_entry_change=any(k in changes and changes[k]!=state['config'][k] for k in entry_keys)
+    if changes.get('enabled') and not state['config']['enabled']:state['inactivity_enabled_at']=time.time()
     state['config'].update(changes)
     if manual_entry_change:state.setdefault('learning',{})['active_version']='manual-'+str(uuid.uuid4())
     state['settings_revision']=state.get('settings_revision',0)+1

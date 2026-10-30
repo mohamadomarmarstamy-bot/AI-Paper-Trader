@@ -83,6 +83,7 @@ def metrics(state, now):
 
 def public():
     from solana_copy_setup import connection_status
+    from crypto_idle_alerts import summary as idle_summary
     state, _ = load(); now = time.time(); own = metrics(state, now)
     regular = regular_metrics(); baseline = state.get('comparison_baseline')
     delta = regular['net_usd']-baseline['net_usd'] if baseline and regular['net_usd'] is not None else None
@@ -94,7 +95,7 @@ def public():
         events = [json.loads(r[0]) for r in conn.execute('SELECT details_json FROM solana_copy_events ORDER BY rowid DESC LIMIT 100')] if exists else []
         closed = [json.loads(r[0]) for r in conn.execute('SELECT details_json FROM solana_copy_closes ORDER BY rowid DESC LIMIT 100')] if exists else []
         totals = conn.execute("SELECT COUNT(*),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')),0),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')>0),0),COALESCE(SUM(json_extract(details_json,'$.cost_usd')),0),COALESCE(SUM(json_extract(details_json,'$.cost_usd')>0),0) FROM solana_copy_closes").fetchone() if exists else (0,0,0,0,0)
-    return {'paper': True, 'live_execution_enabled': False, 'provider_configured': configured(),'connection_checks':connection_status(),
+    return {'inactivity_alert':idle_summary('copy'),'paper': True, 'live_execution_enabled': False, 'provider_configured': configured(),'connection_checks':connection_status(),
             'solscan_configured':solscan.configured(),'discovery':{k:v for k,v in state.get('discovery',{}).items() if k!='pending'},'last_polled':state.get('last_polled',{}),
             'config': state['config'], 'revision': state['settings_revision'], 'health': state['health'],
             'error': state['error'], 'started_at': state['started_at'], 'last_cycle': state['last_cycle'],
@@ -130,6 +131,7 @@ def configure(changes, expected_revision):
     if added < 0: raise ValueError('Virtual capital can only increase.')
     state['cash_usd'] += added
     if changes.get('enabled') and not state['config']['enabled']:
+        state['inactivity_enabled_at']=time.time()
         if state.get('started_at'):state['buy_resume_at']=time.time()
         held={p['wallet'] for p in state['positions'].values()}
         for wallet in state['cursors']:
