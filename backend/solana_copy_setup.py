@@ -20,6 +20,18 @@ SEEDS = (
      'reported_median_hold_seconds':104,'reported_reliability_score':69,
      'copy_source_check':'Recent successful Pump/PumpSwap sell decoded by the same read-only copier on 2026-10-30.',
      'review_note':'Positive reported 7/30/90-day realized P/L and equal-stake history. Low win rate; results depend on larger winners. Historical provider figures do not include copying delays or modeled execution costs.'},
+    {'name':'Solkrow','wallet':'ApRnQN2HkbCn7W2WWiT2FEKvuKJp9LugRyAE1a9Hdz1',
+     'source_url':'https://kolexplorer.com/kol/solkrow','reported_realized_usd':162800,
+     'reported_win_rate_percent':38.9,'reported_sample_trades':1547,'reviewed_on':'2026-10-30',
+     'reported_realized_7d_usd':12916.059331935,'reported_realized_30d_usd':42442.618992857,
+     'reported_equal_stake_multiple_90d':1.38,'reported_profitable_weeks':5,'reported_weeks_sample':8,
+     'reported_median_hold_seconds':162,'reported_reliability_score':66,
+     'copy_source_check':'Three successful wallet-signed Pump buys decoded read-only on 2026-10-30; historical sample only, not copied retrospectively.',
+     'copy_source_sample_at':1793375009,
+     'copy_source_sample_signatures':['2S5vMG4QGMW4acV8fK2LMLWWLg9eP1W65vy3PithFBKUJo4MxYNxeuC5jKhXSo54stAEKkkWGRE355LTSLaNXUsD',
+         '3FTwh8VWAnzb3PbfuFkiRTZgLFGR36cMRpnrGKoLa5eixf9SxJDCZbBEaqwro6MdXdzKcBzdM1e98NUkxaavSXF6',
+         '4c23pJA3aTfCQmKjJL5nT9j6vD6uqiQbQTA9t1oTSMNTJskDYF8Mu3xA7sb6NEMVuSEuLUShGb3yit88uewBAV5n'],
+     'review_note':'Positive published 7/30/90-day realized results, 1.38x reported equal-stake result and 5/8 profitable weeks. The 90-day dollar figure is rounded as published; reported results are not independently audited and exclude our copying latency, 20% loss stops and modeled execution costs. Low win rate: larger winners drive reported returns.'},
 )
 BONK='DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263'
 

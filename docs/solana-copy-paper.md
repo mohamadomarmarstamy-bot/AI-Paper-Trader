@@ -1,5 +1,11 @@
 # Solana copy PAPER experiment
 
+## Reviewed follow expansion — October 30, 2026
+
+A deeper review of the 150-row public board and nine profiles identified Solkrow as an additional curated PAPER follow. The public profile reports positive 7/30/90-day realized P/L, a 1.38× equal-stake result, 5/8 profitable weeks and a 1,547-trade sample. The published 90-day dollar figure is rounded; no reported result is independently audited or adjusted for this copier's latency, costs or loss stops. Three recent successful wallet-signed Pump buys were decoded by the existing parser before adding the address. Their signatures are saved in the attributed review evidence, never replayed as copy orders.
+
+The owner-run reviewed-follow action enrolls only missing wallets with a new prospective cursor; existing follows, holdings, history and settings remain intact on repeated clicks. The current 12-wallet capacity, $50 trade size and 20% per-lot loss protection are unchanged. The automatic public discovery rule is unchanged; the lower-win-rate curated follow is an explicit researched exception, like Iceman. Other candidates were withheld for weaker published equal-stake/longer-term results or an absence of a supported swap in the sampled successful transactions. Sample rejection does not prove a wallet never uses supported programs.
+
 ## Public RPC backlog recovery — October 30, 2026
 
 Signature pages now explicitly request up to 1,000 entries instead of 20, within Solana's documented maximum and the same request-rate/body-size limits. Large streams of failed transactions are counted and excluded before transaction decoding. Full pages still require pagination to the existing cursor/time boundary; neither the follow cursor nor historical holdings are reset. Failed-transaction counts for a window started before this update are labeled incomplete (at least the displayed count).
