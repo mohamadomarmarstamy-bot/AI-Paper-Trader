@@ -20,6 +20,7 @@ ASSOCIATED='ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL'
 SYSTEM='11111111111111111111111111111111'
 JUPITER='JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4'
 LOOKUP='AddressLookupTab1e1111111111111111111111111'
+MAINNET_GENESIS='5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d'
 ROUTES={hashlib.sha256(('global:'+n).encode()).digest()[:8] for n in ('route','route_v2','shared_accounts_route','shared_accounts_route_v2')}
 
 
@@ -120,7 +121,7 @@ class Provider:
 
     def network(self):
         value=self.rpc('getGenesisHash',[])
-        if not isinstance(value,str) or len(bytes(pub(value)))!=32 or not value.startswith('5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'):
+        if value!=MAINNET_GENESIS:
             raise Unavailable('The configured RPC is not Solana mainnet.')
 
     def balance(self,owner):return uint(self.rpc('getBalance',[owner,{'commitment':'confirmed'}])['value'])

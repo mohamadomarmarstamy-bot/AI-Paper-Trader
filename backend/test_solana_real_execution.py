@@ -141,6 +141,12 @@ class ExecutionProviderTests(unittest.TestCase):
             with self.assertRaisesRegex(ex.Unavailable,'switch is off'):self.provider().prepare(self.owner,'buy',self.mint,100000000,self.policy,lambda:None,quote=self.quote())
             with self.assertRaisesRegex(ex.Unavailable,'switch is off'):ex.Provider().send({'wire':'not sent'})
 
+    def test_network_requires_the_full_mainnet_genesis_hash(self):
+        provider=ex.Provider()
+        with patch.object(provider,'rpc',return_value=ex.MAINNET_GENESIS):provider.network()
+        for value in (ex.MAINNET_GENESIS[:32],ex.MAINNET_GENESIS[:-1]+'e',str(Pubkey.new_unique())):
+            with patch.object(provider,'rpc',return_value=value),self.assertRaises(ex.Unavailable):provider.network()
+
     def test_reconciliation_requires_finalized_matching_bytes_and_actual_deltas(self):
         provider=self.provider();prepared=provider.prepare(self.owner,'buy',self.mint,100000000,self.policy,lambda:None,quote=self.quote())
         order={'wallet':self.owner,'mint':self.mint,'side':'buy','prepared':prepared}
