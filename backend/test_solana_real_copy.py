@@ -47,7 +47,7 @@ class RealCopyTests(unittest.TestCase):
             self.assertEqual(health['label'],'Setup required')
             self.assertNotEqual(health['level'],'ok')
             checks={c['name']:c for c in health['checks']}
-            self.assertEqual(checks['Live executor']['level'],'error')
+            self.assertEqual(checks['Live executor']['level'],'warning');self.assertTrue(status['execution_setup']['executor_implemented'])
             self.assertEqual(checks['Unattended signer']['level'],'warning')
             self.assertEqual(status['paper_sync']['operational_health']['label'],'Paused')
             self.assertFalse(status['wallet']['spending_authorized'])
