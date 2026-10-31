@@ -98,6 +98,7 @@ def metrics(state, now):
 
 
 def public():
+    from solana_copy_health import summary as health_summary
     from solana_copy_setup import connection_status
     from crypto_idle_alerts import summary as idle_summary
     state, _ = load(); now = time.time(); own = metrics(state, now)
@@ -115,6 +116,7 @@ def public():
     return {'inactivity_alert':idle_summary('copy'),'paper': True, 'live_execution_enabled': False, 'provider_configured': configured(),'connection_checks':connection_status(),
             'solscan_configured':solscan.configured(),'discovery':{k:v for k,v in state.get('discovery',{}).items() if k!='pending'},'last_polled':state.get('last_polled',{}),
             'config': state['config'], 'revision': state['settings_revision'], 'health': state['health'],
+            'operational_health':health_summary(state,now),
             'error': state['error'], 'started_at': state['started_at'], 'last_cycle': state['last_cycle'],
             'public_rpc_enabled':state.get('public_rpc_enabled',False),'public_discovery':state.get('public_discovery',{}),
             'entry_protection':{'one_open_position_per_coin':state['config']['max_open_lots_per_coin']==1,
