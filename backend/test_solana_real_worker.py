@@ -165,5 +165,22 @@ class RealWorkerTests(unittest.TestCase):
         self.assertEqual(self.chain.sent,[]);self.assertEqual(live.orders()[0]['status'],'rejected')
         self.assertIn('Source sold before live broadcast',live.orders()[0]['error'])
 
+    def test_expired_worker_cannot_persist_or_broadcast_a_late_preparation(self):
+        self.activate();self.event();original=self.chain.prepare
+        def prepare(*args,**kwargs):
+            value=original(*args,**kwargs)
+            with closing(database.get_connection()) as conn:
+                conn.execute('UPDATE solana_real_run SET lease_until=0 WHERE id=1');conn.commit()
+            return value
+        self.chain.prepare=prepare;live.tick(self.chain)
+        self.assertEqual(self.chain.sent,[]);self.assertEqual(live.orders(True)[0]['status'],'preparing')
+        live.tick(self.chain);self.assertFalse(live.orders(True));self.assertEqual(live.orders()[0]['status'],'abandoned')
+
+    def test_terminal_receipt_cannot_be_reopened_by_late_broadcast_update(self):
+        self.enter();order=live.orders()[0];self.assertEqual(order['status'],'confirmed')
+        order['status']='submitted'
+        with self.assertRaises(Conflict):live.save_order(order)
+        self.assertEqual(live.orders()[0]['status'],'confirmed');self.assertFalse(live.orders(True))
+
 
 if __name__=='__main__':unittest.main()

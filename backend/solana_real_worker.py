@@ -129,8 +129,19 @@ def queue_close(ids,pause_new_buys):
 
 def save_order(order):
     with closing(database.get_connection()) as conn:
-        conn.execute('INSERT INTO solana_real_orders VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,details_json=excluded.details_json',
-            (order['id'],order['created_at'],order['status'],json.dumps(order,allow_nan=False)));conn.commit()
+        changed=conn.execute("INSERT INTO solana_real_orders VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,details_json=excluded.details_json WHERE solana_real_orders.status IN ('preparing','signed','submitted','unknown')",
+            (order['id'],order['created_at'],order['status'],json.dumps(order,allow_nan=False)))
+        if changed.rowcount!=1:raise Conflict('Terminal transaction cannot be reopened by an older worker.')
+        conn.commit()
+
+
+def save_signed(order,lease_owner):
+    with closing(database.get_connection()) as conn:
+        conn.execute('BEGIN IMMEDIATE');row=conn.execute('SELECT lease_owner,lease_until FROM solana_real_run WHERE id=1').fetchone()
+        if row['lease_owner']!=lease_owner or row['lease_until']<=time.time():raise Conflict('Worker lease expired before storing signed bytes.')
+        changed=conn.execute("UPDATE solana_real_orders SET status='signed',details_json=? WHERE id=? AND status='preparing'",(json.dumps(order,allow_nan=False),order['id']))
+        if changed.rowcount!=1:raise Conflict('Order preparation was superseded; signed bytes must not be broadcast.')
+        conn.commit()
 
 
 def post_receipt(state,order,result,now):
@@ -185,22 +196,31 @@ def decide(event,reason,now):
         conn.execute('INSERT OR IGNORE INTO solana_real_decisions VALUES(?,?,?)',(event['id'],now,reason));conn.commit()
 
 
-def authorized(state,side,source_at=None):
+def authorized(state,side,source_at=None,lease_owner=None):
     import solana_real_copy as link
     import solana_real_budget as budget
     current,_=load();saved=link.wallet();flags=execution.configuration(saved['wallet_address'])
+    if lease_owner is not None:
+        with closing(database.get_connection()) as conn:row=conn.execute('SELECT lease_owner,lease_until FROM solana_real_run WHERE id=1').fetchone()
+        if row['lease_owner']!=lease_owner or row['lease_until']<=time.time():raise execution.Unavailable('Worker lease expired before signing.')
     if not all(flags[k] for k in ('release_allowed','signer_configured','signer_matches','jupiter_configured')):raise execution.Unavailable('Server trading setup is unavailable. No new transaction is signed.')
     if saved['wallet_address']!=state['wallet'] or saved['revision']!=state['wallet_revision']:raise execution.Unavailable('Live wallet binding changed. Signing is blocked.')
     if side=='buy' and (not current['enabled'] or budget.settings()['revision']!=state['budget_revision']):raise execution.Unavailable('New real buys are paused or buy settings changed.')
     if side=='buy' and source_at is not None and not 0<=time.time()-source_at<=90:raise execution.Unavailable('Source buy expired before signing or broadcast.')
 
 
-def begin_broadcast(order,state):
+def begin_broadcast(order,state,lease_owner):
     """Atomically establish that broadcast began before a concurrent pause."""
-    authorized(state,order['side'],order.get('source_at'))
+    authorized(state,order['side'],order.get('source_at'),lease_owner)
     with closing(database.get_connection()) as conn:
         conn.execute('BEGIN IMMEDIATE')
-        current=json.loads(conn.execute('SELECT state_json FROM solana_real_run WHERE id=1').fetchone()[0])
+        row=conn.execute('SELECT * FROM solana_real_run WHERE id=1').fetchone()
+        if row['lease_owner']!=lease_owner or row['lease_until']<=time.time():raise execution.Unavailable('Worker lease expired before broadcast.')
+        current=json.loads(row['state_json'])
+        if not 0<=time.time()-order['prepared'].get('prepared_at',order['created_at'])<=30:raise execution.Unavailable('Unsent prepared swap expired. A new exit quote is required.')
+        if order['side']=='sell':
+            position=current['positions'].get(order['position_id'])
+            if not position or position['quantity_raw']<order['prepared']['input_amount']:raise execution.Unavailable('Live quantity changed before exit broadcast.')
         wallet=conn.execute('SELECT * FROM solana_real_copy_wallet WHERE id=1').fetchone()
         if wallet['wallet_address']!=state['wallet'] or wallet['revision']!=state['wallet_revision']:raise execution.Unavailable('Wallet changed before broadcast.')
         if order['side']=='buy':
@@ -238,11 +258,14 @@ def tick(provider=None):
                 # Signed bytes are always saved before any broadcast is permitted.
                 order.update(status='abandoned',error='Interrupted before a signed transaction was persisted.');terminal=order
             elif not order.get('send_started_at'):
-                try:authorized(state,order['side'],order.get('source_at'))
+                try:authorized(state,order['side'],order.get('source_at'),owner)
                 except execution.Unavailable as error:
                     order.update(status='canceled',error=str(error));terminal=order
                 else:
-                    begin_broadcast(order,state)
+                    try:begin_broadcast(order,state,owner)
+                    except execution.Unavailable as error:
+                        order.pop('send_started_at',None);order.update(status='canceled',error=str(error));terminal=order
+                        state['last_cycle']=time.time();commit_cycle(state,owner,terminal);return
                     try:provider.send(order['prepared']);order['status']='submitted';save_order(order)
                     except execution.Unavailable:pass
             else:
@@ -255,7 +278,7 @@ def tick(provider=None):
                     else:order['first_expired_at']=time.time();save_order(order)
                 elif execution.release_allowed() and time.time()-order.get('last_broadcast_at',order['send_started_at'])>=15:
                     # Same signed bytes and signature, never a replacement order.
-                    authorized(state,'sell');order['last_broadcast_at']=time.time();save_order(order)
+                    authorized(state,'sell',lease_owner=owner);order['last_broadcast_at']=time.time();save_order(order)
                     try:provider.send(order['prepared'])
                     except execution.Unavailable:pass
             state['last_cycle']=time.time();commit_cycle(state,owner,terminal);return
@@ -324,9 +347,9 @@ def tick(provider=None):
             order={**chosen,'wallet':state['wallet'],'created_at':time.time(),'status':'preparing'}
             save_order(order)
             try:
-                prepared=provider.prepare(state['wallet'],chosen['side'],chosen['mint'],amount,policy,lambda:authorized(state,chosen['side'],chosen.get('source_at')))
-                order.update(prepared=prepared,status='signed',signature=prepared['signature']);save_order(order)
-                begin_broadcast(order,state)
+                prepared=provider.prepare(state['wallet'],chosen['side'],chosen['mint'],amount,policy,lambda:authorized(state,chosen['side'],chosen.get('source_at'),owner))
+                order.update(prepared=prepared,status='signed',signature=prepared['signature']);save_signed(order,owner)
+                begin_broadcast(order,state,owner)
                 try:provider.send(prepared);order['status']='submitted';save_order(order)
                 except execution.Unavailable:state['error']='Broadcast outcome unknown. Further orders wait for reconciliation.'
             except execution.Unavailable as error:
