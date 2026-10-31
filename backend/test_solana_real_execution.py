@@ -66,9 +66,9 @@ class ExecutionProviderTests(unittest.TestCase):
         def row(program,data,accounts):return {'programId':program,'data':base64.b64encode(data).decode(),'accounts':[{'pubkey':key,'isSigner':key==self.owner,'isWritable':True} for key in accounts]}
         sol_ata=ex.ata(self.owner,ex.SOL);out=ex.ata(self.owner,self.mint)
         return {'inputMint':ex.SOL,'outputMint':self.mint,'inAmount':'100000000','outAmount':'100','otherAmountThreshold':'99','swapMode':'ExactIn','slippageBps':100,'priceImpactPct':'0',
-            'setupInstructions':[row(ex.SYSTEM,struct.pack('<IQ',2,100000000),[self.owner,sol_ata]),row(ex.TOKEN,bytes([17]),[sol_ata])],
+            'setupInstructions':[],
             'swapInstruction':row(ex.JUPITER,next(iter(ex.ROUTES))+b'opaque route data',[self.owner,out,sol_ata]),
-            'cleanupInstruction':row(ex.TOKEN,bytes([9]),[sol_ata,self.owner,self.owner]),'_observed_at':time.time()}
+            'cleanupInstruction':None,'_observed_at':time.time()}
 
     def provider(self):
         provider=ex.Provider();provider.network=lambda:None;provider.mint=lambda mint:6
@@ -99,10 +99,35 @@ class ExecutionProviderTests(unittest.TestCase):
     def test_unexpected_native_transfer_token_approval_or_route_cannot_be_signed(self):
         for mutation in ('recipient','approval','program'):
             q=self.quote()
-            if mutation=='recipient':q['setupInstructions'][0]['accounts'][1]['pubkey']=str(Pubkey.new_unique())
-            if mutation=='approval':q['setupInstructions'][1]['data']=base64.b64encode(bytes([4])).decode()
+            if mutation in ('recipient','approval'):
+                q['setupInstructions']=[{'programId':ex.SYSTEM if mutation=='recipient' else ex.TOKEN,'data':base64.b64encode(struct.pack('<IQ',2,100000000) if mutation=='recipient' else bytes([4])).decode(),
+                    'accounts':[{'pubkey':self.owner,'isSigner':True,'isWritable':True},{'pubkey':str(Pubkey.new_unique()),'isSigner':False,'isWritable':True}]}]
             if mutation=='program':q['swapInstruction']['programId']=ex.SYSTEM
             with self.subTest(mutation=mutation),self.assertRaises(ex.Unavailable):self.provider().prepare(self.owner,'buy',self.mint,100000000,self.policy,lambda:self.fail('Must not authorize'),quote=q)
+
+    def test_locally_wrapped_sol_roundtrip_runs_on_solana_runtime(self):
+        prepared=self.provider().prepare(self.owner,'buy',self.mint,100000000,self.policy,lambda:None,quote=self.quote())
+        message=VersionedTransaction.from_bytes(base64.b64decode(prepared['wire'])).message
+        svm=LiteSVM();svm.airdrop(self.key.pubkey(),1_000_000_000)
+        for address,decimals in ((self.mint,6),(ex.SOL,9)):
+            raw=bytearray(82);raw[36:44]=struct.pack('<Q',1_000_000);raw[44]=decimals;raw[45]=1
+            svm.set_account(ex.pub(address),Account(2_100_000,bytes(raw),ex.pub(ex.TOKEN)))
+        target=ex.pub(ex.ata(self.owner,self.mint));svm.set_account(target,token(self.key.pubkey(),ex.pub(self.mint),100))
+        keys=message.account_keys;header=message.header;ixs=[]
+        for ix in message.instructions:
+            program=keys[ix.program_id_index]
+            # Only omit the mocked AMM swap. Wrapping, cleanup and all four
+            # local guards execute against the actual built-in programs.
+            if str(program)==ex.JUPITER:continue
+            accounts=[AccountMeta(keys[i],i<header.num_required_signatures,
+                i<header.num_required_signatures-header.num_readonly_signed_accounts if i<header.num_required_signatures else i<len(keys)-header.num_readonly_unsigned_accounts) for i in ix.accounts]
+            ixs.append(Instruction(program,bytes(ix.data),accounts))
+        tx=Transaction.new_signed_with_payer(ixs,self.key.pubkey(),[self.key],svm.latest_blockhash())
+        result=svm.send_transaction(tx)
+        self.assertEqual(type(result).__name__,'TransactionMetadata')
+        self.assertIsNone(svm.get_account(ex.pub(ex.ata(self.owner,ex.SOL))))
+        self.assertEqual(int.from_bytes(svm.get_account(target).data[64:72],'little'),100)
+        self.assertGreater(svm.get_balance(self.key.pubkey()),999_000_000)
 
     def test_signer_status_does_not_return_key_and_wrong_wallet_never_matches(self):
         flags=ex.configuration(self.owner);self.assertTrue(flags['signer_matches']);self.assertTrue(flags['release_allowed'])

@@ -148,7 +148,7 @@ class Provider:
             start=time.monotonic()
             response=requests.get('https://api.jup.ag/swap/v2/build',params={
                 'inputMint':input_mint,'outputMint':output_mint,'amount':str(uint(amount)),'taker':owner,
-                'slippageBps':policy['slippage_bps'],'maxAccounts':48,'wrapAndUnwrapSol':'true',
+                'slippageBps':policy['slippage_bps'],'maxAccounts':48,'wrapAndUnwrapSol':'false',
                 'platformFeeBps':0,'transactionVersion':'0'},headers={'x-api-key':api_key},timeout=8,allow_redirects=False)
             if response.status_code!=200 or len(response.content)>500_000 or time.monotonic()-start>12:raise ValueError()
             data=response.json()
@@ -170,6 +170,7 @@ class Provider:
         from solders.transaction import VersionedTransaction
         from solders.address_lookup_table_account import AddressLookupTableAccount
         from solders.hash import Hash
+        from solders.system_program import transfer,TransferParams
         self.network();decimals=self.mint(mint)
         input_mint,output_mint=(SOL,mint) if side=='buy' else (mint,SOL)
         quote=quote or self.build(owner,input_mint,output_mint,amount,policy)
@@ -192,16 +193,21 @@ class Provider:
         min_tokens=minimum if side=='buy' else owned-amount
         min_native=max(reserve,native-max_cost) if side=='buy' else max(0,native+minimum-fee_cap)
         ixs=[set_compute_unit_limit(1_400_000),set_compute_unit_price(policy['max_priority_fee_lamports']*1_000_000//1_400_000)]
-        transferred=0
+        # Manage the canonical WSOL account ourselves, so upstream changes to
+        # temporary-account wrapping cannot introduce extra signers or transfers.
+        ixs.append(Instruction(pub(ASSOCIATED),bytes([1]),[
+            AccountMeta(pub(owner),True,True),AccountMeta(pub(sol_ata),False,True),AccountMeta(pub(owner),False,False),
+            AccountMeta(pub(SOL),False,False),AccountMeta(pub(SYSTEM),False,False),AccountMeta(pub(TOKEN),False,False)]))
+        if side=='buy':
+            ixs.append(transfer(TransferParams(from_pubkey=pub(owner),to_pubkey=pub(sol_ata),lamports=amount)))
+            ixs.append(Instruction(pub(TOKEN),bytes([17]),[AccountMeta(pub(sol_ata),False,True)]))
         def decode(row,kind):
-            nonlocal transferred
             data=base64.b64decode(row['data'],validate=True);program=row['programId'];accounts=row['accounts'];keys=[a['pubkey'] for a in accounts]
             if len(data)>2000 or len(accounts)>100 or any(type(a['isSigner']) is not bool or type(a['isWritable']) is not bool or a['isSigner'] and a['pubkey']!=owner for a in accounts):raise Unavailable('Unexpected instruction authority.')
             if kind=='swap':
                 if program!=JUPITER or data[:8] not in ROUTES or not {owner,token_ata,sol_ata}<=set(keys):raise Unavailable('Unsupported Jupiter swap instruction.')
             elif program==SYSTEM:
-                if kind!='setup' or side!='buy' or len(data)!=12 or data[:4]!=struct.pack('<I',2) or keys!=[owner,sol_ata]:raise Unavailable('Unexpected native SOL transfer.')
-                transferred+=struct.unpack('<Q',data[4:])[0]
+                raise Unavailable('Unexpected upstream native SOL transfer; wrapping is managed locally.')
             elif program==ASSOCIATED:
                 if kind!='setup' or data not in (b'',b'\0',b'\1') or len(keys)<6 or keys[0]!=owner or keys[2]!=owner or keys[3] not in (SOL,mint) or keys[1]!=ata(owner,keys[3]) or keys[4:6]!=[SYSTEM,TOKEN]:raise Unavailable('Unexpected associated account creation.')
             elif program==TOKEN:
@@ -213,10 +219,10 @@ class Provider:
         try:
             for row in quote.get('setupInstructions') or []:ixs.append(decode(row,'setup'))
             ixs.append(decode(quote['swapInstruction'],'swap'))
-            if quote.get('cleanupInstruction'):ixs.append(decode(quote['cleanupInstruction'],'cleanup'))
+            if quote.get('cleanupInstruction'):raise Unavailable('Unexpected upstream cleanup; native cleanup is managed locally.')
         except Unavailable:raise
         except Exception:raise Unavailable('Malformed swap instruction set.') from None
-        if transferred!=(amount if side=='buy' else 0):raise Unavailable('Wrapped SOL funding does not match the approved input.')
+        ixs.append(Instruction(pub(TOKEN),bytes([9]),[AccountMeta(pub(sol_ata),False,True),AccountMeta(pub(owner),False,True),AccountMeta(pub(owner),True,False)]))
         ixs.extend(guards(owner,mint,decimals,min_tokens,min_native))
         # Other pre-existing wallet token accounts cannot be used as route funds.
         writable=list(dict.fromkeys(str(a.pubkey) for ix in ixs for a in ix.accounts if a.is_writable))
