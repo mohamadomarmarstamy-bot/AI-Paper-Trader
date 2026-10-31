@@ -21,7 +21,7 @@ _lock=Lock();_calls=deque();_cooldown=0
 def request(method,params):
     from solana_copy_trader import DataUnavailable
     global _cooldown
-    if method not in ('getSignaturesForAddress','getTransaction'):
+    if method not in ('getSignaturesForAddress','getTransaction','getBalance'):
         raise ValueError('Only read-only wallet history methods are supported.')
     with _lock:
         now=time.monotonic()
