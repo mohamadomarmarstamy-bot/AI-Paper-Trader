@@ -88,8 +88,16 @@ class RealCopyTests(unittest.TestCase):
 
     def test_http_auth_origin_body_and_hard_execution_lock(self):
         self.allowed=False;self.assertEqual(self.client.get('/real-copy/status').status_code,401)
+        self.assertEqual(self.client.get('/real-copy/balance').status_code,401)
+        self.assertEqual(self.client.post('/real-copy/settings',json={}).status_code,401)
         self.assertEqual(self.client.post('/real-copy/start',json={}).status_code,401)
         self.allowed=True
+        self.assertEqual(self.client.post('/real-copy/settings',json={'changes':{'buy_usd':10},'expected_revision':0}).status_code,403)
+        self.assertEqual(self.client.post('/real-copy/settings',json={'changes':{'enabled':True},'expected_revision':0},headers=self.headers).status_code,422)
+        configured=self.client.post('/real-copy/settings',json={'changes':{'buy_usd':10},'expected_revision':0},headers=self.headers)
+        self.assertEqual(configured.status_code,200);self.assertFalse(configured.json()['execution_enabled'])
+        self.assertEqual(self.client.post('/real-copy/settings',json={'changes':{'buy_usd':20},'expected_revision':0},headers=self.headers).status_code,409)
+        self.assertEqual(self.client.get('/real-copy/balance').headers['cache-control'],'no-store')
         self.assertEqual(self.client.post('/real-copy/start',json={}).status_code,403)
         self.assertEqual(self.client.post('/real-copy/start',json={'enabled':True},headers=self.headers).status_code,423)
         self.assertEqual(self.client.post('/real-copy/challenge',json={'wallet_address':self.address,'expected_revision':0,'private_key':'never'},headers=self.headers).status_code,422)

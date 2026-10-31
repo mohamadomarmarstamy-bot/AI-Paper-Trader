@@ -34,6 +34,7 @@ def initialize(conn):
 
 def public():
     import solana_copy_trader as paper
+    import solana_real_budget as budget
     source=paper.public();saved=wallet()
     # One canonical source: PAPER enabled/cash/holdings can NEVER arm live execution.
     rules={k:v for k,v in source['config'].items() if k not in ('enabled','paper_capital_usd')}
@@ -51,7 +52,7 @@ def public():
             'checks':checks,'checked_at':now,'valid_until':feed.get('valid_until',now) if feed else now,
             'basis':'Live readiness checks; source monitoring comes from the paper copier. No live protection or execution is active.'}
     return {'live_execution_enabled':False,'can_start':False,'lock_reason':'Live execution is not implemented in this release.',
-            'server_time':now,'operational_health':health,
+            'server_time':now,'operational_health':health,'buy_settings':budget.settings(),
             'wallet':{'address':saved['wallet_address'],'verified_at':saved['verified_at'],'revision':saved['revision'],
                       'ownership_verified':bool(saved['wallet_address'] and saved['verified_at']), 'spending_authorized':False},
             'live_positions':[],'live_trade_count':0,'live_pnl_usd':None,

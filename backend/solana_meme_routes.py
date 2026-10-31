@@ -26,6 +26,19 @@ def build_router(*,require_session):
         try:return await run_in_threadpool(real_copy.challenge,payload['wallet_address'],payload['expected_revision'],request.headers['origin'])
         except Conflict as error:raise HTTPException(409,str(error)) from None
         except (ValueError,TypeError):raise HTTPException(422,'Invalid public wallet challenge.') from None
+    @router.get('/real-copy/balance')
+    def real_copy_balance(request:Request):
+        require_session(request)
+        import solana_real_budget as budget
+        return JSONResponse(budget.public(),headers={'Cache-Control':'no-store'})
+    @router.post('/real-copy/settings')
+    async def real_copy_settings(request:Request):
+        payload=await body(request)
+        if not isinstance(payload,dict) or set(payload)!={'changes','expected_revision'}:raise HTTPException(422,'Buy settings and revision required.')
+        import solana_real_budget as budget
+        try:return await run_in_threadpool(budget.configure,payload['changes'],payload['expected_revision'])
+        except Conflict as error:raise HTTPException(409,str(error)) from None
+        except (ValueError,TypeError,OverflowError) as error:raise HTTPException(422,str(error)) from None
     @router.post('/real-copy/verify')
     async def real_copy_verify(request:Request):
         payload=await body(request)
