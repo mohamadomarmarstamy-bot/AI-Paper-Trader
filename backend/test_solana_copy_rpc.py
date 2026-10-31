@@ -1,6 +1,8 @@
 from contextlib import closing
 from copy import deepcopy
 import json
+import os
+from collections import deque
 from pathlib import Path
 import tempfile
 import unittest
@@ -249,3 +251,46 @@ class RpcTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class RpcConnectionTests(unittest.TestCase):
+    def setUp(self):
+        for mock in (patch.dict(os.environ,{},clear=True),patch.object(rpc,'_calls',deque()),patch.object(rpc,'_cooldown',0)):
+            mock.start();self.addCleanup(mock.stop)
+
+    def response(self):
+        from unittest.mock import Mock
+        return Mock(status_code=200,content=b'{}',json=lambda:{'result':[]})
+
+    def test_default_endpoint_and_read_request_contract_are_preserved(self):
+        with patch.object(rpc.requests,'post',return_value=self.response()) as post:
+            self.assertEqual(rpc.request('getSignaturesForAddress',['wallet',{'limit':1000}]),[])
+        post.assert_called_once_with(rpc.ENDPOINT,json={'jsonrpc':'2.0','id':1,'method':'getSignaturesForAddress','params':['wallet',{'limit':1000}]},timeout=8,allow_redirects=False)
+
+    def test_custom_endpoint_is_used_for_all_supported_reads_only(self):
+        url='https://rpc.example.test/mainnet?api-key=synthetic-secret'
+        with patch.dict(os.environ,{'SOLANA_COPY_RPC_URL':url}),patch.object(rpc.requests,'post',return_value=self.response()) as post:
+            for method in ('getBalance','getTransaction','getSignaturesForAddress'):
+                rpc.request(method,['wallet'])
+                self.assertEqual(post.call_args.args,(url,))
+            with self.assertRaises(ValueError):rpc.request('sendTransaction',['never-submit'])
+            self.assertEqual(post.call_count,3)
+
+    def test_bad_configuration_fails_closed_without_sending_or_exposing_url(self):
+        for url in ('http://rpc.example.test/secret','https://user:secret@rpc.example.test','https://rpc.example.test/#secret','https://rpc.example.test:bad/secret'):
+            with self.subTest(url=url),patch.dict(os.environ,{'SOLANA_COPY_RPC_URL':url}),patch.object(rpc.requests,'post') as post:
+                with self.assertRaises(copy.DataUnavailable) as caught:rpc.request('getBalance',['wallet'])
+                self.assertNotIn(url,str(caught.exception));post.assert_not_called()
+
+    def test_provider_failure_does_not_leak_key_or_fall_back_to_public(self):
+        url='https://rpc.example.test/?api-key=synthetic-secret'
+        for error in (rpc.requests.Timeout(url),rpc.requests.ConnectionError(url),ValueError(url)):
+            with patch.dict(os.environ,{'SOLANA_COPY_RPC_URL':url}),patch.object(rpc.requests,'post',side_effect=error) as post:
+                with self.assertRaises(copy.DataUnavailable) as caught:rpc.request('getBalance',['wallet'])
+                self.assertNotIn('synthetic-secret',str(caught.exception))
+                self.assertIn('Configured Solana RPC',str(caught.exception));post.assert_called_once()
+
+    def test_custom_endpoint_keeps_existing_rate_limit_budget(self):
+        with patch.dict(os.environ,{'SOLANA_COPY_RPC_URL':'https://rpc.example.test'}),patch.object(rpc,'_calls',deque([rpc.time.monotonic()]*100)),patch.object(rpc.requests,'post') as post:
+            with self.assertRaises(copy.DataUnavailable):rpc.request('getBalance',['wallet'])
+            post.assert_not_called()

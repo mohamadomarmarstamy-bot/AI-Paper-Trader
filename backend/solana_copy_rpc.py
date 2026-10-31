@@ -7,6 +7,8 @@ from collections import deque
 from copy import deepcopy
 from decimal import Decimal
 import json
+import os
+from urllib.parse import urlsplit
 from pathlib import Path
 from threading import Lock
 import time
@@ -18,36 +20,54 @@ PROGRAMS=json.loads(Path(__file__).with_name('solana_copy_pump_instructions.json
 _lock=Lock();_calls=deque();_cooldown=0
 
 
+def endpoint():
+    """Server-only read endpoint. Never expose credential-bearing URLs."""
+    from solana_copy_trader import DataUnavailable
+    value=os.environ.get('SOLANA_COPY_RPC_URL','').strip()
+    if not value:return ENDPOINT
+    try:
+        parsed=urlsplit(value)
+        if (parsed.scheme!='https' or not parsed.hostname or parsed.username is not None
+                or parsed.password is not None or parsed.fragment or any(c.isspace() for c in value)):
+            raise ValueError()
+        parsed.port
+    except ValueError:
+        raise DataUnavailable('SOLANA_COPY_RPC_URL must be an HTTPS RPC URL without user info or a fragment.') from None
+    return value
+
+
 def request(method,params):
     from solana_copy_trader import DataUnavailable
     global _cooldown
     if method not in ('getSignaturesForAddress','getTransaction','getBalance'):
         raise ValueError('Only read-only wallet history methods are supported.')
+    url=endpoint()
+    label='Configured Solana RPC' if url!=ENDPOINT else 'Public Solana RPC'
     with _lock:
         now=time.monotonic()
         while _calls and now-_calls[0]>=60:_calls.popleft()
-        if now<_cooldown or len(_calls)>=100:raise DataUnavailable('Public Solana RPC cooling down; retrying automatically.')
+        if now<_cooldown or len(_calls)>=100:raise DataUnavailable(f'{label} cooling down; retrying automatically.')
         _calls.append(now)
     try:
-        response=requests.post(ENDPOINT,json={'jsonrpc':'2.0','id':1,'method':method,'params':params},timeout=8 if method=='getSignaturesForAddress' else 5,allow_redirects=False)
+        response=requests.post(url,json={'jsonrpc':'2.0','id':1,'method':method,'params':params},timeout=8 if method=='getSignaturesForAddress' else 5,allow_redirects=False)
         if response.status_code==429:
             with _lock:_cooldown=time.monotonic()+60
-            raise DataUnavailable('Public Solana RPC rate limited; retrying after cooldown.')
-        if response.status_code in (401,403):raise DataUnavailable('Public Solana RPC denied access from this server. Wallet connection cannot grant RPC access.')
-        if response.status_code!=200:raise DataUnavailable(f'Public Solana RPC {method}: HTTP {response.status_code}; retrying automatically.')
+            raise DataUnavailable(f'{label} rate limited; retrying after cooldown.')
+        if response.status_code in (401,403):raise DataUnavailable(f'{label} denied access from this server. Wallet connection cannot grant RPC access.')
+        if response.status_code!=200:raise DataUnavailable(f'{label} {method}: HTTP {response.status_code}; retrying automatically.')
         if len(response.content)>2_000_000:raise ValueError()
         data=response.json()
         if isinstance(data,dict) and method=='getTransaction' and isinstance(data.get('error'),dict) and data['error'].get('code')==-32015:
             return {'unsupported_transaction_version':True}
         if isinstance(data,dict) and isinstance(data.get('error'),dict):
             code=data['error'].get('code')
-            if type(code) is int:raise DataUnavailable(f'Public Solana RPC {method}: provider error {code}; retrying automatically.')
+            if type(code) is int:raise DataUnavailable(f'{label} {method}: provider error {code}; retrying automatically.')
         if not isinstance(data,dict) or data.get('error') or 'result' not in data:raise ValueError()
         return data['result']
     except DataUnavailable:raise
-    except requests.Timeout:raise DataUnavailable(f'Public Solana RPC {method} timed out; retrying automatically.') from None
-    except requests.ConnectionError:raise DataUnavailable(f'Public Solana RPC {method} connection failed; retrying automatically.') from None
-    except Exception:raise DataUnavailable('Public Solana RPC history unavailable or unsupported. No copy fill created.') from None
+    except requests.Timeout:raise DataUnavailable(f'{label} {method} timed out; retrying automatically.') from None
+    except requests.ConnectionError:raise DataUnavailable(f'{label} {method} connection failed; retrying automatically.') from None
+    except Exception:raise DataUnavailable(f'{label} history unavailable or unsupported. No copy fill created.') from None
 
 
 def decode58(value):
