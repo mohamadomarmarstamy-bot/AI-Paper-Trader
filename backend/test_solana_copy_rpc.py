@@ -70,12 +70,15 @@ class RpcTests(unittest.TestCase):
             if method=='getSignaturesForAddress':return rows
             self.assertEqual(method,'getTransaction');return current
         with (patch.object(rpc,'request',side_effect=request),patch.object(copy.Birdeye,'meme',side_effect=AssertionError('No metadata key required')),
-              patch.object(copy.Birdeye,'discover',side_effect=copy.DataUnavailable('Birdeye HTTP 401'))):
+              patch.object(copy.Birdeye,'discover',side_effect=copy.DataUnavailable('Birdeye HTTP 401')),
+              patch.object(rpc,'trades',wraps=rpc.trades) as observed):
             result=copy.tick(market=Market(),clock=lambda:self.now)
+            self.assertFalse(observed.call_args.kwargs['preserve_exits'])
             self.assertEqual(len(result['positions']),1);self.assertEqual(result['health'],'running')
             self.assertIsNone(result['error']);self.assertIn('401',result['discovery_error'])
             cash=result['cash_usd'];self.now+=10
             result=copy.tick(market=Market(),clock=lambda:self.now)
+            self.assertTrue(observed.call_args.kwargs['preserve_exits'])
             self.assertEqual(len(result['positions']),1);self.assertEqual(result['cash_usd'],cash)
             self.now+=10;rows[0].update(signature='3'*88,blockTime=self.now-1)
             current=tx(self.now-1,'sell','3'*88)
@@ -112,6 +115,53 @@ class RpcTests(unittest.TestCase):
         with patch.object(rpc.requests,'post') as post:
             with self.assertRaises(ValueError):rpc.request('sendTransaction',['anything'])
             post.assert_not_called()
+
+    def test_flat_wallet_discards_large_stale_decode_queue_without_requests_or_fills(self):
+        queue=[{'signature':str(i).ljust(88,'2'),'blockTime':self.now-500,'err':None,'confirmationStatus':'confirmed'} for i in range(12000)]
+        cursor={'provider':'rpc','at':self.now-1000,'latest':'old','window':{'queue':queue,'at':self.now-400,'newest':'window-head',
+            'seen':250000,'failed':238000,'unsupported':0,'decoded':0,'truncated':False,'scan_before':None}}
+        with patch.object(rpc,'request') as request:
+            rows,cur=rpc.trades(WALLET,cursor,self.now,preserve_exits=False)
+            request.assert_not_called()
+        self.assertEqual(rows,[]);self.assertNotIn('window',cur)
+        self.assertEqual(cur['rpc_coverage']['stale_references_skipped'],12000)
+        self.assertEqual(cur['rpc_coverage']['history_scope'],'fresh_entries_only')
+        self.assertEqual(cur['latest'],'window-head');self.assertEqual(len(cursor['window']['queue']),12000)
+
+    def test_held_wallet_still_decodes_old_source_sell(self):
+        old={'signature':'3'*88,'blockTime':self.now-500,'err':None,'confirmationStatus':'confirmed'}
+        cursor={'provider':'rpc','at':self.now-1000}
+        with patch.object(rpc,'request',side_effect=[[old],tx(self.now-500,'sell','3'*88)]):
+            rows,cur=rpc.trades(WALLET,cursor,self.now,preserve_exits=True)
+        self.assertEqual(rows[0]['base']['type_swap'],'from')
+        self.assertEqual(cur['rpc_coverage']['history_scope'],'full_exit_history')
+        self.assertEqual(cur['rpc_coverage']['stale_references_skipped'],0)
+
+    def test_flat_wallet_keeps_fresh_buy_sell_order_and_drops_only_stale_references(self):
+        rows=[{'signature':str(i)*88,'blockTime':at,'err':None,'confirmationStatus':'confirmed'} for i,at in [(4,self.now-2),(3,self.now-3),(2,self.now-200)]]
+        calls=[]
+        def request(method,params):
+            if method=='getSignaturesForAddress':return rows
+            calls.append(params[0]);return tx(self.now-2,'sell' if params[0]=='4'*88 else 'buy',params[0])
+        with patch.object(rpc,'request',side_effect=request):
+            signals,cur=rpc.trades(WALLET,{'provider':'rpc','at':self.now-1000},self.now,preserve_exits=False)
+        self.assertEqual(calls,['3'*88,'4'*88]);self.assertEqual(len(signals),2)
+        self.assertEqual(cur['rpc_coverage']['stale_references_skipped'],1)
+
+    def test_flat_signature_scan_stops_at_freshness_boundary_but_held_scan_continues(self):
+        rows=[{'signature':str(i)*88,'blockTime':self.now-age,'err':None,'confirmationStatus':'confirmed'} for i,age in [(2,2),(3,100)]]
+        with patch.object(rpc,'SIGNATURE_PAGE_SIZE',2),patch.object(rpc,'request',side_effect=lambda m,p:rows if m=='getSignaturesForAddress' else tx(self.now-2,signature=p[0])):
+            signals,cur=rpc.trades(WALLET,{'provider':'rpc','at':self.now-1000},self.now,preserve_exits=False)
+            self.assertNotIn('window',cur);self.assertEqual(len(signals),1)
+            signals,cur=rpc.trades(WALLET,{'provider':'rpc','at':self.now-1000},self.now,preserve_exits=True)
+            self.assertIn('window',cur);self.assertEqual(signals,[])
+
+    def test_provider_explicitly_receives_copied_exposure_and_default_is_conservative(self):
+        with patch.object(rpc,'trades',return_value=([],{})) as trades:
+            copy.Birdeye().trades(WALLET,{'provider':'rpc'},self.now)
+            self.assertTrue(trades.call_args.kwargs['preserve_exits'])
+            copy.Birdeye().trades(WALLET,{'provider':'rpc'},self.now,has_copied_positions=False)
+            self.assertFalse(trades.call_args.kwargs['preserve_exits'])
 
     def test_full_signature_page_is_backfilled_before_cursor_advances(self):
         cursor={'provider':'rpc','at':self.now-100,'latest':'old-signature'}

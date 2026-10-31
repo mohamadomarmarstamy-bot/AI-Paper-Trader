@@ -107,11 +107,24 @@ def parse(transaction,wallet,signature):
     except (ValueError,TypeError,KeyError,IndexError,OverflowError):return []
 
 
-def trades(wallet,cursor,now):
+def trades(wallet,cursor,now,*,preserve_exits=True):
     from solana_copy_trader import DataUnavailable
     from solana_meme_bot import mint,num
+    if type(preserve_exits) is not bool:raise ValueError('Explicit copied-position coverage required.')
     wallet=mint(wallet);cursor=deepcopy(cursor)
     window=cursor.get('window')
+    # Only an explicitly flat copied wallet may drop stale references. Its old
+    # buys cannot be admitted and there is no copied quantity needing a sell.
+    # Held/unknown callers retain the complete historical reconciliation path.
+    floor=cursor['at']-2 if preserve_exits else max(cursor['at']-2,now-90)
+    if window is not None:
+        if not preserve_exits:
+            stale=[r for r in window['queue'] if r['blockTime']<floor]
+            window['stale_references']=window.get('stale_references',0)+len(stale)
+            window['queue']=[r for r in window['queue'] if r['blockTime']>=floor]
+            if window.get('scan_oldest_at') is not None and window['scan_oldest_at']<floor:
+                window['scan_before']=None;window['truncated']=False
+        window['history_scope']='full_exit_history' if preserve_exits else 'fresh_entries_only'
     if window is None or window.get('scan_before'):
         options={'limit':SIGNATURE_PAGE_SIZE,'commitment':'confirmed'}
         if cursor.get('latest'):options['until']=cursor['latest']
@@ -120,7 +133,7 @@ def trades(wallet,cursor,now):
         data=request('getSignaturesForAddress',[wallet,options])
         received_at=now+max(0,time.monotonic()-requested)
         if not isinstance(data,list) or len(data)>SIGNATURE_PAGE_SIZE:raise DataUnavailable('Unsupported public RPC signature list.')
-        queue=[]
+        queue=[];stale=0
         for row in data:
             if not isinstance(row,dict) or not isinstance(row.get('signature'),str) or not 64<=len(row['signature'])<=128:
                 raise DataUnavailable('Unsupported public RPC signature entry.')
@@ -128,22 +141,28 @@ def trades(wallet,cursor,now):
                 if row.get('blockTime') is None:raise DataUnavailable('RPC transaction time not available yet.')
                 at=num(row['blockTime'])
                 if at>received_at+5:raise DataUnavailable('RPC transaction time is ahead of this server.')
-                if at>=cursor['at']-2:queue.append(row)
+                if at>=floor:queue.append(row)
+                elif not preserve_exits and at>=cursor['at']-2:stale+=1
         if window is None:
             window={'queue':[],'at':now,'newest':data[0]['signature'] if data else cursor.get('latest'),
                     'seen':0,'failed':0,'unsupported':0,'decoded':0,'truncated':False}
+        window['history_scope']='full_exit_history' if preserve_exits else 'fresh_entries_only'
+        window['stale_references']=window.get('stale_references',0)+stale
+        times=[r['blockTime'] for r in data if isinstance(r.get('blockTime'),(int,float))]
+        if times:window['scan_oldest_at']=min(times)
         # A full newest page is not a complete history window. Page backwards
         # to the previous cursor/time boundary before advancing or decoding.
         window['queue']=list(reversed(queue))+window['queue']
         window['seen']+=len(data)
         window.setdefault('failed_count_complete','failed' in window)
         window['failed']=window.get('failed',0)+sum(row.get('err') is not None for row in data)
-        reached_boundary=any(isinstance(r.get('blockTime'),(int,float)) and r['blockTime']<cursor['at']-2 for r in data)
+        reached_boundary=any(isinstance(r.get('blockTime'),(int,float)) and r['blockTime']<floor for r in data)
         window['scan_before']=data[-1]['signature'] if len(data)==SIGNATURE_PAGE_SIZE and not reached_boundary else None
         window['truncated']=bool(window['scan_before'])
         if window['scan_before']:
             coverage={'checked_at':now,'signatures_seen':window['seen'],'failed_transactions':window.get('failed',0),'failed_count_complete':window.get('failed_count_complete',False),'decoded_swaps':window['decoded'],
-                      'unsupported_transactions':window['unsupported'],'history_truncated':True,'queued':len(window['queue'])}
+                      'unsupported_transactions':window['unsupported'],'history_truncated':True,'queued':len(window['queue']),
+                      'stale_references_skipped':window.get('stale_references',0),'history_scope':window['history_scope']}
             return [],{**cursor,'window':window,'rpc_coverage':coverage}
     rows=[];processed=0;partial_error=None
     for row in window['queue'][:4]:
@@ -159,7 +178,8 @@ def trades(wallet,cursor,now):
         rows.extend(parsed);processed+=1
     window['queue']=window['queue'][processed:]
     coverage={'checked_at':now,'signatures_seen':window['seen'],'failed_transactions':window.get('failed',0),'failed_count_complete':window.get('failed_count_complete',False),'decoded_swaps':window['decoded'],
-              'unsupported_transactions':window['unsupported'],'history_truncated':window['truncated'],'queued':len(window['queue'])}
+              'unsupported_transactions':window['unsupported'],'history_truncated':window['truncated'],'queued':len(window['queue']),
+              'stale_references_skipped':window.get('stale_references',0),'history_scope':window.get('history_scope','full_exit_history')}
     if partial_error:coverage['error']=partial_error
     if window['queue']:return rows,{**cursor,'window':window,'rpc_coverage':coverage}
     return rows,{'at':window['at'],'latest':window['newest'],'provider':'rpc','rpc_coverage':coverage}

@@ -232,10 +232,10 @@ class Birdeye:
         info=data.get('meme_info')
         return isinstance(info,dict) and bool(info.get('source') or info.get('platform_id'))
 
-    def trades(self, wallet, cursor, now):
+    def trades(self, wallet, cursor, now, *, has_copied_positions=True):
         if cursor.get('provider')=='rpc':
             import solana_copy_rpc
-            return solana_copy_rpc.trades(wallet,cursor,now)
+            return solana_copy_rpc.trades(wallet,cursor,now,preserve_exits=has_copied_positions)
         if cursor.get('provider')=='solscan':
             import solana_copy_solscan as solscan
             return solscan.trades(wallet,cursor,now)
@@ -429,7 +429,9 @@ def tick(*, provider=None, market=None, clock=time.time):
         for wallet in sorted(watched,key=lambda w:(last_polled.get(w,0),w))[:3]:
             last_polled[wallet]=clock()
             try:
-                rows,cursor=provider.trades(wallet,state['cursors'][wallet],clock())
+                if isinstance(provider,Birdeye) and state['cursors'][wallet].get('provider')=='rpc':
+                    rows,cursor=provider.trades(wallet,state['cursors'][wallet],clock(),has_copied_positions=any(p['wallet']==wallet for p in state['positions'].values()))
+                else:rows,cursor=provider.trades(wallet,state['cursors'][wallet],clock())
                 gathered=state['cursors'][wallet].get('pending',[])+signals(rows,wallet)
                 if 'window' in cursor: cursor['pending']=gathered
                 else: incoming.extend(gathered)
