@@ -1,14 +1,14 @@
 (() => {
   const $ = id => document.getElementById(id);
   let revision = null, busy = false, dirty = false;
-  let phantom = null;
+  let phantom = null, restoring = false;
   const fields = ['profile-name', 'profile-wallet', 'profile-key', 'profile-remove', 'profile-solscan-key', 'profile-solscan-remove', 'profile-save'];
   function controls() {
     for (const id of fields) $(id).disabled = busy || revision === null;
     $('profile-key').disabled ||= $('profile-remove').checked;
     $('profile-solscan-key').disabled ||= $('profile-solscan-remove').checked;
     $('profile-reload').disabled = busy;
-    $('profile-phantom-connect').disabled = busy || revision === null;
+    $('profile-phantom-connect').disabled = busy || restoring || revision === null;
     $('profile-phantom-disconnect').disabled = busy || !phantom?.isConnected;
   }
   function render(data) {
@@ -41,7 +41,7 @@
     } catch (error) {
       revision = null;
       $('profile-status').textContent = error.message;
-    } finally { busy = false; controls(); }
+    } finally { busy = false; controls(); void restorePhantom(); }
   }
   $('profile-form').addEventListener('input', () => { dirty = true; });
   function connectedWallet(publicKey) {
@@ -50,25 +50,34 @@
     $('profile-wallet').value=wallet;dirty=true;
     $('profile-phantom-status').textContent='Phantom connected · public address only. Save profile to remember this wallet. PAPER copying uses separate read-only chain data.';
   }
+  function bindPhantom(provider) {
+    if(phantom===provider)return;phantom=provider;
+    provider.on('accountChanged',key=>{if(key&&!restoring){try{connectedWallet(key);}catch{$('profile-phantom-status').textContent='Wallet address unavailable.';}}else if(!key){$('profile-phantom-status').textContent='Phantom disconnected. Your saved profile has not changed.';}controls();});
+    provider.on('disconnect',()=>{$('profile-phantom-status').textContent='Phantom disconnected. Your saved profile has not changed.';controls();});
+  }
+  async function restorePhantom() {
+    const provider=window.PhantomSession?.provider();if(!provider||restoring||busy)return;
+    bindPhantom(provider);restoring=true;controls();
+    try{const publicKey=await window.PhantomSession.reconnect();if(publicKey){
+      const matches=publicKey.toString()===$('profile-wallet').value;
+      $('profile-phantom-status').textContent=matches?'Phantom connected · saved public wallet restored.':'Phantom connected · selected wallet differs from this profile. Connect explicitly to update the field.';
+    }}finally{restoring=false;controls();}
+  }
   $('profile-phantom-connect').onclick=async()=>{
-    if(busy||revision===null)return;
-    const provider=window.phantom?.solana;
-    if(!provider?.isPhantom){$('profile-phantom-status').textContent='Phantom was not detected. Use its browser extension on desktop, or open this app inside Phantom’s mobile browser.';return;}
+    if(busy||restoring||revision===null)return;
+    const provider=window.PhantomSession?.provider();
+    if(!provider){$('profile-phantom-status').textContent='Phantom was not detected. Use its browser extension on desktop, or open this app inside Phantom’s mobile browser.';return;}
     busy=true;controls();
     try {
-      if(phantom!==provider){
-        phantom=provider;
-        provider.on('accountChanged',key=>{if(key){try{connectedWallet(key);}catch{$('profile-phantom-status').textContent='Wallet address unavailable.';}}else{$('profile-phantom-status').textContent='Phantom disconnected. Your saved profile has not changed.';}controls();});
-        provider.on('disconnect',()=>{$('profile-phantom-status').textContent='Phantom disconnected. Your saved profile has not changed.';controls();});
-      }
-      const result=await provider.connect();connectedWallet(result.publicKey);
+      bindPhantom(provider);
+      const result=await window.PhantomSession.connect();connectedWallet(result.publicKey);
     }catch(error){$('profile-phantom-status').textContent=error.code===4001?'Connection declined. Profile unchanged.':'Phantom connection failed. Unlock Phantom and try again.';}
     finally{busy=false;controls();}
   };
   $('profile-phantom-disconnect').onclick=async()=>{
     if(busy||!phantom)return;
     busy=true;controls();
-    try{await phantom.disconnect();$('profile-phantom-status').textContent='Phantom disconnected. Your saved public address stays in your profile.';}
+    try{await window.PhantomSession.disconnect();$('profile-phantom-status').textContent='Phantom disconnected. Your saved public address stays in your profile.';}
     catch{$('profile-phantom-status').textContent='Could not disconnect Phantom. Disconnect this app in Phantom settings.';}
     finally{busy=false;controls();}
   };
@@ -117,5 +126,6 @@
     } finally { payload.api_key = ''; payload.solscan_api_key = ''; busy = false; controls(); }
   };
   window.addEventListener('pagehide', () => { $('profile-key').value = ''; $('profile-solscan-key').value = ''; });
+  window.addEventListener('load',()=>void restorePhantom());
   load();
 })();

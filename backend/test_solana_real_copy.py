@@ -39,6 +39,20 @@ class RealCopyTests(unittest.TestCase):
         status=real.public();self.assertTrue(status['wallet']['ownership_verified']);self.assertEqual(status['wallet']['address'],self.address)
         self.assertFalse(status['can_start']);self.assertFalse(status['live_execution_enabled']);self.assertFalse(status['wallet']['spending_authorized'])
         self.assertEqual(status['live_trade_count'],0);self.assertEqual(status['live_positions'],[]);self.assertIsNone(status['live_pnl_usd'])
+    def test_health_distinguishes_source_readiness_from_live_execution(self):
+        with patch.object(paper,'public',wraps=paper.public):
+            before=paper.load()
+            status=real.public()
+            health=status['operational_health']
+            self.assertEqual(health['label'],'Setup required')
+            self.assertNotEqual(health['level'],'ok')
+            checks={c['name']:c for c in health['checks']}
+            self.assertEqual(checks['Live executor']['level'],'error')
+            self.assertEqual(checks['Unattended signer']['level'],'warning')
+            self.assertEqual(status['paper_sync']['operational_health']['label'],'Paused')
+            self.assertFalse(status['wallet']['spending_authorized'])
+            self.assertEqual(paper.load(),before)
+
     def test_wrong_key_origin_expiry_and_replay_are_rejected(self):
         c=real.challenge(self.address,0,'https://app.example',now=1000)
         for signature,origin,now in ((self.proof(c,Ed25519PrivateKey.generate()),'https://app.example',1010),(self.proof(c),'https://other.example',1010),(self.proof(c),'https://app.example',1300)):

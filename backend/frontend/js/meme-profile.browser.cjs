@@ -31,7 +31,7 @@ test('Profile desktop/mobile save, reload, write-only key, removal and stale-tab
         solscan_api_key_configured:Boolean(solscanKey), api_key_configured:Boolean(key), api_key_source:key?'profile':null, error:null};
       return res.end(JSON.stringify(saved));
     }
-    const file = {'/meme-coins/profile':'meme-profile.html', '/js/meme-profile.js':'js/meme-profile.js'}[url.pathname];
+    const file = {'/meme-coins/profile':'meme-profile.html', '/js/meme-profile.js':'js/meme-profile.js', '/js/phantom-session.js':'js/phantom-session.js'}[url.pathname];
     if (file) {
       res.setHeader('Content-Type', file.endsWith('.js')?'application/javascript':'text/html');
       return res.end(fs.readFileSync(path.join(root, file)));
@@ -46,7 +46,7 @@ test('Profile desktop/mobile save, reload, write-only key, removal and stale-tab
       key = ''; solscanKey = ''; reject = false;
       const page = await browser.newPage({viewport:{width,height:1000}}), errors = [];
       page.on('pageerror', error => errors.push(error.message));
-      await page.addInitScript(()=>{const listeners={};window.phantom={solana:{isPhantom:true,isConnected:false,on:(event,fn)=>{listeners[event]=fn;},connect:async function(){this.isConnected=true;return {publicKey:{toString:()=> '1'.repeat(31)+'2'}};},disconnect:async function(){this.isConnected=false;listeners.disconnect?.();},signMessage:()=>{throw Error('Signing must never be requested');},signAndSendTransaction:()=>{throw Error('Transactions must never be requested');}}};window.phantomAccountChanged=()=>listeners.accountChanged({toString:()=> '1'.repeat(31)+'3'});});
+      await page.addInitScript(()=>{const listeners={};window.phantom={solana:{isPhantom:true,isConnected:false,on:(event,fn)=>{listeners[event]=fn;},connect:async function(options){if(options?.onlyIfTrusted&&!sessionStorage.getItem('test-phantom-trusted'))throw {code:4001};sessionStorage.setItem('test-phantom-trusted','1');this.isConnected=true;this.publicKey={toString:()=> '1'.repeat(31)+'2'};return {publicKey:this.publicKey};},disconnect:async function(){sessionStorage.removeItem('test-phantom-trusted');this.publicKey=null;this.isConnected=false;listeners.disconnect?.();},signMessage:()=>{throw Error('Signing must never be requested');},signAndSendTransaction:()=>{throw Error('Transactions must never be requested');}}};window.phantomAccountChanged=()=>listeners.accountChanged({toString:()=> '1'.repeat(31)+'3'});});
       await page.goto(`http://127.0.0.1:${server.address().port}/meme-coins/profile`);
       await page.getByText('Profile loaded.', {exact:true}).waitFor();
       const beforeConnect=requests.length;await page.getByRole('button',{name:'Connect Phantom',exact:true}).click();await page.getByText(/Phantom connected · public address only/).waitFor();assert.equal(await page.locator('#profile-wallet').inputValue(),'1'.repeat(31)+'2');assert.equal(requests.length,beforeConnect);await page.evaluate(()=>window.phantomAccountChanged());assert.equal(await page.locator('#profile-wallet').inputValue(),'1'.repeat(31)+'3');await page.getByRole('button',{name:'Disconnect Phantom',exact:true}).click();assert.equal(await page.locator('#profile-wallet').inputValue(),'1'.repeat(31)+'3');await page.getByText('Advanced data providers · optional for public RPC copying',{exact:true}).click();
@@ -58,12 +58,13 @@ test('Profile desktop/mobile save, reload, write-only key, removal and stale-tab
       await page.getByText('Profile saved. You can return to Copy traders.', {exact:true}).waitFor();
       assert.equal(key, 'synthetic-browser-key');
       assert.equal(await page.locator('#profile-key').inputValue(), '');
-      assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length), 0);
+      assert.deepEqual(await page.evaluate(()=>Object.keys(localStorage)),['phantom-auto-connect-blocked']);assert.equal(await page.evaluate(()=>sessionStorage.length),0);
       assert.equal((await page.locator('body').innerText()).includes('synthetic-browser-key'), false);
       await page.reload(); await page.getByText('Profile loaded.', {exact:true}).waitFor();
       assert.equal(await page.locator('#profile-name').inputValue(), 'Omar');
       assert.equal(await page.locator('#profile-wallet').inputValue(), '1'.repeat(31)+'2');
       assert.equal(await page.locator('#profile-key').inputValue(), '');
+      await page.getByRole('button',{name:'Connect Phantom',exact:true}).click();await page.getByText(/Phantom connected · public address only/).waitFor();await page.reload();await page.getByText('Phantom connected · saved public wallet restored.',{exact:true}).waitFor();assert.equal(await page.locator('#profile-wallet').inputValue(),'1'.repeat(31)+'2');
       await page.locator('#profile-wallet').fill('1'.repeat(31)+'3');
       await page.getByRole('button', {name:'Save profile',exact:true}).click();
       await page.getByText('Profile saved. You can return to Copy traders.', {exact:true}).waitFor();
