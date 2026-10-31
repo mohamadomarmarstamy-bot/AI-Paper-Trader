@@ -147,6 +147,12 @@ class ExecutionProviderTests(unittest.TestCase):
         for value in (ex.MAINNET_GENESIS[:32],ex.MAINNET_GENESIS[:-1]+'e',str(Pubkey.new_unique())):
             with patch.object(provider,'rpc',return_value=value),self.assertRaises(ex.Unavailable):provider.network()
 
+    def test_api_denial_is_reported_without_response_or_key_data(self):
+        from types import SimpleNamespace
+        with patch.object(ex.requests,'get',return_value=SimpleNamespace(status_code=403)):
+            with self.assertRaisesRegex(ex.Unavailable,'key or plan') as error:ex.Provider().build(self.owner,ex.SOL,self.mint,100000000,self.policy)
+        self.assertNotIn('synthetic-api-key',str(error.exception))
+
     def test_reconciliation_requires_finalized_matching_bytes_and_actual_deltas(self):
         provider=self.provider();prepared=provider.prepare(self.owner,'buy',self.mint,100000000,self.policy,lambda:None,quote=self.quote())
         order={'wallet':self.owner,'mint':self.mint,'side':'buy','prepared':prepared}

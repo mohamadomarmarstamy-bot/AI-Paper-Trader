@@ -78,6 +78,11 @@ class RealWorkerTests(unittest.TestCase):
         self.assertEqual(self.chain.prepared,[]);self.assertEqual(live.orders(),[])
         self.event('b'*64,source_at=time.time()-100);live.tick(self.chain);self.assertEqual(self.chain.prepared,[])
 
+    def test_failed_readonly_swap_probe_cannot_activate_or_create_an_order(self):
+        with patch.object(self.chain,'build',side_effect=ex.Unavailable('Jupiter API key or plan does not permit swap building.')):
+            with self.assertRaises(ex.Unavailable):self.activate()
+        self.assertFalse(live.public()['enabled']);self.assertFalse(live.orders());self.assertFalse(self.chain.prepared)
+
     def test_timeout_reconciles_exact_stored_signature_and_posts_once(self):
         self.activate();self.event();live.tick(self.chain)
         self.assertEqual(live.orders(True)[0]['status'],'unknown');self.assertEqual(len(self.chain.prepared),1)

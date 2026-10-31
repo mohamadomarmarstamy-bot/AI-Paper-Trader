@@ -67,7 +67,9 @@ def build_router(*,require_session):
             return real_copy.public()
         except Conflict as error:raise HTTPException(409,str(error)) from None
         except ValueError as error:raise HTTPException(422,str(error)) from None
-        except Exception:raise HTTPException(503,'Live activation checks failed. Trading remains off.') from None
+        except Exception as error:
+            from solana_real_execution import Unavailable
+            raise HTTPException(503,str(error) if isinstance(error,Unavailable) else 'Live activation checks failed. Trading remains off.') from None
     @router.post('/real-copy/pause')
     async def real_copy_pause(request:Request):
         payload=await body(request)

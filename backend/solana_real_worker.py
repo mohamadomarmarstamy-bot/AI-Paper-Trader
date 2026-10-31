@@ -87,6 +87,8 @@ def activate(expected_revision,wallet_revision,budget_revision,acknowledgement,p
     if source_health(source,time.time())['level']!='ok':raise Conflict('The source wallet feed needs current successful checks before live activation.')
     provider=provider or execution.Provider();provider.network()
     if provider.balance(saved['wallet_address'])<=int(Decimal(str(cfg['config']['fee_reserve_sol']))*10**9):raise Conflict('No native SOL is available above the fee reserve.')
+    # Read-only entitlement/route probe: never sign or submit this sample quote.
+    provider.build(saved['wallet_address'],budget.SOL,'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',1_000_000,DEFAULT_POLICY)
     with closing(database.get_connection()) as conn:
         initialize(conn);conn.execute('BEGIN IMMEDIATE')
         row=conn.execute('SELECT * FROM solana_real_run WHERE id=1').fetchone();state=json.loads(row['state_json'])
