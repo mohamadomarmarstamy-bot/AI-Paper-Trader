@@ -59,8 +59,33 @@ def build_router(*,require_session):
         except (ValueError,TypeError):raise HTTPException(422,'Invalid wallet revision.') from None
     @router.post('/real-copy/start')
     async def real_copy_start(request:Request):
-        await body(request)
-        raise HTTPException(423,'Live execution is locked. This release cannot sign or submit trades.')
+        payload=await body(request)
+        if not isinstance(payload,dict) or set(payload)!={'expected_revision','wallet_revision','budget_revision','acknowledgement'}:raise HTTPException(423,'Complete live setup and explicitly acknowledge real-money activation.')
+        import solana_real_worker as live
+        try:
+            await run_in_threadpool(live.activate,payload['expected_revision'],payload['wallet_revision'],payload['budget_revision'],payload['acknowledgement'])
+            return real_copy.public()
+        except Conflict as error:raise HTTPException(409,str(error)) from None
+        except ValueError as error:raise HTTPException(422,str(error)) from None
+        except Exception:raise HTTPException(503,'Live activation checks failed. Trading remains off.') from None
+    @router.post('/real-copy/pause')
+    async def real_copy_pause(request:Request):
+        payload=await body(request)
+        if not isinstance(payload,dict) or set(payload)!={'expected_revision'}:raise HTTPException(422,'Real copier revision required.')
+        import solana_real_worker as live
+        try:
+            await run_in_threadpool(live.pause,payload['expected_revision']);return real_copy.public()
+        except Conflict as error:raise HTTPException(409,str(error)) from None
+        except ValueError as error:raise HTTPException(422,str(error)) from None
+    @router.post('/real-copy/close')
+    async def real_copy_close(request:Request):
+        payload=await body(request)
+        if not isinstance(payload,dict) or set(payload)!={'positions','pause_new_buys'}:raise HTTPException(422,'Live position identities required.')
+        import solana_real_worker as live
+        try:
+            await run_in_threadpool(live.queue_close,payload['positions'],payload['pause_new_buys']);return real_copy.public()
+        except Conflict as error:raise HTTPException(409,str(error)) from None
+        except ValueError as error:raise HTTPException(422,str(error)) from None
     @router.get('/meme-coins/profile')
     def profile_page(request:Request):
         require_session(request)

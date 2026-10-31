@@ -3,9 +3,9 @@
  const money=n=>Number.isFinite(n)?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(n):'—';
  const short=s=>s?`${s.slice(0,6)}…${s.slice(-5)}`:'No wallet linked';
  const node=(tag,value,cls)=>{const el=document.createElement(tag);el.textContent=value;if(cls)el.className=cls;return el;};
- async function request(path,payload){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),path==='balance'?12000:8000);try{const response=await fetch('/real-copy/'+path,{method:payload?'POST':'GET',credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:payload?{'Content-Type':'application/json'}:undefined,body:payload?JSON.stringify(payload):undefined});const data=await response.json();if(!response.ok)throw Error(typeof data.detail==='string'?data.detail:'Could not load this workspace.');return data;}finally{clearTimeout(timer);}}
+ async function request(path,payload){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),path==='balance'?12000:path==='start'?25000:8000);try{const response=await fetch('/real-copy/'+path,{method:payload?'POST':'GET',credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:payload?{'Content-Type':'application/json'}:undefined,body:payload?JSON.stringify(payload):undefined});const data=await response.json();if(!response.ok)throw Error(typeof data.detail==='string'?data.detail:'Could not load this workspace.');return data;}finally{clearTimeout(timer);}}
  function message(value){$('rc-message').textContent=value;}
- function controls(){$('rc-connect').disabled=busy||restoring||!snapshot;$('rc-unlink').disabled=busy||!snapshot?.wallet.address;$('rc-refresh').disabled=busy;$('rc-start').disabled=true;$('rc-buy-save').disabled=busy||!buySettings;$('rc-buy-reload').disabled=busy;for(const id of ['rc-buy-mode','rc-buy-usd','rc-buy-percent','rc-fee-reserve'])$(id).disabled=busy||!buySettings;}
+ function controls(){$('rc-connect').disabled=busy||restoring||!snapshot;$('rc-unlink').disabled=busy||!snapshot?.wallet.address||snapshot?.live_execution_enabled||Boolean(snapshot?.live_positions?.length)||Boolean(snapshot?.live_runtime?.pending_count);$('rc-refresh').disabled=busy;$('rc-start').disabled=busy||!snapshot?.can_start||balanceData?.funding?.wallet_address!==snapshot?.wallet.address||balanceData?.settings?.revision!==buySettings?.revision||!balanceData?.funding?.funding_fits||balanceError||transportError||!balanceData?.funding?.valid_until||balanceData.server_time+(performance.now()-(balanceReceivedAt??0))/1000>balanceData.funding.valid_until;$('rc-pause').disabled=busy||!snapshot?.live_execution_enabled;$('rc-close-all').disabled=busy||!snapshot?.live_positions?.length;$('rc-buy-save').disabled=busy||!buySettings;$('rc-buy-reload').disabled=busy;for(const id of ['rc-buy-mode','rc-buy-usd','rc-buy-percent','rc-fee-reserve'])$(id).disabled=busy||!buySettings;}
  const sol=n=>Number.isFinite(n)?`${n.toLocaleString('en-US',{maximumFractionDigits:9})} SOL`:'Unavailable';
  function buyFields(){const fixed=$('rc-buy-mode').value==='fixed_usd';$('rc-buy-usd-field').hidden=!fixed;$('rc-buy-percent-field').hidden=fixed;$('rc-buy-usd').required=fixed;$('rc-buy-percent').required=!fixed;}
  function showSettings(settings){
@@ -25,13 +25,14 @@
  }
  async function loadBalance(){
   if(balanceBusy)return;balanceBusy=true;
-  try{const data=await request('balance');if(data.funding?.wallet_address!==snapshot?.wallet.address)return;balanceData=data;balanceReceivedAt=performance.now();balanceError=false;}catch{balanceError=true;}finally{balanceBusy=false;funding();}
+  try{const data=await request('balance');if(data.funding?.wallet_address!==snapshot?.wallet.address)return;balanceData=data;balanceReceivedAt=performance.now();balanceError=false;}catch{balanceError=true;}finally{balanceBusy=false;funding();controls();}
  }
  function health(){
   funding();
   const elapsed=receivedAt===null?Infinity:Math.max(0,(performance.now()-receivedAt)/1000),h=snapshot?.operational_health;
   let level=h?.level||'warning',label=h?.label||'Checking health…',detail=h?.detail||'Waiting for live readiness checks.';
   if(transportError||snapshot&&elapsed>60){level='error';label='Connection lost';detail='Live readiness is unavailable. Displayed values may be old.';}
+  else if(h?.level==='ok'&&Number.isFinite(h.valid_until)&&snapshot.server_time+elapsed>h.valid_until){level='warning';label='Check delayed';detail='A live heartbeat or source check needs a fresh update.';}
   else if(snapshot&&elapsed>30){level='warning';label='Status delayed';detail='Waiting for fresh live readiness checks.';}
   else if(!snapshot){level='loading';detail='Connecting to the real-copy workspace.';}
   $('rc-health').dataset.level=level;
@@ -52,8 +53,16 @@
   try{await window.PhantomSession.reconnect();if(snapshot)render(snapshot);}finally{restoring=false;controls();health();}
  }
  function render(data){
-  if(data.live_execution_enabled!==false||data.can_start!==false)throw Error('Unexpected execution state. Live workspace remains locked.');
-  snapshot=data;showSettings(data.buy_settings);const s=data.paper_sync,b=s.blueprint,c=b.settings,active=b.traders.filter(t=>t.active!==false);
+  if(typeof data.live_execution_enabled!=='boolean'||typeof data.can_start!=='boolean')throw Error('Execution state unavailable.');
+  snapshot=data;showSettings(data.buy_settings);
+  $('rc-live-badge').textContent=data.live_execution_enabled?(data.operational_health?.level==='error'?'● REAL MONEY · needs attention':'● REAL MONEY · copying'):'● Live trading off';
+  $('rc-live-summary').textContent=data.live_execution_enabled?'Real trades are active. Fresh admitted source buys use your saved live size.':'Real trading is off. Configure the server signer, then activate copying yourself.';
+  $('rc-live-count').textContent=String(data.live_trade_count??0);
+  $('rc-live-pnl').textContent=Number.isFinite(data.live_pnl_sol)?`${data.live_pnl_sol>=0?'+':''}${data.live_pnl_sol.toFixed(6)} SOL`:'Unpriced';
+  const setup=data.execution_setup;$('rc-setup-status').textContent=setup?`Engine installed · ${setup.signer_matches?'signer matches wallet':'matching signer needed'} · ${setup.jupiter_configured?'Jupiter configured':'Jupiter key needed'} · server switch ${setup.release_allowed?'on':'off'}`:'Execution setup unavailable.';
+  const holdings=$('rc-live-holdings');holdings.replaceChildren();for(const p of data.live_positions||[]){const row=node('div',''),head=node('div','', 'rc-row'),button=node('button',p.pending_reason?'Exit queued':'Sell');button.type='button';button.disabled=busy||Boolean(p.pending_reason);button.onclick=()=>closeLive([p.id],false);head.append(node('strong',short(p.mint)),button);row.append(head,node('small',`${(Number(p.quantity_raw)/10**p.decimals).toLocaleString('en-US',{maximumFractionDigits:6})} tokens · ${sol(p.cost_lamports/1e9)} remaining cost`),node('small',Number.isFinite(p.exit_value_lamports)&&Date.now()/1000-(p.marked_at||0)<=60?`${sol(p.exit_value_lamports/1e9)} minimum exit estimate`:'Waiting for a current exit quote'));holdings.append(row);}if(!data.live_positions?.length)holdings.append(node('p','No real holdings.'));
+  const activity=$('rc-live-orders');activity.replaceChildren();for(const o of data.live_runtime?.orders||[]){const row=node('div','');row.append(node('strong',`${o.side.toUpperCase()} · ${o.status.toUpperCase()}`),node('small',short(o.mint)),node('small',o.error||o.reason));if(o.signature){const a=node('a','View transaction ↗','rc-link');a.href='https://solscan.io/tx/'+encodeURIComponent(o.signature);a.target='_blank';a.rel='noopener';row.append(a);}activity.append(row);}if(!data.live_runtime?.orders?.length)activity.append(node('p','No real transactions.'));
+  const s=data.paper_sync,b=s.blueprint,c=b.settings,active=b.traders.filter(t=>t.active!==false);
   $('rc-wallet-address').textContent=short(data.wallet.address);$('rc-wallet-address').title=data.wallet.address||'';
   const localAddress=provider?.isConnected===false?null:provider?.publicKey?.toString();
   $('rc-wallet-status').textContent=data.wallet.ownership_verified?(localAddress===data.wallet.address?'Phantom connected · ownership verified':localAddress?'Different Phantom account selected · saved wallet unchanged':'Wallet link saved · unlock or reconnect Phantom'):'Link Phantom with a message signature. No spending permission.';
@@ -70,6 +79,12 @@
   controls();health();
  }
  async function load(){if(busy)return;busy=true;controls();try{accept(await request('status'));message('');}catch(e){transportError=true;health();message(e.name==='AbortError'?'Status request timed out. Retrying automatically.':e.message);}finally{busy=false;controls();void restore();void loadBalance();}}
+ async function liveAction(path,payload){
+  if(busy||!snapshot)return;busy=true;controls();
+  try{accept(await request(path,payload));message(path==='start'?'REAL copying activated.':path==='pause'?'New real buys paused. Existing exits remain monitored.':'Live exit queued. Waiting for a supported swap and on-chain confirmation.');}
+  catch(e){transportError=true;health();message(e.name==='AbortError'?'Action reply timed out. Refreshing the live state before another action.':e.message);}finally{busy=false;controls();if(transportError)void load();}
+ }
+ async function closeLive(ids,pause){if(!confirm(`Sell ${ids.length} REAL holding(s) at the available swap price${pause?' and pause new buys':''}? Network costs and slippage apply.`))return;await liveAction('close',{positions:ids,pause_new_buys:pause});}
  function bindProvider(p){if(provider===p)return;provider=p;for(const event of ['accountChanged','disconnect'])p.on?.(event,()=>{generation++;message('Wallet session changed. Reconnect to verify the selected account.');if(snapshot)render(snapshot);});}
  async function connect(){
   if(busy||restoring||!snapshot)return;const p=window.PhantomSession?.provider();
@@ -98,13 +113,21 @@
   $('rc-buy-settings').onsubmit=async event=>{
    event.preventDefault();if(busy||!buySettings)return;busy=true;controls();
    const val=id=>$(id).value===''?null:Number($(id).value);
-   try{const settings=await request('settings',{changes:{buy_mode:$('rc-buy-mode').value,buy_usd:val('rc-buy-usd'),buy_percent:val('rc-buy-percent'),fee_reserve_sol:val('rc-fee-reserve')},expected_revision:buyRevision??buySettings.revision});buyDirty=false;buyRevision=null;showSettings(settings);$('rc-buy-message').textContent='Buy settings saved. Real trading remains off.';void loadBalance();}
+   try{const settings=await request('settings',{changes:{buy_mode:$('rc-buy-mode').value,buy_usd:val('rc-buy-usd'),buy_percent:val('rc-buy-percent'),fee_reserve_sol:val('rc-fee-reserve')},expected_revision:buyRevision??buySettings.revision});buyDirty=false;buyRevision=null;showSettings(settings);$('rc-buy-message').textContent=snapshot?.live_execution_enabled?'Buy settings saved. Restart copying to apply them; existing exits remain monitored.':'Buy settings saved. Real trading remains off.';void loadBalance();}
    catch(e){$('rc-buy-message').textContent=e.message;}
    finally{busy=false;controls();}
   };
+  $('rc-start').onclick=async()=>{
+   if(busy||!snapshot?.can_start)return;
+   const c=buySettings.config,size=c.buy_mode==='fixed_usd'?`${money(c.buy_usd)} per coin`:`${c.buy_percent}% of available SOL per coin`;
+   if(!confirm(`Enable REAL Solana copy trading with ${size}? The server key can spend this wallet's funds. Slippage limit: 1%; maximum price impact: 5%; maximum priority fee: 0.0001 SOL plus the base fee and account rent. Loss stops can fill beyond their trigger. New settings require a restart; pausing buys keeps exits running.`))return;
+   await liveAction('start',{expected_revision:snapshot.live_runtime.revision,wallet_revision:snapshot.wallet.revision,budget_revision:buySettings.revision,acknowledgement:'ENABLE REAL SOLANA COPY TRADING'});
+  };
+  $('rc-pause').onclick=()=>snapshot&&liveAction('pause',{expected_revision:snapshot.live_runtime.revision});
+  $('rc-close-all').onclick=()=>snapshot?.live_positions?.length&&closeLive(snapshot.live_positions.map(p=>p.id),true);
   $('rc-refresh').onclick=load;$('rc-connect').onclick=connect;
   $('rc-unlink').onclick=async()=>{if(busy||!snapshot)return;busy=true;controls();try{accept(await request('unlink',{expected_revision:snapshot.wallet.revision}));await window.PhantomSession?.disconnect();balanceData=null;balanceReceivedAt=null;funding();message('Wallet link removed. Live copying remains locked.');}catch(e){message(e.message);}finally{busy=false;controls();}};
-  setInterval(health,1000);
+  setInterval(()=>{health();controls();},1000);
   window.addEventListener('focus',()=>{if(!$('real-copy-section').hidden)void restore(true);});
   window.addEventListener('load',()=>void restore());
   document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!$('real-copy-section').hidden)void restore(true);});

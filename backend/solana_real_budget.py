@@ -106,7 +106,7 @@ def preview(observation,config,now):
     if requested is not None:
         if requested<=0:reason='Buy amount rounds below one lamport.'
         elif requested>spendable:reason='Insufficient SOL after the fee reserve. Reduce the buy amount.'
-        else:amount=requested;reason='Funding preview fits. Real execution remains off.'
+        else:amount=requested;reason='Funding preview fits the available SOL.'
     return {'wallet_address':observation['address'],'balance_sol':balance/10**9 if balance is not None else None,
             'spendable_sol':spendable/10**9 if spendable is not None else None,'fee_reserve_sol':config['fee_reserve_sol'],
             'spendable_usd':float(Decimal(spendable)/10**9*usd) if spendable is not None and usd else None,
@@ -124,4 +124,5 @@ def public():
     if saved['wallet_address'] and saved['verified_at']:observation=observe(saved['wallet_address'],now)
     else:observation={'address':'','lamports':None,'observed_at':None,'error':'Link and verify Phantom to read its SOL balance.'}
     result=preview(observation,config['config'],time.time())
-    return {'settings':config,'funding':result,'server_time':time.time(),'live_execution_enabled':False}
+    from solana_real_worker import load as live_state
+    return {'settings':config,'funding':result,'server_time':time.time(),'live_execution_enabled':live_state()[0]['enabled']}
