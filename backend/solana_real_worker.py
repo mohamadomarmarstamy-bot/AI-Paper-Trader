@@ -226,7 +226,9 @@ def begin_broadcast(order,state,lease_owner):
         if order['side']=='buy':
             revision=conn.execute('SELECT revision FROM solana_real_copy_budget WHERE id=1').fetchone()[0]
             if not current['enabled'] or revision!=state['budget_revision']:raise execution.Unavailable('New real buy was paused before broadcast.')
-            sold=conn.execute("SELECT 1 FROM solana_copy_events WHERE observed_at>=? AND json_extract(details_json,'$.side')='sell' AND json_extract(details_json,'$.wallet')=? AND json_extract(details_json,'$.mint')=? AND json_extract(details_json,'$.source_at')>=? LIMIT 1",(order['source_at']-5,order['source_wallet'],order['mint'],order['source_at'])).fetchone()
+            # Chain block times have second precision. Treat a same-second sell
+            # as superseding the buy, including subsecond provider clock skew.
+            sold=conn.execute("SELECT 1 FROM solana_copy_events WHERE observed_at>=? AND json_extract(details_json,'$.side')='sell' AND json_extract(details_json,'$.wallet')=? AND json_extract(details_json,'$.mint')=? AND CAST(json_extract(details_json,'$.source_at') AS INTEGER)>=? LIMIT 1",(int(order['source_at'])-5,order['source_wallet'],order['mint'],int(order['source_at']))).fetchone()
             if sold:raise execution.Unavailable('Source sold before live broadcast; buy canceled.')
         order.update(status='unknown',send_started_at=time.time())
         changed=conn.execute("UPDATE solana_real_orders SET status='unknown',details_json=? WHERE id=? AND status='signed'",(json.dumps(order,allow_nan=False),order['id']))

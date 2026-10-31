@@ -165,6 +165,46 @@ class RealWorkerTests(unittest.TestCase):
         self.assertEqual(self.chain.sent,[]);self.assertEqual(live.orders()[0]['status'],'rejected')
         self.assertIn('Source sold before live broadcast',live.orders()[0]['error'])
 
+    def test_same_second_source_sale_cancels_despite_fractional_clock_skew(self):
+        now=int(time.time())+0.8
+        with patch.object(live.time,'time',return_value=now):
+            self.activate();self.event(source_at=now);original=self.chain.prepare
+            def prepare(*args,**kwargs):
+                value=original(*args,**kwargs)
+                self.event('s'*64,side='sell',status='observed',source_at=now-0.5)
+                return value
+            self.chain.prepare=prepare;live.tick(self.chain)
+        self.assertEqual(self.chain.sent,[])
+        self.assertEqual(live.orders()[0]['status'],'rejected')
+
+    def test_prior_second_or_unrelated_sale_does_not_cancel_fresh_buy(self):
+        now=int(time.time())+0.8
+        with patch.object(live.time,'time',return_value=now):
+            self.activate();self.event(source_at=now);original=self.chain.prepare
+            def prepare(*args,**kwargs):
+                value=original(*args,**kwargs)
+                self.event('s'*64,side='sell',status='observed',source_at=now-1)
+                self.event('t'*64,mint=str(Pubkey.new_unique()),side='sell',status='observed',source_at=now)
+                return value
+            self.chain.prepare=prepare;live.tick(self.chain)
+        self.assertEqual(self.chain.sent,['wire-0'])
+
+    def test_recovered_unsent_buy_rechecks_source_sale_before_broadcast(self):
+        self.activate();self.event();live.tick(self.chain)
+        order=live.orders(True)[0];order.pop('send_started_at');order['status']='signed';live.save_order(order)
+        self.chain.sent.clear();self.event('s'*64,side='sell',status='observed')
+        live.tick(self.chain)
+        self.assertEqual(self.chain.sent,[])
+        self.assertEqual(live.orders()[0]['status'],'canceled')
+
+    def test_revoked_server_setup_cancels_recovered_unsent_transaction(self):
+        self.activate();self.event();live.tick(self.chain)
+        order=live.orders(True)[0];order.pop('send_started_at');order['status']='signed';live.save_order(order)
+        self.chain.sent.clear()
+        with patch.object(ex,'configuration',return_value={**self.flags,'release_allowed':False}):live.tick(self.chain)
+        self.assertEqual(self.chain.sent,[])
+        self.assertEqual(live.orders()[0]['status'],'canceled')
+
     def test_expired_worker_cannot_persist_or_broadcast_a_late_preparation(self):
         self.activate();self.event();original=self.chain.prepare
         def prepare(*args,**kwargs):
