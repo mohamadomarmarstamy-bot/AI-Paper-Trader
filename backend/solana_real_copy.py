@@ -40,12 +40,24 @@ def public():
     roster=[{k:v for k,v in r.items() if k not in ('research_evidence','public_research_evidence')} for r in source['traders']]
     blueprint={'settings':rules,'entry_protection':source['entry_protection'],'traders':roster}
     digest=hashlib.sha256(json.dumps(blueprint,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+    now=time.time();feed=source.get('operational_health')
+    checks=[{'name':'Wallet ownership','level':'ok' if saved['wallet_address'] and saved['verified_at'] else 'warning',
+             'detail':'Verified public wallet' if saved['wallet_address'] and saved['verified_at'] else 'Link and verify Phantom'},
+            {'name':'Source monitoring','level':feed['level'] if feed else 'warning',
+             'detail':feed['detail'] if feed else 'Source health is unavailable'},
+            {'name':'Live executor','level':'error','detail':'Not implemented · no real orders can be sent'},
+            {'name':'Unattended signer','level':'warning','detail':'Not configured · wallet linking grants no spending authority'}]
+    health={'level':'warning','label':'Setup required','detail':'Live copying is off. The executor and unattended signer are not configured.',
+            'checks':checks,'checked_at':now,'valid_until':feed.get('valid_until',now) if feed else now,
+            'basis':'Live readiness checks; source monitoring comes from the paper copier. No live protection or execution is active.'}
     return {'live_execution_enabled':False,'can_start':False,'lock_reason':'Live execution is not implemented in this release.',
+            'server_time':now,'operational_health':health,
             'wallet':{'address':saved['wallet_address'],'verified_at':saved['verified_at'],'revision':saved['revision'],
                       'ownership_verified':bool(saved['wallet_address'] and saved['verified_at']), 'spending_authorized':False},
             'live_positions':[],'live_trade_count':0,'live_pnl_usd':None,
             'paper_sync':{'snapshot':digest,'settings_revision':source['revision'],'read_at':time.time(),
                 'source_last_cycle':source['last_cycle'],'source_health':source['health'],'source_error':source['error'],
+                'operational_health':feed,
                 'blueprint':blueprint,'discovery':source.get('public_discovery',{}),
                 'performance':{k:source[k] for k in ('closed_count','realized_pnl_usd','closed_return_percent','wins')},
                 'signals':source['events'][:6],

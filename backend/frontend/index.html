@@ -1150,7 +1150,8 @@
 
 <section id="real-copy-section" class="app-section hidden" aria-labelledby="rc-title" hidden>
 <div class="rc-top"><div><p class="rc-eyebrow">Solana · next chapter</p><h2 id="rc-title">Real Copy Trade<span>.</span></h2></div><button id="rc-refresh" type="button">↻ Refresh</button></div>
-<div class="rc-layout"><article class="rc-panel rc-hero"><div><span class="rc-pill rc-lock">● Live execution locked</span><h3 class="rc-hero-title">Paper does the homework.<br>Your next move stays yours.</h3><p>Your paper roster and rules, always in sync. Link Phantom now. Trading stays off.</p></div><div><div class="rc-actions"><button id="rc-start" type="button" disabled>Start live copying · locked</button><a class="rc-link" href="/meme-coins/copy">Open paper copier ↗</a></div><small>Live execution is not implemented in this release.</small></div></article>
+<div id="rc-health" class="rc-health" data-level="loading" aria-label="Real copy operational health"><div class="rc-health-row"><span class="rc-health-dot" aria-hidden="true"></span><div><strong id="rc-health-label" role="status">Checking health…</strong><p id="rc-health-detail">Connecting to the real-copy workspace.</p></div><small id="rc-health-age">Waiting for status</small></div><details><summary>Health details</summary><div id="rc-health-checks" class="rc-health-checks"></div><small>Checks readiness and data freshness. It does not guarantee fills or profit.</small></details></div>
+<div class="rc-layout"><article class="rc-panel rc-hero"><div><span class="rc-pill rc-lock">● Live execution locked</span><h3 class="rc-hero-title">Your live copy desk.</h3><p>Paper roster and rules synced. Real-money copying is off.</p></div><div><div class="rc-actions"><button id="rc-start" type="button" disabled>Start live copying · locked</button><a class="rc-link" href="/meme-coins/copy">Open paper copier ↗</a></div><small>Unattended trading needs a live executor and a separate trading signer.</small></div></article>
 <article class="rc-panel"><div class="rc-row"><span class="rc-wallet-icon" aria-hidden="true">P</span><span class="rc-pill">Phantom · Solana</span></div><h3 class="rc-wallet" id="rc-wallet-address">No wallet linked</h3><p class="rc-muted" id="rc-wallet-status">Link Phantom with a message signature. No spending permission.</p><div class="rc-actions"><button type="button" id="rc-connect" class="rc-primary" disabled>Connect Phantom</button><button type="button" id="rc-unlink" disabled>Unlink</button></div><small>We never ask for your seed phrase or private key.</small></article></div>
 <p id="rc-message" role="status" aria-live="polite"></p>
 <div class="rc-stats"><article class="rc-stat"><p>Following the paper roster</p><strong id="rc-count">—</strong><p>Shared wallet selections</p></article><article class="rc-stat"><p>Inherited paper trade size</p><strong id="rc-size">—</strong><p>Preview only · no live allocation</p></article><article class="rc-stat"><p>Paper return on completed-trade spend</p><strong id="rc-paper-return">—</strong><p id="rc-paper-profit">Waiting for paper results</p></article></div>
@@ -1909,7 +1910,8 @@
     <script src="js/search.js?v=entry-diagnostics-v1"></script>
     <script src="js/watchlist.js"></script>
     <script src="js/portfolio.js?v=history-recovery-v1"></script>
-    <script src="js/real-copy.js?v=partial-profit-exits-v3"></script>
+    <script src="js/phantom-session.js?v=trusted-v1"></script>
+    <script src="js/real-copy.js?v=trusted-health-v4"></script>
     <script src="js/pro-ticker-manual.js"></script>
     <script src="js/pro-ticker-release.js"></script>
     <script src="js/pro-ticker-workspace.js?v=entry-settings-v1"></script>
