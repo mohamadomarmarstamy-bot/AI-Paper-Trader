@@ -18,6 +18,7 @@
   const fresh=matches&&!balanceError&&Number.isFinite(b.valid_until)&&balanceData.server_time+elapsed<=b.valid_until;
   const currentSettings=balanceData?.settings?.revision===buySettings?.revision;
   $('rc-balance-sol').textContent=fresh?sol(b.balance_sol):'Unavailable';
+  $('rc-summary-balance').textContent=fresh?sol(b.balance_sol):'Unavailable';
   $('rc-spendable').textContent=fresh?`${sol(b.spendable_sol)}${Number.isFinite(b.spendable_usd)?` ≈ ${money(b.spendable_usd)}`:''}`:'Unavailable';
   $('rc-next-buy').textContent=fresh&&currentSettings&&Number.isFinite(b.next_buy_sol)?`${sol(b.next_buy_sol)}${Number.isFinite(b.next_buy_usd)?` ≈ ${money(b.next_buy_usd)}`:''}`:'Not available';
   $('rc-funding-status').textContent=balanceError?'Balance check failed. Retrying automatically.':!matches?'Checking wallet SOL balance…':!fresh?(b.error||'Wallet balance is unavailable or expired.'):!currentSettings?'Updating the buy preview for saved settings…':b.reason+(b.price_error?' '+b.price_error:'');
@@ -58,6 +59,8 @@
   $('rc-live-badge').textContent=data.live_execution_enabled?(data.operational_health?.level==='error'?'● REAL MONEY · needs attention':'● REAL MONEY · copying'):'● Live trading off';
   $('rc-live-summary').textContent=data.live_execution_enabled?'Real trades are active. Fresh admitted source buys use your saved live size.':'Real trading is off. Configure the server signer, then activate copying yourself.';
   $('rc-live-count').textContent=String(data.live_trade_count??0);
+  $('rc-summary-open').textContent=String(data.live_positions?.length??0);
+  $('rc-live-pnl').dataset.sign=Number.isFinite(data.live_pnl_sol)?(data.live_pnl_sol<0?'negative':'positive'):'unknown';
   $('rc-live-pnl').textContent=Number.isFinite(data.live_pnl_sol)?`${data.live_pnl_sol>=0?'+':''}${data.live_pnl_sol.toFixed(6)} SOL`:'Unpriced';
   const setup=data.execution_setup;$('rc-setup-status').textContent=setup?`Engine installed · ${setup.signer_matches?'signer matches wallet':'matching signer needed'} · ${setup.jupiter_configured?'Jupiter configured':'Jupiter key needed'} · server switch ${setup.release_allowed?'on':'off'}`:'Execution setup unavailable.';
   const holdings=$('rc-live-holdings');holdings.replaceChildren();for(const p of data.live_positions||[]){const row=node('div',''),head=node('div','', 'rc-row'),button=node('button',p.pending_reason?'Exit queued':'Sell');button.type='button';button.disabled=busy||Boolean(p.pending_reason);button.onclick=()=>closeLive([p.id],false);head.append(node('strong',short(p.mint)),button);row.append(head,node('small',`${(Number(p.quantity_raw)/10**p.decimals).toLocaleString('en-US',{maximumFractionDigits:6})} tokens · ${sol(p.cost_lamports/1e9)} remaining cost`),node('small',Number.isFinite(p.exit_value_lamports)&&Date.now()/1000-(p.marked_at||0)<=60?`${sol(p.exit_value_lamports/1e9)} minimum exit estimate`:'Waiting for a current exit quote'));holdings.append(row);}if(!data.live_positions?.length)holdings.append(node('p','No real holdings.'));
@@ -67,6 +70,7 @@
   const localAddress=provider?.isConnected===false?null:provider?.publicKey?.toString();
   $('rc-wallet-status').textContent=data.wallet.ownership_verified?(localAddress===data.wallet.address?'Phantom connected · ownership verified':localAddress?'Different Phantom account selected · saved wallet unchanged':'Wallet link saved · unlock or reconnect Phantom'):'Link Phantom with a message signature. No spending permission.';
   $('rc-connect').textContent=localAddress===data.wallet.address&&data.wallet.ownership_verified?'Phantom connected':data.wallet.ownership_verified?'Reconnect Phantom':'Connect Phantom';
+  $('rc-summary-following').textContent=`${active.length} wallets followed`;
   $('rc-count').textContent=active.length;$('rc-size').textContent=money(c.trade_usd);$('rc-paper-return').textContent=Number.isFinite(s.performance.closed_return_percent)?`${s.performance.closed_return_percent>=0?'+':''}${s.performance.closed_return_percent.toFixed(2)}%`:'—';
   $('rc-paper-profit').textContent=`${money(s.performance.realized_pnl_usd)} net · ${s.performance.closed_count} realized paper exits, including partial sales`;
   $('rc-sync').textContent=`Synced ${new Date(s.read_at*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} · revision ${s.settings_revision}`;
