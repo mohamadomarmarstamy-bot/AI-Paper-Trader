@@ -75,3 +75,16 @@ Primary layout/behavior references:
 - https://github.com/solana-program/token-2022/blob/main/program/src/processor.rs
 - https://solana.com/docs/tokens/extensions/immutable-owner
 - https://solana.com/docs/tokens/extensions/metadata
+
+
+## Exit recovery and external wallet reductions
+
+The first finalized-expiry observation is retained across frequent polling and restarts. An unseen signature expires only after repeated history queries, finalized block-height expiry and at least 15 seconds between first and final observations. Until then no replacement transaction is signed.
+
+After pending bot orders resolve, compare each tracked canonical token account at finalized commitment. Mismatches pause buys and suppress signing for the affected position. A reduction is accepted only after the same quantity appears in a newer finalized slot at least 15 seconds later. Zero balance removes the stale holding from exposure; partial reductions retain proportional cost for the remaining quantity. Extra tokens are never adopted as bot-owned funds. RPC failures or old/frozen/malformed accounts do not erase a position.
+
+External changes are not assumed to be sales. Archive the removed quantity, unreconciled cost and both observation slots with unknown proceeds. Keep an explicit accounting-review lock, incomplete P/L and no automatic restart until transaction-based accounting is reviewed. There is no automatic write-off, synthetic realized loss or inferred profit. This release does not import the owner's prior Phantom sale proceeds or alter production records during development.
+
+Profit trims recheck a fresh quote for the actual half quantity against its proportional cost and the existing profit threshold, after the fee allowance, before signing. Stop/source/manual full exits do not get this profit-only gate. Slippage, fees, impact limits and strategy thresholds are unchanged; quotes and execution can still fail. Failed receipts expose the chain execution error; simulation rejections expose the instruction error.
+
+The dashboard's realized P/L card uses finalized realized ledger P/L only, rather than realized plus unrealized estimates. It shows accounting review when external proceeds are unknown. No PAPER logic is changed.

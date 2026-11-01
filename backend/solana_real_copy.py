@@ -46,7 +46,7 @@ def public():
     now=time.time();feed=source.get('operational_health');runtime=live.public();flags=execution.configuration(saved['wallet_address']);settings=budget.settings()
     configured=all(flags[k] for k in ('release_allowed','signer_configured','signer_matches','jupiter_configured'))
     sized=bool(settings['config'].get('buy_usd' if settings['config']['buy_mode']=='fixed_usd' else 'buy_percent'))
-    can_start=bool(configured and sized and saved['verified_at'] and source['config']['enabled'] and feed and feed['level']=='ok' and not runtime['enabled'])
+    can_start=bool(not runtime.get('balance_adjustments') and not runtime['pending_count'] and not any(p.get('balance_observation') or p.get('external_change') for p in runtime['positions']) and configured and sized and saved['verified_at'] and source['config']['enabled'] and feed and feed['level']=='ok' and not runtime['enabled'])
     active=runtime['enabled'];held=runtime['positions'];stale=any(p.get('exit_value_lamports') is None or now-(p.get('marked_at') or 0)>60 for p in held)
     checks=[{'name':'Wallet ownership','level':'ok' if saved['wallet_address'] and saved['verified_at'] else 'warning',
              'detail':'Verified public wallet' if saved['wallet_address'] and saved['verified_at'] else 'Link and verify Phantom'},
@@ -58,13 +58,14 @@ def public():
             {'name':'Live worker','level':'error' if (active or held) and now-(runtime['last_cycle'] or 0)>60 else 'ok' if active or held else 'paused','detail':'Updated recently' if runtime['last_cycle'] and now-runtime['last_cycle']<=60 else 'Waiting for activation' if not active and not held else 'No recent live cycle'}]
     level='ok' if active else 'paused' if can_start else 'warning';label='Copying live' if active else 'Ready to start' if can_start else 'Setup required'
     detail='Monitoring real holdings and fresh admitted copy signals.' if active else 'Real trades are off until you activate copying.'
-    if active or held or runtime['pending_count']:
-        if active and runtime['last_cycle'] is None and now-(runtime['started_at'] or 0)<=15:level='warning';label='Starting live worker';detail='Waiting for the first live monitoring cycle.'
+    if active or held or runtime['pending_count'] or runtime.get('balance_adjustments'):
+        if runtime.get('balance_adjustments'):level='error';label='Wallet accounting review';detail='External wallet changes detected. New buys are paused and P/L is incomplete.'
+        elif active and runtime['last_cycle'] is None and now-(runtime['started_at'] or 0)<=15:level='warning';label='Starting live worker';detail='Waiting for the first live monitoring cycle.'
         elif now-(runtime['last_cycle'] or 0)>60:level='error';label='Live worker delayed';detail='Live monitoring needs a fresh cycle.'
         elif not configured:level='error';label='Live signing unavailable';detail='Held assets may not be protected until server signing and swap access are restored.'
+        elif runtime['pending_count']:level='warning';label='Confirming transaction';detail='New orders wait for the stored transaction to finalize or expire.'
         elif stale:level='error';label='Exit quote unavailable';detail='Some holdings do not have a current executable exit quote.'
         elif runtime['error']:level='warning';label='Live check needed';detail=runtime['error']
-        elif runtime['pending_count']:level='warning';label='Confirming transaction';detail='New orders wait for the stored transaction to finalize.'
         elif not active:level='paused';label='Buys paused';detail='Existing live holdings remain monitored for exits.'
         elif feed and feed['level']!='ok':level='warning';label='Source feed delayed';detail='New buys wait for current source data; live exits are monitored separately.'
     health={'level':level,'label':label,'detail':detail,
@@ -76,7 +77,7 @@ def public():
             'wallet':{'address':saved['wallet_address'],'verified_at':saved['verified_at'],'revision':saved['revision'],
                       'ownership_verified':bool(saved['wallet_address'] and saved['verified_at']), 'spending_authorized':bool(configured and (active or held or runtime['pending_count']))},
             'live_positions':held,'live_trade_count':runtime['confirmed_trade_count'],'live_pnl_usd':None,
-            'live_pnl_sol':runtime['realized_sol']+unrealized if unrealized is not None else None,
+            'live_pnl_sol':runtime['realized_sol']+unrealized if unrealized is not None and runtime.get('accounting_complete',True) else None,
             'paper_sync':{'snapshot':digest,'settings_revision':source['revision'],'read_at':time.time(),
                 'source_last_cycle':source['last_cycle'],'source_health':source['health'],'source_error':source['error'],
                 'operational_health':feed,
