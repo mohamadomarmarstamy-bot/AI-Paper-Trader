@@ -43,6 +43,7 @@ class RealWorkerTests(unittest.TestCase):
     def setUp(self):
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
         p=patch.object(database,'DATABASE_PATH',Path(temp.name)/'live.db');p.start();self.addCleanup(p.stop)
+        hours=patch.object(live,'entry_allowed',return_value=True);hours.start();self.addCleanup(hours.stop)
         self.owner=str(Keypair().pubkey());self.source=str(Keypair().pubkey());self.mint=str(Pubkey.new_unique());self.chain=Chain()
         self.flags={'release_allowed':True,'signer_configured':True,'signer_matches':True,'jupiter_configured':True,'signer_address':self.owner,'executor_implemented':True,'network':'Solana mainnet'}
         for p in (patch.object(ex,'configuration',return_value=self.flags),patch.object(ex,'release_allowed',return_value=True),patch.object(budget,'sol_price',return_value={'usd':100})):
@@ -135,6 +136,19 @@ class RealWorkerTests(unittest.TestCase):
         self.assertFalse(self.chain.sent)
         self.assertEqual(live.orders()[0]['status'],'canceled')
         self.assertIn('paper-only',live.orders()[0]['error'])
+
+    def test_scheduled_pause_blocks_buys_but_protective_exits_continue(self):
+        self.activate();self.event()
+        with patch.object(live,'entry_allowed',return_value=False):live.tick(self.chain)
+        self.assertFalse(self.chain.prepared)
+        # A skipped buy is consumed, not replayed when the window reopens.
+        live.tick(self.chain);self.assertFalse(self.chain.prepared)
+        self.event(ident='b'*64);live.tick(self.chain)
+        self.chain.receipt={'state':'confirmed','token_delta':10_000_000,'native_delta':-200_005_000,'fee_lamports':5000,'slot':1}
+        live.tick(self.chain);self.chain.receipt={'state':'pending'}
+        self.chain.exit_value=100_000_000
+        with patch.object(live,'entry_allowed',return_value=False):live.tick(self.chain)
+        self.assertEqual(self.chain.prepared[-1][0],'sell')
 
     def test_expiry_timer_survives_frequent_polling_and_restart(self):
         self.activate();self.event();live.tick(self.chain)
