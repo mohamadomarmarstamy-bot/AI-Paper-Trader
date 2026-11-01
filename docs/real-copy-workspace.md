@@ -25,7 +25,7 @@ The worker reads new `paper_buy` source decisions and supported source-sell even
 
 Each entry captures the current paper stop, half-profit target and protective-exit cooldown. Real live exits use new Jupiter minimum-output estimates after a fee allowance, not Dexscreener chart marks or simulated prices. Stop triggers and staged half-sales run independently of browser connectivity. After a confirmed half-sale, remaining cost is allocated proportionally, the next target doubles, and a remaining-position net break-even trigger is armed. Source/manual exits take priority. An unavailable route, liquidity gap, fees, RPC outage, rejected simulation or failed transaction can delay an exit or cause losses beyond a stop trigger. There is no fill or profit guarantee.
 
-The initial execution policy is explicit in the activation summary: 1% slippage, maximum 5% route price impact, and maximum 0.0001 SOL priority fee plus the base network fee. Only initialized **legacy SPL** mints without active mint/freeze authorities are supported. Token-2022, unsupported instruction layouts, pre-existing wallet holdings in the candidate coin, existing wrapped SOL balances and routes touching unrelated wallet token accounts are rejected. The server does not silently escalate slippage or fees to force a trade.
+The initial execution policy is explicit in the activation summary: 1% slippage, maximum 5% route price impact, and maximum 0.0001 SOL priority fee plus the base network fee. Initialized legacy SPL mints and a bounded subset of **Token-2022** mints are supported, without active mint/freeze authorities. Token-2022 mints may have only MetadataPointer and TokenMetadata extensions; their token accounts may have only ImmutableOwner. Unknown extensions, transfer fees/hooks, permanent delegates, pausable/non-transferable/confidential/default-state behavior, unsupported instruction layouts, pre-existing wallet holdings in the candidate coin, existing wrapped SOL balances and routes touching unrelated wallet token accounts are rejected. The server does not silently escalate slippage or fees to force a trade.
 
 ## Wallet-funded sizing
 
@@ -60,3 +60,18 @@ Primary implementation references:
 - https://kevinheavey.github.io/solders/api_reference/transaction.html
 - https://github.com/solana-program/token/blob/main/program/src/processor.rs
 - https://docs.phantom.com/solana/establishing-a-connection
+
+
+## Token-2022 compatibility
+
+The mint is decoded from raw confirmed account bytes, including its owning token program and complete TLV extension list. Malformed, duplicate, unknown or unsupported extensions fail closed with a specific rejection reason. Metadata does not affect transfer amounts. Mint/freeze authorities remain forbidden; existing delegated, close-authority or frozen token accounts remain rejected.
+
+ATA derivation, validated associated-account setup, token-balance parsing and all three token guard instructions use the mint's actual program. Native SOL wrapping remains on legacy SPL. Rent allowances use the relevant token-account size (170 bytes for the supported Token-2022 immutable-owner ATA), plus legacy WSOL rent. Signed order records and resulting positions retain the token program; receipt verification checks program-tagged actual finalized token deltas. Historical legacy pending orders without a program field retain legacy behavior.
+
+Tests run both programs' guards against local LiteSVM: exact floors, rollback, delegated authority revocation and close-authority takeover rejection. Synthetic Token-2022 preparation, ATA layout checks, buy/sell receipts, partial cost allocation and uncertain-order recovery never contact mainnet or use production keys. No historical rejected buy is replayed. Deployment expands future live token eligibility and requires owner approval.
+
+Primary layout/behavior references:
+- https://github.com/solana-program/token-2022/blob/main/interface/src/extension/mod.rs
+- https://github.com/solana-program/token-2022/blob/main/program/src/processor.rs
+- https://solana.com/docs/tokens/extensions/immutable-owner
+- https://solana.com/docs/tokens/extensions/metadata
