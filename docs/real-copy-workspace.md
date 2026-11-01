@@ -88,3 +88,7 @@ External changes are not assumed to be sales. Archive the removed quantity, unre
 Profit trims recheck a fresh quote for the actual half quantity against its proportional cost and the existing profit threshold, after the fee allowance, before signing. Stop/source/manual full exits do not get this profit-only gate. Slippage, fees, impact limits and strategy thresholds are unchanged; quotes and execution can still fail. Failed receipts expose the chain execution error; simulation rejections expose the instruction error.
 
 The dashboard's realized P/L card uses finalized realized ledger P/L only, rather than realized plus unrealized estimates. It shows accounting review when external proceeds are unknown. No PAPER logic is changed.
+
+## Owner-selected paper-only wallets
+
+Solkrow and Kay The Doc remain actively followed by the main paper copier but are excluded from new live entries. The live source policy also retains Jijo, Tech and Kadenox's paper-only restriction. Live status exposes `paper_active` and `paper_only`, and its active count excludes these sources. Signal admission and first broadcast both enforce the restriction, including recovered signed orders that have not been sent. Already-broadcast transactions are reconciled normally, and existing holdings retain normal sell/protective exit monitoring. No paper roster, simulated cash, strategy thresholds, historical records or live buy sizing is edited.

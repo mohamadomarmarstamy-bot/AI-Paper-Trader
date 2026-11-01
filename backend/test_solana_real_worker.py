@@ -98,6 +98,44 @@ class RealWorkerTests(unittest.TestCase):
         self.assertFalse(self.chain.prepared)
         self.assertFalse(self.chain.sent)
 
+    def test_owner_excluded_sources_remain_paper_active_but_never_buy_live(self):
+        from solana_live_source_policy import PAPER_ONLY_SOURCES
+        for wallet in PAPER_ONLY_SOURCES:
+            self.source=wallet
+            with closing(database.get_connection()) as conn:
+                source,_=paper.load()
+                source['traders']=[{'wallet':wallet,'active':True,'name':PAPER_ONLY_SOURCES[wallet]}]
+                source['cursors']={wallet:{'provider':'rpc','rpc_coverage':{'checked_at':time.time()}}}
+                conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1',(json.dumps(source),));conn.commit()
+            self.activate();self.event(ident=wallet);live.tick(self.chain)
+            self.assertTrue(paper.load()[0]['traders'][0]['active'])
+            trader=link.public()['paper_sync']['blueprint']['traders'][0]
+            self.assertTrue(trader['paper_active']);self.assertTrue(trader['paper_only'])
+            self.assertFalse(trader['active'])
+        self.assertFalse(self.chain.prepared);self.assertFalse(self.chain.sent)
+
+    def test_paper_only_policy_keeps_existing_protective_exits_running(self):
+        from solana_live_source_policy import PAPER_ONLY_SOURCES
+        self.enter()
+        state,_=live.load()
+        next(iter(state['positions'].values()))['source_wallet']=next(iter(PAPER_ONLY_SOURCES))
+        with closing(database.get_connection()) as conn:
+            conn.execute('UPDATE solana_real_run SET state_json=? WHERE id=1',(json.dumps(state),));conn.commit()
+        self.chain.exit_value=100_000_000;live.tick(self.chain)
+        self.assertEqual(self.chain.prepared[-1][0],'sell')
+        self.assertEqual(live.orders(True)[0]['reason'],'stop_loss')
+
+    def test_recovered_unsent_buy_from_paper_only_source_is_canceled(self):
+        self.activate();self.event();live.tick(self.chain)
+        order=live.orders(True)[0]
+        order.pop('send_started_at',None)
+        order.update(status='signed',source_wallet='ApRnQN2HkbCn7W2WWiT2FEKvuKJp9LugRyAE1a9Hdz1')
+        live.save_order(order)
+        self.chain.sent.clear();live.tick(self.chain)
+        self.assertFalse(self.chain.sent)
+        self.assertEqual(live.orders()[0]['status'],'canceled')
+        self.assertIn('paper-only',live.orders()[0]['error'])
+
     def test_expiry_timer_survives_frequent_polling_and_restart(self):
         self.activate();self.event();live.tick(self.chain)
         self.chain.receipt={'state':'expired_unseen'}

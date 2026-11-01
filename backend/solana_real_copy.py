@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.exceptions import InvalidSignature
 import database
 from solana_copy_rpc import decode58
+from solana_live_source_policy import paper_only
 from solana_meme_bot import mint,Conflict
 
 SCHEMA='''CREATE TABLE IF NOT EXISTS solana_real_copy_wallet(
@@ -41,6 +42,10 @@ def public():
     # One canonical source: PAPER enabled/cash/holdings can NEVER arm live execution.
     rules={k:v for k,v in source['config'].items() if k not in ('enabled','paper_capital_usd')}
     roster=[{k:v for k,v in r.items() if k not in ('research_evidence','public_research_evidence')} for r in source['traders']]
+    for trader in roster:
+        trader['paper_active']=trader.get('active',True)
+        trader['paper_only']=paper_only(trader['wallet'])
+        if trader['paper_only']:trader['active']=False
     blueprint={'settings':rules,'entry_protection':source['entry_protection'],'traders':roster}
     digest=hashlib.sha256(json.dumps(blueprint,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
     now=time.time();feed=source.get('operational_health');runtime=live.public();flags=execution.configuration(saved['wallet_address']);settings=budget.settings()
