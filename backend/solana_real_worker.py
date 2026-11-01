@@ -14,6 +14,7 @@ import uuid
 import database
 from solana_meme_bot import Conflict
 import solana_real_execution as execution
+from solana_live_source_policy import paper_only
 
 SCHEMA='''CREATE TABLE IF NOT EXISTS solana_real_run(
  id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL,state_json TEXT NOT NULL,
@@ -213,6 +214,8 @@ def authorized(state,side,source_at=None,lease_owner=None):
 
 def begin_broadcast(order,state,lease_owner):
     """Atomically establish that broadcast began before a concurrent pause."""
+    if order['side']=='buy' and paper_only(order.get('source_wallet')):
+        raise execution.Unavailable('Source wallet is paper-only; new live buys are disabled.')
     authorized(state,order['side'],order.get('source_at'),lease_owner)
     with closing(database.get_connection()) as conn:
         conn.execute('BEGIN IMMEDIATE')
@@ -365,8 +368,7 @@ def tick(provider=None):
             state['event_cursor']=cursor
             if e['side']!='buy':continue
             reason=None
-            from solana_paper_trials import CANDIDATES
-            if e['wallet'] in {wallet for _,wallet in CANDIDATES}:reason='Paper-only research wallet; live promotion requires a separate approved release.'
+            if paper_only(e['wallet']):reason='Source wallet is paper-only; new live buys are disabled.'
             elif not state['enabled']:reason='Real buys paused.'
             elif e.get('status')!='paper_buy':reason='Source buy was not admitted by the paper copy rules.'
             elif not any(t['wallet']==e['wallet'] and t.get('active',True) for t in source['traders']):reason='Source wallet is no longer actively followed.'
