@@ -21,6 +21,7 @@ class Chain:
     def __init__(self):self.prepared=[];self.sent=[];self.receipt={'state':'pending'};self.exit_value=215_000_000;self.timeout=True
     def network(self):pass
     def balance(self,owner):return 1_000_000_000
+    def entry_rent(self,mint):return 4_000_000
     def rpc(self,method,params):
         if method=='getMinimumBalanceForRentExemption':return 2_000_000
         raise AssertionError(method)
@@ -142,6 +143,31 @@ class RealWorkerTests(unittest.TestCase):
         self.activate();self.event();before=paper.load();live.tick(self.chain)
         self.assertEqual(paper.load(),before)
         self.assertNotIn('wire',json.dumps(live.public()))
+
+    def test_token2022_receipts_keep_program_and_partial_exit_accounting_through_recovery(self):
+        original=self.chain.prepare
+        def prepare(*args,**kwargs):
+            value=original(*args,**kwargs);value['token_program']=ex.TOKEN2022;return value
+        self.chain.prepare=prepare;p=self.enter()
+        self.assertEqual(p['token_program'],ex.TOKEN2022)
+        self.chain.exit_value=300_105_000;live.tick(self.chain)
+        pending=live.orders(True)[0];self.assertEqual(pending['prepared']['token_program'],ex.TOKEN2022)
+        # Unknown submission survives another cycle without creating a second swap.
+        count=len(self.chain.prepared);live.tick(self.chain);self.assertEqual(len(self.chain.prepared),count)
+        self.chain.receipt={'state':'confirmed','token_delta':-5_000_000,'native_delta':150_000_000,'fee_lamports':5000,'slot':2}
+        live.tick(self.chain);live.tick(self.chain)
+        state,_=live.load();remaining=state['positions'][p['id']]
+        self.assertEqual(remaining['quantity_raw'],5_000_000)
+        self.assertEqual(remaining['token_program'],ex.TOKEN2022)
+        self.assertEqual(remaining['cost_lamports'],100_002_500)
+        self.assertEqual(state['realized_lamports'],49_997_500)
+
+    def test_mint_or_rent_admission_failure_is_recorded_without_signing(self):
+        self.activate();self.event()
+        with patch.object(self.chain,'entry_rent',side_effect=ex.Unavailable('Token freeze authority is still active.')):live.tick(self.chain)
+        self.assertEqual(self.chain.prepared,[]);self.assertEqual(self.chain.sent,[])
+        self.assertFalse(live.orders(True));self.assertEqual(live.orders()[0]['status'],'rejected')
+        self.assertIn('freeze authority',live.orders()[0]['error'])
 
     def test_changed_sizing_pauses_entries_but_keeps_existing_book(self):
         self.enter();budget.configure({'buy_usd':30},1)

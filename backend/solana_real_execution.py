@@ -59,9 +59,10 @@ def pub(value):
     return Pubkey.from_string(value)
 
 
-def ata(owner,mint):
-    from solders.token.associated import get_associated_token_address
-    return str(get_associated_token_address(pub(owner),pub(mint)))
+def ata(owner,mint,program=TOKEN):
+    from solders.pubkey import Pubkey
+    if program not in (TOKEN,TOKEN2022):raise Unavailable('Unsupported token program.')
+    return str(Pubkey.find_program_address([bytes(pub(owner)),bytes(pub(program)),bytes(pub(mint))],pub(ASSOCIATED))[0])
 
 
 def uint(value):
@@ -77,16 +78,37 @@ def raw_account(account):
     return base64.b64decode(value[0],validate=True)
 
 
-def token_amount(account,owner,mint):
+def extensions(raw,base_size,account_type,allowed):
+    """Parse Token-2022 TLV framing; reject unknown economic/account extensions."""
+    if len(raw)==base_size:return
+    if len(raw)<166 or raw[base_size:165]!=bytes(165-base_size) or raw[165]!=account_type:
+        raise Unavailable('Malformed Token-2022 account layout.')
+    offset=166;seen=set()
+    while offset<len(raw):
+        if not any(raw[offset:]):break
+        if offset+4>len(raw):raise Unavailable('Truncated Token-2022 extension.')
+        kind,size=struct.unpack_from('<HH',raw,offset);offset+=4
+        if kind in seen or kind not in allowed or offset+size>len(raw):
+            raise Unavailable('Unsupported Token-2022 extension; transfer behavior or authority is not supported.')
+        expected=allowed[kind]
+        if expected is not None and size!=expected:raise Unavailable('Malformed Token-2022 extension size.')
+        if kind==19 and size<80:raise Unavailable('Malformed Token-2022 metadata.')
+        seen.add(kind);offset+=size
+
+
+def token_amount(account,owner,mint,program=TOKEN):
     if account is None:return 0
     raw=raw_account(account)
-    if account.get('owner')!=TOKEN or len(raw)!=165 or raw[:32]!=bytes(pub(mint)) or raw[32:64]!=bytes(pub(owner)) or raw[108]!=1:
-        raise Unavailable('Only initialized legacy SPL accounts owned by the trading wallet are supported.')
+    if (account.get('owner')!=program or len(raw)<165 or raw[:32]!=bytes(pub(mint))
+            or raw[32:64]!=bytes(pub(owner)) or raw[108]!=1):
+        raise Unavailable('Token account program, mint, owner or initialized state does not match.')
+    if program==TOKEN and len(raw)!=165:raise Unavailable('Malformed legacy SPL token account.')
+    if program==TOKEN2022:extensions(raw,165,2,{7:0})  # ImmutableOwner only.
     if raw[72:76]!=b'\0'*4 or raw[129:133]!=b'\0'*4:raise Unavailable('Token account has an existing delegate or close authority.')
     return int.from_bytes(raw[64:72],'little')
 
 
-def guards(owner,mint,decimals,min_tokens,min_sol):
+def guards(owner,mint,decimals,min_tokens,min_sol,program=TOKEN):
     """SPL self-transfer validates balance/mint/authority before its no-op branch.
 
     Revoke + clear close authority must succeed as owner first. System transfer
@@ -95,11 +117,11 @@ def guards(owner,mint,decimals,min_tokens,min_sol):
     """
     from solders.instruction import AccountMeta,Instruction
     from solders.system_program import transfer,TransferParams
-    account=pub(ata(owner,mint));owner=pub(owner)
+    account=pub(ata(owner,mint,program));owner=pub(owner)
     auth=[AccountMeta(account,False,True),AccountMeta(owner,True,False)]
-    return [Instruction(pub(TOKEN),bytes([5]),auth),
-            Instruction(pub(TOKEN),bytes([6,3,0]),auth),
-            Instruction(pub(TOKEN),bytes([12])+struct.pack('<Q',uint(min_tokens))+bytes([decimals]),
+    return [Instruction(pub(program),bytes([5]),auth),
+            Instruction(pub(program),bytes([6,3,0]),auth),
+            Instruction(pub(program),bytes([12])+struct.pack('<Q',uint(min_tokens))+bytes([decimals]),
                 [AccountMeta(account,False,True),AccountMeta(pub(mint),False,False),AccountMeta(account,False,True),AccountMeta(owner,True,False)]),
             transfer(TransferParams(from_pubkey=owner,to_pubkey=owner,lamports=uint(min_sol)))]
 
@@ -133,14 +155,22 @@ class Provider:
         return data
 
     def mint(self,address):
-        info=self.rpc('getAccountInfo',[address,{'encoding':'jsonParsed','commitment':'confirmed'}])['value']
-        try:
-            data=info['data']['parsed'];m=data['info'];decimals=m['decimals']
-            if info['owner']!=TOKEN or data['type']!='mint' or m['isInitialized'] is not True or type(decimals) is not int or not 0<=decimals<=18:
-                raise ValueError()
-            if m['mintAuthority'] is not None or m['freezeAuthority'] is not None:raise ValueError()
-            return decimals
-        except Exception:raise Unavailable('Unsupported token mint, or active mint/freeze authority.') from None
+        info=self.rpc('getAccountInfo',[address,{'encoding':'base64','commitment':'confirmed'}])['value']
+        if not info:raise Unavailable('Token mint account is unavailable.')
+        program=info.get('owner')
+        if program not in (TOKEN,TOKEN2022):raise Unavailable('Unsupported token mint program.')
+        raw=raw_account(info)
+        if len(raw)<82 or raw[45]!=1 or not 0<=raw[44]<=18:
+            raise Unavailable('Token mint layout, initialization or decimals are unsupported.')
+        if raw[:4]!=bytes(4):raise Unavailable('Token mint authority is still active.')
+        if raw[46:50]!=bytes(4):raise Unavailable('Token freeze authority is still active.')
+        if program==TOKEN and len(raw)!=82:raise Unavailable('Malformed legacy SPL mint.')
+        if program==TOKEN2022:extensions(raw,82,1,{18:64,19:None})
+        return {'decimals':raw[44],'program':program,'account_size':170 if program==TOKEN2022 else 165}
+
+    def entry_rent(self,mint):
+        info=self.mint(mint)
+        return uint(self.rpc('getMinimumBalanceForRentExemption',[info['account_size']]))+uint(self.rpc('getMinimumBalanceForRentExemption',[165]))
 
     def build(self,owner,input_mint,output_mint,amount,policy):
         api_key=os.getenv('JUPITER_API_KEY','')
@@ -175,22 +205,23 @@ class Provider:
         from solders.address_lookup_table_account import AddressLookupTableAccount
         from solders.hash import Hash
         from solders.system_program import transfer,TransferParams
-        self.network();decimals=self.mint(mint)
+        self.network();mint_info=self.mint(mint);decimals=mint_info['decimals'];token_program=mint_info['program']
         input_mint,output_mint=(SOL,mint) if side=='buy' else (mint,SOL)
         quote=quote or self.build(owner,input_mint,output_mint,amount,policy)
         if not 0<=time.time()-quote['_observed_at']<=20:raise Unavailable('Swap quote expired before preparation.')
         # Revalidate a caller-supplied quote before it can influence guards.
         if quote['inputMint']!=input_mint or quote['outputMint']!=output_mint or uint(quote['inAmount'])!=amount:raise Unavailable('Quote does not match the order.')
-        minimum=uint(quote['otherAmountThreshold']);token_ata=ata(owner,mint);sol_ata=ata(owner,SOL)
+        minimum=uint(quote['otherAmountThreshold']);token_ata=ata(owner,mint,token_program);sol_ata=ata(owner,SOL)
         before=self.accounts([owner,token_ata,sol_ata]);native=uint(before[0]['lamports'])
         if before[0]['owner']!=SYSTEM or raw_account(before[0])!=b'':raise Unavailable('A system-owned trading wallet is required.')
-        owned=token_amount(before[1],owner,mint)
+        owned=token_amount(before[1],owner,mint,token_program)
         if token_amount(before[2],owner,SOL)!=0:raise Unavailable('Existing wrapped SOL must be unwrapped before trading.')
         if side=='buy' and owned:raise Unavailable('This wallet already owns the coin; a repeated buy is skipped.')
         if side=='sell' and amount>owned:raise Unavailable('Confirmed token balance is smaller than the planned exit.')
-        rent=uint(self.rpc('getMinimumBalanceForRentExemption',[165]))
+        rent=uint(self.rpc('getMinimumBalanceForRentExemption',[mint_info['account_size']]))
+        sol_rent=uint(self.rpc('getMinimumBalanceForRentExemption',[165]))
         fee_cap=5000+policy['max_priority_fee_lamports']
-        max_cost=amount+fee_cap+2*rent if side=='buy' else fee_cap
+        max_cost=amount+fee_cap+rent+sol_rent if side=='buy' else fee_cap
         reserve=policy['reserve_lamports']
         if side=='buy' and native<max_cost+reserve:raise Unavailable('Insufficient SOL after reserve, rent and fee allowance.')
         if side=='sell' and native<fee_cap:raise Unavailable('Not enough native SOL to pay for this exit.')
@@ -213,7 +244,7 @@ class Provider:
             elif program==SYSTEM:
                 raise Unavailable('Unexpected upstream native SOL transfer; wrapping is managed locally.')
             elif program==ASSOCIATED:
-                if kind!='setup' or data not in (b'',b'\0',b'\1') or len(keys)<6 or keys[0]!=owner or keys[2]!=owner or keys[3] not in (SOL,mint) or keys[1]!=ata(owner,keys[3]) or keys[4:6]!=[SYSTEM,TOKEN]:raise Unavailable('Unexpected associated account creation.')
+                if kind!='setup' or data not in (b'',b'\0',b'\1') or len(keys)<6 or keys[0]!=owner or keys[2]!=owner or keys[3] not in (SOL,mint) or keys[1]!=ata(owner,keys[3],TOKEN if keys[3]==SOL else token_program) or keys[4:6]!=[SYSTEM,TOKEN if keys[3]==SOL else token_program]:raise Unavailable('Unexpected associated account creation.')
             elif program==TOKEN:
                 if data==bytes([17]) and kind=='setup' and keys==[sol_ata]:pass
                 elif data==bytes([9]) and kind=='cleanup' and keys==[sol_ata,owner,owner]:pass
@@ -227,7 +258,7 @@ class Provider:
         except Unavailable:raise
         except Exception:raise Unavailable('Malformed swap instruction set.') from None
         ixs.append(Instruction(pub(TOKEN),bytes([9]),[AccountMeta(pub(sol_ata),False,True),AccountMeta(pub(owner),False,True),AccountMeta(pub(owner),True,False)]))
-        ixs.extend(guards(owner,mint,decimals,min_tokens,min_native))
+        ixs.extend(guards(owner,mint,decimals,min_tokens,min_native,token_program))
         # Other pre-existing wallet token accounts cannot be used as route funds.
         writable=list(dict.fromkeys(str(a.pubkey) for ix in ixs for a in ix.accounts if a.is_writable))
         for address,account in zip(writable,self.accounts(writable)):
@@ -257,7 +288,7 @@ class Provider:
         tx=VersionedTransaction(msg,[key]);tx.verify_and_hash_message()
         return {'wire':base64.b64encode(bytes(tx)).decode(),'signature':str(tx.signatures[0]),
                 'last_valid_block_height':uint(block['lastValidBlockHeight']),'prepared_at':time.time(),
-                'input_amount':amount,'minimum_output':minimum,'decimals':decimals,'max_debit_lamports':max_cost,
+                'input_amount':amount,'minimum_output':minimum,'decimals':decimals,'token_program':token_program,'max_debit_lamports':max_cost,
                 'native_before':native,'token_before':owned,'fee_cap':fee_cap,'min_native_after':min_native,
                 'min_tokens_after':min_tokens,'quote_observed_at':quote['_observed_at']}
 
@@ -285,7 +316,12 @@ class Provider:
         owner=order['wallet'];mint=order['mint']
         if str(tx.message.account_keys[0])!=owner:raise Unavailable('Confirmed fee payer mismatch.')
         def tokens(name):
-            return sum(uint(r['uiTokenAmount']['amount']) for r in meta[name] if r.get('owner')==owner and r['mint']==mint)
+            total=0;program=prepared.get('token_program',TOKEN)
+            for r in meta[name]:
+                if r.get('owner')!=owner or r['mint']!=mint:continue
+                if r.get('programId',TOKEN)!=program:raise Unavailable('Confirmed token program requires manual reconciliation.')
+                total+=uint(r['uiTokenAmount']['amount'])
+            return total
         delta=tokens('postTokenBalances')-tokens('preTokenBalances')
         native_delta=uint(meta['postBalances'][0])-uint(meta['preBalances'][0])
         if order['side']=='buy' and (delta<prepared['minimum_output'] or native_delta>=0 or -native_delta>prepared['max_debit_lamports']):raise Unavailable('Confirmed buy requires manual reconciliation.')

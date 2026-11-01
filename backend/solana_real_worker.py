@@ -154,7 +154,8 @@ def post_receipt(state,order,result,now):
     if order['side']=='buy':
         state['positions'][order['id']]={'id':order['id'],'mint':order['mint'],'source_wallet':order['source_wallet'],
             'quantity_raw':quantity,'original_quantity_raw':quantity,'cost_lamports':-delta,'original_cost_lamports':-delta,
-            'realized_lamports':0,'opened_at':now,'source_at':order['source_at'],'decimals':order['prepared']['decimals'],'stages':0,
+            'realized_lamports':0,'opened_at':now,'source_at':order['source_at'],'decimals':order['prepared']['decimals'],
+            'token_program':order['prepared'].get('token_program',execution.TOKEN),'stages':0,
             'next_gain_percent':order['protection']['profit_take_first_percent'],'protection':order['protection'],
             'pending_reason':None,'marked_at':None,'exit_value_lamports':None,'last_exit_attempt_at':0}
     else:
@@ -338,17 +339,17 @@ def tick(provider=None):
                 reason='Selected fresh admitted copy signal.'
             decide(e,reason,time.time())
         if chosen and execution.release_allowed() and time.time()-now<110:
-            policy={**state['policy'],'reserve_lamports':int(Decimal(str(cfg['config']['fee_reserve_sol']))*10**9)}
-            if chosen['side']=='buy':
-                available=provider.balance(state['wallet'])-policy['reserve_lamports']-5000-policy['max_priority_fee_lamports']-2*execution.uint(provider.rpc('getMinimumBalanceForRentExemption',[165]))
-                if cfg['config']['buy_mode']=='fixed_usd':
-                    price=Decimal(str(budget.sol_price()['usd']));amount=int((Decimal(str(cfg['config']['buy_usd']))/price*10**9).to_integral_value(rounding=ROUND_CEILING))
-                else:amount=int(Decimal(max(0,available))*Decimal(str(cfg['config']['buy_percent']))/100)
-                if not 0<amount<=available:raise execution.Unavailable('Buy size does not fit the current wallet after fees and reserve.')
-            else:amount=chosen['quantity']
             order={**chosen,'wallet':state['wallet'],'created_at':time.time(),'status':'preparing'}
             save_order(order)
             try:
+                policy={**state['policy'],'reserve_lamports':int(Decimal(str(cfg['config']['fee_reserve_sol']))*10**9)}
+                if chosen['side']=='buy':
+                    available=provider.balance(state['wallet'])-policy['reserve_lamports']-5000-policy['max_priority_fee_lamports']-provider.entry_rent(chosen['mint'])
+                    if cfg['config']['buy_mode']=='fixed_usd':
+                        price=Decimal(str(budget.sol_price()['usd']));amount=int((Decimal(str(cfg['config']['buy_usd']))/price*10**9).to_integral_value(rounding=ROUND_CEILING))
+                    else:amount=int(Decimal(max(0,available))*Decimal(str(cfg['config']['buy_percent']))/100)
+                    if not 0<amount<=available:raise execution.Unavailable('Buy size does not fit the current wallet after fees and reserve.')
+                else:amount=chosen['quantity']
                 prepared=provider.prepare(state['wallet'],chosen['side'],chosen['mint'],amount,policy,lambda:authorized(state,chosen['side'],chosen.get('source_at'),owner))
                 order.update(prepared=prepared,status='signed',signature=prepared['signature']);save_signed(order,owner)
                 begin_broadcast(order,state,owner)
