@@ -154,7 +154,7 @@ jobs:
       - name: Verify preinstalled Chromium
         run: node -e "const {chromium}=require('playwright'); require('fs').accessSync(chromium.executablePath())"
       - name: PAPER release desktop and mobile browser smoke
-        run: node --test backend/frontend/js/pro-ticker-release.browser.cjs backend/frontend/js/pro-ticker-workspace.browser.cjs backend/frontend/js/main-app.browser.cjs backend/frontend/js/scanner.browser.cjs backend/frontend/js/execution-quotes.browser.cjs backend/frontend/js/day-trader.browser.cjs backend/frontend/js/meme-coins.browser.cjs backend/frontend/js/copy-traders.browser.cjs backend/frontend/js/meme-profile.browser.cjs backend/frontend/js/real-copy.browser.cjs
+        run: node --test backend/frontend/js/pro-ticker-release.browser.cjs backend/frontend/js/pro-ticker-workspace.browser.cjs backend/frontend/js/main-app.browser.cjs backend/frontend/js/scanner.browser.cjs backend/frontend/js/execution-quotes.browser.cjs backend/frontend/js/day-trader.browser.cjs backend/frontend/js/meme-coins.browser.cjs backend/frontend/js/copy-traders.browser.cjs backend/frontend/js/meme-profile.browser.cjs backend/frontend/js/real-copy.browser.cjs backend/frontend/js/copy-trials.browser.cjs
       - name: Keep PAPER release screenshots for review
         if: always()
         uses: actions/upload-artifact@v4

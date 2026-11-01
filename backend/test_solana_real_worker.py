@@ -85,6 +85,19 @@ class RealWorkerTests(unittest.TestCase):
             conn.execute('UPDATE solana_real_run SET state_json=? WHERE id=1',(json.dumps(state),));conn.commit()
         live.tick(self.chain);self.assertEqual(live.orders(True)[0]['reason'],'stop_loss')
 
+    def test_trial_wallet_cannot_buy_live_even_if_main_discovery_enrolls_it(self):
+        from solana_paper_trials import CANDIDATES
+        for _,wallet in CANDIDATES:
+            self.source=wallet
+            with closing(database.get_connection()) as conn:
+                source,_=paper.load()
+                source['traders']=[{'wallet':wallet,'active':True}]
+                source['cursors']={wallet:{'provider':'rpc','rpc_coverage':{'checked_at':time.time()}}}
+                conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1',(json.dumps(source),));conn.commit()
+            self.activate();self.event(ident=wallet);live.tick(self.chain)
+        self.assertFalse(self.chain.prepared)
+        self.assertFalse(self.chain.sent)
+
     def test_expiry_timer_survives_frequent_polling_and_restart(self):
         self.activate();self.event();live.tick(self.chain)
         self.chain.receipt={'state':'expired_unseen'}
