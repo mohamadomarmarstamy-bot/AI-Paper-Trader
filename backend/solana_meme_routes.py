@@ -12,6 +12,25 @@ def build_router(*,require_session):
     import solana_copy_trader as copy_bot
     import solana_profile as profile
     import solana_real_copy as real_copy
+    import solana_paper_trials as trials
+
+    @router.get('/meme-coins/copy/trials')
+    def trial_page(request:Request):
+        require_session(request)
+        return FileResponse(Path(__file__).parent/'frontend'/'copy-trials.html')
+
+    @router.get('/meme-coins/copy/trials/status')
+    def trial_status(request:Request):
+        require_session(request)
+        return trials.status()
+
+    @router.post('/meme-coins/copy/trials/start')
+    async def trial_start(request:Request):
+        if await body(request) != {}:
+            raise HTTPException(422,'The paper trial uses its fixed reviewed roster.')
+        try:return await run_in_threadpool(trials.start)
+        except Conflict as error:raise HTTPException(409,str(error)) from None
+
     @router.get('/real-copy.css')
     def real_copy_style():
         return FileResponse(Path(__file__).parent/'frontend'/'real-copy.css',media_type='text/css')

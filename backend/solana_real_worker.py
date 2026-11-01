@@ -365,7 +365,9 @@ def tick(provider=None):
             state['event_cursor']=cursor
             if e['side']!='buy':continue
             reason=None
-            if not state['enabled']:reason='Real buys paused.'
+            from solana_paper_trials import CANDIDATES
+            if e['wallet'] in {wallet for _,wallet in CANDIDATES}:reason='Paper-only research wallet; live promotion requires a separate approved release.'
+            elif not state['enabled']:reason='Real buys paused.'
             elif e.get('status')!='paper_buy':reason='Source buy was not admitted by the paper copy rules.'
             elif not any(t['wallet']==e['wallet'] and t.get('active',True) for t in source['traders']):reason='Source wallet is no longer actively followed.'
             elif e['source_at']<state['started_at'] or not 0<=time.time()-e['source_at']<=90:reason='Outside the fresh live entry window.'

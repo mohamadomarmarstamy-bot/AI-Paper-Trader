@@ -4,6 +4,8 @@ import math
 import os
 import sqlite3
 from contextlib import closing
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,20 @@ DATABASE_PATH = Path(
 
 DEFAULT_STARTING_CASH = 100_000.0
 SQLITE_TIMEOUT_SECONDS = 30
+_paper_trial_path = ContextVar('paper_trial_database', default=None)
+
+
+@contextmanager
+def paper_trial_context():
+    """Separate PAPER research ledger, local to this task/thread."""
+    path = Path(DATABASE_PATH).with_name('copy_wallet_trials.sqlite3')
+    if path.resolve() == Path(DATABASE_PATH).resolve():
+        raise ValueError('Trial and production databases must differ.')
+    token = _paper_trial_path.set(path)
+    try:
+        yield
+    finally:
+        _paper_trial_path.reset(token)
 
 
 def get_connection(*, check_same_thread: bool = True) -> sqlite3.Connection:
@@ -39,7 +55,7 @@ def get_connection(*, check_same_thread: bool = True) -> sqlite3.Connection:
     A new connection is opened for each database operation.
     """
     connection = sqlite3.connect(
-        DATABASE_PATH,
+        _paper_trial_path.get() or DATABASE_PATH,
         timeout=SQLITE_TIMEOUT_SECONDS,
         check_same_thread=check_same_thread,
     )
