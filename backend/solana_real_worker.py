@@ -15,6 +15,7 @@ import database
 from solana_meme_bot import Conflict
 import solana_real_execution as execution
 from solana_live_source_policy import paper_only
+from solana_live_hours import entry_allowed
 
 SCHEMA='''CREATE TABLE IF NOT EXISTS solana_real_run(
  id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL,state_json TEXT NOT NULL,
@@ -209,6 +210,8 @@ def authorized(state,side,source_at=None,lease_owner=None):
     if not all(flags[k] for k in ('release_allowed','signer_configured','signer_matches','jupiter_configured')):raise execution.Unavailable('Server trading setup is unavailable. No new transaction is signed.')
     if saved['wallet_address']!=state['wallet'] or saved['revision']!=state['wallet_revision']:raise execution.Unavailable('Live wallet binding changed. Signing is blocked.')
     if side=='buy' and (current.get('balance_adjustments') or not current['enabled'] or budget.settings()['revision']!=state['budget_revision']):raise execution.Unavailable('New real buys are paused or buy settings changed.')
+    if side=='buy' and (not entry_allowed() or source_at is not None and not entry_allowed(source_at)):
+        raise execution.Unavailable('Daily live entry pause: 2 PM to midnight America/New_York.')
     if side=='buy' and source_at is not None and not 0<=time.time()-source_at<=90:raise execution.Unavailable('Source buy expired before signing or broadcast.')
 
 
@@ -369,6 +372,7 @@ def tick(provider=None):
             if e['side']!='buy':continue
             reason=None
             if paper_only(e['wallet']):reason='Source wallet is paper-only; new live buys are disabled.'
+            elif not entry_allowed() or not entry_allowed(e['source_at']):reason='Daily live entry pause: 2 PM to midnight America/New_York.'
             elif not state['enabled']:reason='Real buys paused.'
             elif e.get('status')!='paper_buy':reason='Source buy was not admitted by the paper copy rules.'
             elif not any(t['wallet']==e['wallet'] and t.get('active',True) for t in source['traders']):reason='Source wallet is no longer actively followed.'

@@ -11,6 +11,7 @@ from cryptography.exceptions import InvalidSignature
 import database
 from solana_copy_rpc import decode58
 from solana_live_source_policy import paper_only
+from solana_live_hours import entry_status
 from solana_meme_bot import mint,Conflict
 
 SCHEMA='''CREATE TABLE IF NOT EXISTS solana_real_copy_wallet(
@@ -73,11 +74,15 @@ def public():
         elif runtime['error']:level='warning';label='Live check needed';detail=runtime['error']
         elif not active:level='paused';label='Buys paused';detail='Existing live holdings remain monitored for exits.'
         elif feed and feed['level']!='ok':level='warning';label='Source feed delayed';detail='New buys wait for current source data; live exits are monitored separately.'
+    schedule=entry_status(now)
+    checks.append({'name':'Live entry hours','level':'ok' if schedule['new_buys_allowed'] else 'paused','detail':'New buys allowed midnight–2 PM Eastern; exits monitored all day.'})
+    if active and not schedule['new_buys_allowed'] and level=='ok':
+        level='paused';label='Scheduled buy pause';detail='New live buys paused until midnight Eastern; existing exits remain monitored.'
     health={'level':level,'label':label,'detail':detail,
             'checks':checks,'checked_at':now,'valid_until':feed.get('valid_until',now) if feed else now,
             'basis':'Live readiness and monitoring checks, not guaranteed execution or profit. Source signals come from the paper copier.'}
     unrealized=None if stale else sum(p['exit_value_lamports']-p['cost_lamports'] for p in held)/10**9
-    return {'live_execution_enabled':active,'can_start':can_start,'lock_reason':None if configured else 'Complete server signer, Jupiter API and release-switch setup.',
+    return {'live_execution_enabled':active,'entry_schedule':entry_status(now),'can_start':can_start,'lock_reason':None if configured else 'Complete server signer, Jupiter API and release-switch setup.',
             'server_time':now,'operational_health':health,'buy_settings':settings,'execution_setup':flags,'live_runtime':runtime,
             'wallet':{'address':saved['wallet_address'],'verified_at':saved['verified_at'],'revision':saved['revision'],
                       'ownership_verified':bool(saved['wallet_address'] and saved['verified_at']), 'spending_authorized':bool(configured and (active or held or runtime['pending_count']))},

@@ -92,3 +92,7 @@ The dashboard's realized P/L card uses finalized realized ledger P/L only, rathe
 ## Owner-selected paper-only wallets
 
 Solkrow and Kay The Doc remain actively followed by the main paper copier but are excluded from new live entries. The live source policy also retains Jijo, Tech and Kadenox's paper-only restriction. Live status exposes `paper_active` and `paper_only`, and its active count excludes these sources. Signal admission and first broadcast both enforce the restriction, including recovered signed orders that have not been sent. Already-broadcast transactions are reconciled normally, and existing holdings retain normal sell/protective exit monitoring. No paper roster, simulated cash, strategy thresholds, historical records or live buy sizing is edited.
+
+## Daily live entry hours
+
+Owner-requested live buys are eligible only from midnight until 2 PM in America/New_York, every day. The interval from 2 PM through midnight blocks new buys, including paused-window source signals and recovered unsent transactions. Timezone rules follow daylight saving changes. Selection and final signing/broadcast authorization both check the window. Existing sells, transaction reconciliation, PAPER and trial workers are unaffected. Midnight reopens the entry gate only: it never clears a manual pause, enables a disabled bot, overrides source exclusions, or bypasses readiness/freshness checks. Status exposes the daily schedule and a health check. No historical buy is replayed.
