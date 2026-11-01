@@ -11,3 +11,41 @@
 #real-copy-section .rc-funding-panel{margin:1rem 0}#real-copy-section .rc-funding-panel .rc-stats strong{font-size:1.25rem;color:var(--rc-mint)}#real-copy-section .rc-funding-panel .rc-stats p{font-size:.75rem;margin:.25rem 0}#real-copy-section .rc-buy-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:1rem;margin-top:1rem}#real-copy-section .rc-buy-fields label{font-size:.8rem;color:var(--rc-muted);display:flex;flex-direction:column;gap:.5rem}#real-copy-section .rc-buy-fields label[hidden]{display:none}#real-copy-section .rc-buy-fields input,#real-copy-section .rc-buy-fields select{font:inherit;width:100%;min-width:0;padding:.75rem;border-radius:10px;border:1px solid var(--rc-line);background:#10182a;color:var(--rc-ink)}#real-copy-section .rc-funding-panel summary{font-size:.75rem;color:var(--rc-muted);cursor:pointer}#real-copy-section .rc-funding-panel input:focus-visible,#real-copy-section .rc-funding-panel select:focus-visible{outline:2px solid var(--rc-mint);outline-offset:2px}
 
 #real-copy-section .rc-live-book{margin:1rem 0}#real-copy-section .rc-server-setup{margin:1rem 0}#real-copy-section .rc-server-setup summary{cursor:pointer}#real-copy-section .rc-server-setup code{overflow-wrap:anywhere}#real-copy-section .rc-live-book .rc-list>div{border-top:1px solid var(--rc-line);padding:.8rem 0}#real-copy-section .rc-live-book small{display:block;margin-top:.3rem}#real-copy-section .rc-live-book strong{overflow-wrap:anywhere}
+
+/* Paper-copy desk layout. All execution controls retain their existing bindings. */
+#real-copy-section{max-width:1450px}
+#real-copy-section .rc-top{margin-bottom:20px;flex-wrap:wrap}
+#real-copy-section h2{font-size:2rem;letter-spacing:-.04em}
+#real-copy-section .rc-top p{margin:6px 0 0;font-size:.82rem}
+#real-copy-section .rc-eyebrow{font-size:.7rem!important;margin-bottom:8px!important}
+#real-copy-section .rc-health-wallet{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(280px,1fr);gap:16px;margin-bottom:16px;align-items:start}
+#real-copy-section .rc-health{margin:0;border-radius:16px;padding:20px;min-height:195px}
+#real-copy-section .rc-panel,#real-copy-section .rc-stat{background:linear-gradient(145deg,#192238,#151b2d);border-color:#303c56;border-radius:16px;padding:20px}
+#real-copy-section .rc-wallet-panel{min-height:195px}
+#real-copy-section .rc-wallet{font-size:1.25rem;margin:12px 0 5px}
+#real-copy-section .rc-wallet-panel p{font-size:.82rem;margin:5px 0}
+#real-copy-section .rc-wallet-panel small{font-size:.72rem}
+#real-copy-section .rc-wallet-icon{width:30px;height:30px;border-radius:10px}
+#real-copy-section .rc-wallet-panel .rc-actions{margin:10px 0}
+#real-copy-section .rc-controls-panel{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px}
+#real-copy-section .rc-controls-panel p{font-size:.82rem;margin:6px 0 0}
+#real-copy-section .rc-controls-panel .rc-actions{margin:0 0 6px}
+#real-copy-section .rc-controls-panel small{font-size:.72rem}
+#real-copy-section .rc-summary-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:0 0 16px}
+#real-copy-section .rc-summary-cards .rc-stat{min-height:158px}
+#real-copy-section .rc-summary-cards p{margin:0 0 10px;font-size:.78rem;color:#aab9d1}
+#real-copy-section .rc-summary-cards strong{font-size:clamp(1.3rem,2.2vw,1.8rem);font-variant-numeric:tabular-nums;color:#e8edf9;letter-spacing:-.035em;overflow-wrap:anywhere}
+#real-copy-section .rc-summary-cards small{font-size:.78rem;display:block}
+#real-copy-section #rc-live-pnl[data-sign=positive]{color:#7ee0bb}
+#real-copy-section #rc-live-pnl[data-sign=negative]{color:#ff9da7}
+#real-copy-section .rc-layout{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+#real-copy-section .rc-live-book{margin:0 0 16px}
+#real-copy-section .rc-note{font-size:.78rem}
+#real-copy-section .rc-list{max-height:340px;scrollbar-width:thin}
+#real-copy-section details.rc-panel{margin:16px 0}
+#real-copy-section details.rc-panel>summary{cursor:pointer;color:#c0cce0;font-size:.88rem;font-weight:600}
+#real-copy-section details.rc-panel[open]>summary{margin-bottom:16px}
+#real-copy-section .rc-paper-reference .rc-stats{margin-bottom:0}
+#real-copy-section [hidden]{display:none!important}
+@media(max-width:1050px){#real-copy-section .rc-summary-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:700px){#real-copy-section .rc-health-wallet,#real-copy-section .rc-layout{grid-template-columns:1fr}#real-copy-section .rc-panel,#real-copy-section .rc-health,#real-copy-section .rc-stat{padding:16px}#real-copy-section .rc-health,#real-copy-section .rc-wallet-panel{min-height:0}#real-copy-section h2{font-size:1.7rem}#real-copy-section .rc-summary-cards{gap:10px}#real-copy-section .rc-summary-cards .rc-stat{min-height:150px}#real-copy-section .rc-summary-cards strong{font-size:1.4rem}}
