@@ -21,12 +21,15 @@ class Chain:
     def __init__(self):self.prepared=[];self.sent=[];self.receipt={'state':'pending'};self.exit_value=215_000_000;self.timeout=True
     def network(self):pass
     def balance(self,owner):return 1_000_000_000
+    def finalized_token_balance(self,owner,mint,program):
+        p=next(p for p in live.load()[0]['positions'].values() if p['mint']==mint)
+        return {'quantity':p['quantity_raw'],'slot':int(time.time()*10)}
     def entry_rent(self,mint):return 4_000_000
     def rpc(self,method,params):
         if method=='getMinimumBalanceForRentExemption':return 2_000_000
         raise AssertionError(method)
     def build(self,owner,input_mint,output_mint,amount,policy):return {'otherAmountThreshold':str(self.exit_value)}
-    def prepare(self,owner,side,mint,amount,policy,authorize):
+    def prepare(self,owner,side,mint,amount,policy,authorize,quote=None):
         authorize();value={'wire':'wire-'+str(len(self.prepared)),'signature':'signature-'+str(len(self.prepared)),
             'input_amount':amount,'minimum_output':1,'last_valid_block_height':1000,'decimals':6}
         self.prepared.append((side,amount,value));return value
@@ -66,6 +69,81 @@ class RealWorkerTests(unittest.TestCase):
         live.tick(self.chain)
         self.chain.receipt={'state':'pending'}
         return live.load()[0]['positions']['buy:'+'a'*64]
+
+    def test_profitable_monitor_quote_cannot_sign_a_losing_half_sale(self):
+        self.enter();original=self.chain.build
+        def quote(owner,input_mint,output_mint,amount,policy):
+            return {'otherAmountThreshold':str(300_105_000 if amount==10_000_000 else 90_000_000)}
+        self.chain.build=quote;live.tick(self.chain)
+        self.assertEqual(len(self.chain.prepared),1);self.assertFalse(live.orders(True))
+        self.assertEqual(live.orders()[0]['status'],'rejected');self.assertIn('Profit trim deferred',live.orders()[0]['error'])
+        self.assertIsNone(next(iter(live.load()[0]['positions'].values()))['pending_reason'])
+        # A subsequent stop remains free to submit a full exit; no extra profit gate.
+        self.chain.exit_value=100_000_000;self.chain.build=original
+        state,_=live.load();next(iter(state['positions'].values()))['last_exit_attempt_at']=0
+        with closing(database.get_connection()) as conn:
+            conn.execute('UPDATE solana_real_run SET state_json=? WHERE id=1',(json.dumps(state),));conn.commit()
+        live.tick(self.chain);self.assertEqual(live.orders(True)[0]['reason'],'stop_loss')
+
+    def test_expiry_timer_survives_frequent_polling_and_restart(self):
+        self.activate();self.event();live.tick(self.chain)
+        self.chain.receipt={'state':'expired_unseen'}
+        start=time.time()+1
+        for offset in (0,5,10):
+            with patch.object(live.time,'time',return_value=start+offset):live.tick(self.chain)
+            self.assertEqual(live.orders(True)[0]['first_expired_at'],start)
+        with patch.object(live.time,'time',return_value=start+16):live.tick(self.chain)
+        self.assertFalse(live.orders(True));self.assertEqual(live.orders()[0]['status'],'expired')
+        self.assertEqual(len(self.chain.prepared),1)
+
+    def test_manual_full_exit_archives_missing_cost_without_inventing_proceeds(self):
+        p=self.enter();live.pause(live.public()['revision']);start=time.time()+1
+        with patch.object(self.chain,'finalized_token_balance',return_value={'quantity':0,'slot':20}):
+            with patch.object(live.time,'time',return_value=start):live.tick(self.chain)
+        state,_=live.load();self.assertEqual(state['positions'][p['id']]['quantity_raw'],10_000_000)
+        self.assertFalse(live.public()['enabled']);self.assertEqual(len(self.chain.prepared),1)
+        with patch.object(self.chain,'finalized_token_balance',return_value={'quantity':0,'slot':21}):
+            with patch.object(live.time,'time',return_value=start+16):live.tick(self.chain)
+        state,_=live.load();self.assertFalse(state['positions']);a=state['balance_adjustments'][0]
+        self.assertEqual(a['unreconciled_cost_lamports'],200_005_000);self.assertIsNone(a['proceeds_lamports'])
+        self.assertEqual(state['realized_lamports'],0);self.assertFalse(live.public()['accounting_complete'])
+        status=link.public();self.assertFalse(status['can_start']);self.assertIsNone(status['live_pnl_sol'])
+        self.assertEqual(status['operational_health']['label'],'Wallet accounting review')
+        with self.assertRaisesRegex(Conflict,'accounting review'):self.activate()
+        with self.assertRaises(Conflict):link.unlink(1)
+        live.tick(self.chain);self.assertEqual(len(live.load()[0]['balance_adjustments']),1)
+        self.assertEqual(len(self.chain.prepared),1)
+
+    def test_external_partial_reduction_preserves_remaining_cost_and_blocks_affected_exit(self):
+        p=self.enter();start=time.time()+1
+        for offset,slot in ((0,20),(16,21),(32,22)):
+            with patch.object(self.chain,'finalized_token_balance',return_value={'quantity':4_000_000,'slot':slot}),patch.object(live.time,'time',return_value=start+offset):live.tick(self.chain)
+        state,_=live.load();p=state['positions'][p['id']]
+        self.assertEqual(p['quantity_raw'],4_000_000);self.assertEqual(p['cost_lamports'],80_002_000)
+        self.assertEqual(state['balance_adjustments'][0]['unreconciled_cost_lamports'],120_003_000)
+        self.assertEqual(len(self.chain.prepared),1);self.assertFalse(state['enabled'])
+
+    def test_balance_read_failure_stale_slot_and_same_slot_never_remove_holdings(self):
+        p=self.enter();start=time.time()+1
+        with patch.object(self.chain,'finalized_token_balance',side_effect=ex.Unavailable('RPC unavailable')):live.tick(self.chain)
+        for offset,slot in ((0,0),(1,20),(17,20)):
+            with patch.object(self.chain,'finalized_token_balance',return_value={'quantity':0,'slot':slot}),patch.object(live.time,'time',return_value=start+offset):live.tick(self.chain)
+        state,_=live.load();self.assertIn(p['id'],state['positions']);self.assertFalse(state['balance_adjustments'])
+        self.assertEqual(len(self.chain.prepared),1)
+
+    def test_uncertain_bot_order_is_settled_before_external_balance_checks(self):
+        self.enter();self.chain.exit_value=300_105_000;live.tick(self.chain)
+        with patch.object(self.chain,'finalized_token_balance',side_effect=AssertionError('Pending swap first')):live.tick(self.chain)
+        self.assertEqual(len(self.chain.prepared),2);self.assertTrue(live.orders(True))
+
+    def test_recovered_balance_and_external_deposit_do_not_create_fake_profit(self):
+        p=self.enter();start=time.time()+1
+        with patch.object(self.chain,'finalized_token_balance',return_value={'quantity':20_000_000,'slot':20}),patch.object(live.time,'time',return_value=start):live.tick(self.chain)
+        with patch.object(self.chain,'finalized_token_balance',return_value={'quantity':20_000_000,'slot':21}),patch.object(live.time,'time',return_value=start+16):live.tick(self.chain)
+        state,_=live.load();self.assertFalse(state['balance_adjustments']);self.assertEqual(state['positions'][p['id']]['quantity_raw'],10_000_000)
+        with patch.object(self.chain,'finalized_token_balance',return_value={'quantity':10_000_000,'slot':22}):live.tick(self.chain)
+        self.assertNotIn('balance_observation',live.load()[0]['positions'][p['id']]);self.assertFalse(live.public()['enabled'])
+        self.assertEqual(live.public()['realized_sol'],0)
 
     def test_disabled_default_never_fetches_or_signs_and_activation_is_explicit(self):
         with patch.object(self.chain,'network',side_effect=AssertionError('No network while disabled')):live.tick(self.chain)

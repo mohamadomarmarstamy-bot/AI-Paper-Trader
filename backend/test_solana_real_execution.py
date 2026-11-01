@@ -166,7 +166,7 @@ class ExecutionProviderTests(unittest.TestCase):
         provider.rpc=rpc;self.assertEqual(provider.reconcile(order),{'state':'pending'})
         status['confirmationStatus']='finalized';receipt=provider.reconcile(order)
         self.assertEqual(receipt['state'],'confirmed');self.assertEqual(receipt['token_delta'],100);self.assertEqual(receipt['native_delta'],-100105000)
-        meta['err']={'InstructionError':[1,'Custom']};self.assertEqual(provider.reconcile(order),{'state':'failed','fee_lamports':105000})
+        meta['err']={'InstructionError':[1,'Custom']};self.assertEqual(provider.reconcile(order),{'state':'failed','fee_lamports':105000,'execution_error':meta['err']})
 
 
 def mint_bytes(program=ex.TOKEN2022,extensions=True):
@@ -206,6 +206,20 @@ class Token2022MintTests(unittest.TestCase):
                 self.mint(prefix+struct.pack('<HH',kind,0))
         for tail in (b'\x12',struct.pack('<HH',18,65)+bytes(65),struct.pack('<HH',18,64)+bytes(63),struct.pack('<HH',7,0),struct.pack('<HH',19,1)+b'x',struct.pack('<HH',18,64)+bytes(64)+struct.pack('<HH',18,64)+bytes(64)):
             with self.subTest(tail=tail[:4]),self.assertRaises(ex.Unavailable):self.mint(prefix+tail)
+
+    def test_finalized_balance_validates_account_program_and_explicit_absence(self):
+        owner=Pubkey.new_unique();mint=Pubkey.new_unique();provider=ex.Provider();calls=[]
+        def rpc(method,params):
+            calls.append((method,params));return {'context':{'slot':123},'value':encoded(token2022(owner,mint,456))}
+        provider.rpc=rpc
+        self.assertEqual(provider.finalized_token_balance(str(owner),str(mint),ex.TOKEN2022),{'quantity':456,'slot':123})
+        self.assertEqual(calls[0][1][0],ex.ata(str(owner),str(mint),ex.TOKEN2022))
+        self.assertEqual(calls[0][1][1]['commitment'],'finalized')
+        with patch.object(provider,'rpc',return_value={'context':{'slot':124},'value':None}):
+            self.assertEqual(provider.finalized_token_balance(str(owner),str(mint),ex.TOKEN2022)['quantity'],0)
+        with patch.object(provider,'rpc',return_value={'context':{'slot':125}}),self.assertRaises(ex.Unavailable):
+            provider.finalized_token_balance(str(owner),str(mint),ex.TOKEN2022)
+        with self.assertRaises(ex.Unavailable):provider.finalized_token_balance(str(owner),str(mint),ex.TOKEN)
 
     def test_token_accounts_require_correct_program_and_only_immutable_owner(self):
         owner=Pubkey.new_unique();mint=Pubkey.new_unique();account=token2022(owner,mint,123)

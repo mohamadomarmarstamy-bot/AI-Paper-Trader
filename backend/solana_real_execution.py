@@ -168,6 +168,13 @@ class Provider:
         if program==TOKEN2022:extensions(raw,82,1,{18:64,19:None})
         return {'decimals':raw[44],'program':program,'account_size':170 if program==TOKEN2022 else 165}
 
+    def finalized_token_balance(self,owner,mint,program):
+        if program not in (TOKEN,TOKEN2022):raise Unavailable('Unsupported token balance program.')
+        address=ata(owner,mint,program)
+        result=self.rpc('getAccountInfo',[address,{'encoding':'base64','commitment':'finalized'}])
+        if not isinstance(result,dict) or 'value' not in result or not isinstance(result.get('context'),dict) or 'slot' not in result['context']:raise Unavailable('Finalized token balance unavailable.')
+        return {'quantity':token_amount(result['value'],owner,mint,program),'slot':uint(result['context']['slot'])}
+
     def entry_rent(self,mint):
         info=self.mint(mint)
         return uint(self.rpc('getMinimumBalanceForRentExemption',[info['account_size']]))+uint(self.rpc('getMinimumBalanceForRentExemption',[165]))
@@ -280,7 +287,7 @@ class Provider:
         fee=self.rpc('getFeeForMessage',[base64.b64encode(to_bytes_versioned(msg)).decode(),{'commitment':'confirmed'}])['value']
         if fee is None or uint(fee)>fee_cap:raise Unavailable('Transaction fee exceeds the configured cap.')
         simulated=self.rpc('simulateTransaction',[base64.b64encode(wire).decode(),{'encoding':'base64','sigVerify':False,'commitment':'confirmed'}])['value']
-        if simulated.get('err') is not None:raise Unavailable('Swap simulation or atomic balance guard failed.')
+        if simulated.get('err') is not None:raise Unavailable('Swap simulation or atomic balance guard failed: '+json.dumps(simulated['err'],separators=(',',':'))[:300])
         if not 0<=time.time()-quote['_observed_at']<=30:raise Unavailable('Swap preparation exceeded its quote window.')
         authorize()
         key=signer()
@@ -310,7 +317,7 @@ class Provider:
         if transaction is None:return {'state':'pending'}
         if transaction['transaction'][0]!=prepared['wire']:raise Unavailable('Confirmed transaction bytes do not match the stored signature.')
         meta=transaction['meta'];fee=uint(meta['fee'])
-        if meta['err'] is not None:return {'state':'failed','fee_lamports':fee}
+        if meta['err'] is not None:return {'state':'failed','fee_lamports':fee,'execution_error':meta['err']}
         from solders.transaction import VersionedTransaction
         tx=VersionedTransaction.from_bytes(base64.b64decode(prepared['wire'],validate=True));tx.verify_and_hash_message()
         owner=order['wallet'];mint=order['mint']

@@ -30,7 +30,7 @@ PENDING=('preparing','signed','submitted','unknown')
 
 def initial():return {'enabled':False,'wallet':'','wallet_revision':None,'budget_revision':None,'started_at':None,
     'event_cursor':0,'positions':{},'cooldowns':{},'realized_lamports':0,'last_cycle':None,'error':None,
-    'policy':dict(DEFAULT_POLICY),'last_order_at':0}
+    'policy':dict(DEFAULT_POLICY),'last_order_at':0,'balance_adjustments':[]}
 
 
 def initialize(conn):
@@ -55,7 +55,7 @@ def orders(pending=False):
 
 def guard_wallet_change():
     state,_=load()
-    if state['enabled'] or state['positions'] or orders(True):raise Conflict('Pause real copying and finish every live position and pending transaction before changing wallets.')
+    if state['enabled'] or state['positions'] or state.get('balance_adjustments') or orders(True):raise Conflict('Pause real copying and finish every live position and pending transaction before changing wallets.')
 
 
 def public():
@@ -66,7 +66,7 @@ def public():
         count=conn.execute("SELECT COUNT(*) FROM solana_real_orders WHERE status='confirmed'").fetchone()[0] if exists else 0
     return {'revision':revision,'enabled':state['enabled'],'wallet':state['wallet'],'last_cycle':state['last_cycle'],'confirmed_trade_count':count,
             'started_at':state['started_at'],
-            'error':state['error'],'positions':list(state['positions'].values()),'pending_count':len(pending),
+            'balance_adjustments':state.get('balance_adjustments',[]),'accounting_complete':not state.get('balance_adjustments'),'error':state['error'],'positions':list(state['positions'].values()),'pending_count':len(pending),
             'orders':latest,'realized_sol':state['realized_lamports']/10**9,'policy':state['policy'],
             'basis':'Actual finalized wallet balance changes, including transaction fees and account rent. SOL accounting; dollar P/L is not inferred from PAPER.'}
 
@@ -92,6 +92,7 @@ def activate(expected_revision,wallet_revision,budget_revision,acknowledgement,p
     with closing(database.get_connection()) as conn:
         initialize(conn);conn.execute('BEGIN IMMEDIATE')
         row=conn.execute('SELECT * FROM solana_real_run WHERE id=1').fetchone();state=json.loads(row['state_json'])
+        if state.get('balance_adjustments') or any(p.get('balance_observation') or p.get('external_change') for p in state['positions'].values()):raise Conflict('External wallet changes require accounting review before restarting.')
         if row['revision']!=expected_revision or row['lease_until']>time.time():raise Conflict('Real copier changed or is busy. Refresh before activation.')
         if state['wallet'] and state['wallet']!=saved['wallet_address'] and (state['positions'] or orders(True)):raise Conflict('Previous wallet has unresolved live holdings.')
         if state['wallet']!=saved['wallet_address']:state=initial()
@@ -154,7 +155,7 @@ def post_receipt(state,order,result,now):
     if order['side']=='buy':
         state['positions'][order['id']]={'id':order['id'],'mint':order['mint'],'source_wallet':order['source_wallet'],
             'quantity_raw':quantity,'original_quantity_raw':quantity,'cost_lamports':-delta,'original_cost_lamports':-delta,
-            'realized_lamports':0,'opened_at':now,'source_at':order['source_at'],'decimals':order['prepared']['decimals'],
+            'realized_lamports':0,'opened_slot':result.get('slot',0),'opened_at':now,'source_at':order['source_at'],'decimals':order['prepared']['decimals'],
             'token_program':order['prepared'].get('token_program',execution.TOKEN),'stages':0,
             'next_gain_percent':order['protection']['profit_take_first_percent'],'protection':order['protection'],
             'pending_reason':None,'marked_at':None,'exit_value_lamports':None,'last_exit_attempt_at':0}
@@ -206,7 +207,7 @@ def authorized(state,side,source_at=None,lease_owner=None):
         if row['lease_owner']!=lease_owner or row['lease_until']<=time.time():raise execution.Unavailable('Worker lease expired before signing.')
     if not all(flags[k] for k in ('release_allowed','signer_configured','signer_matches','jupiter_configured')):raise execution.Unavailable('Server trading setup is unavailable. No new transaction is signed.')
     if saved['wallet_address']!=state['wallet'] or saved['revision']!=state['wallet_revision']:raise execution.Unavailable('Live wallet binding changed. Signing is blocked.')
-    if side=='buy' and (not current['enabled'] or budget.settings()['revision']!=state['budget_revision']):raise execution.Unavailable('New real buys are paused or buy settings changed.')
+    if side=='buy' and (current.get('balance_adjustments') or not current['enabled'] or budget.settings()['revision']!=state['budget_revision']):raise execution.Unavailable('New real buys are paused or buy settings changed.')
     if side=='buy' and source_at is not None and not 0<=time.time()-source_at<=90:raise execution.Unavailable('Source buy expired before signing or broadcast.')
 
 
@@ -235,6 +236,47 @@ def begin_broadcast(order,state,lease_owner):
         changed=conn.execute("UPDATE solana_real_orders SET status='unknown',details_json=? WHERE id=? AND status='signed'",(json.dumps(order,allow_nan=False),order['id']))
         if changed.rowcount!=1:raise Conflict('The stored transaction changed before broadcast.')
         conn.commit()
+
+
+def reconcile_balances(state,provider,now):
+    """Read-only wallet drift detection, only after all stored swaps settle.
+
+    External withdrawals are not assumed to be sales. Archive the missing cost
+    separately and suppress incomplete P/L until the actual proceeds are audited.
+    """
+    blocked=set()
+    for ident,p in list(state['positions'].items()):
+        try:
+            observed=provider.finalized_token_balance(state['wallet'],p['mint'],p.get('token_program',execution.TOKEN))
+            actual=execution.uint(observed['quantity']);slot=execution.uint(observed['slot'])
+            if slot<p.get('opened_slot',0):raise execution.Unavailable('Finalized wallet balance is older than the recorded buy.')
+            if actual==p['quantity_raw']:
+                p.pop('balance_observation',None);continue
+            blocked.add(ident);state['enabled']=False;p['exit_value_lamports']=None
+            state['error']='External wallet balance change detected. New buys paused; affected holdings require reconciliation.'
+            first=p.get('balance_observation')
+            if not first or first['quantity']!=actual:
+                p['balance_observation']={'quantity':actual,'slot':slot,'at':now};continue
+            if now-first['at']<15 or slot<=first['slot']:continue
+            # Extra deposited tokens never become bot-owned trading funds.
+            if actual>p['quantity_raw']:continue
+            removed=p['quantity_raw']-actual
+            cost=p['cost_lamports'] if actual==0 else p['cost_lamports']*removed//p['quantity_raw']
+            state.setdefault('balance_adjustments',[]).append({'position_id':ident,'mint':p['mint'],
+                'quantity_removed_raw':removed,'unreconciled_cost_lamports':cost,'observed_at':now,
+                'first_slot':first['slot'],'finalized_slot':slot,'proceeds_lamports':None,
+                'basis':'External wallet reduction; sale versus transfer and proceeds require transaction review.'})
+            if actual==0:del state['positions'][ident]
+            else:
+                p.update(quantity_raw=actual,cost_lamports=p['cost_lamports']-cost,pending_reason=None)
+                p.pop('balance_observation',None);p['external_change']=True
+        except execution.Unavailable:
+            blocked.add(ident);p['exit_value_lamports']=None
+            state['error']='Finalized wallet balance unavailable. No new order for the affected holding.'
+    if state.get('balance_adjustments'):
+        state['enabled']=False;state['error']='External wallet changes require accounting review. P/L is incomplete; new buys remain paused.'
+        blocked.update(p['id'] for p in state['positions'].values() if p.get('external_change'))
+    return blocked
 
 
 def tick(provider=None):
@@ -275,16 +317,18 @@ def tick(provider=None):
                 result=provider.reconcile(order)
                 if result['state'] in ('confirmed','failed'):
                     post_receipt(state,order,result,time.time());order.update(status=result['state'],result=result);terminal=order
+                    if result['state']=='failed':order['error']='On-chain swap failed; no fill recorded. '+json.dumps(result.get('execution_error','Network execution failed'),separators=(',',':'))[:300]
                 elif result['state']=='expired_unseen':
                     if order.get('first_expired_at') and time.time()-order['first_expired_at']>=15:
                         order.update(status='expired',error='Finalized block height passed expiry; repeated history queries found no transaction.');terminal=order
-                    else:order['first_expired_at']=time.time();save_order(order)
+                    else:order.setdefault('first_expired_at',time.time());save_order(order)
                 elif execution.release_allowed() and time.time()-order.get('last_broadcast_at',order['send_started_at'])>=15:
                     # Same signed bytes and signature, never a replacement order.
                     authorized(state,'sell',lease_owner=owner);order['last_broadcast_at']=time.time();save_order(order)
                     try:provider.send(order['prepared'])
                     except execution.Unavailable:pass
             state['last_cycle']=time.time();commit_cycle(state,owner,terminal);return
+        blocked_positions=reconcile_balances(state,provider,time.time())
         source=paper.load()[0];cfg=budget.settings()
         if cfg['revision']!=state['budget_revision']:
             state['enabled']=False;state['error']='Buy settings changed. Restart copying to apply them; existing exits remain monitored.'
@@ -298,6 +342,7 @@ def tick(provider=None):
         # Current swap quotes, not chart marks, trigger live protective exits.
         chosen=None
         for p in sorted(state['positions'].values(),key=lambda p:p['opened_at']):
+            if p['id'] in blocked_positions:continue
             try:
                 q=provider.build(state['wallet'],p['mint'],budget.SOL,p['quantity_raw'],{**state['policy'],'reserve_lamports':0})
                 value=max(0,execution.uint(q['otherAmountThreshold'])-5000-state['policy']['max_priority_fee_lamports'])
@@ -350,7 +395,19 @@ def tick(provider=None):
                     else:amount=int(Decimal(max(0,available))*Decimal(str(cfg['config']['buy_percent']))/100)
                     if not 0<amount<=available:raise execution.Unavailable('Buy size does not fit the current wallet after fees and reserve.')
                 else:amount=chosen['quantity']
-                prepared=provider.prepare(state['wallet'],chosen['side'],chosen['mint'],amount,policy,lambda:authorized(state,chosen['side'],chosen.get('source_at'),owner))
+                quote=None
+                if chosen['side']=='sell' and chosen['reason']=='profit_take_half':
+                    # The actual half-size executable quote must meet the same
+                    # profit target as the whole-position monitoring estimate.
+                    position=state['positions'][chosen['position_id']]
+                    quote=provider.build(state['wallet'],chosen['mint'],budget.SOL,amount,policy)
+                    allocated_cost=position['cost_lamports']*amount//position['quantity_raw']
+                    target=int((Decimal(allocated_cost)*(100+Decimal(str(position['next_gain_percent'])))/100).to_integral_value(rounding=ROUND_CEILING))
+                    if execution.uint(quote['otherAmountThreshold'])-5000-policy['max_priority_fee_lamports']<target:
+                        position['pending_reason']=None
+                        raise execution.Unavailable('Profit trim deferred: current half-sale proceeds after fees do not meet the profit target.')
+                kwargs={'quote':quote} if quote is not None else {}
+                prepared=provider.prepare(state['wallet'],chosen['side'],chosen['mint'],amount,policy,lambda:authorized(state,chosen['side'],chosen.get('source_at'),owner),**kwargs)
                 order.update(prepared=prepared,status='signed',signature=prepared['signature']);save_signed(order,owner)
                 begin_broadcast(order,state,owner)
                 try:provider.send(prepared);order['status']='submitted';save_order(order)
