@@ -160,6 +160,22 @@ def schedule_failed_sell_retry(state, order, now):
         p['last_exit_attempt_at'] = now - 25
 
 
+def trailing_profit_trigger(position, value, fee_lamports):
+    """Post-trim 20% trail on fresh executable proceeds per token, net cost floor.
+
+    Keep the peak per raw token so subsequent half-sales cannot lower it merely
+    by reducing quantity. Caller supplies only a successful current exit quote.
+    """
+    if not position['stages']: return False
+    quantity = position['quantity_raw']
+    unit = Decimal(value + fee_lamports) / Decimal(quantity)
+    peak = max(Decimal(str(position.get('trailing_peak_lamports_per_raw', unit))), unit)
+    position['trailing_peak_lamports_per_raw'] = str(peak)
+    floor = max(position['cost_lamports'], int((peak * quantity * Decimal('0.8') - fee_lamports).to_integral_value(rounding=ROUND_CEILING)))
+    position['trailing_floor_lamports'] = floor
+    return value <= floor
+
+
 def post_receipt(state,order,result,now):
     """Runs in the same DB transaction as the order's terminal state."""
     if result['state']=='failed':
@@ -369,9 +385,10 @@ def tick(provider=None):
                 value=max(0,execution.uint(q['otherAmountThreshold'])-5000-state['policy']['max_priority_fee_lamports'])
                 p.update(marked_at=time.time(),exit_value_lamports=value)
                 gain=100*(value-p['cost_lamports'])/p['cost_lamports'];rules=p['protection'];reason=p['pending_reason'];quantity=p['quantity_raw']
+                trailing_exit=trailing_profit_trigger(p,value,5000+state['policy']['max_priority_fee_lamports'])
                 if reason not in ('manual','source_sell'):
                     if rules['stop_loss_percent']>0 and gain<=-rules['stop_loss_percent']:reason='stop_loss'
-                    elif p['stages'] and value<=p['cost_lamports']:reason='profit_protection'
+                    elif trailing_exit:reason='profit_protection'
                     elif reason=='profit_take_half' and gain<p['next_gain_percent']:reason=None;p['pending_reason']=None
                 if reason=='profit_take_half':quantity=max(1,quantity//2)
                 if not reason and rules['profit_take_enabled'] and gain>=p['next_gain_percent'] and quantity>=2:

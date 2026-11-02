@@ -103,3 +103,7 @@ seconds). Remaining cost is explicitly a current-dollar equivalent, not the
 historical USD cost basis. Stale/missing conversion data shows USD unavailable;
 a stale exit quote is never shown as a current exit estimate. The ledger,
 transaction sizing, profit targets and stop calculations continue using SOL.
+
+
+## Owner-approved live runner trail
+After the first finalized profit half-sale, each fresh executable whole-runner quote updates a persisted per-token peak. A 20% decline triggers a full profit-protection exit, with the remaining net cost as a minimum trigger floor. Peaks start with the first fresh post-trim quote; they never infer historical highs. Quantity reductions preserve the unit peak. Source sells, initial stop, profit trims, safety gates, retry spacing and paper-only eligibility remain unchanged. The trigger does not guarantee execution price. Deploy only with no live holdings or pending orders.
