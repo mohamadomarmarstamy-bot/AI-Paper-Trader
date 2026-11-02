@@ -75,7 +75,7 @@ def public():
         elif not active:level='paused';label='Buys paused';detail='Existing live holdings remain monitored for exits.'
         elif feed and feed['level']!='ok':level='warning';label='Source feed delayed';detail='New buys wait for current source data; live exits are monitored separately.'
     schedule=entry_status(now)
-    checks.append({'name':'Live entry hours','level':'ok' if schedule['new_buys_allowed'] else 'paused','detail':'Mr. Frog entries allowed all day; other sources midnight–2 PM Eastern; exits monitored all day.'})
+    checks.append({'name':'Live entry hours','level':'ok' if schedule['new_buys_allowed'] or schedule['all_day_sources'] else 'paused','detail':', '.join(schedule['all_day_source_names'])+' entries allowed all day; other sources midnight–2 PM Eastern; exits monitored all day.'})
     if active and not schedule['new_buys_allowed'] and level=='ok':
         level='paused';label='Scheduled buy pause';detail='New live buys paused until midnight Eastern; existing exits remain monitored.'
     health={'level':level,'label':label,'detail':detail,
