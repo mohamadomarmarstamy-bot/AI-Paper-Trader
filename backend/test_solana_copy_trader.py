@@ -212,6 +212,24 @@ class CopyTests(unittest.TestCase):
         self.source.rows=[trade(self.now-16+i,index=i+1,tx=str(i+2)*88) for i in range(6)]
         self.assertEqual(self.tick()['positions'],[])
 
+    def test_wallet_network_reads_overlap_and_failure_preserves_other_cursor(self):
+        from threading import Barrier
+        self.start();state,_=copy.load()
+        state['traders'].append({'wallet':OTHER,'selected_at':self.now,'active':True})
+        state['cursors'][OTHER]={'at':self.now}
+        with closing(database.get_connection()) as conn:
+            conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1',(json.dumps(state),));conn.commit()
+        barrier=Barrier(2)
+        def read(wallet,cursor,now):
+            barrier.wait(timeout=2)
+            if wallet==WALLET:raise copy.DataUnavailable('synthetic timeout')
+            return [],{'at':now}
+        self.now+=10
+        with patch.object(self.source,'trades',side_effect=read):self.tick()
+        saved,_=copy.load()
+        self.assertEqual(saved['cursors'][OTHER]['at'],self.now)
+        self.assertEqual(saved['cursors'][WALLET]['at'],state['cursors'][WALLET]['at'])
+
     def test_same_coin_limit_applies_across_wallets(self):
         self.buy();state,_=copy.load()
         state['traders'].append({'wallet':OTHER,'selected_at':self.now,'active':True})

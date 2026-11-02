@@ -428,19 +428,30 @@ def tick(*, provider=None, market=None, clock=time.time):
         watched={p['wallet'] for p in state['positions'].values()} | ({r['wallet'] for r in state['traders'] if r.get('active',True)} if enabled else set())
         last_polled=state.setdefault('last_polled',{})
         # Oldest first prevents a rate-limited large list starving its later wallets.
-        for wallet in sorted(watched,key=lambda w:(last_polled.get(w,0),w))[:3]:
-            last_polled[wallet]=clock()
+        selected=sorted(watched,key=lambda w:(last_polled.get(w,0),w))[:3]
+        # Network reads run independently; only the cycle thread merges state.
+        # Do not abandon futures: a late result must never mutate saved cursors.
+        def read_wallet(wallet):
+            cursor=deepcopy(state['cursors'][wallet])
             try:
-                if isinstance(provider,Birdeye) and state['cursors'][wallet].get('provider')=='rpc':
-                    rows,cursor=provider.trades(wallet,state['cursors'][wallet],clock(),has_copied_positions=any(p['wallet']==wallet for p in state['positions'].values()))
-                else:rows,cursor=provider.trades(wallet,state['cursors'][wallet],clock())
-                gathered=state['cursors'][wallet].get('pending',[])+signals(rows,wallet)
-                if 'window' in cursor: cursor['pending']=gathered
-                else: incoming.extend(gathered)
-                cursor['provider']=state['cursors'][wallet].get('provider','birdeye')
-                state['cursors'][wallet]=cursor
-                if cursor.get('rpc_coverage',{}).get('error'):state['error']=cursor['rpc_coverage']['error']
-            except DataUnavailable as error: state['error']=str(error)
+                if isinstance(provider,Birdeye) and cursor.get('provider')=='rpc':
+                    return provider.trades(wallet,cursor,clock(),has_copied_positions=any(p['wallet']==wallet for p in state['positions'].values()))
+                return provider.trades(wallet,cursor,clock())
+            except DataUnavailable as error:return error
+        for wallet in selected:last_polled[wallet]=clock()
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            results=list(pool.map(read_wallet,selected))
+        for wallet,result in zip(selected,results):
+            if isinstance(result,DataUnavailable):
+                state['error']=str(result)
+                continue
+            rows,cursor=result
+            gathered=state['cursors'][wallet].get('pending',[])+signals(rows,wallet)
+            if 'window' in cursor: cursor['pending']=gathered
+            else: incoming.extend(gathered)
+            cursor['provider']=state['cursors'][wallet].get('provider','birdeye')
+            state['cursors'][wallet]=cursor
+            if cursor.get('rpc_coverage',{}).get('error'):state['error']=cursor['rpc_coverage']['error']
         category_errors={}; checks=0
         if enabled:
             for address,is_rpc in dict.fromkeys((r['mint'],r['wallet'] in rpc_wallets and r.get('source')=='solana_rpc_pump') for r in incoming if r['side']=='buy' and 0<=clock()-r['source_at']<=90):

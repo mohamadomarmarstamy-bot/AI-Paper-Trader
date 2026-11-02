@@ -255,7 +255,7 @@ if __name__=='__main__':unittest.main()
 
 class RpcConnectionTests(unittest.TestCase):
     def setUp(self):
-        for mock in (patch.dict(os.environ,{},clear=True),patch.object(rpc,'_calls',deque()),patch.object(rpc,'_cooldown',0)):
+        for mock in (patch.dict(os.environ,{},clear=True),patch.object(rpc,'_calls',deque()),patch.object(rpc,'_cooldown',0),patch.object(rpc,'_backup_cooldown',0)):
             mock.start();self.addCleanup(mock.stop)
 
     def response(self):
@@ -292,5 +292,25 @@ class RpcConnectionTests(unittest.TestCase):
 
     def test_custom_endpoint_keeps_existing_rate_limit_budget(self):
         with patch.dict(os.environ,{'SOLANA_COPY_RPC_URL':'https://rpc.example.test'}),patch.object(rpc,'_calls',deque([rpc.time.monotonic()]*100)),patch.object(rpc.requests,'post') as post:
+            with self.assertRaises(copy.DataUnavailable):rpc.request('getBalance',['wallet'])
+            post.assert_not_called()
+
+
+class RpcFailoverTests(RpcConnectionTests):
+    def test_timeout_uses_explicit_backup(self):
+        with patch.dict(os.environ,{'SOLANA_COPY_RPC_BACKUP_URL':'https://backup.example.test'}),patch.object(rpc.requests,'post',side_effect=[rpc.requests.Timeout(),self.response()]) as post:
+            self.assertEqual(rpc.request('getBalance',['wallet']),[])
+            self.assertEqual(post.call_count,2)
+            self.assertEqual(post.call_args.args[0],'https://backup.example.test')
+
+    def test_public_rate_limit_can_use_backup_without_clearing_cooldown(self):
+        from unittest.mock import Mock
+        with patch.dict(os.environ,{'SOLANA_COPY_RPC_BACKUP_URL':'https://backup.example.test'}),patch.object(rpc.requests,'post',side_effect=[Mock(status_code=429),self.response()]) as post:
+            self.assertEqual(rpc.request('getBalance',['wallet']),[])
+            self.assertGreater(rpc._cooldown,rpc.time.monotonic())
+            self.assertEqual(post.call_count,2)
+
+    def test_invalid_backup_fails_before_network(self):
+        with patch.dict(os.environ,{'SOLANA_COPY_RPC_BACKUP_URL':'http://bad.test'}),patch.object(rpc.requests,'post') as post:
             with self.assertRaises(copy.DataUnavailable):rpc.request('getBalance',['wallet'])
             post.assert_not_called()

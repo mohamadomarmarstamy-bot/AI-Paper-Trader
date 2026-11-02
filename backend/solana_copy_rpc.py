@@ -17,13 +17,13 @@ import requests
 ENDPOINT='https://api.mainnet.solana.com'
 SIGNATURE_PAGE_SIZE=1000
 PROGRAMS=json.loads(Path(__file__).with_name('solana_copy_pump_instructions.json').read_text())
-_lock=Lock();_calls=deque();_cooldown=0
+_lock=Lock();_calls=deque();_cooldown=0;_backup_cooldown=0
 
 
-def endpoint():
+def endpoint(variable="SOLANA_COPY_RPC_URL"):
     """Server-only read endpoint. Never expose credential-bearing URLs."""
     from solana_copy_trader import DataUnavailable
-    value=os.environ.get('SOLANA_COPY_RPC_URL','').strip()
+    value=os.environ.get(variable,'').strip()
     if not value:return ENDPOINT
     try:
         parsed=urlsplit(value)
@@ -32,26 +32,41 @@ def endpoint():
             raise ValueError()
         parsed.port
     except ValueError:
-        raise DataUnavailable('SOLANA_COPY_RPC_URL must be an HTTPS RPC URL without user info or a fragment.') from None
+        raise DataUnavailable(f'{variable} must be an HTTPS RPC URL without user info or a fragment.') from None
     return value
 
 
 def request(method,params):
+    """At most one explicitly configured read-only fallback; never replay writes."""
     from solana_copy_trader import DataUnavailable
-    global _cooldown
     if method not in ('getSignaturesForAddress','getTransaction','getBalance'):
         raise ValueError('Only read-only wallet history methods are supported.')
-    url=endpoint()
+    primary=endpoint()
+    backup=endpoint('SOLANA_COPY_RPC_BACKUP_URL') if os.environ.get('SOLANA_COPY_RPC_BACKUP_URL','').strip() else None
+    try:
+        return _request(method,params,primary)
+    except DataUnavailable:
+        if not backup or backup==primary:raise
+        return _request(method,params,backup,backup=True)
+
+
+def _request(method,params,url,backup=False):
+    from solana_copy_trader import DataUnavailable
+    global _cooldown,_backup_cooldown
+    if method not in ('getSignaturesForAddress','getTransaction','getBalance'):
+        raise ValueError('Only read-only wallet history methods are supported.')
     label='Configured Solana RPC' if url!=ENDPOINT else 'Public Solana RPC'
     with _lock:
         now=time.monotonic()
         while _calls and now-_calls[0]>=60:_calls.popleft()
-        if now<_cooldown or len(_calls)>=100:raise DataUnavailable(f'{label} cooling down; retrying automatically.')
+        if (now<(_backup_cooldown if backup else _cooldown)) or len(_calls)>=100:raise DataUnavailable(f'{label} cooling down; retrying automatically.')
         _calls.append(now)
     try:
         response=requests.post(url,json={'jsonrpc':'2.0','id':1,'method':method,'params':params},timeout=8 if method=='getSignaturesForAddress' else 5,allow_redirects=False)
         if response.status_code==429:
-            with _lock:_cooldown=time.monotonic()+60
+            with _lock:
+                if backup:_backup_cooldown=time.monotonic()+60
+                else:_cooldown=time.monotonic()+60
             raise DataUnavailable(f'{label} rate limited; retrying after cooldown.')
         if response.status_code in (401,403):raise DataUnavailable(f'{label} denied access from this server. Wallet connection cannot grant RPC access.')
         if response.status_code!=200:raise DataUnavailable(f'{label} {method}: HTTP {response.status_code}; retrying automatically.')
