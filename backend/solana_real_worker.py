@@ -231,7 +231,7 @@ def decide(event,reason,now):
         conn.execute('INSERT OR IGNORE INTO solana_real_decisions VALUES(?,?,?)',(event['id'],now,reason));conn.commit()
 
 
-def authorized(state,side,source_at=None,lease_owner=None):
+def authorized(state,side,source_at=None,lease_owner=None,source_wallet=None):
     import solana_real_copy as link
     import solana_real_budget as budget
     current,_=load();saved=link.wallet();flags=execution.configuration(saved['wallet_address'])
@@ -241,7 +241,7 @@ def authorized(state,side,source_at=None,lease_owner=None):
     if not all(flags[k] for k in ('release_allowed','signer_configured','signer_matches','jupiter_configured')):raise execution.Unavailable('Server trading setup is unavailable. No new transaction is signed.')
     if saved['wallet_address']!=state['wallet'] or saved['revision']!=state['wallet_revision']:raise execution.Unavailable('Live wallet binding changed. Signing is blocked.')
     if side=='buy' and (current.get('balance_adjustments') or not current['enabled'] or budget.settings()['revision']!=state['budget_revision']):raise execution.Unavailable('New real buys are paused or buy settings changed.')
-    if side=='buy' and (not entry_allowed() or source_at is not None and not entry_allowed(source_at)):
+    if side=='buy' and (not entry_allowed(source_wallet=source_wallet) or source_at is not None and not entry_allowed(source_at, source_wallet)):
         raise execution.Unavailable('Daily live entry pause: 2 PM to midnight America/New_York.')
     if side=='buy' and source_at is not None and not 0<=time.time()-source_at<=90:raise execution.Unavailable('Source buy expired before signing or broadcast.')
 
@@ -253,7 +253,7 @@ def begin_broadcast(order,state,lease_owner):
     if order['side']=='buy':
         try:order['token_age_proof']=require_age(order['mint'])
         except AgeUnavailable as error:raise execution.Unavailable(str(error)) from None
-    authorized(state,order['side'],order.get('source_at'),lease_owner)
+    authorized(state,order['side'],order.get('source_at'),lease_owner,order.get('source_wallet'))
     with closing(database.get_connection()) as conn:
         conn.execute('BEGIN IMMEDIATE')
         row=conn.execute('SELECT * FROM solana_real_run WHERE id=1').fetchone()
@@ -347,7 +347,7 @@ def tick(provider=None):
                 # Signed bytes are always saved before any broadcast is permitted.
                 order.update(status='abandoned',error='Interrupted before a signed transaction was persisted.');terminal=order
             elif not order.get('send_started_at'):
-                try:authorized(state,order['side'],order.get('source_at'),owner)
+                try:authorized(state,order['side'],order.get('source_at'),owner,order.get('source_wallet'))
                 except execution.Unavailable as error:
                     order.update(status='canceled',error=str(error));terminal=order
                 else:
@@ -413,7 +413,7 @@ def tick(provider=None):
             if e['side']!='buy':continue
             reason=None
             if paper_only(e['wallet']):reason='Source wallet is paper-only; new live buys are disabled.'
-            elif not entry_allowed() or not entry_allowed(e['source_at']):reason='Daily live entry pause: 2 PM to midnight America/New_York.'
+            elif not entry_allowed(source_wallet=e['wallet']) or not entry_allowed(e['source_at'], e['wallet']):reason='Daily live entry pause: 2 PM to midnight America/New_York.'
             elif not state['enabled']:reason='Real buys paused.'
             elif e.get('status')!='paper_buy':reason='Source buy was not admitted by the paper copy rules.'
             elif not any(t['wallet']==e['wallet'] and t.get('active',True) for t in source['traders']):reason='Source wallet is no longer actively followed.'
@@ -458,7 +458,7 @@ def tick(provider=None):
                         position['pending_reason']=None
                         raise execution.Unavailable('Profit trim deferred: current half-sale proceeds after fees do not meet the profit target.')
                 kwargs={'quote':quote} if quote is not None else {}
-                prepared=provider.prepare(state['wallet'],chosen['side'],chosen['mint'],amount,policy,lambda:authorized(state,chosen['side'],chosen.get('source_at'),owner),**kwargs)
+                prepared=provider.prepare(state['wallet'],chosen['side'],chosen['mint'],amount,policy,lambda:authorized(state,chosen['side'],chosen.get('source_at'),owner,chosen.get('source_wallet')),**kwargs)
                 order.update(prepared=prepared,status='signed',signature=prepared['signature']);save_signed(order,owner)
                 begin_broadcast(order,state,owner)
                 try:provider.send(prepared);order['status']='submitted';save_order(order)

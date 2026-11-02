@@ -66,6 +66,8 @@ class RpcTests(unittest.TestCase):
             self.assertEqual(rpc.parse(row,WALLET,'2'*88),[],mutation)
 
     def test_rpc_buy_duplicate_and_source_sell_complete_without_any_api_key(self):
+        age_patch = patch.object(copy, 'require_age', return_value={'minimum_age_seconds':1800})
+        age_patch.start(); self.addCleanup(age_patch.stop)
         self.enroll();self.now+=10;rows=[{'signature':'2'*88,'blockTime':self.now-1,'err':None,'confirmationStatus':'confirmed'}]
         current=tx(self.now-1)
         def request(method,params):
@@ -234,6 +236,8 @@ class RpcTests(unittest.TestCase):
             self.assertEqual(calls.count('4'*88),1);self.assertEqual(calls.count('3'*88),2)
 
     def test_partial_window_does_not_buy_before_later_source_sell_is_decoded(self):
+        age_patch = patch.object(copy, 'require_age', return_value={'minimum_age_seconds':1800})
+        age_patch.start(); self.addCleanup(age_patch.stop)
         self.enroll();self.now+=10;failed=[True]
         signatures=[{'signature':str(i)*88,'blockTime':self.now-(3-i),'err':None,'confirmationStatus':'confirmed'} for i in (3,2)]
         def request(method,params):
