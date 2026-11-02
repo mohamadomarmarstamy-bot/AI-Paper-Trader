@@ -148,6 +148,18 @@ def save_signed(order,lease_owner):
         conn.commit()
 
 
+def schedule_failed_sell_retry(state, order, now):
+    """Only finalized on-chain failures qualify; at most two fast retries per holding."""
+    if order.get('side') != 'sell': return
+    p = state['positions'].get(order.get('position_id'))
+    if p is None: return
+    count = p.get('fast_failed_sell_retries', 0)
+    if count < 2:
+        p['fast_failed_sell_retries'] = count + 1
+        # Existing 30s guard now permits another attempt 5s after final failure.
+        p['last_exit_attempt_at'] = now - 25
+
+
 def post_receipt(state,order,result,now):
     """Runs in the same DB transaction as the order's terminal state."""
     if result['state']=='failed':
@@ -324,7 +336,9 @@ def tick(provider=None):
                 result=provider.reconcile(order)
                 if result['state'] in ('confirmed','failed'):
                     post_receipt(state,order,result,time.time());order.update(status=result['state'],result=result);terminal=order
-                    if result['state']=='failed':order['error']='On-chain swap failed; no fill recorded. '+json.dumps(result.get('execution_error','Network execution failed'),separators=(',',':'))[:300]
+                    if result['state']=='failed':
+                        schedule_failed_sell_retry(state,order,time.time())
+                        order['error']='On-chain swap failed; no fill recorded. '+json.dumps(result.get('execution_error','Network execution failed'),separators=(',',':'))[:300]
                 elif result['state']=='expired_unseen':
                     if order.get('first_expired_at') and time.time()-order['first_expired_at']>=15:
                         order.update(status='expired',error='Finalized block height passed expiry; repeated history queries found no transaction.');terminal=order
