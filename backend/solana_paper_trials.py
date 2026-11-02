@@ -63,7 +63,7 @@ def status():
                       automatic_promotion=False, isolated_paper_trial=True)
         result['wallet_results'] = []
         for name, wallet in CANDIDATES:
-            exits = [r for r in rows if r['wallet'] == wallet]
+            exits = [r for r in rows if r['wallet'] == wallet and not r.get('voided')]
             lots = {}
             for row in exits:
                 lots.setdefault(row['lot_id'], []).append(row)
