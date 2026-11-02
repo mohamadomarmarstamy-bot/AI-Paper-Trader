@@ -209,3 +209,32 @@ delivery. No arbitrary provider error text or credentials are put in emails.
 `live_runtime.exit_alerts` exposes configuration and outbox counts. This monitor
 observes sell orders; quote outages before an order exists remain visible in
 live worker health rather than these order emails.
+
+### Matched-entry trailing-stop PAPER experiment
+
+A separate comparison ledger starts prospectively when this release begins
+receiving paper cycles. Existing holdings/history are not imported. Each new
+admitted main-paper entry is copied identically into two shadow arms: the current
+exit rules, and those same rules plus a 20% observed-price trail after the first
+profit sale, with a net remaining-cost break-even floor. Both arms consume the
+same observed pool prices, source sells, partial-sale schedule, and modeled
+costs. A trail never falls as price falls; partial sales reduce quantity without
+resetting its unit-price high-water mark. Missing/stale quotes do not create
+fills. The trial may fill below its trigger across sampled price gaps.
+
+Entries remain coupled to the main paper account: exiting early does not create
+extra entry opportunities for either comparison arm. This measures exit behavior
+on matched entries, not a fully independent portfolio strategy. Source sells
+close each arm's remaining copied quantity. The existing paper account and live
+ledger do not read the experiment's signals or positions. It does not promote
+wallets or enable live trading. Isolated wallet trials use their own database
+and get their own independent comparison, exposed in their status JSON.
+
+`trailing_comparison` on copy status contains all-history aggregates, position-
+grouped completed win rates, open marks, observed equity drawdown, and the most
+recent 20 sale records per arm with total/returned counts. The main paper page
+has a collapsed "Paper trailing-stop experiment" table. Observation timestamps
+and unpriced counts accompany results; drawdown is sampled, not continuous.
+Experiment writes use a savepoint so an experiment error cannot roll back the
+primary paper cycle. A failed experiment cycle is logged; check last_cycle
+before using its comparison. No historical replay or profitability promise.

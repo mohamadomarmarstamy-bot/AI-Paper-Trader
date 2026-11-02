@@ -113,7 +113,7 @@ def public():
         closed = [json.loads(r[0]) for r in conn.execute('SELECT details_json FROM solana_copy_closes ORDER BY rowid DESC LIMIT 100')] if exists else []
         totals = conn.execute("SELECT COUNT(*),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')),0),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')>0),0),COALESCE(SUM(json_extract(details_json,'$.cost_usd')),0),COALESCE(SUM(json_extract(details_json,'$.cost_usd')>0),0) FROM solana_copy_closes").fetchone() if exists else (0,0,0,0,0)
         partial_count=conn.execute("SELECT COUNT(*) FROM solana_copy_closes WHERE json_extract(details_json,'$.partial_exit')=1").fetchone()[0] if exists else 0
-    return {'inactivity_alert':idle_summary('copy'),'paper': True, 'live_execution_enabled': False, 'provider_configured': configured(),'connection_checks':connection_status(),
+    return {'trailing_comparison':__import__('solana_trailing_comparison').status(now), 'inactivity_alert':idle_summary('copy'),'paper': True, 'live_execution_enabled': False, 'provider_configured': configured(),'connection_checks':connection_status(),
             'solscan_configured':solscan.configured(),'discovery':{k:v for k,v in state.get('discovery',{}).items() if k!='pending'},'last_polled':state.get('last_polled',{}),
             'config': state['config'], 'revision': state['settings_revision'], 'health': state['health'],
             'operational_health':health_summary(state,now),
@@ -400,13 +400,19 @@ def tick(*, provider=None, market=None, clock=time.time):
         initialize(conn)
         if conn.execute('UPDATE solana_copy_state SET lease_owner=?,lease_until=? WHERE id=1 AND lease_until<=?',(owner,now+180,now)).rowcount != 1: raise bot.Conflict('Copy cycle already running.')
         conn.commit()
+    comparison_actions=[]
+    from solana_trailing_comparison import watched_mints, advance as advance_comparison
+    try:comparison_mints=watched_mints()
+    except Exception:comparison_mints=[]
     events=[]; closes=[]; provider=provider or Birdeye(); market=market or bot.ReadOnlyProviders(); state['error']=None
     try:
         # Fetch marks and protect existing lots BEFORE any potentially slow RPC
         # polling. Missing prices never create synthetic fills or zero marks.
-        if state['positions']:
-            marks=prices([p['mint'] for p in state['positions'].values()],market,clock)
-            mark_and_protect(state,marks,clock(),closes)
+        if state['positions'] or comparison_mints:
+            marks=prices([*(p['mint'] for p in state['positions'].values()),*comparison_mints],market,clock)
+            mark_time=clock()
+            mark_and_protect(state,marks,mark_time,closes)
+            comparison_actions.append(('mark',marks,mark_time,False))
         enabled=state['config']['enabled']; incoming=[]
         rpc_wallets={r['wallet'] for r in state['traders'] if state['cursors'].get(r['wallet'],{}).get('provider')=='rpc'}
         connection_missing=enabled and isinstance(provider,Birdeye) and not configured() and not state.get('public_rpc_enabled') and not rpc_wallets
@@ -467,11 +473,12 @@ def tick(*, provider=None, market=None, clock=time.time):
                 except DataUnavailable as error:category_errors[address]=str(error)
         observed=clock()
         if observed-now > 150: raise DataUnavailable('Copy cycle exceeded observation budget.')
-        quotes=prices([*(p['mint'] for p in state['positions'].values()),*(s['mint'] for s in incoming)],market,clock)
+        quotes=prices([*(p['mint'] for p in state['positions'].values()),*(s['mint'] for s in incoming),*comparison_mints],market,clock)
         observed=clock()
         if observed-now>150:raise DataUnavailable('Copy cycle exceeded observation budget.')
         quotes={key:q for key,q in quotes.items() if 0<=observed-q['at']<=45}
         mark_and_protect(state,quotes,observed,closes)
+        comparison_actions.append(('mark',quotes,observed,False))
         # Retain recently expired deadlines long enough to reject delayed
         # signals originating during the cooldown; skipped buys never replay.
         state['stop_loss_cooldowns']={mint:until for mint,until in state['stop_loss_cooldowns'].items() if until>=observed-90}
@@ -488,6 +495,7 @@ def tick(*, provider=None, market=None, clock=time.time):
             if signal['source_at'] < selected or signal['source_at'] > observed+5:
                 signal['reason']='Outside prospective follow window.'
             elif signal['side']=='sell':
+                comparison_actions.append(('sell',deepcopy(signal)))
                 lots=[(key,p) for key,p in state['positions'].items() if p['wallet']==wallet and p['mint']==mint]
                 for key,p in lots:
                     p['pending_sell']=signal['id']
@@ -518,9 +526,11 @@ def tick(*, provider=None, market=None, clock=time.time):
                     amount=state['config']['trade_usd']; cost=amount+.1
                     p={'id':signal['id'],'mint':mint,'wallet':wallet,'pool':quote['pool'],'symbol':quote['symbol'],'quantity':amount/(quote['price']*1.01),'cost_usd':cost,'entry_price_usd':quote['price'],'opened_at':observed,'source_at':signal['source_at'],'latency_seconds':signal['latency_seconds'],'tx_hash':signal['tx_hash'],'marked_at':quote['at'],'source':signal.get('source','birdeye')}
                     p['mark_usd']=max(0,p['quantity']*quote['price']*.99-.1)
+                    comparison_actions.append(('entry',deepcopy(p)))
                     state['positions'][p['id']]=p; state['cash_usd']-=cost; signal['status']='paper_buy'; signal['reason']='Copied buy within per-coin exposure and stop-loss cooldown rules; no liquidity or volume gate.'
             events.append(signal)
         mark_and_protect(state,quotes,observed,closes,allow_profit_takes=True)
+        comparison_actions.append(('mark',quotes,observed,True))
         if enabled and hasattr(provider,'discover') and now>=state.get('discovery_retry_at',0):
             try:
                 provider.discover(state,clock);state['discovery_error']=None
@@ -549,6 +559,14 @@ def tick(*, provider=None, market=None, clock=time.time):
             raise bot.Conflict('Copy settings changed; cycle discarded.')
         for signal in events: conn.execute('INSERT OR IGNORE INTO solana_copy_events VALUES(?,?,?)',(signal['id'],signal['observed_at'],json.dumps(signal,allow_nan=False)))
         for closed in closes: conn.execute('INSERT INTO solana_copy_closes VALUES(?,?,?)',(closed['id'],closed['closed_at'],json.dumps(closed,allow_nan=False)))
+        conn.execute('SAVEPOINT trailing_comparison')
+        try:
+            advance_comparison(conn,comparison_actions,state['config'],state['last_cycle'])
+            conn.execute('RELEASE trailing_comparison')
+        except Exception:
+            conn.execute('ROLLBACK TO trailing_comparison');conn.execute('RELEASE trailing_comparison')
+            import logging
+            logging.getLogger(__name__).exception('Paper trailing comparison failed; primary cycle preserved')
         conn.commit()
     return public()
 
