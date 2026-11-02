@@ -26,6 +26,8 @@ ROUTES={hashlib.sha256(('global:'+n).encode()).digest()[:8] for n in ('route','r
 
 class Unavailable(Exception):pass
 
+class SimulationSlippage(Unavailable):pass
+
 
 def release_allowed():return os.getenv('REAL_COPY_EXECUTION_ALLOWED','').lower()=='true'
 
@@ -204,6 +206,23 @@ class Provider:
         except Exception:raise Unavailable('No supported Jupiter route within the configured slippage and price-impact limits.') from None
 
     def prepare(self,owner,side,mint,amount,policy,authorize,quote=None):
+        if side != 'buy':
+            return self._prepare_once(owner,side,mint,amount,policy,authorize,quote)
+        original = quote or self.build(owner,SOL,mint,amount,policy)
+        try:
+            return self._prepare_once(owner,side,mint,amount,policy,authorize,original)
+        except SimulationSlippage:
+            # Simulation precedes signing/broadcast. Never retry generic or unknown outcomes.
+            authorize()
+            fresh = self.build(owner,SOL,mint,amount,policy)
+            # Same input; bound total minimum token-output deterioration to 1%.
+            for field in ('outAmount','otherAmountThreshold'):
+                if uint(fresh[field])*10000 < uint(original[field])*9900:
+                    raise Unavailable('Buy retry skipped: fresh quote worsened more than 1% from original.')
+            authorize()
+            return self._prepare_once(owner,side,mint,amount,policy,authorize,fresh)
+
+    def _prepare_once(self,owner,side,mint,amount,policy,authorize,quote=None):
         if not release_allowed():raise Unavailable('Server execution switch is off.')
         from solders.compute_budget import set_compute_unit_limit,set_compute_unit_price
         from solders.instruction import Instruction,AccountMeta
@@ -287,7 +306,12 @@ class Provider:
         fee=self.rpc('getFeeForMessage',[base64.b64encode(to_bytes_versioned(msg)).decode(),{'commitment':'confirmed'}])['value']
         if fee is None or uint(fee)>fee_cap:raise Unavailable('Transaction fee exceeds the configured cap.')
         simulated=self.rpc('simulateTransaction',[base64.b64encode(wire).decode(),{'encoding':'base64','sigVerify':False,'commitment':'confirmed'}])['value']
-        if simulated.get('err') is not None:raise Unavailable('Swap simulation or atomic balance guard failed: '+json.dumps(simulated['err'],separators=(',',':'))[:300])
+        if simulated.get('err') is not None:
+            message='Swap simulation or atomic balance guard failed: '+json.dumps(simulated['err'],separators=(',',':'))[:300]
+            logs=simulated.get('logs') or []
+            if any(line == f'Program {JUPITER} failed: custom program error: 0x1771' for line in logs):
+                raise SimulationSlippage(message)
+            raise Unavailable(message)
         if not 0<=time.time()-quote['_observed_at']<=30:raise Unavailable('Swap preparation exceeded its quote window.')
         authorize()
         key=signer()
