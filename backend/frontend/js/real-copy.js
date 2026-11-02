@@ -12,7 +12,18 @@
   if(!settings)return;buySettings=settings;
   if(!buyDirty){const c=settings.config;$('rc-buy-mode').value=c.buy_mode;$('rc-buy-usd').value=c.buy_usd??'';$('rc-buy-percent').value=c.buy_percent??'';$('rc-fee-reserve').value=c.fee_reserve_sol;buyFields();}
  }
+ function holdingDollars(lamports){
+  const price=balanceData?.funding?.price,elapsed=balanceReceivedAt===null?Infinity:(performance.now()-balanceReceivedAt)/1000;
+  const now=(balanceData?.server_time??0)+elapsed,age=now-(price?.observed_at??0);
+  const fresh=!balanceError&&balanceData?.funding?.wallet_address===snapshot?.wallet.address&&Number.isFinite(price?.usd)&&price.usd>0&&age>=0&&age<=45;
+  return fresh&&Number.isFinite(lamports)?`≈ ${money(lamports/1e9*price.usd)}`:'USD unavailable';
+ }
+ function renderHoldings(data){
+  if(!data)return;
+  const holdings=$('rc-live-holdings');holdings.replaceChildren();for(const p of data.live_positions||[]){const row=node('div',''),head=node('div','', 'rc-row'),button=node('button',p.pending_reason?'Exit queued':'Sell');button.type='button';button.disabled=busy||Boolean(p.pending_reason);button.onclick=()=>closeLive([p.id],false);head.append(node('strong',short(p.mint)),button);row.append(head,node('small',`${(Number(p.quantity_raw)/10**p.decimals).toLocaleString('en-US',{maximumFractionDigits:6})} tokens · ${holdingDollars(p.cost_lamports)} remaining cost (current USD estimate)`),node('small',Number.isFinite(p.exit_value_lamports)&&Date.now()/1000-(p.marked_at||0)<=60?`${holdingDollars(p.exit_value_lamports)} minimum exit estimate`:'Waiting for a current exit quote'));holdings.append(row);}if(!data.live_positions?.length)holdings.append(node('p','No real holdings.'));for(const a of data.live_runtime?.balance_adjustments||[]){const row=node('div','');row.append(node('strong',short(a.mint)+' · external wallet reduction'),node('small','Removed from live exposure after finalized wallet checks. Proceeds and P/L need accounting review.'));holdings.append(row);}
+ }
  function funding(){
+  renderHoldings(snapshot);
   const b=balanceData?.funding,elapsed=balanceReceivedAt===null?Infinity:(performance.now()-balanceReceivedAt)/1000;
   const matches=b&&b.wallet_address===snapshot?.wallet.address;
   const fresh=matches&&!balanceError&&Number.isFinite(b.valid_until)&&balanceData.server_time+elapsed<=b.valid_until;
@@ -63,7 +74,7 @@
   $('rc-live-pnl').dataset.sign=data.live_runtime?.accounting_complete!==false&&Number.isFinite(data.live_runtime?.realized_sol)?(data.live_runtime.realized_sol<0?'negative':'positive'):'unknown';
   $('rc-live-pnl').textContent=data.live_runtime?.accounting_complete!==false&&Number.isFinite(data.live_runtime?.realized_sol)?`${data.live_runtime.realized_sol>=0?'+':''}${data.live_runtime.realized_sol.toFixed(6)} SOL`:'Needs accounting review';
   const setup=data.execution_setup;$('rc-setup-status').textContent=setup?`Engine installed · ${setup.signer_matches?'signer matches wallet':'matching signer needed'} · ${setup.jupiter_configured?'Jupiter configured':'Jupiter key needed'} · server switch ${setup.release_allowed?'on':'off'}`:'Execution setup unavailable.';
-  const holdings=$('rc-live-holdings');holdings.replaceChildren();for(const p of data.live_positions||[]){const row=node('div',''),head=node('div','', 'rc-row'),button=node('button',p.pending_reason?'Exit queued':'Sell');button.type='button';button.disabled=busy||Boolean(p.pending_reason);button.onclick=()=>closeLive([p.id],false);head.append(node('strong',short(p.mint)),button);row.append(head,node('small',`${(Number(p.quantity_raw)/10**p.decimals).toLocaleString('en-US',{maximumFractionDigits:6})} tokens · ${sol(p.cost_lamports/1e9)} remaining cost`),node('small',Number.isFinite(p.exit_value_lamports)&&Date.now()/1000-(p.marked_at||0)<=60?`${sol(p.exit_value_lamports/1e9)} minimum exit estimate`:'Waiting for a current exit quote'));holdings.append(row);}if(!data.live_positions?.length)holdings.append(node('p','No real holdings.'));for(const a of data.live_runtime?.balance_adjustments||[]){const row=node('div','');row.append(node('strong',short(a.mint)+' · external wallet reduction'),node('small','Removed from live exposure after finalized wallet checks. Proceeds and P/L need accounting review.'));holdings.append(row);}
+  renderHoldings(data);
   const activity=$('rc-live-orders');activity.replaceChildren();for(const o of data.live_runtime?.orders||[]){const row=node('div','');row.append(node('strong',`${o.side.toUpperCase()} · ${o.status.toUpperCase()}`),node('small',short(o.mint)),node('small',o.error||o.reason));if(o.signature){const a=node('a','View transaction ↗','rc-link');a.href='https://solscan.io/tx/'+encodeURIComponent(o.signature);a.target='_blank';a.rel='noopener';row.append(a);}activity.append(row);}if(!data.live_runtime?.orders?.length)activity.append(node('p','No real transactions.'));
   const s=data.paper_sync,b=s.blueprint,c=b.settings,active=b.traders.filter(t=>t.active!==false);
   $('rc-wallet-address').textContent=short(data.wallet.address);$('rc-wallet-address').title=data.wallet.address||'';

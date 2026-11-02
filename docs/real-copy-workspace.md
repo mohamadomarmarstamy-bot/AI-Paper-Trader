@@ -96,3 +96,10 @@ Solkrow and Kay The Doc remain actively followed by the main paper copier but ar
 ## Daily live entry hours
 
 Owner-requested live buys are eligible only from midnight until 2 PM in America/New_York, every day. The interval from 2 PM through midnight blocks new buys, including paused-window source signals and recovered unsent transactions. Timezone rules follow daylight saving changes. Selection and final signing/broadcast authorization both check the window. Existing sells, transaction reconciliation, PAPER and trial workers are unaffected. Midnight reopens the entry gate only: it never clears a manual pause, enables a disabled bot, overrides source exclusions, or bypasses readiness/freshness checks. Status exposes the daily schedule and a health check. No historical buy is replayed.
+
+Holding cards show remaining SOL cost and executable minimum exit estimates in
+USD using the funding preview's sourced SOL/USD observation (maximum age 45
+seconds). Remaining cost is explicitly a current-dollar equivalent, not the
+historical USD cost basis. Stale/missing conversion data shows USD unavailable;
+a stale exit quote is never shown as a current exit estimate. The ledger,
+transaction sizing, profit targets and stop calculations continue using SOL.
