@@ -16,6 +16,7 @@ import requests
 import database
 import solana_meme_bot as bot
 import solana_copy_solscan as solscan
+from solana_token_age import require_age, AgeUnavailable
 
 CASH_MINTS = {'So11111111111111111111111111111111111111112',
               'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
@@ -523,6 +524,9 @@ def tick(*, provider=None, market=None, clock=time.time):
                 quote=next((q for (a,_),q in quotes.items() if a==mint),None)
                 if not quote: signal['reason']='No current positive pool price. No fill invented.'
                 else:
+                    try:signal['token_age_proof']=require_age(mint)
+                    except AgeUnavailable as error:
+                        signal['reason']=str(error);events.append(signal);continue
                     amount=state['config']['trade_usd']; cost=amount+.1
                     p={'id':signal['id'],'mint':mint,'wallet':wallet,'pool':quote['pool'],'symbol':quote['symbol'],'quantity':amount/(quote['price']*1.01),'cost_usd':cost,'entry_price_usd':quote['price'],'opened_at':observed,'source_at':signal['source_at'],'latency_seconds':signal['latency_seconds'],'tx_hash':signal['tx_hash'],'marked_at':quote['at'],'source':signal.get('source','birdeye')}
                     p['mark_usd']=max(0,p['quantity']*quote['price']*.99-.1)

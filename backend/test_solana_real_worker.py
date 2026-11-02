@@ -44,6 +44,7 @@ class RealWorkerTests(unittest.TestCase):
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
         p=patch.object(database,'DATABASE_PATH',Path(temp.name)/'live.db');p.start();self.addCleanup(p.stop)
         hours=patch.object(live,'entry_allowed',return_value=True);hours.start();self.addCleanup(hours.stop)
+        age=patch.object(live,'require_age',return_value={'minimum_age_seconds':1800});age.start();self.addCleanup(age.stop)
         self.owner=str(Keypair().pubkey());self.source=str(Keypair().pubkey());self.mint=str(Pubkey.new_unique());self.chain=Chain()
         self.flags={'release_allowed':True,'signer_configured':True,'signer_matches':True,'jupiter_configured':True,'signer_address':self.owner,'executor_implemented':True,'network':'Solana mainnet'}
         for p in (patch.object(ex,'configuration',return_value=self.flags),patch.object(ex,'release_allowed',return_value=True),patch.object(budget,'sol_price',return_value={'usd':100})):
@@ -57,6 +58,20 @@ class RealWorkerTests(unittest.TestCase):
         budget.configure({'buy_usd':20},0)
 
     def activate(self):return live.activate(live.public()['revision'],1,budget.settings()['revision'],'ENABLE REAL SOLANA COPY TRADING',self.chain)
+
+    def test_underage_or_unverified_coin_never_reaches_signing(self):
+        self.activate();self.event()
+        with patch.object(live,'require_age',side_effect=live.AgeUnavailable('Token under 30 minutes')):
+            live.tick(self.chain)
+        self.assertFalse(self.chain.prepared);self.assertFalse(self.chain.sent)
+        self.assertEqual(live.orders()[0]['status'],'rejected')
+        self.assertIn('30 minutes',live.orders()[0]['error'])
+
+    def test_age_rule_does_not_block_exit_of_existing_young_coin(self):
+        self.enter();self.chain.exit_value=100_000_000
+        with patch.object(live,'require_age',side_effect=live.AgeUnavailable('Too young')):
+            live.tick(self.chain)
+        self.assertEqual(live.orders(True)[0]['side'],'sell')
 
     def event(self,ident='a'*64,mint=None,side='buy',status='paper_buy',source_at=None):
         event={'id':ident,'wallet':self.source,'mint':mint or self.mint,'side':side,'status':status,'source_at':source_at or time.time(),'observed_at':time.time()}
@@ -130,7 +145,7 @@ class RealWorkerTests(unittest.TestCase):
         self.activate();self.event();live.tick(self.chain)
         order=live.orders(True)[0]
         order.pop('send_started_at',None)
-        order.update(status='signed',source_wallet='ApRnQN2HkbCn7W2WWiT2FEKvuKJp9LugRyAE1a9Hdz1')
+        order.update(status='signed',source_wallet='CAPn1yH4oSywsxGU456jfgTrSSUidf9jgeAnHceNUJdw')
         live.save_order(order)
         self.chain.sent.clear();live.tick(self.chain)
         self.assertFalse(self.chain.sent)

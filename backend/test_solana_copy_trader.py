@@ -50,8 +50,14 @@ class CopyTests(unittest.TestCase):
         p=patch.object(database,'DATABASE_PATH',Path(t.name)/'paper.sqlite3');p.start();self.addCleanup(p.stop)
         self.now=1800000000.;self.baseline={'equity_usd':100000.,'net_usd':-200.}
         for p in (patch.object(copy,'configured',return_value=True),patch.object(copy.time,'time',side_effect=lambda:self.now),patch.object(copy,'regular_metrics',side_effect=lambda:deepcopy(self.baseline))):p.start();self.addCleanup(p.stop)
+        age=patch.object(copy,'require_age',return_value={'minimum_age_seconds':1800});age.start();self.addCleanup(age.stop)
         self.source=Provider();self.market=Market()
     def config(self,changes):return copy.configure(changes,copy.public()['revision'])
+    def test_underage_coin_is_skipped_without_paper_exposure(self):
+        with patch.object(copy,'require_age',side_effect=copy.AgeUnavailable('Token under 30 minutes')):
+            data=self.buy()
+        self.assertFalse(data['positions']);self.assertEqual(data['events'][0]['status'],'skipped')
+        self.assertIn('30 minutes',data['events'][0]['reason'])
     def tick(self):return copy.tick(provider=self.source,market=self.market,clock=lambda:self.now)
     def start(self):self.config({'enabled':True});return self.tick()
     def buy(self):

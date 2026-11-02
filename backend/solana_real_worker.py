@@ -16,6 +16,7 @@ from solana_meme_bot import Conflict
 import solana_real_execution as execution
 from solana_live_source_policy import paper_only
 from solana_live_hours import entry_allowed
+from solana_token_age import require_age, AgeUnavailable
 
 SCHEMA='''CREATE TABLE IF NOT EXISTS solana_real_run(
  id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL,state_json TEXT NOT NULL,
@@ -68,6 +69,7 @@ def public():
         count=conn.execute("SELECT COUNT(*) FROM solana_real_orders WHERE status='confirmed'").fetchone()[0] if exists else 0
     return {'revision':revision,'enabled':state['enabled'],'wallet':state['wallet'],'last_cycle':state['last_cycle'],'confirmed_trade_count':count,
             'started_at':state['started_at'],
+            'minimum_token_age_seconds':1800,'accounting_reviews':state.get('accounting_reviews',[]),
             'balance_adjustments':state.get('balance_adjustments',[]),'accounting_complete':not state.get('balance_adjustments'),'error':state['error'],'positions':list(state['positions'].values()),'pending_count':len(pending),
             'exit_alerts':__import__('solana_exit_alerts').summary(),
             'orders':latest,'realized_sol':state['realized_lamports']/10**9,'policy':state['policy'],
@@ -248,6 +250,9 @@ def begin_broadcast(order,state,lease_owner):
     """Atomically establish that broadcast began before a concurrent pause."""
     if order['side']=='buy' and paper_only(order.get('source_wallet')):
         raise execution.Unavailable('Source wallet is paper-only; new live buys are disabled.')
+    if order['side']=='buy':
+        try:order['token_age_proof']=require_age(order['mint'])
+        except AgeUnavailable as error:raise execution.Unavailable(str(error)) from None
     authorized(state,order['side'],order.get('source_at'),lease_owner)
     with closing(database.get_connection()) as conn:
         conn.execute('BEGIN IMMEDIATE')
@@ -318,6 +323,10 @@ def tick(provider=None):
     import solana_copy_trader as paper
     import solana_real_budget as budget
     state,_=load()
+    if state.get('balance_adjustments') and not orders(True):
+        from solana_manual_accounting import reconcile_reviewed
+        reconcile_reviewed(provider=provider)
+        state,_=load()
     if not state['enabled'] and not state['positions'] and not orders(True):return
     provider=provider or execution.Provider();owner=str(uuid.uuid4());now=time.time()
     with closing(database.get_connection()) as conn:
@@ -429,6 +438,8 @@ def tick(provider=None):
             try:
                 policy={**state['policy'],'reserve_lamports':int(Decimal(str(cfg['config']['fee_reserve_sol']))*10**9)}
                 if chosen['side']=='buy':
+                    try:order['token_age_proof']=require_age(chosen['mint'])
+                    except AgeUnavailable as error:raise execution.Unavailable(str(error)) from None
                     available=provider.balance(state['wallet'])-policy['reserve_lamports']-5000-policy['max_priority_fee_lamports']-provider.entry_rent(chosen['mint'])
                     if cfg['config']['buy_mode']=='fixed_usd':
                         price=Decimal(str(budget.sol_price()['usd']));amount=int((Decimal(str(cfg['config']['buy_usd']))/price*10**9).to_integral_value(rounding=ROUND_CEILING))

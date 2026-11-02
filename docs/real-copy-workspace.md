@@ -107,3 +107,18 @@ transaction sizing, profit targets and stop calculations continue using SOL.
 
 ## Owner-approved live runner trail
 After the first finalized profit half-sale, each fresh executable whole-runner quote updates a persisted per-token peak. A 20% decline triggers a full profit-protection exit, with the remaining net cost as a minimum trigger floor. Peaks start with the first fresh post-trim quote; they never infer historical highs. Quantity reductions preserve the unit peak. Source sells, initial stop, profit trims, safety gates, retry spacing and paper-only eligibility remain unchanged. The trigger does not guarantee execution price. Deploy only with no live holdings or pending orders.
+# November 2: mint age and manual-sale accounting
+
+New paper-copy and live-copy buys require finalized on-chain proof that the mint
+existed at least 1,800 seconds ago. This is a conservative lower bound, not pool
+age or a claimed exact creation timestamp. Missing, pruned, unsupported or
+insufficient history skips the signal; skipped signals are not replayed when
+they age. Existing exits remain available regardless of token age.
+
+The owner-confirmed November 2 manual sale is reconciled from its five reviewed,
+finalized settlement legs. The migration checks the wallet, position, quantity,
+cost, signatures, times and actual native deltas, preserves the original balance
+adjustment and every receipt in accounting_reviews, and books a manual_external
+sell exactly once in the same database transaction as its P/L. Unknown external
+changes remain blocked. Reconciliation never activates real trading.
+
