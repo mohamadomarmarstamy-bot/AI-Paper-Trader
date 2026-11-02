@@ -59,6 +59,22 @@ class RealWorkerTests(unittest.TestCase):
 
     def activate(self):return live.activate(live.public()['revision'],1,budget.settings()['revision'],'ENABLE REAL SOLANA COPY TRADING',self.chain)
 
+    def test_johnson_after_cutoff_reaches_signing_with_existing_guards(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from solana_live_hours import entry_allowed
+        self.source='J9TYAsWWidbrcZybmLSfrLzryANf4CgJBLdvwdGuC8MB'
+        with closing(database.get_connection()) as conn:
+            source,_=paper.load();source['traders']=[{'wallet':self.source,'active':True}]
+            source['cursors']={self.source:{'provider':'rpc','rpc_coverage':{'checked_at':time.time()}}}
+            conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1',(json.dumps(source),));conn.commit()
+        self.activate();self.event()
+        evening=datetime(2026,11,2,17,tzinfo=ZoneInfo('America/New_York')).timestamp()
+        with patch.object(live,'entry_allowed',side_effect=lambda at=None,source_wallet=None:entry_allowed(evening,source_wallet)):
+            live.tick(self.chain)
+        self.assertEqual(len(self.chain.sent),1)
+        self.assertEqual(live.orders(True)[0]['source_wallet'],self.source)
+
     def test_underage_or_unverified_coin_never_reaches_signing(self):
         self.activate();self.event()
         with patch.object(live,'require_age',side_effect=live.AgeUnavailable('Token under 30 minutes')):
