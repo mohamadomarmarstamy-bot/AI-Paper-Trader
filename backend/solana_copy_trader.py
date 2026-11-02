@@ -65,6 +65,8 @@ def load():
     with closing(database.get_connection()) as conn:
         if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='solana_copy_state'").fetchone():
             return initial(), 0
+        from solana_paper_price_review import repair
+        repair(conn)
         row = conn.execute('SELECT state_json,revision FROM solana_copy_state WHERE id=1').fetchone()
     if not row:return initial(),0
     state=json.loads(row[0]);state['config']={**DEFAULTS,**state['config']}
@@ -111,9 +113,9 @@ def public():
     with closing(database.get_connection()) as conn:
         exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name='solana_copy_events'").fetchone()
         events = [json.loads(r[0]) for r in conn.execute('SELECT details_json FROM solana_copy_events ORDER BY rowid DESC LIMIT 100')] if exists else []
-        closed = [json.loads(r[0]) for r in conn.execute('SELECT details_json FROM solana_copy_closes ORDER BY rowid DESC LIMIT 100')] if exists else []
-        totals = conn.execute("SELECT COUNT(*),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')),0),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')>0),0),COALESCE(SUM(json_extract(details_json,'$.cost_usd')),0),COALESCE(SUM(json_extract(details_json,'$.cost_usd')>0),0) FROM solana_copy_closes").fetchone() if exists else (0,0,0,0,0)
-        partial_count=conn.execute("SELECT COUNT(*) FROM solana_copy_closes WHERE json_extract(details_json,'$.partial_exit')=1").fetchone()[0] if exists else 0
+        closed = [json.loads(r[0]) for r in conn.execute("SELECT details_json FROM solana_copy_closes WHERE COALESCE(json_extract(details_json,'$.voided'),0)=0 ORDER BY rowid DESC LIMIT 100")] if exists else []
+        totals = conn.execute("SELECT COUNT(*),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')),0),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')>0),0),COALESCE(SUM(json_extract(details_json,'$.cost_usd')),0),COALESCE(SUM(json_extract(details_json,'$.cost_usd')>0),0) FROM solana_copy_closes WHERE COALESCE(json_extract(details_json,'$.voided'),0)=0").fetchone() if exists else (0,0,0,0,0)
+        partial_count=conn.execute("SELECT COUNT(*) FROM solana_copy_closes WHERE COALESCE(json_extract(details_json,'$.voided'),0)=0 AND json_extract(details_json,'$.partial_exit')=1").fetchone()[0] if exists else 0
     return {'trailing_comparison':__import__('solana_trailing_comparison').status(now), 'inactivity_alert':idle_summary('copy'),'paper': True, 'live_execution_enabled': False, 'provider_configured': configured(),'connection_checks':connection_status(),
             'solscan_configured':solscan.configured(),'discovery':{k:v for k,v in state.get('discovery',{}).items() if k!='pending'},'last_polled':state.get('last_polled',{}),
             'config': state['config'], 'revision': state['settings_revision'], 'health': state['health'],
@@ -131,6 +133,7 @@ def public():
             'stop_loss_cooldowns':{mint:until for mint,until in state['stop_loss_cooldowns'].items() if until>now},
             'discovery_error':state.get('discovery_error'),
             'rpc_coverage':{w:c.get('rpc_coverage') for w,c in state['cursors'].items() if c.get('provider')=='rpc'},
+            'paper_price_reviews':state.get('paper_price_reviews',[]),
             'cash_usd': state['cash_usd'], **own, 'positions': [{**p,'mark_fresh':p.get('marked_at') is not None and 0<=now-p['marked_at']<=120 and p.get('mark_usd') is not None} for p in state['positions'].values()],
             'traders': state['traders'], 'events': events, 'closed': closed,
             'closed_count': totals[0], 'realized_pnl_usd': totals[1], 'wins': totals[2],
@@ -291,7 +294,10 @@ def prices(addresses, provider, clock):
             if row['chainId'] != 'solana': continue
             address=bot.mint(row['baseToken']['address']); pair=bot.mint(row['pairAddress']); price=bot.num(row['priceUsd'])
             if address not in addresses or price <= 0: continue
+            from solana_paper_price import validate
+            price_check = validate(row)
             result[(address,pair)]={'price':price,'pool':pair,'symbol':str(row['baseToken'].get('symbol') or address[:6])[:80],'at':received,
+                'price_check':price_check,
                 'quote_mint':(row.get('quoteToken') or {}).get('address'),
                 'liquidity_usd':(row.get('liquidity') or {}).get('usd'),
                 'volume_m5_usd':(row.get('volume') or {}).get('m5'),
@@ -345,7 +351,8 @@ def record_close(state, key, quote, now, reason, fraction=1):
     proceeds=max(0,quantity*quote['price']*.99-.1)
     row={**deepcopy(p),'lot_id':p['id'],'id':str(uuid.uuid4()),'quantity':quantity,'cost_usd':cost,
          'mark_usd':proceeds,'closed_at':now,'exit_price_usd':quote['price'],'proceeds_usd':proceeds,
-         'pnl_usd':proceeds-cost,'reason':reason,'partial_exit':fraction<1}
+         'pnl_usd':proceeds-cost,'reason':reason,'partial_exit':fraction<1,
+         'price_check':deepcopy(quote.get('price_check'))}
     if fraction<1:
         p.setdefault('original_quantity',p['quantity']);p.setdefault('original_cost_usd',p['cost_usd'])
         p['quantity']-=quantity;p['cost_usd']-=cost

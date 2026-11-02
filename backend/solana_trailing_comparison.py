@@ -79,19 +79,21 @@ def advance(conn, actions, config, now):
 
 def arm_summary(arm, now):
     groups = {}
-    for r in arm['closed']: groups.setdefault(r['lot_id'], []).append(r)
+    for r in arm['closed']:
+        if r.get('voided'): continue
+        groups.setdefault(r['lot_id'], []).append(r)
     complete = {key: sum(r['pnl_usd'] for r in rows) for key, rows in groups.items() if any(not r.get('partial_exit') for r in rows)}
     unpriced = sum(p.get('mark_usd') is None or p.get('marked_at') is None or not 0 <= now-p['marked_at'] <= 45 for p in arm['positions'].values())
-    realized = sum(r['pnl_usd'] for r in arm['closed'])
+    realized = sum(r['pnl_usd'] for r in arm['closed'] if not r.get('voided'))
     unrealized = None if unpriced else sum(p['mark_usd']-p['cost_usd'] for p in arm['positions'].values())
     return {'realized_pnl_usd': realized, 'unrealized_pnl_usd': unrealized,
             'total_pnl_usd': realized+unrealized if unrealized is not None else None,
             'completed_positions': len(complete), 'winning_completed_positions': sum(p>0 for p in complete.values()),
             'win_rate_percent': 100*sum(p>0 for p in complete.values())/len(complete) if complete else None,
             'open_holdings': len(arm['positions']), 'unpriced_holdings': unpriced,
-            'max_observed_drawdown_usd': arm['max_drawdown_usd'],
-            'positions': list(arm['positions'].values()), 'recent_exits': arm['closed'][-20:],
-            'exit_records_total': len(arm['closed']), 'exit_records_returned': min(20, len(arm['closed']))}
+            'max_observed_drawdown_usd': None if arm.get('drawdown_invalidated') else arm['max_drawdown_usd'],
+            'positions': list(arm['positions'].values()), 'recent_exits': [r for r in arm['closed'] if not r.get('voided')][-20:],
+            'exit_records_total': sum(not r.get('voided') for r in arm['closed']), 'exit_records_returned': min(20, sum(not r.get('voided') for r in arm['closed']))}
 
 
 def status(now=None):
