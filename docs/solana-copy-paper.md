@@ -183,3 +183,29 @@ The feature is dormant until the explicit trial start action. Deployment alone c
 Optional `SOLANA_COPY_RPC_BACKUP_URL` supplies an explicit HTTPS read-only fallback for wallet history and balance reads. A failed primary read gets at most one backup attempt. Both share the existing 100-call/minute budget; a primary 429 cooldown remains in force. No public fallback is silently added. Configure endpoints only after reviewing provider access and quotas. This does not change execution RPC or trading strategy.
 
 Selected wallet network reads overlap in a pool of at most three workers; state merges remain sequential and oldest-first scheduling is preserved. Existing live exits run before entries, including while buys are paused. RPC failover does not configure the execution provider or guarantee provider uptime.
+
+### Live exit responsiveness and owner alerts
+
+The live worker waits one second after a pending-order cycle, two seconds when
+holdings are open, and five seconds otherwise. Network processing adds to these
+intervals; cycles never overlap. Existing 30-second fresh-exit retry spacing,
+15-second same-signature rebroadcast, finalization checks, and trade rules remain
+unchanged. This does not guarantee a fill or a stop price.
+
+An independent two-second observer queues owner emails for new live sell-order
+rejections, failures, expiry, or interrupted/canceled preparation; it warns once
+an outstanding signed/submitted/unknown sale is at least 30 seconds old. One
+pending warning and one failure warning are allowed per unresolved position
+incident, with a recovery email after a finalized sale (possibly partial).
+Retries share the incident until recovery. Historical terminal orders are
+baselined on first initialization, not emailed retroactively. The observer reads
+the latest 100 orders, so a long outage can limit detection history.
+
+Delivery runs separately from both observation and trading, uses the configured
+Resend sender/owner recipient, durable outbox, stable provider idempotency keys,
+and bounded backoff. Uncertain deliveries stop after 23 hours rather than retry
+past the provider deduplication window. Provider acceptance is not proof of inbox
+delivery. No arbitrary provider error text or credentials are put in emails.
+`live_runtime.exit_alerts` exposes configuration and outbox counts. This monitor
+observes sell orders; quote outages before an order exists remain visible in
+live worker health rather than these order emails.

@@ -69,6 +69,7 @@ def public():
     return {'revision':revision,'enabled':state['enabled'],'wallet':state['wallet'],'last_cycle':state['last_cycle'],'confirmed_trade_count':count,
             'started_at':state['started_at'],
             'balance_adjustments':state.get('balance_adjustments',[]),'accounting_complete':not state.get('balance_adjustments'),'error':state['error'],'positions':list(state['positions'].values()),'pending_count':len(pending),
+            'exit_alerts':__import__('solana_exit_alerts').summary(),
             'orders':latest,'realized_sol':state['realized_lamports']/10**9,'policy':state['policy'],
             'basis':'Actual finalized wallet balance changes, including transaction fees and account rent. SOL accounting; dollar P/L is not inferred from PAPER.'}
 
@@ -431,8 +432,19 @@ def tick(provider=None):
         except Conflict:pass
 
 
-async def worker():
+def cycle_delay():
+    """Faster reconciliation while a transaction is pending, no overlapping ticks."""
+    if orders(True): return 1
+    return 2 if load()[0]['positions'] else 5
+
+
+async def execution_loop():
     while True:
         try:await asyncio.to_thread(tick)
         except Exception:pass
-        await asyncio.sleep(5)
+        await asyncio.sleep(await asyncio.to_thread(cycle_delay))
+
+
+async def worker():
+    import solana_exit_alerts
+    await asyncio.gather(execution_loop(), solana_exit_alerts.worker())
