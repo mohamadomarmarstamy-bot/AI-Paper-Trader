@@ -6,7 +6,12 @@ import time
 TIMEZONE = 'America/New_York'
 
 
-def entry_allowed(at=None):
+ALL_DAY_SOURCES = frozenset({'4DdrfiDHpmx55i4SPssxVzS9ZaKLb8qr45NKY9Er9nNh'})
+
+
+def entry_allowed(at=None, source_wallet=None):
+    if source_wallet in ALL_DAY_SOURCES:
+        return True
     local = datetime.fromtimestamp(time.time() if at is None else at, ZoneInfo(TIMEZONE))
     return local.hour < 14
 
