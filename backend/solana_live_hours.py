@@ -18,5 +18,5 @@ def entry_allowed(at=None, source_wallet=None):
 
 def entry_status(at=None):
     return {'timezone': TIMEZONE, 'new_buys_allowed': entry_allowed(at),
-            'pause_at': '14:00', 'resume_at': '00:00', 'exits_monitored': True,
+            'all_day_sources': sorted(ALL_DAY_SOURCES), 'pause_at': '14:00', 'resume_at': '00:00', 'exits_monitored': True,
             'basis': 'Daily live entry window only; manual pause and all readiness checks remain binding.'}
