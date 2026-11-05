@@ -63,10 +63,14 @@ def guard_wallet_change():
 
 def public():
     state,revision=load();pending=orders(True)
-    latest=[{k:v for k,v in r.items() if k in ('id','side','mint','status','created_at','reason','signature','result','error')} for r in orders()]
+    latest=orders()
     with closing(database.get_connection()) as conn:
         exists=conn.execute("SELECT 1 FROM sqlite_master WHERE name='solana_real_orders'").fetchone()
         count=conn.execute("SELECT COUNT(*) FROM solana_real_orders WHERE status='confirmed'").fetchone()[0] if exists else 0
+        if exists:
+            from solana_activity_details import enrich_orders
+            latest=enrich_orders(conn,latest,state)
+    latest=[{k:v for k,v in r.items() if k in ('id','side','mint','status','created_at','reason','signature','result','error','source_wallet','realized_pnl_lamports')} for r in latest]
     return {'revision':revision,'enabled':state['enabled'],'wallet':state['wallet'],'last_cycle':state['last_cycle'],'confirmed_trade_count':count,
             'started_at':state['started_at'],
             'minimum_token_age_seconds':1800,'accounting_reviews':state.get('accounting_reviews',[]),
