@@ -23,7 +23,7 @@ jobs:
       - name: Portfolio history outage recovery
         run: |
           python -m unittest discover -s backend -p 'test_portfolio_history_recovery.py' -q
-          node --test backend/frontend/js/portfolio.test.cjs
+          node --test backend/frontend/js/portfolio.test.cjs backend/frontend/js/coin-labels.test.cjs
       - name: Python syntax check (all Pro Ticker modules and tests)
         run: |
           python - <<'PY'
