@@ -14,6 +14,14 @@ def build_router(*,require_session):
     import solana_real_copy as real_copy
     import solana_paper_trials as trials
 
+    @router.get('/meme-coins/token-labels')
+    def token_labels(request:Request, mints:str=''):
+        require_session(request)
+        if len(mints)>1400:raise HTTPException(422,'Coin address batch too large.')
+        from solana_token_labels import labels
+        try:return JSONResponse({'labels':labels(mints.split(','))},headers={'Cache-Control':'private, max-age=60'})
+        except ValueError as error:raise HTTPException(422,str(error)) from None
+
     @router.get('/meme-coins/copy/trials')
     def trial_page(request:Request):
         require_session(request)
