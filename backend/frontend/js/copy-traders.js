@@ -5,7 +5,7 @@
  const time=n=>n?new Date(n*1000).toLocaleString():'—';const short=s=>`${s.slice(0,6)}…${s.slice(-4)}`;
  const text=(tag,value)=>{const n=document.createElement(tag);n.textContent=value;return n;};
  const coin=(tag,row)=>{const el=text(tag,row.name||row.symbol||short(row.mint));if(row.mint)el.title=row.mint;return window.MemeCoinLabels?.attach(el,row.mint,row.symbol)||el;};
- const exitReason=r=>({stop_loss:'Stop loss triggered',source_sell:'Copied wallet sold',profit_take_half:'Took profit · sold half',profit_protection:'Profit protection triggered',manual:'Manual sell',manual_external:'Sold manually in wallet',take_profit:'Profit target reached'}[r]||String(r||'Sell reason unavailable').replaceAll('_',' '));
+ const exitReason=r=>({stop_loss:'Stop loss triggered',source_sell:'Copied wallet sold',trader_sell:'Copied wallet sold',manual_sell:'Manual sell',profit_take_half:'Took profit · sold half',profit_protection:'Profit protection triggered',manual:'Manual sell',manual_external:'Sold manually in wallet',take_profit:'Profit target reached'}[r]||String(r||'Sell reason unavailable').replaceAll('_',' '));
  const traderName=(wallet,data)=>data.traders.find(t=>t.wallet===wallet)?.name||(wallet?short(wallet):'Unknown source wallet');
  const saleProfit=r=>Number.isFinite(r.pnl_usd)?`${r.pnl_usd>0?'Profit':r.pnl_usd<0?'Loss':'Break-even'}: ${r.pnl_usd>=0?'+':''}${money(r.pnl_usd)} · this sale, after modeled costs`:'Realized P/L unavailable';
  function health(){
