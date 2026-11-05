@@ -16,6 +16,8 @@ CANDIDATES = (
     ('Jijo', '4BdKaxN8G6ka4GYtQQWk4G4dZRUTX2vQH9GcXdBREFUk'),
     ('Tech', '5d3jQcuUvsuHyZkhdp78FFqc7WogrzZpTtec1X9VNkuE'),
     ('Kadenox', 'B32QbbdDAyhvUQzjcaM5j6ZVKwjCxAwGH5Xgvb9SJqnC'),
+    ('Casino', '8rvAsDKeAcEjEkiZMug9k8v1y8mW6gQQiMobd89Uy7qR'),
+    ('Rambo', '2net6etAtTe3Rbq2gKECmQwnzcKVXRaLcHy2Zy1iCiWz'),
 )
 
 
@@ -86,6 +88,25 @@ def tick():
     if not exists():
         return
     with database.paper_trial_context():
+        # Enroll newly approved trials prospectively without resetting existing results.
+        with closing(database.get_connection()) as conn:
+            state, revision = paper.load()
+            known = {r['wallet'] for r in state['traders']}
+            now = time.time()
+            added = False
+            for name, wallet in CANDIDATES:
+                if wallet in known:
+                    continue
+                state['traders'].append(dict(name=name, wallet=wallet, active=True,
+                    paper_only=True, selected_at=now, buy_resume_at=now,
+                    qualification='owner_requested_paper_trial', trade_provider='rpc'))
+                state['cursors'][wallet] = {'at': now, 'provider': 'rpc'}
+                added = True
+            if added:
+                if conn.execute('UPDATE solana_copy_state SET state_json=?,revision=revision+1 WHERE id=1 AND revision=?',
+                                (json.dumps(state, allow_nan=False), revision)).rowcount != 1:
+                    raise paper.bot.Conflict('Trial changed during candidate enrollment.')
+                conn.commit()
         paper.tick(provider=TrialProvider())
 
 

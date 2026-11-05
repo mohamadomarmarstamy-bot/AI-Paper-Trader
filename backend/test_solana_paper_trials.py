@@ -32,7 +32,7 @@ class PaperTrialsTests(unittest.TestCase):
         result = trials.start()
         self.assertTrue(result['started']); self.assertFalse(result['live_execution_enabled'])
         self.assertFalse(result['automatic_promotion'])
-        self.assertEqual([r['name'] for r in result['traders']], ['Jijo', 'Tech', 'Kadenox'])
+        self.assertEqual([r['name'] for r in result['traders']], ['Jijo', 'Tech', 'Kadenox', 'Casino', 'Rambo'])
         self.assertFalse(result['config']['auto_discover'])
         for row in result['traders']:
             self.assertTrue(row['paper_only'])
