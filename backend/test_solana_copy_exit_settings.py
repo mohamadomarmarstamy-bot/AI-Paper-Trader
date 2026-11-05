@@ -64,12 +64,25 @@ class ExitSettingsTests(unittest.TestCase):
 
     def test_stale_revisions_and_missing_acknowledgement_cannot_apply(self):
         before=(paper.load(),live.load())
-        for revisions in ((1,0,0),(0,1,0),(0,0,1)):
+        for revisions in ((1,0,0),(0,0,1)):
             with self.assertRaises(Conflict):exits.apply_split(*revisions,exits.ACK)
         for ack in ('',None):
             with self.assertRaises(ValueError):exits.apply_split(0,0,0,ack)
         with self.assertRaises(ValueError):exits.apply_split(False,0,0,exits.ACK)
         self.assertEqual((paper.load(),live.load()),before)
+
+    def test_heartbeat_revision_does_not_reject_or_overwrite_the_current_live_ledger(self):
+        with closing(database.get_connection()) as conn:
+            runtime,_=live.load()
+            runtime.update(enabled=True,realized_lamports=-9876,event_cursor=456,last_cycle=time.time())
+            conn.execute('UPDATE solana_real_run SET revision=revision+10,state_json=? WHERE id=1',(json.dumps(runtime),));conn.commit()
+        # The owner confirmed using revision 0, before ten normal worker ticks.
+        exits.apply_split(0,0,0,exits.ACK)
+        current,revision=live.load()
+        self.assertEqual(current,runtime)
+        self.assertEqual(revision,11)
+        self.assertEqual(paper.load()[0]['config']['stop_loss_percent'],0)
+        self.assertEqual(exits.live_stop({'stop_loss_percent':0}),40)
 
     def test_applying_while_paused_does_not_start_real_trading(self):
         self.apply();self.assertFalse(live.load()[0]['enabled'])
