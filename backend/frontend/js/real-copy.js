@@ -130,10 +130,19 @@
   $('rc-stop-apply').onclick=async()=>{
    if(busy||!snapshot)return;
    if(!confirm('Apply this experiment? PAPER loss stop will be OFF. REAL loss stop will be 40% for new and existing bot positions. Profit-taking and source-sell exits stay active. A 40% trigger can fill at a larger loss. Trading on/off state and manual wallet holdings stay unchanged.'))return;
-   const data=snapshot;let refresh=false;busy=true;controls();$('rc-stop-apply').disabled=true;
-   try{accept(await request('stop-experiment',{paper_revision:data.paper_sync.settings_revision,live_revision:data.live_runtime.revision,exit_revision:data.exit_settings?.revision??0,acknowledgement:'APPLY PAPER 0 REAL 40 STOP EXPERIMENT'}));message('Applied: paper stop off; real stop 40%. Profit-taking and source sells remain active.');}
-   catch(e){refresh=true;message(e.name==='AbortError'?'Reply timed out. Refreshing settings before any retry.':e.message);}
-   finally{busy=false;controls();if(refresh)void load();}
+   busy=true;controls();$('rc-stop-message').textContent='Applying stop settings…';
+   try{
+    const data=await request('status');accept(data);
+    const payload={paper_revision:data.paper_sync.settings_revision,live_revision:data.live_runtime.revision,exit_revision:data.exit_settings?.revision??0,acknowledgement:'APPLY PAPER 0 REAL 40 STOP EXPERIMENT'};
+    for(let attempt=0;;attempt++){
+     try{accept(await request('stop-experiment',payload));break;}
+     catch(e){if(attempt>=3||e.message!=='A live cycle is running. Refresh and retry after it finishes.')throw e;await new Promise(resolve=>setTimeout(resolve,500));}
+    }
+    $('rc-stop-message').textContent='Applied: paper stop off; real stop 40%. Profit-taking and source sells remain active.';
+   }
+   catch(e){$('rc-stop-message').textContent=e.name==='AbortError'?'Reply timed out. Refresh to check the saved stop values before trying again.':e.message;}
+   finally{busy=false;controls();}
+
   };
   $('rc-buy-settings').addEventListener('input',()=>{if(!buyDirty)buyRevision=buySettings?.revision;buyDirty=true;buyFields();});
   $('rc-buy-reload').onclick=async()=>{buyDirty=false;buyRevision=null;await load();if(!transportError)$('rc-buy-message').textContent='Saved buy settings reloaded.';};

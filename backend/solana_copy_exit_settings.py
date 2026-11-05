@@ -45,7 +45,12 @@ def apply_split(paper_revision, live_revision, exit_revision, acknowledgement):
         if not source_row or not live_row:
             raise Conflict('Load both copy accounts before applying the experiment.')
         source, runtime = json.loads(source_row['state_json']), json.loads(live_row['state_json'])
-        if source['settings_revision'] != paper_revision or live_row['revision'] != live_revision or (saved['revision'] if saved else 0) != exit_revision:
+        # live_revision advances on every heartbeat, not just owner edits. This
+        # transaction reads and updates the CURRENT live ledger under the write
+        # lock, so comparing that telemetry revision would reject normal clicks.
+        # Keep the parameter for older clients; settings revisions, the worker
+        # lease and pending-order guard still protect the actual change.
+        if source['settings_revision'] != paper_revision or (saved['revision'] if saved else 0) != exit_revision:
             raise Conflict('Copy settings changed. Refresh before applying the experiment.')
         if live_row['lease_until'] > now:
             raise Conflict('A live cycle is running. Refresh and retry after it finishes.')
