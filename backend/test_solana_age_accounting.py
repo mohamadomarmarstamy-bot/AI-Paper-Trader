@@ -47,9 +47,9 @@ class AgeTests(unittest.TestCase):
 class ReviewedProvider:
     def network(self):pass
     def rpc(self, method, args):
-        sale=manual.REVIEWED_SALES[0];sig=args[0];delta=dict(sale['legs'])[sig]
-        swap=sig==sale['legs'][1][0]
-        return {'slot':464575808,'blockTime':1793639780,'meta':{'err':None,'fee':10000,
+        sale=getattr(self, 'sale', manual.REVIEWED_SALES[0]);sig=args[0];delta=dict(sale['legs'])[sig]
+        swap=sig==sale['legs'][0 if len(sale['legs']) == 2 else 1][0]
+        return {'slot':464575808,'blockTime':sale['time_window'][0],'meta':{'err':None,'fee':10000,
             'preBalances':[1000000000], 'postBalances':[1000000000+delta],
             'preTokenBalances':[{'owner':sale['wallet'],'mint':sale['mint'],
               'uiTokenAmount':{'amount':str(sale['quantity'])}}] if swap else [], 'postTokenBalances':[]},
@@ -77,6 +77,26 @@ class AccountingTests(unittest.TestCase):
         self.assertFalse(manual.reconcile_reviewed(ReviewedProvider()))
         self.assertEqual(live.load()[0]['realized_lamports'],state['realized_lamports'])
         self.assertEqual(live.orders()[0]['reason'],'manual_external')
+
+    def test_kimchi_cash_settlement_books_once(self):
+        sale = manual.REVIEWED_SALES[1]
+        state, _ = live.load()
+        state['balance_adjustments'] = [{
+            'position_id': sale['position_id'], 'mint': sale['mint'],
+            'quantity_removed_raw': sale['quantity'],
+            'unreconciled_cost_lamports': sale['cost']}]
+        with closing(database.get_connection()) as conn:
+            conn.execute('UPDATE solana_real_run SET state_json=? WHERE id=1', (json.dumps(state),))
+            conn.commit()
+        provider = ReviewedProvider()
+        provider.sale = sale
+        self.assertTrue(manual.reconcile_reviewed(provider))
+        updated, _ = live.load()
+        self.assertEqual(updated['realized_lamports'], -100 - 3745058)
+        self.assertFalse(updated['enabled'])
+        self.assertFalse(updated['balance_adjustments'])
+        self.assertEqual(live.orders()[0]['signature'], sale['settlement_signature'])
+        self.assertFalse(manual.reconcile_reviewed(provider))
 
     def test_wrong_receipt_never_clears_adjustment(self):
         provider=ReviewedProvider();original=provider.rpc

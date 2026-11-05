@@ -17,12 +17,24 @@ REVIEWED_SALES = ({
     'position_id': 'buy:9d6f8a67dc49a55d95728334d95c1c0cf0171538505c0ced84685e38210eda69',
     'mint': 'y9XdvdUzvQanC64SxwzqaNKfV76YLo3mRpNnvKgpump',
     'quantity': 833221406038, 'cost': 109030226,
+    'time_window': (1793639780, 1793639798),
     'legs': (
         ('5493PoD9QzB1C5asmEQWwR5dKkR2cnNWGyEnkYrdfgHrdM5ma65BQZqJ2VRHgCrzaVLLd2JjByCSTUajMeyomSVi', 50000000),
         ('GrhHax9cUCkbgNQ8FoiD55GmpdHXmaeqvpWneRaMMMZJZvWkn6b9V5y1xrxh6nLNEze48xYZddt6DETRLdsbrZv', -3172680),
         ('4ZLGf6upLxYMSnwzcFVvGQh2JPgcKgptMBzRbUR69YHJhyCRjuYBNJbYNcyVFBZ8WYfuQ5tUFL12y6WNpTy8uLya', -45468480),
         ('4reVhPyw58BmNXZkoBimh2Pzy6FdHrTVR846cR7VRuuLc9o5TQVGbtdkCMQv2hRNoP1P7HfkiDDU9n2xwWa5T2b1', 79763552),
         ('ALhUF3psRsSXVyWKGesTN2Gf9YjNWUUFNn9NhRErt33RhdKtZmZKBv5gcLa1MYZDHGLV984Dzv1c7j3CpeW5Xgn', -90001),
+    ),
+}, {
+    'wallet': '3tmujS2fwJiPHRXc6NskYz1vJHf1Eq9JNvx2547MKut6',
+    'position_id': 'buy:1a7c1b3d9e099c817b22a1942069294cc0b280796c43989d90b671ece3a77c86',
+    'mint': 'CSocnzcRpgSCr1naKcNTieWZUxb6rABe45j844m7pump',
+    'quantity': 2960033644, 'cost': 87677360,
+    'time_window': (1793842582, 1793851879),
+    'settlement_signature': 'BzHfqgx3dqgAWfRAYNzTGuuDQbyUAh4kjCxuDtU2j9qoziS4TyXsq2zPPpaRGwjNGL3rKpQznf5cLz6hpmxvae6',
+    'legs': (
+        ('3ioyLYXQht9tC1DDur9RVzhLm5on8ZUdjuTQAoJNYjCzeFhvV3CgQ6snVrqdkWCWWoHucHR2tB3a3NLxGTf2xjb9', -80001),
+        ('BzHfqgx3dqgAWfRAYNzTGuuDQbyUAh4kjCxuDtU2j9qoziS4TyXsq2zPPpaRGwjNGL3rKpQznf5cLz6hpmxvae6', 84012303),
     ),
 },)
 
@@ -36,7 +48,7 @@ def audit(sale, provider):
             meta = tx['meta']; message = tx['transaction']['message']
             if meta['err'] is not None or tx['transaction']['signatures'][0] != signature:
                 raise ValueError()
-            if type(tx['blockTime']) is not int or not 1793639780 <= tx['blockTime'] <= 1793639798:
+            if type(tx['blockTime']) is not int or not sale['time_window'][0] <= tx['blockTime'] <= sale['time_window'][1]:
                 raise ValueError()
             idx = next(i for i, k in enumerate(message['accountKeys']) if k['pubkey'] == sale['wallet'])
             delta = uint(meta['postBalances'][idx]) - uint(meta['preBalances'][idx])
@@ -76,7 +88,7 @@ def reconcile_reviewed(provider=None):
         ident = 'manual:' + sale['position_id']
         order = {'id': ident, 'side': 'sell', 'mint': sale['mint'], 'position_id': sale['position_id'],
                  'wallet': sale['wallet'], 'reason': 'manual_external', 'created_at': time.time(),
-                 'status': 'confirmed', 'signature': sale['legs'][-2][0], 'result': result}
+                 'status': 'confirmed', 'signature': sale.get('settlement_signature', sale['legs'][-2][0]), 'result': result}
         with closing(database.get_connection()) as conn:
             conn.execute('BEGIN IMMEDIATE')
             row = conn.execute('SELECT * FROM solana_real_run WHERE id=1').fetchone()
