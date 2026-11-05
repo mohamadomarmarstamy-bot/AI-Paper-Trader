@@ -160,7 +160,9 @@ def trades(wallet,cursor,now,*,preserve_exits=True):
             if window.get('scan_oldest_at') is not None and window['scan_oldest_at']<floor:
                 window['scan_before']=None;window['truncated']=False
         window['history_scope']='full_exit_history' if preserve_exits else 'fresh_entries_only'
-    if window is None or window.get('scan_before'):
+    for page in range(3):
+        if window is not None and not window.get('scan_before'):
+            break
         options={'limit':SIGNATURE_PAGE_SIZE,'commitment':'confirmed'}
         if cursor.get('latest'):options['until']=cursor['latest']
         if window is not None:options['before']=window['scan_before']
@@ -195,6 +197,10 @@ def trades(wallet,cursor,now,*,preserve_exits=True):
         window['scan_before']=data[-1]['signature'] if len(data)==SIGNATURE_PAGE_SIZE and not reached_boundary else None
         window['truncated']=bool(window['scan_before'])
         if window['scan_before']:
+            # Failed transactions cannot contain a committed buy or sell. Drain
+            # at most three such pages without waiting another wallet poll.
+            if page < 2 and all(row.get('err') is not None for row in data):
+                continue
             coverage={'checked_at':now,'signatures_seen':window['seen'],'failed_transactions':window.get('failed',0),'failed_count_complete':window.get('failed_count_complete',False),'decoded_swaps':window['decoded'],
                       'unsupported_transactions':window['unsupported'],'history_truncated':True,'queued':len(window['queue']),
                       'stale_references_skipped':window.get('stale_references',0),'history_scope':window['history_scope']}

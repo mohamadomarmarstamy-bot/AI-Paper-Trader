@@ -202,11 +202,29 @@ class RpcTests(unittest.TestCase):
             self.assertEqual(params[0],'3'*88);return tx(self.now-60,'sell',signature='3'*88)
         with patch.object(rpc,'request',side_effect=request):
             rows,cur=rpc.trades(WALLET,cursor,self.now)
-            self.assertEqual(rows,[]);self.assertEqual(cur['rpc_coverage']['failed_transactions'],1000)
+            self.assertEqual(cur['rpc_coverage']['failed_transactions'],1000)
             self.assertTrue(cur['rpc_coverage']['failed_count_complete']);self.assertEqual(cur['rpc_coverage']['queued'],0)
-            rows,cur=rpc.trades(WALLET,cur,self.now+10)
             self.assertEqual(len(rows),1);self.assertEqual(rows[0]['base']['type_swap'],'from')
             self.assertNotIn('window',cur);self.assertEqual(cur['latest'],failed[0]['signature'])
+
+    def test_failed_page_drain_is_bounded_and_keeps_pagination(self):
+        cursor = {'provider': 'rpc', 'at': self.now - 200, 'latest': 'old-signature'}
+        calls = []
+        def request(method, params):
+            self.assertEqual(method, 'getSignaturesForAddress')
+            calls.append(params[1])
+            return [{'signature': str(len(calls)).ljust(88, '2'),
+                     'blockTime': self.now - 1, 'err': {'InstructionError': [0, 'Custom']},
+                     'confirmationStatus': 'confirmed'}]
+        with patch.object(rpc, 'SIGNATURE_PAGE_SIZE', 1), patch.object(rpc, 'request', side_effect=request):
+            rows, updated = rpc.trades(WALLET, cursor, self.now)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(rows, [])
+        self.assertEqual(updated['latest'], 'old-signature')
+        self.assertTrue(updated['rpc_coverage']['history_truncated'])
+        self.assertEqual(updated['window']['scan_before'], '3'.ljust(88, '2'))
+        self.assertEqual(calls[1]['before'], '1'.ljust(88, '2'))
+        self.assertEqual(calls[2]['before'], '2'.ljust(88, '2'))
 
     def test_signature_time_check_accounts_for_slow_response_but_rejects_future_clock(self):
         cursor={'provider':'rpc','at':self.now-10}
