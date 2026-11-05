@@ -429,7 +429,8 @@ def tick(provider=None):
                     known=conn.execute('SELECT 1 FROM solana_real_decisions WHERE source_id=?',(e['id'],)).fetchone()
                 if known:continue
                 chosen={'id':'buy:'+e['id'],'side':'buy','mint':e['mint'],'source_wallet':e['wallet'],'source_at':e['source_at'],'reason':'copy_buy',
-                    'protection':{k:source['config'][k] for k in ('stop_loss_percent','profit_take_enabled','profit_take_first_percent','stop_loss_cooldown_seconds')}}
+                    'protection':{**{k:source['config'][k] for k in ('profit_take_enabled','profit_take_first_percent','stop_loss_cooldown_seconds')},
+                                  'stop_loss_percent':__import__('solana_copy_exit_settings').live_stop(source['config'])}}
                 reason='Selected fresh admitted copy signal.'
             decide(e,reason,time.time())
         if chosen and execution.release_allowed() and time.time()-now<110:

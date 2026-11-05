@@ -75,6 +75,27 @@ class RealWorkerTests(unittest.TestCase):
         self.assertEqual(len(self.chain.sent),1)
         self.assertEqual(live.orders(True)[0]['source_wallet'],self.source)
 
+    def test_independent_live_stop_survives_disabled_paper_stop_and_triggers_at_40(self):
+        import solana_copy_exit_settings as exits
+        self.activate()
+        exits.apply_split(paper.load()[0]['settings_revision'],live.load()[1],0,exits.ACK)
+        self.event();live.tick(self.chain)
+        self.assertEqual(live.orders(True)[0]['protection']['stop_loss_percent'],40)
+        self.chain.receipt={'state':'confirmed','token_delta':10_000_000,'native_delta':-200_005_000,'fee_lamports':5000,'slot':1}
+        live.tick(self.chain)
+        self.chain.exit_value=150_000_000;live.tick(self.chain)
+        self.assertFalse(live.orders(True))
+        self.chain.exit_value=100_000_000;live.tick(self.chain)
+        self.assertEqual(live.orders(True)[0]['reason'],'stop_loss')
+
+    def test_source_sell_still_exits_before_independent_40_percent_stop(self):
+        import solana_copy_exit_settings as exits
+        self.enter()
+        exits.apply_split(paper.load()[0]['settings_revision'],live.load()[1],0,exits.ACK)
+        self.event(ident='b'*64,side='sell',status='observed')
+        self.chain.exit_value=190_000_000;live.tick(self.chain)
+        self.assertEqual(live.orders(True)[0]['reason'],'source_sell')
+
     def test_underage_or_unverified_coin_never_reaches_signing(self):
         self.activate();self.event()
         with patch.object(live,'require_age',side_effect=live.AgeUnavailable('Token under 30 minutes')):
