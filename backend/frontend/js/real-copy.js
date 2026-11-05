@@ -130,10 +130,10 @@
   $('rc-stop-apply').onclick=async()=>{
    if(busy||!snapshot)return;
    if(!confirm('Apply this experiment? PAPER loss stop will be OFF. REAL loss stop will be 40% for new and existing bot positions. Profit-taking and source-sell exits stay active. A 40% trigger can fill at a larger loss. Trading on/off state and manual wallet holdings stay unchanged.'))return;
-   const data=snapshot;busy=true;controls();$('rc-stop-apply').disabled=true;
+   const data=snapshot;let refresh=false;busy=true;controls();$('rc-stop-apply').disabled=true;
    try{accept(await request('stop-experiment',{paper_revision:data.paper_sync.settings_revision,live_revision:data.live_runtime.revision,exit_revision:data.exit_settings?.revision??0,acknowledgement:'APPLY PAPER 0 REAL 40 STOP EXPERIMENT'}));message('Applied: paper stop off; real stop 40%. Profit-taking and source sells remain active.');}
-   catch(e){message(e.name==='AbortError'?'Reply timed out. Refreshing settings before any retry.':e.message);}
-   finally{busy=false;controls();void load();}
+   catch(e){refresh=true;message(e.name==='AbortError'?'Reply timed out. Refreshing settings before any retry.':e.message);}
+   finally{busy=false;controls();if(refresh)void load();}
   };
   $('rc-buy-settings').addEventListener('input',()=>{if(!buyDirty)buyRevision=buySettings?.revision;buyDirty=true;buyFields();});
   $('rc-buy-reload').onclick=async()=>{buyDirty=false;buyRevision=null;await load();if(!transportError)$('rc-buy-message').textContent='Saved buy settings reloaded.';};
