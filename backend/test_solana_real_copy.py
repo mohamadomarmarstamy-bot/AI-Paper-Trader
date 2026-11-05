@@ -32,6 +32,24 @@ class RealCopyTests(unittest.TestCase):
             if not self.allowed:raise HTTPException(401)
         app=FastAPI();app.include_router(build_router(require_session=auth));self.client=TestClient(app);self.headers={'Origin':'http://testserver'}
     def proof(self,challenge,key=None):return base64.b64encode((key or self.key).sign(challenge['message'].encode())).decode()
+    def test_stop_experiment_requires_session_same_origin_and_explicit_ack(self):
+        import solana_real_worker as live
+        import solana_copy_exit_settings as exits
+        with closing(database.get_connection()) as conn:
+            paper.initialize(conn);live.initialize(conn)
+        payload={'paper_revision':0,'live_revision':0,'exit_revision':0,'acknowledgement':exits.ACK}
+        self.allowed=False
+        self.assertEqual(self.client.post('/real-copy/stop-experiment',json=payload,headers=self.headers).status_code,401)
+        self.allowed=True
+        self.assertEqual(self.client.post('/real-copy/stop-experiment',json=payload,headers={'Origin':'https://other.example'}).status_code,403)
+        self.assertEqual(self.client.post('/real-copy/stop-experiment',json={**payload,'acknowledgement':''},headers=self.headers).status_code,422)
+        self.assertEqual(paper.load()[0]['config']['stop_loss_percent'],20)
+        response=self.client.post('/real-copy/stop-experiment',json=payload,headers=self.headers)
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['exit_settings']['stop_loss_percent'],40)
+        self.assertEqual(response.json()['paper_sync']['blueprint']['settings']['stop_loss_percent'],0)
+        self.assertFalse(response.json()['live_execution_enabled'])
+
     def test_wallet_proof_persists_without_trading_authority(self):
         c=real.challenge(self.address,0,'https://app.example',now=1000)
         self.assertIn('Live trading remains DISABLED',c['message']);self.assertIn('Origin: https://app.example',c['message'])

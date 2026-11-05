@@ -58,6 +58,18 @@ def build_router(*,require_session):
         try:return await run_in_threadpool(budget.configure,payload['changes'],payload['expected_revision'])
         except Conflict as error:raise HTTPException(409,str(error)) from None
         except (ValueError,TypeError,OverflowError) as error:raise HTTPException(422,str(error)) from None
+    @router.post('/real-copy/stop-experiment')
+    async def real_copy_stop_experiment(request:Request):
+        payload=await body(request)
+        fields={'paper_revision','live_revision','exit_revision','acknowledgement'}
+        if not isinstance(payload,dict) or set(payload)!=fields:raise HTTPException(422,'Current stop experiment revisions required.')
+        from solana_copy_exit_settings import apply_split
+        try:
+            await run_in_threadpool(apply_split,**payload)
+            return await run_in_threadpool(real_copy.public)
+        except Conflict as error:raise HTTPException(409,str(error)) from None
+        except (ValueError,TypeError) as error:raise HTTPException(422,str(error)) from None
+
     @router.post('/real-copy/verify')
     async def real_copy_verify(request:Request):
         payload=await body(request)

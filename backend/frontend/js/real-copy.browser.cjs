@@ -43,3 +43,36 @@ test('Real-copy desktop/mobile: setup gates, owner activation, pause, exits and 
   assert.equal(requests.some(r=>r.method==='POST'&&!['/real-copy/challenge','/real-copy/verify','/real-copy/unlink','/real-copy/settings','/real-copy/start','/real-copy/pause','/real-copy/close'].includes(r.path)),false);
  }finally{await browser?.close();await new Promise(r=>server.close(r));}
 });
+
+test('Owner applies paper 0 / real 40 only after explicit confirmation',{timeout:60000},async()=>{
+ const root=path.resolve(__dirname,'..'),section=fs.readFileSync(path.join(root,'index.html'),'utf8').match(/<section id="real-copy-section"[\s\S]*?<\/section>/)[0];
+ let applied=false,posts=[];
+ const snapshot=()=>({live_execution_enabled:false,can_start:false,server_time:Date.now()/1000,
+  live_positions:[],live_trade_count:0,live_runtime:{revision:3,pending_count:0,orders:[],realized_sol:0,accounting_complete:true},
+  buy_settings:{revision:0,config:{buy_mode:'fixed_usd',buy_usd:7,buy_percent:null,fee_reserve_sol:.01}},
+  exit_settings:{revision:applied?1:0,independent:applied,stop_loss_percent:applied?40:null,started_at:applied?Date.now()/1000:null},
+  wallet:{address:'',revision:0,ownership_verified:false},operational_health:{level:'paused',label:'Paused',detail:'Fixture',checks:[]},
+  paper_sync:{snapshot:'fixture',settings_revision:2,read_at:Date.now()/1000,source_health:'running',source_error:null,
+   blueprint:{settings:{trade_usd:50,stop_loss_percent:applied?0:20,auto_discover:true},entry_protection:{one_open_position_per_coin:true},traders:[]},
+   performance:{closed_return_percent:0,realized_pnl_usd:0,closed_count:0},signals:[]}});
+ const server=http.createServer(async(req,res)=>{
+  res.setHeader('Content-Type','application/json');
+  if(req.url==='/real-copy/status')return res.end(JSON.stringify(snapshot()));
+  if(req.url==='/real-copy/balance')return res.end(JSON.stringify({settings:snapshot().buy_settings,funding:{wallet_address:'',funding_fits:false},server_time:Date.now()/1000}));
+  if(req.url==='/real-copy/stop-experiment'){
+   let chunks=[];for await(const c of req)chunks.push(c);const body=JSON.parse(Buffer.concat(chunks));posts.push(body);
+   assert.deepEqual(body,{paper_revision:2,live_revision:3,exit_revision:0,acknowledgement:'APPLY PAPER 0 REAL 40 STOP EXPERIMENT'});
+   applied=true;return res.end(JSON.stringify(snapshot()));
+  }
+  if(req.url==='/js/real-copy.js'){res.setHeader('Content-Type','application/javascript');return res.end(fs.readFileSync(path.join(root,'js/real-copy.js')));}
+  res.setHeader('Content-Type','text/html');res.end(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">${section.replace(' hidden>','>')}<script src="/js/real-copy.js"></script><script>addEventListener('DOMContentLoaded',()=>loadRealCopyTrade())</script>`);
+ });await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
+ try{browser=await chromium.launch({headless:true,args:['--no-sandbox']});for(const width of [1440,390]){
+  applied=false;posts=[];const page=await browser.newPage({viewport:{width,height:1100}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto('http://127.0.0.1:'+server.address().port);await page.getByText('Paper stop: 20% · Real stop for new entries: 20%',{exact:true}).waitFor();assert.equal(posts.length,0);
+  page.once('dialog',d=>d.dismiss());await page.locator('#rc-stop-apply').click();assert.equal(posts.length,0);assert.equal(applied,false);
+  page.once('dialog',d=>d.accept());await page.locator('#rc-stop-apply').click();await page.getByText('Applied: paper stop off; real stop 40%. Profit-taking and source sells remain active.',{exact:true}).waitFor();
+  assert.equal(posts.length,1);assert.equal(await page.locator('#rc-cooldown').innerText(),'40% per lot');assert.match(await page.locator('#rc-stop-summary').innerText(),/Paper stop: off · Real stop for new entries: 40%/);
+  await page.waitForFunction(()=>document.getElementById('rc-stop-apply').disabled);assert.deepEqual(errors,[]);await page.close();
+ }}finally{await browser?.close();await new Promise(r=>server.close(r));}
+});

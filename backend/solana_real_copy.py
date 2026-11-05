@@ -84,6 +84,7 @@ def public():
     unrealized=None if stale else sum(p['exit_value_lamports']-p['cost_lamports'] for p in held)/10**9
     return {'live_execution_enabled':active,'entry_schedule':entry_status(now),'can_start':can_start,'lock_reason':None if configured else 'Complete server signer, Jupiter API and release-switch setup.',
             'server_time':now,'operational_health':health,'buy_settings':settings,'execution_setup':flags,'live_runtime':runtime,
+            'exit_settings':__import__('solana_copy_exit_settings').settings(),
             'wallet':{'address':saved['wallet_address'],'verified_at':saved['verified_at'],'revision':saved['revision'],
                       'ownership_verified':bool(saved['wallet_address'] and saved['verified_at']), 'spending_authorized':bool(configured and (active or held or runtime['pending_count']))},
             'live_positions':held,'live_trade_count':runtime['confirmed_trade_count'],'live_pnl_usd':None,

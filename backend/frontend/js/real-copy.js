@@ -86,7 +86,10 @@
   $('rc-paper-profit').textContent=`${money(s.performance.realized_pnl_usd)} net · ${s.performance.closed_count} realized paper exits, including partial sales`;
   $('rc-sync').textContent=`Synced ${new Date(s.read_at*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} · revision ${s.settings_revision}`;
   $('rc-fingerprint').textContent=s.snapshot.slice(0,12);$('rc-guard').textContent=b.entry_protection.one_open_position_per_coin?'One position per coin':'Every fresh buy + add-ons';
-  $('rc-cooldown').textContent=c.stop_loss_percent===0?'Off':`${c.stop_loss_percent??20}% per lot`;
+  const liveStop=data.exit_settings?.independent?data.exit_settings.stop_loss_percent:c.stop_loss_percent;
+  $('rc-cooldown').textContent=liveStop===0?'Off':`${liveStop??20}% per lot`;
+  $('rc-stop-summary').textContent=`Paper stop: ${c.stop_loss_percent===0?'off':`${c.stop_loss_percent}%`} · Real stop for new entries: ${liveStop}%${data.exit_settings?.started_at?` · Applied ${new Date(data.exit_settings.started_at*1000).toLocaleString()}`:''}`;
+  $('rc-stop-apply').disabled=busy||Boolean(data.live_runtime?.pending_count)||Boolean(data.exit_settings?.independent&&liveStop===40&&c.stop_loss_percent===0&&data.live_positions.every(p=>p.protection.stop_loss_percent===40));
   $('rc-discovery').textContent=c.auto_discover?'Automatic':'Paused';
   $('rc-feed').textContent=s.source_error?`Paper feed: ${s.source_error}`:`Paper feed · ${s.source_health.replaceAll('_',' ')}`;
   const roster=$('rc-roster');roster.replaceChildren();for(const [i,t]of active.entries()){const row=node('div','', 'rc-trader'),avatar=node('span',(t.name||t.wallet).slice(0,2).toUpperCase(),'rc-avatar');avatar.style.setProperty('--rc-hue',String((i*47+230)%360));const info=node('div','');info.append(node('strong',t.name||short(t.wallet)),node('small',short(t.wallet)));const badge=node('span',t.trade_provider==='rpc'?'Chain feed':'Provider feed','rc-pill');row.append(avatar,info,badge);roster.append(row);}if(!active.length)roster.append(node('p','Waiting for the paper roster.'));
@@ -123,6 +126,14 @@
  }
  document.addEventListener('DOMContentLoaded',()=>{
   if(!$('real-copy-section'))return;
+  $('rc-stop-apply').onclick=async()=>{
+   if(busy||!snapshot)return;
+   if(!confirm('Apply this experiment? PAPER loss stop will be OFF. REAL loss stop will be 40% for new and existing bot positions. Profit-taking and source-sell exits stay active. A 40% trigger can fill at a larger loss. Trading on/off state and manual wallet holdings stay unchanged.'))return;
+   const data=snapshot;busy=true;controls();$('rc-stop-apply').disabled=true;
+   try{accept(await request('stop-experiment',{paper_revision:data.paper_sync.settings_revision,live_revision:data.live_runtime.revision,exit_revision:data.exit_settings?.revision??0,acknowledgement:'APPLY PAPER 0 REAL 40 STOP EXPERIMENT'}));message('Applied: paper stop off; real stop 40%. Profit-taking and source sells remain active.');}
+   catch(e){message(e.name==='AbortError'?'Reply timed out. Refreshing settings before any retry.':e.message);}
+   finally{busy=false;controls();void load();}
+  };
   $('rc-buy-settings').addEventListener('input',()=>{if(!buyDirty)buyRevision=buySettings?.revision;buyDirty=true;buyFields();});
   $('rc-buy-reload').onclick=async()=>{buyDirty=false;buyRevision=null;await load();if(!transportError)$('rc-buy-message').textContent='Saved buy settings reloaded.';};
   $('rc-buy-settings').onsubmit=async event=>{
