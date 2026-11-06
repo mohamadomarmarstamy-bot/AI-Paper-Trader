@@ -156,15 +156,26 @@ def save_signed(order,lease_owner):
 
 
 def schedule_failed_sell_retry(state, order, now):
-    """Only finalized on-chain failures qualify; at most two fast retries per holding."""
-    if order.get('side') != 'sell': return
+    """Two fast retries after safe pre-broadcast rejection or finalized failure.
+
+    Pending/unknown transactions must settle before another order can be made.
+    """
+    if order.get('side') != 'sell' or order.get('status') not in ('failed','rejected'): return
     p = state['positions'].get(order.get('position_id'))
     if p is None: return
     count = p.get('fast_failed_sell_retries', 0)
     if count < 2:
         p['fast_failed_sell_retries'] = count + 1
-        # Existing 30s guard now permits another attempt 5s after final failure.
-        p['last_exit_attempt_at'] = now - 25
+        p['exit_retry_at'] = now + 2
+    else:
+        p.pop('exit_retry_at',None)
+
+
+def exit_attempt_ready(position, reason, now):
+    # A full protective exit must not wait for an earlier half-sale cooldown.
+    if position.get('last_exit_reason')=='profit_take_half' and reason!='profit_take_half':
+        return True
+    return now >= position.get('exit_retry_at',position['last_exit_attempt_at']+30)
 
 
 def trailing_profit_trigger(position, value, fee_lamports):
@@ -202,6 +213,7 @@ def post_receipt(state,order,result,now):
         if not p or quantity>p['quantity_raw']:raise execution.Unavailable('Exit ledger quantity requires manual reconciliation.')
         cost=p['cost_lamports'] if quantity==p['quantity_raw'] else p['cost_lamports']*quantity//p['quantity_raw']
         pnl=delta-cost;state['realized_lamports']+=pnl;p['realized_lamports']+=pnl
+        p.pop('exit_retry_at',None);p.pop('fast_failed_sell_retries',None)
         p['quantity_raw']-=quantity;p['cost_lamports']-=cost;p['pending_reason']=None
         if order['reason']=='profit_take_half':p['stages']+=1;p['next_gain_percent']*=2
         if not p['quantity_raw']:
@@ -407,8 +419,9 @@ def tick(provider=None):
                 if reason=='profit_take_half':quantity=max(1,quantity//2)
                 if not reason and rules['profit_take_enabled'] and gain>=p['next_gain_percent'] and quantity>=2:
                     reason='profit_take_half';quantity//=2
-                if reason and time.time()-p['last_exit_attempt_at']>=30:
-                    p['pending_reason']=reason;p['last_exit_attempt_at']=time.time()
+                if reason and exit_attempt_ready(p,reason,time.time()):
+                    p.pop('exit_retry_at',None)
+                    p['pending_reason']=reason;p['last_exit_attempt_at']=time.time();p['last_exit_reason']=reason
                     chosen={'id':str(uuid.uuid4()),'side':'sell','mint':p['mint'],'position_id':p['id'],'quantity':quantity,'reason':reason};break
             except execution.Unavailable:
                 p['exit_value_lamports']=None;state['error']='A live exit quote is unavailable. Holdings remain unpriced and exits are retried.'
@@ -460,6 +473,7 @@ def tick(provider=None):
                     quote=provider.build(state['wallet'],chosen['mint'],budget.SOL,amount,policy)
                     allocated_cost=position['cost_lamports']*amount//position['quantity_raw']
                     target=int((Decimal(allocated_cost)*(100+Decimal(str(position['next_gain_percent'])))/100).to_integral_value(rounding=ROUND_CEILING))
+                    policy['minimum_sell_output_lamports']=target+5000+state['policy']['max_priority_fee_lamports']
                     if execution.uint(quote['otherAmountThreshold'])-5000-policy['max_priority_fee_lamports']<target:
                         position['pending_reason']=None
                         raise execution.Unavailable('Profit trim deferred: current half-sale proceeds after fees do not meet the profit target.')
@@ -470,7 +484,9 @@ def tick(provider=None):
                 try:provider.send(prepared);order['status']='submitted';save_order(order)
                 except execution.Unavailable:state['error']='Broadcast outcome unknown. Further orders wait for reconciliation.'
             except execution.Unavailable as error:
-                if not order.get('send_started_at'):order.update(status='rejected',error=str(error));save_order(order)
+                if not order.get('send_started_at'):
+                    order.update(status='rejected',error=str(error));save_order(order)
+                    schedule_failed_sell_retry(state,order,time.time())
                 raise
             state['last_order_at']=time.time()
         state['last_cycle']=time.time();commit_cycle(state,owner)
@@ -483,7 +499,9 @@ def tick(provider=None):
 def cycle_delay():
     """Faster reconciliation while a transaction is pending, no overlapping ticks."""
     if orders(True): return 1
-    return 2 if load()[0]['positions'] else 5
+    positions=load()[0]['positions']
+    if any(p.get('exit_retry_at') is not None for p in positions.values()):return 1
+    return 2 if positions else 5
 
 
 async def execution_loop():

@@ -86,6 +86,15 @@ class ExecutionProviderTests(unittest.TestCase):
         provider.rpc=rpc
         return provider
 
+    def test_fresh_profit_trim_quote_cannot_drop_below_net_target(self):
+        provider=self.provider();quote=self.quote()
+        quote.update(inputMint=self.mint,outputMint=ex.SOL)
+        policy={**self.policy,'minimum_sell_output_lamports':100}
+        with patch.object(ex,'signer') as sign:
+            with self.assertRaisesRegex(ex.Unavailable,'profit target'):
+                provider._prepare_once(self.owner,'sell',self.mint,100000000,policy,lambda:None,quote)
+            sign.assert_not_called()
+
     def test_local_compilation_adds_guards_and_signs_only_after_authorization(self):
         provider=self.provider();calls=[]
         result=provider.prepare(self.owner,'buy',self.mint,100000000,self.policy,lambda:calls.append('authorized'),quote=self.quote())

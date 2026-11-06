@@ -207,7 +207,15 @@ class Provider:
 
     def prepare(self,owner,side,mint,amount,policy,authorize,quote=None):
         if side != 'buy':
-            return self._prepare_once(owner,side,mint,amount,policy,authorize,quote)
+            try:
+                return self._prepare_once(owner,side,mint,amount,policy,authorize,quote)
+            except SimulationSlippage:
+                # No signature or broadcast exists after a simulation failure.
+                # Refresh once immediately, with unchanged execution limits.
+                authorize()
+                fresh = self.build(owner,mint,SOL,amount,policy)
+                authorize()
+                return self._prepare_once(owner,side,mint,amount,policy,authorize,fresh)
         original = quote or self.build(owner,SOL,mint,amount,policy)
         try:
             return self._prepare_once(owner,side,mint,amount,policy,authorize,original)
@@ -238,6 +246,8 @@ class Provider:
         # Revalidate a caller-supplied quote before it can influence guards.
         if quote['inputMint']!=input_mint or quote['outputMint']!=output_mint or uint(quote['inAmount'])!=amount:raise Unavailable('Quote does not match the order.')
         minimum=uint(quote['otherAmountThreshold']);token_ata=ata(owner,mint,token_program);sol_ata=ata(owner,SOL)
+        if side=='sell' and minimum<policy.get('minimum_sell_output_lamports',0):
+            raise Unavailable('Profit trim deferred: fresh sale proceeds after fees do not meet the profit target.')
         before=self.accounts([owner,token_ata,sol_ata]);native=uint(before[0]['lamports'])
         if before[0]['owner']!=SYSTEM or raw_account(before[0])!=b'':raise Unavailable('A system-owned trading wallet is required.')
         owned=token_amount(before[1],owner,mint,token_program)

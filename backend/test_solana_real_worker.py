@@ -169,6 +169,33 @@ class RealWorkerTests(unittest.TestCase):
             conn.execute('UPDATE solana_real_run SET state_json=? WHERE id=1',(json.dumps(state),));conn.commit()
         live.tick(self.chain);self.assertEqual(live.orders(True)[0]['reason'],'stop_loss')
 
+    def test_rejected_sell_retries_after_two_seconds_without_duplicate_pending_sale(self):
+        self.enter();self.chain.exit_value=100_000_000
+        now=time.time()
+        with patch.object(live.time,'time',return_value=now):
+            with patch.object(self.chain,'prepare',side_effect=ex.Unavailable('simulation rejected')):
+                live.tick(self.chain)
+        self.assertEqual(live.orders()[0]['status'],'rejected')
+        self.assertEqual(live.cycle_delay(),1)
+        with patch.object(live.time,'time',return_value=now+1):live.tick(self.chain)
+        self.assertEqual(len(self.chain.prepared),1)
+        with patch.object(live.time,'time',return_value=now+2):live.tick(self.chain)
+        self.assertEqual(len(self.chain.prepared),2)
+        self.assertEqual(live.orders(True)[0]['side'],'sell')
+        with patch.object(live.time,'time',return_value=now+5):live.tick(self.chain)
+        self.assertEqual(len(self.chain.prepared),2)
+
+    def test_stop_loss_bypasses_rejected_trim_wait_and_sells_full_remaining_quantity(self):
+        self.enter();self.chain.exit_value=300_105_000;now=time.time()
+        with patch.object(live.time,'time',return_value=now):
+            with patch.object(self.chain,'prepare',side_effect=ex.Unavailable('simulation rejected')):
+                live.tick(self.chain)
+        self.chain.exit_value=100_000_000
+        with patch.object(live.time,'time',return_value=now+1):live.tick(self.chain)
+        order=live.orders(True)[0]
+        self.assertEqual(order['reason'],'stop_loss')
+        self.assertEqual(self.chain.prepared[-1][:2],('sell',10_000_000))
+
     def test_trial_wallet_cannot_buy_live_even_if_main_discovery_enrolls_it(self):
         from solana_paper_trials import CANDIDATES
         for _,wallet in CANDIDATES:
