@@ -49,3 +49,5 @@
 #real-copy-section [hidden]{display:none!important}
 @media(max-width:1050px){#real-copy-section .rc-summary-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:700px){#real-copy-section .rc-health-wallet,#real-copy-section .rc-layout{grid-template-columns:1fr}#real-copy-section .rc-panel,#real-copy-section .rc-health,#real-copy-section .rc-stat{padding:16px}#real-copy-section .rc-health,#real-copy-section .rc-wallet-panel{min-height:0}#real-copy-section h2{font-size:1.7rem}#real-copy-section .rc-summary-cards{gap:10px}#real-copy-section .rc-summary-cards .rc-stat{min-height:150px}#real-copy-section .rc-summary-cards strong{font-size:1.4rem}}
+
+#real-copy-section .rc-coin-address{display:inline-flex;flex-wrap:wrap;align-items:center;gap:.5rem;min-width:0;overflow-wrap:anywhere}#real-copy-section .rc-coin-address>strong,#real-copy-section .rc-coin-address>small{min-width:0}#real-copy-section .rc-copy-address{font-size:.72rem;min-height:44px;padding:.5rem .65rem;flex:none}#real-copy-section .rc-copy-status{font-size:.72rem;color:var(--rc-mint)}
