@@ -122,3 +122,19 @@ adjustment and every receipt in accounting_reviews, and books a manual_external
 sell exactly once in the same database transaction as its P/L. Unknown external
 changes remain blocked. Reconciliation never activates real trading.
 
+
+
+## Fast live sell retries
+
+A recognized Jupiter slippage failure during unsigned simulation gets one immediate
+fresh-quote attempt with current authorization and the same slippage/fee limits.
+Profit half-sales carry their net profit floor into the fresh preparation, so a
+requote cannot turn a profit trim into a losing sale.
+
+Pre-broadcast rejected sells and finalized failed sells get up to two retries
+eligible two seconds after failure, with one-second worker polling during that
+window. After that burst, the existing 30-second attempt spacing applies until a
+successful sale resets the burst. A full stop/source/manual/protection exit can
+supersede the wait after a half-sale attempt. Every attempt checks current quotes
+and balances; pending or uncertain signatures must reconcile before replacement.
+Network, quoting and finalization time are additional to retry eligibility.
