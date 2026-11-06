@@ -209,6 +209,29 @@ class RealWorkerTests(unittest.TestCase):
         self.assertFalse(self.chain.prepared)
         self.assertFalse(self.chain.sent)
 
+    def test_sell_timings_survive_uncertain_submission_and_finalized_receipt(self):
+        self.enter();self.chain.exit_value=100_000_000
+        live.tick(self.chain)
+        pending=live.orders(True)[0]
+        for name in ('quote_ms','prepare_ms','submit_ms','trigger_to_broadcast_ms'):
+            self.assertGreaterEqual(pending['timing_ms'][name],0)
+        self.chain.receipt={'state':'confirmed','token_delta':-10_000_000,'native_delta':99_000_000,'fee_lamports':5000,'slot':3}
+        live.tick(self.chain)
+        order=next(o for o in live.public()['orders'] if o['id']==pending['id'])
+        self.assertEqual(order['status'],'confirmed')
+        self.assertGreaterEqual(order['timing_ms']['broadcast_to_finalized_ms'],0)
+        self.assertGreaterEqual(order['timing_ms']['trigger_to_finalized_ms'],order['timing_ms']['trigger_to_broadcast_ms'])
+        self.assertNotIn('prepared',order)
+
+    def test_rejected_sell_retains_preparation_timing(self):
+        self.enter();self.chain.exit_value=100_000_000
+        with patch.object(self.chain,'prepare',side_effect=ex.Unavailable('simulation rejected')):
+            live.tick(self.chain)
+        order=live.orders()[0]
+        self.assertEqual(order['status'],'rejected')
+        self.assertGreaterEqual(order['timing_ms']['prepare_ms'],0)
+        self.assertNotIn('trigger_to_broadcast_ms',order['timing_ms'])
+
     def test_owner_excluded_sources_remain_paper_active_but_never_buy_live(self):
         from solana_live_source_policy import PAPER_ONLY_SOURCES
         for wallet in PAPER_ONLY_SOURCES:

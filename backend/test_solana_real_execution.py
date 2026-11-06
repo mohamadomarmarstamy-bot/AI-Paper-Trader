@@ -349,5 +349,36 @@ class Token2022PreparationTests(ExecutionProviderTests):
         calls=[];provider.rpc=lambda method,params:calls.append(params[0]) or params[0]*100
         self.assertEqual(provider.entry_rent(self.mint),33500);self.assertEqual(calls,[170,165])
 
+    def test_sell_initial_checks_are_parallel_and_no_rent_calls_are_needed(self):
+        from threading import Barrier
+        provider=self.provider();original_accounts=provider.accounts;original_mint=provider.mint;rpc=provider.rpc
+        barrier=Barrier(2,timeout=3)
+        def network():barrier.wait()
+        def mint(address):barrier.wait();return original_mint(address)
+        provider.network=network;provider.mint=mint
+        def accounts(keys):
+            rows=original_accounts(keys)
+            for i,key in enumerate(keys):
+                if key==ex.ata(self.owner,self.mint,ex.TOKEN2022):rows[i]=encoded(token2022(self.key.pubkey(),ex.pub(self.mint),1000))
+            return rows
+        provider.accounts=accounts
+        def checked_rpc(method,params):
+            self.assertNotEqual(method,'getMinimumBalanceForRentExemption')
+            return rpc(method,params)
+        provider.rpc=checked_rpc
+        quote=self.quote();quote.update(inputMint=self.mint,outputMint=ex.SOL,inAmount='500',otherAmountThreshold='10000000')
+        prepared=provider.prepare(self.owner,'sell',self.mint,500,self.policy,lambda:None,quote=quote)
+        self.assertGreaterEqual(prepared['timing_ms']['simulation_ms'],0)
+        self.assertEqual(prepared['min_tokens_after'],500)
+
+    def test_parallel_network_failure_never_reaches_signing(self):
+        provider=self.provider()
+        provider.network=lambda:(_ for _ in ()).throw(ex.Unavailable('wrong network'))
+        quote=self.quote();quote.update(inputMint=self.mint,outputMint=ex.SOL,inAmount='500')
+        with patch.object(ex,'signer') as sign:
+            with self.assertRaisesRegex(ex.Unavailable,'wrong network'):
+                provider.prepare(self.owner,'sell',self.mint,500,self.policy,lambda:self.fail('Must not authorize'),quote=quote)
+            sign.assert_not_called()
+
 
 if __name__=='__main__':unittest.main()

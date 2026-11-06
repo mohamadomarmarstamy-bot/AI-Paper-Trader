@@ -12,6 +12,7 @@ import json
 import time
 import uuid
 import database
+from solana_execution_timing import measure
 from solana_meme_bot import Conflict
 import solana_real_execution as execution
 from solana_live_source_policy import paper_only
@@ -70,7 +71,7 @@ def public():
         if exists:
             from solana_activity_details import enrich_orders
             latest=enrich_orders(conn,latest,state)
-    latest=[{k:v for k,v in r.items() if k in ('id','side','mint','status','created_at','reason','signature','result','error','source_wallet','realized_pnl_lamports')} for r in latest]
+    latest=[{k:v for k,v in r.items() if k in ('id','side','mint','status','created_at','reason','signature','result','error','source_wallet','realized_pnl_lamports','timing_ms')} for r in latest]
     return {'revision':revision,'enabled':state['enabled'],'wallet':state['wallet'],'last_cycle':state['last_cycle'],'confirmed_trade_count':count,
             'started_at':state['started_at'],
             'minimum_token_age_seconds':1800,'accounting_reviews':state.get('accounting_reviews',[]),
@@ -290,6 +291,8 @@ def begin_broadcast(order,state,lease_owner):
             sold=conn.execute("SELECT 1 FROM solana_copy_events WHERE observed_at>=? AND json_extract(details_json,'$.side')='sell' AND json_extract(details_json,'$.wallet')=? AND json_extract(details_json,'$.mint')=? AND CAST(json_extract(details_json,'$.source_at') AS INTEGER)>=? LIMIT 1",(int(order['source_at'])-5,order['source_wallet'],order['mint'],int(order['source_at']))).fetchone()
             if sold:raise execution.Unavailable('Source sold before live broadcast; buy canceled.')
         order.update(status='unknown',send_started_at=time.time())
+        if order['side']=='sell' and order.get('detected_at') is not None:
+            order.setdefault('timing_ms',{})['trigger_to_broadcast_ms']=round(max(0,order['send_started_at']-order['detected_at'])*1000,3)
         changed=conn.execute("UPDATE solana_real_orders SET status='unknown',details_json=? WHERE id=? AND status='signed'",(json.dumps(order,allow_nan=False),order['id']))
         if changed.rowcount!=1:raise Conflict('The stored transaction changed before broadcast.')
         conn.commit()
@@ -378,6 +381,10 @@ def tick(provider=None):
                 result=provider.reconcile(order)
                 if result['state'] in ('confirmed','failed'):
                     post_receipt(state,order,result,time.time());order.update(status=result['state'],result=result);terminal=order
+                    if order['side']=='sell':
+                        observed=time.time();timings=order.setdefault('timing_ms',{})
+                        timings['broadcast_to_finalized_ms']=round(max(0,observed-order['send_started_at'])*1000,3)
+                        if order.get('detected_at') is not None:timings['trigger_to_finalized_ms']=round(max(0,observed-order['detected_at'])*1000,3)
                     if result['state']=='failed':
                         schedule_failed_sell_retry(state,order,time.time())
                         order['error']='On-chain swap failed; no fill recorded. '+json.dumps(result.get('execution_error','Network execution failed'),separators=(',',':'))[:300]
@@ -407,7 +414,9 @@ def tick(provider=None):
         for p in sorted(state['positions'].values(),key=lambda p:p['opened_at']):
             if p['id'] in blocked_positions:continue
             try:
-                q=provider.build(state['wallet'],p['mint'],budget.SOL,p['quantity_raw'],{**state['policy'],'reserve_lamports':0})
+                quote_timing={}
+                with measure(quote_timing,'quote_ms'):
+                    q=provider.build(state['wallet'],p['mint'],budget.SOL,p['quantity_raw'],{**state['policy'],'reserve_lamports':0})
                 value=max(0,execution.uint(q['otherAmountThreshold'])-5000-state['policy']['max_priority_fee_lamports'])
                 p.update(marked_at=time.time(),exit_value_lamports=value)
                 gain=100*(value-p['cost_lamports'])/p['cost_lamports'];rules=p['protection'];reason=p['pending_reason'];quantity=p['quantity_raw']
@@ -422,7 +431,7 @@ def tick(provider=None):
                 if reason and exit_attempt_ready(p,reason,time.time()):
                     p.pop('exit_retry_at',None)
                     p['pending_reason']=reason;p['last_exit_attempt_at']=time.time();p['last_exit_reason']=reason
-                    chosen={'id':str(uuid.uuid4()),'side':'sell','mint':p['mint'],'position_id':p['id'],'quantity':quantity,'reason':reason};break
+                    chosen={'id':str(uuid.uuid4()),'side':'sell','mint':p['mint'],'position_id':p['id'],'quantity':quantity,'reason':reason,'detected_at':time.time(),'timing_ms':quote_timing};break
             except execution.Unavailable:
                 p['exit_value_lamports']=None;state['error']='A live exit quote is unavailable. Holdings remain unpriced and exits are retried.'
             if time.time()-now>100:break
@@ -470,7 +479,8 @@ def tick(provider=None):
                     # The actual half-size executable quote must meet the same
                     # profit target as the whole-position monitoring estimate.
                     position=state['positions'][chosen['position_id']]
-                    quote=provider.build(state['wallet'],chosen['mint'],budget.SOL,amount,policy)
+                    with measure(order.setdefault('timing_ms',{}),'quote_ms'):
+                        quote=provider.build(state['wallet'],chosen['mint'],budget.SOL,amount,policy)
                     allocated_cost=position['cost_lamports']*amount//position['quantity_raw']
                     target=int((Decimal(allocated_cost)*(100+Decimal(str(position['next_gain_percent'])))/100).to_integral_value(rounding=ROUND_CEILING))
                     policy['minimum_sell_output_lamports']=target+5000+state['policy']['max_priority_fee_lamports']
@@ -478,11 +488,17 @@ def tick(provider=None):
                         position['pending_reason']=None
                         raise execution.Unavailable('Profit trim deferred: current half-sale proceeds after fees do not meet the profit target.')
                 kwargs={'quote':quote} if quote is not None else {}
-                prepared=provider.prepare(state['wallet'],chosen['side'],chosen['mint'],amount,policy,lambda:authorized(state,chosen['side'],chosen.get('source_at'),owner,chosen.get('source_wallet')),**kwargs)
+                with measure(order.setdefault('timing_ms',{}),'prepare_ms'):
+                    prepared=provider.prepare(state['wallet'],chosen['side'],chosen['mint'],amount,policy,lambda:authorized(state,chosen['side'],chosen.get('source_at'),owner,chosen.get('source_wallet')),**kwargs)
+                if chosen['side']=='sell':order['timing_ms'].update(prepared.get('timing_ms',{}))
                 order.update(prepared=prepared,status='signed',signature=prepared['signature']);save_signed(order,owner)
                 begin_broadcast(order,state,owner)
-                try:provider.send(prepared);order['status']='submitted';save_order(order)
-                except execution.Unavailable:state['error']='Broadcast outcome unknown. Further orders wait for reconciliation.'
+                try:
+                    with measure(order.setdefault('timing_ms',{}),'submit_ms'):provider.send(prepared)
+                    order['status']='submitted';save_order(order)
+                except execution.Unavailable:
+                    save_order(order)
+                    state['error']='Broadcast outcome unknown. Further orders wait for reconciliation.'
             except execution.Unavailable as error:
                 if not order.get('send_started_at'):
                     order.update(status='rejected',error=str(error));save_order(order)
