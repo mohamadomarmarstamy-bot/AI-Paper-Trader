@@ -67,3 +67,24 @@ def summary(state,now):
             'valid_until':min((d for d in deadlines if d>=now),default=now+10),
             'watched_wallets':len(watched),'delayed_wallets':delayed,'backlogged_wallets':backlog,
             'unpriced_holdings':unpriced,'basis':'Operational data checks only; not a guarantee of fills, protection or profit.'}
+
+
+def live_source_health(feed, live_stop, now):
+    """Separate the paper loss-stop warning from live source readiness.
+
+    Only an independently protected live account may disregard that one warning.
+    Every source/price/heartbeat check and the freshness deadline remain binding.
+    """
+    if not feed:
+        return {'level':'warning','detail':'Source health is unavailable','valid_until':now}
+    result=dict(feed)
+    if not isinstance(feed.get('valid_until'),(int,float)) or not math.isfinite(feed['valid_until']) or now>feed['valid_until']:
+        return {**result,'level':'warning','detail':'Source checks need a fresh update.'}
+    checks={c['name']:c['level'] for c in feed.get('checks',[])}
+    if (feed.get('level')=='warning' and feed.get('label')=='Loss stop off'
+            and isinstance(live_stop,(int,float)) and math.isfinite(live_stop) and live_stop>0
+            and all(checks.get(name)=='ok' for name in ('Bot heartbeat','Wallet feed','Holding prices'))
+            and feed.get('watched_wallets',0)>0
+            and all(feed.get(key)==0 for key in ('delayed_wallets','backlogged_wallets','unpriced_holdings'))):
+        return {**result,'level':'ok','label':'Watching','detail':'Source wallet data is current. Live loss protection is configured separately.'}
+    return result
