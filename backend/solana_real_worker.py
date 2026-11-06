@@ -92,8 +92,9 @@ def activate(expected_revision,wallet_revision,budget_revision,acknowledgement,p
     if not cfg['config'].get(field):raise ValueError('Set the real buy size first.')
     source=paper.load()[0]
     if not source['config']['enabled']:raise Conflict('The paper source copier must be running to provide admitted signals.')
-    from solana_copy_health import summary as source_health
-    if source_health(source,time.time())['level']!='ok':raise Conflict('The source wallet feed needs current successful checks before live activation.')
+    from solana_copy_health import summary as source_health, live_source_health
+    from solana_copy_exit_settings import live_stop
+    if live_source_health(source_health(source,time.time()),live_stop(source['config']),time.time())['level']!='ok':raise Conflict('The source wallet feed needs current successful checks before live activation.')
     provider=provider or execution.Provider();provider.network()
     if provider.balance(saved['wallet_address'])<=int(Decimal(str(cfg['config']['fee_reserve_sol']))*10**9):raise Conflict('No native SOL is available above the fee reserve.')
     # Read-only entitlement/route probe: never sign or submit this sample quote.

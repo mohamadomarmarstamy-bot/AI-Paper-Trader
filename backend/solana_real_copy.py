@@ -50,6 +50,9 @@ def public():
     blueprint={'settings':rules,'entry_protection':source['entry_protection'],'traders':roster}
     digest=hashlib.sha256(json.dumps(blueprint,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
     now=time.time();feed=source.get('operational_health');runtime=live.public();flags=execution.configuration(saved['wallet_address']);settings=budget.settings()
+    from solana_copy_health import live_source_health
+    from solana_copy_exit_settings import live_stop
+    feed=live_source_health(feed,live_stop(source['config']),now)
     configured=all(flags[k] for k in ('release_allowed','signer_configured','signer_matches','jupiter_configured'))
     sized=bool(settings['config'].get('buy_usd' if settings['config']['buy_mode']=='fixed_usd' else 'buy_percent'))
     can_start=bool(not runtime.get('balance_adjustments') and not runtime['pending_count'] and not any(p.get('balance_observation') or p.get('external_change') for p in runtime['positions']) and configured and sized and saved['verified_at'] and source['config']['enabled'] and feed and feed['level']=='ok' and not runtime['enabled'])
@@ -91,7 +94,7 @@ def public():
             'live_pnl_sol':runtime['realized_sol']+unrealized if unrealized is not None and runtime.get('accounting_complete',True) else None,
             'paper_sync':{'snapshot':digest,'settings_revision':source['revision'],'read_at':time.time(),
                 'source_last_cycle':source['last_cycle'],'source_health':source['health'],'source_error':source['error'],
-                'operational_health':feed,
+                'operational_health':source.get('operational_health'),
                 'blueprint':blueprint,'discovery':source.get('public_discovery',{}),
                 'performance':{k:source[k] for k in ('closed_count','realized_pnl_usd','closed_return_percent','wins')},
                 'signals':source['events'][:6],

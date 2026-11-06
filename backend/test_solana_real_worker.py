@@ -59,6 +59,37 @@ class RealWorkerTests(unittest.TestCase):
 
     def activate(self):return live.activate(live.public()['revision'],1,budget.settings()['revision'],'ENABLE REAL SOLANA COPY TRADING',self.chain)
 
+    def test_restart_with_paper_stop_off_uses_separate_live_stop(self):
+        import solana_copy_exit_settings as exits
+        self.activate()
+        exits.apply_split(paper.load()[0]['settings_revision'],live.load()[1],0,exits.ACK)
+        live.pause(live.public()['revision'])
+        self.assertTrue(link.public()['can_start'])
+        self.assertEqual(link.public()['paper_sync']['operational_health']['label'],'Loss stop off')
+        self.activate()
+        self.assertTrue(live.public()['enabled'])
+        self.assertFalse(self.chain.prepared);self.assertFalse(self.chain.sent)
+
+    def test_paper_stop_exception_keeps_source_safety_gates(self):
+        import solana_copy_exit_settings as exits
+        self.activate()
+        exits.apply_split(paper.load()[0]['settings_revision'],live.load()[1],0,exits.ACK)
+        live.pause(live.public()['revision'])
+        original=paper.load()[0]
+        for failure in ('heartbeat','backlog','feed_error','price','disabled'):
+            source=json.loads(json.dumps(original))
+            if failure=='heartbeat':source['last_cycle']=time.time()-90
+            elif failure=='backlog':source['cursors'][self.source]['rpc_coverage']['queued']=1
+            elif failure=='feed_error':source['error']='RPC timeout'
+            elif failure=='price':source['positions']['test']={'wallet':self.source,'mark_usd':None}
+            else:source['config']['enabled']=False
+            with closing(database.get_connection()) as conn:
+                conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1',(json.dumps(source),));conn.commit()
+            with self.subTest(failure=failure):
+                with self.assertRaises(Conflict):self.activate()
+                self.assertFalse(live.public()['enabled'])
+        self.assertFalse(self.chain.prepared);self.assertFalse(self.chain.sent)
+
     def test_johnson_after_cutoff_reaches_signing_with_existing_guards(self):
         from datetime import datetime
         from zoneinfo import ZoneInfo

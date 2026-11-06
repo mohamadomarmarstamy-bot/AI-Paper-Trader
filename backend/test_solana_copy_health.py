@@ -1,6 +1,6 @@
 from copy import deepcopy
 import unittest
-from solana_copy_health import summary
+from solana_copy_health import summary, live_source_health
 from solana_copy_trader import initial
 
 
@@ -12,6 +12,21 @@ class CopyHealthTests(unittest.TestCase):
         self.state['traders']=[{'wallet':'A','active':True},{'wallet':'B','active':True}]
         self.state['cursors']={w:{'provider':'rpc','rpc_coverage':{'checked_at':self.now-10,'queued':0}} for w in ('A','B')}
     def health(self):return summary(self.state,self.now)
+    def test_live_source_exception_requires_live_stop_and_fresh_complete_checks(self):
+        self.state['config']['stop_loss_percent']=0
+        feed=self.health();before=deepcopy(feed)
+        self.assertEqual(live_source_health(feed,40,self.now)['level'],'ok')
+        for stop in (None,0,float('nan')):
+            self.assertNotEqual(live_source_health(feed,stop,self.now)['level'],'ok')
+        self.assertNotEqual(live_source_health(feed,40,feed['valid_until']+1)['level'],'ok')
+        missing=deepcopy(feed);missing['checks']=[]
+        self.assertNotEqual(live_source_health(missing,40,self.now)['level'],'ok')
+        self.assertEqual(feed,before)
+
+    def test_live_source_rejects_expired_green_status(self):
+        feed=self.health()
+        self.assertNotEqual(live_source_health(feed,40,feed['valid_until']+1)['level'],'ok')
+
     def test_current_feed_is_green_even_without_recent_trades_and_does_not_mutate(self):
         before=deepcopy(self.state);h=self.health()
         self.assertEqual(h['level'],'ok');self.assertEqual(h['label'],'Watching')
