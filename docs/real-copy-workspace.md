@@ -138,3 +138,22 @@ successful sale resets the burst. A full stop/source/manual/protection exit can
 supersede the wait after a half-sale attempt. Every attempt checks current quotes
 and balances; pending or uncertain signatures must reconcile before replacement.
 Network, quoting and finalization time are additional to retry eligibility.
+
+
+## Sell preparation latency and timing
+
+Sell preparation runs mainnet validation, mint validation and any required fresh
+quote concurrently, then waits for every result before proceeding. Route writable
+accounts and lookup tables share bounded batched reads, concurrent with obtaining
+a fresh blockhash. Sell preparation omits the two buy-only rent lookups. Fresh
+balances, instruction validation, fee bounds, simulation, quote age, current
+authorization and signature reconciliation remain required.
+
+New sell activity includes an expandable Sell timing section. It records quote
+checks, preparation, submission, trigger-to-broadcast attempt and observed
+finalization delays; preparation details include checks and simulation. Detail
+stages overlap the preparation total and should not be summed with it. Rejected
+orders retain their elapsed preparation time; unknown submissions retain timing
+while awaiting the original signature. Finalization durations include worker
+polling and network time, and are not a claim about exact chain inclusion latency.
+Old orders have no fabricated timing. Timings contain only local elapsed numbers.

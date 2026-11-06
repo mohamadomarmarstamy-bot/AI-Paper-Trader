@@ -10,6 +10,8 @@ import json
 import os
 import struct
 import time
+from concurrent.futures import ThreadPoolExecutor
+from solana_execution_timing import measure
 from urllib.parse import urlsplit
 import requests
 from solana_real_budget import SOL
@@ -231,6 +233,7 @@ class Provider:
             return self._prepare_once(owner,side,mint,amount,policy,authorize,fresh)
 
     def _prepare_once(self,owner,side,mint,amount,policy,authorize,quote=None):
+        timings={}
         if not release_allowed():raise Unavailable('Server execution switch is off.')
         from solders.compute_budget import set_compute_unit_limit,set_compute_unit_price
         from solders.instruction import Instruction,AccountMeta
@@ -239,23 +242,41 @@ class Provider:
         from solders.address_lookup_table_account import AddressLookupTableAccount
         from solders.hash import Hash
         from solders.system_program import transfer,TransferParams
-        self.network();mint_info=self.mint(mint);decimals=mint_info['decimals'];token_program=mint_info['program']
         input_mint,output_mint=(SOL,mint) if side=='buy' else (mint,SOL)
-        quote=quote or self.build(owner,input_mint,output_mint,amount,policy)
+        with measure(timings,'initial_checks_ms'):
+            if side=='sell':
+                # Read-only calls are independent. All must finish successfully
+                # before compilation, simulation, authorization or signing.
+                with ThreadPoolExecutor(max_workers=3) as reads:
+                    network=reads.submit(self.network)
+                    mint_read=reads.submit(self.mint,mint)
+                    quote_read=reads.submit(self.build,owner,input_mint,output_mint,amount,policy) if quote is None else None
+                    network.result();mint_info=mint_read.result()
+                    if quote_read is not None:quote=quote_read.result()
+            else:
+                self.network();mint_info=self.mint(mint)
+                quote=quote or self.build(owner,input_mint,output_mint,amount,policy)
+        decimals=mint_info['decimals'];token_program=mint_info['program']
         if not 0<=time.time()-quote['_observed_at']<=20:raise Unavailable('Swap quote expired before preparation.')
         # Revalidate a caller-supplied quote before it can influence guards.
         if quote['inputMint']!=input_mint or quote['outputMint']!=output_mint or uint(quote['inAmount'])!=amount:raise Unavailable('Quote does not match the order.')
         minimum=uint(quote['otherAmountThreshold']);token_ata=ata(owner,mint,token_program);sol_ata=ata(owner,SOL)
         if side=='sell' and minimum<policy.get('minimum_sell_output_lamports',0):
             raise Unavailable('Profit trim deferred: fresh sale proceeds after fees do not meet the profit target.')
-        before=self.accounts([owner,token_ata,sol_ata]);native=uint(before[0]['lamports'])
+        with measure(timings,'balances_ms'):
+            before=self.accounts([owner,token_ata,sol_ata])
+        native=uint(before[0]['lamports'])
         if before[0]['owner']!=SYSTEM or raw_account(before[0])!=b'':raise Unavailable('A system-owned trading wallet is required.')
         owned=token_amount(before[1],owner,mint,token_program)
         if token_amount(before[2],owner,SOL)!=0:raise Unavailable('Existing wrapped SOL must be unwrapped before trading.')
         if side=='buy' and owned:raise Unavailable('This wallet already owns the coin; a repeated buy is skipped.')
         if side=='sell' and amount>owned:raise Unavailable('Confirmed token balance is smaller than the planned exit.')
-        rent=uint(self.rpc('getMinimumBalanceForRentExemption',[mint_info['account_size']]))
-        sol_rent=uint(self.rpc('getMinimumBalanceForRentExemption',[165]))
+        # Only buys need an entry-rent allowance. Sells still validate actual
+        # wallet balances, fees and all account instructions below.
+        rent=sol_rent=0
+        if side=='buy':
+            rent=uint(self.rpc('getMinimumBalanceForRentExemption',[mint_info['account_size']]))
+            sol_rent=uint(self.rpc('getMinimumBalanceForRentExemption',[165]))
         fee_cap=5000+policy['max_priority_fee_lamports']
         max_cost=amount+fee_cap+rent+sol_rent if side=='buy' else fee_cap
         reserve=policy['reserve_lamports']
@@ -297,25 +318,41 @@ class Provider:
         ixs.extend(guards(owner,mint,decimals,min_tokens,min_native,token_program))
         # Other pre-existing wallet token accounts cannot be used as route funds.
         writable=list(dict.fromkeys(str(a.pubkey) for ix in ixs for a in ix.accounts if a.is_writable))
-        for address,account in zip(writable,self.accounts(writable)):
+        lookup_map=quote.get('addressesByLookupTableAddress') or {}
+        if not isinstance(lookup_map,dict) or len(lookup_map)>8:raise Unavailable('Unsupported address tables.')
+        addresses=list(dict.fromkeys(writable+list(lookup_map)))
+        def read_accounts():
+            rows=[]
+            for offset in range(0,len(addresses),100):rows.extend(self.accounts(addresses[offset:offset+100]))
+            return dict(zip(addresses,rows))
+        with measure(timings,'route_checks_ms'):
+            if side=='sell':
+                with ThreadPoolExecutor(max_workers=2) as reads:
+                    account_read=reads.submit(read_accounts)
+                    block_read=reads.submit(self.rpc,'getLatestBlockhash',[{'commitment':'confirmed'}])
+                    route_accounts=account_read.result();block=block_read.result()['value']
+            else:
+                route_accounts=read_accounts()
+                block=self.rpc('getLatestBlockhash',[{'commitment':'confirmed'}])['value']
+        for address in writable:
+            account=route_accounts[address]
             if account and account.get('owner') in (TOKEN,TOKEN2022) and address not in (token_ata,sol_ata):
                 raw=raw_account(account)
                 if len(raw)>=64 and raw[32:64]==bytes(pub(owner)):raise Unavailable('Swap touches an unrelated wallet token account.')
         tables=[]
-        lookup_map=quote.get('addressesByLookupTableAddress') or {}
-        if not isinstance(lookup_map,dict) or len(lookup_map)>8:raise Unavailable('Unsupported address tables.')
         for address in lookup_map:
-            account=self.accounts([address])[0];raw=raw_account(account)
+            account=route_accounts[address];raw=raw_account(account)
             if not account or account['owner']!=LOOKUP or len(raw)<56 or (len(raw)-56)%32 or int.from_bytes(raw[4:12],'little')!=2**64-1:raise Unavailable('Address table is unavailable or deactivating.')
             tables.append(AddressLookupTableAccount(pub(address),[pub_from_bytes(raw[i:i+32]) for i in range(56,len(raw),32)]))
-        block=self.rpc('getLatestBlockhash',[{'commitment':'confirmed'}])['value']
         msg=MessageV0.try_compile(pub(owner),ixs,tables,Hash.from_string(block['blockhash']))
         if msg.header.num_required_signatures!=1 or str(msg.account_keys[0])!=owner:raise Unavailable('Unexpected compiled signer set.')
         wire=bytes(VersionedTransaction.populate(msg,[empty_signature()]))
         if len(wire)>1232:raise Unavailable('Swap exceeds the supported transaction size.')
-        fee=self.rpc('getFeeForMessage',[base64.b64encode(to_bytes_versioned(msg)).decode(),{'commitment':'confirmed'}])['value']
+        with measure(timings,'fee_check_ms'):
+            fee=self.rpc('getFeeForMessage',[base64.b64encode(to_bytes_versioned(msg)).decode(),{'commitment':'confirmed'}])['value']
         if fee is None or uint(fee)>fee_cap:raise Unavailable('Transaction fee exceeds the configured cap.')
-        simulated=self.rpc('simulateTransaction',[base64.b64encode(wire).decode(),{'encoding':'base64','sigVerify':False,'commitment':'confirmed'}])['value']
+        with measure(timings,'simulation_ms'):
+            simulated=self.rpc('simulateTransaction',[base64.b64encode(wire).decode(),{'encoding':'base64','sigVerify':False,'commitment':'confirmed'}])['value']
         if simulated.get('err') is not None:
             message='Swap simulation or atomic balance guard failed: '+json.dumps(simulated['err'],separators=(',',':'))[:300]
             logs=simulated.get('logs') or []
@@ -331,7 +368,7 @@ class Provider:
                 'last_valid_block_height':uint(block['lastValidBlockHeight']),'prepared_at':time.time(),
                 'input_amount':amount,'minimum_output':minimum,'decimals':decimals,'token_program':token_program,'max_debit_lamports':max_cost,
                 'native_before':native,'token_before':owned,'fee_cap':fee_cap,'min_native_after':min_native,
-                'min_tokens_after':min_tokens,'quote_observed_at':quote['_observed_at']}
+                'min_tokens_after':min_tokens,'quote_observed_at':quote['_observed_at'],'timing_ms':timings}
 
     def send(self,prepared):
         if not release_allowed():raise Unavailable('Server execution switch is off; broadcast is blocked.')
