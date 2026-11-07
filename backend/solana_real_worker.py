@@ -57,6 +57,10 @@ def orders(pending=False):
     return [json.loads(r[0]) for r in rows]
 
 
+def accounting_pending(state):
+    return bool(state.get('balance_adjustments') or any(p.get('balance_observation') or p.get('external_change') for p in state['positions'].values()))
+
+
 def guard_wallet_change():
     state,_=load()
     if state['enabled'] or state['positions'] or state.get('balance_adjustments') or orders(True):raise Conflict('Pause real copying and finish every live position and pending transaction before changing wallets.')
@@ -75,7 +79,7 @@ def public():
     return {'revision':revision,'enabled':state['enabled'],'wallet':state['wallet'],'last_cycle':state['last_cycle'],'confirmed_trade_count':count,
             'started_at':state['started_at'],
             'minimum_token_age_seconds':1800,'accounting_reviews':state.get('accounting_reviews',[]),
-            'balance_adjustments':state.get('balance_adjustments',[]),'accounting_complete':not state.get('balance_adjustments'),'error':state['error'],'positions':list(state['positions'].values()),'pending_count':len(pending),
+            'balance_adjustments':state.get('balance_adjustments',[]),'accounting_complete':not accounting_pending(state),'error':state['error'],'positions':list(state['positions'].values()),'pending_count':len(pending),
             'exit_alerts':__import__('solana_exit_alerts').summary(),
             'orders':latest,'realized_sol':state['realized_lamports']/10**9,'policy':state['policy'],
             'basis':'Actual finalized wallet balance changes, including transaction fees and account rent. SOL accounting; dollar P/L is not inferred from PAPER.'}
@@ -216,6 +220,7 @@ def post_receipt(state,order,result,now):
         pnl=delta-cost;state['realized_lamports']+=pnl;p['realized_lamports']+=pnl
         p.pop('exit_retry_at',None);p.pop('fast_failed_sell_retries',None)
         p['quantity_raw']-=quantity;p['cost_lamports']-=cost;p['pending_reason']=None
+        p['balance_checked_slot']=result.get('slot',p.get('balance_checked_slot',p.get('opened_slot',0)))
         if order['reason']=='profit_take_half':p['stages']+=1;p['next_gain_percent']*=2
         if not p['quantity_raw']:
             if order['reason'] in ('stop_loss','profit_protection'):state['cooldowns'][p['mint']]=now+p['protection']['stop_loss_cooldown_seconds']
@@ -232,7 +237,11 @@ def commit_cycle(state,owner,order=None):
         # A close requested while RPC work was in flight must survive this cycle.
         for ident,p in current['positions'].items():
             if ident in state['positions'] and p.get('pending_reason')=='manual':state['positions'][ident]['pending_reason']='manual'
-        conn.execute('UPDATE solana_real_run SET revision=revision+1,state_json=?,lease_owner=NULL,lease_until=0 WHERE id=1',(json.dumps(state,allow_nan=False),))
+        external_orders=state.get('_external_orders',[])
+        for external in external_orders:
+            conn.execute('INSERT INTO solana_real_orders VALUES(?,?,?,?)',(external['id'],external['created_at'],'confirmed',json.dumps(external,allow_nan=False)))
+        persisted={k:v for k,v in state.items() if k!='_external_orders'}
+        conn.execute('UPDATE solana_real_run SET revision=revision+1,state_json=?,lease_owner=NULL,lease_until=0 WHERE id=1',(json.dumps(persisted,allow_nan=False),))
         if order:conn.execute('UPDATE solana_real_orders SET status=?,details_json=? WHERE id=?',(order['status'],json.dumps(order,allow_nan=False),order['id']))
         conn.commit()
 
@@ -258,7 +267,7 @@ def authorized(state,side,source_at=None,lease_owner=None,source_wallet=None):
         if row['lease_owner']!=lease_owner or row['lease_until']<=time.time():raise execution.Unavailable('Worker lease expired before signing.')
     if not all(flags[k] for k in ('release_allowed','signer_configured','signer_matches','jupiter_configured')):raise execution.Unavailable('Server trading setup is unavailable. No new transaction is signed.')
     if saved['wallet_address']!=state['wallet'] or saved['revision']!=state['wallet_revision']:raise execution.Unavailable('Live wallet binding changed. Signing is blocked.')
-    if side=='buy' and (current.get('balance_adjustments') or not current['enabled'] or budget.settings()['revision']!=state['budget_revision']):raise execution.Unavailable('New real buys are paused or buy settings changed.')
+    if side=='buy' and (accounting_pending(current) or accounting_pending(state) or not current['enabled'] or budget.settings()['revision']!=state['budget_revision']):raise execution.Unavailable('New real buys are paused or buy settings changed.')
     if side=='buy' and (not entry_allowed(source_wallet=source_wallet) or source_at is not None and not entry_allowed(source_at, source_wallet)):
         raise execution.Unavailable('Daily live entry pause: 2 PM to midnight America/New_York.')
     if side=='buy' and source_at is not None and not 0<=time.time()-source_at<=90:raise execution.Unavailable('Source buy expired before signing or broadcast.')
@@ -309,10 +318,32 @@ def reconcile_balances(state,provider,now):
         try:
             observed=provider.finalized_token_balance(state['wallet'],p['mint'],p.get('token_program',execution.TOKEN))
             actual=execution.uint(observed['quantity']);slot=execution.uint(observed['slot'])
-            if slot<p.get('opened_slot',0):raise execution.Unavailable('Finalized wallet balance is older than the recorded buy.')
+            if slot<max(p.get('opened_slot',0),p.get('balance_checked_slot',0)):raise execution.Unavailable('Finalized wallet balance is older than the last verified holding.')
             if actual==p['quantity_raw']:
-                p.pop('balance_observation',None);continue
-            blocked.add(ident);state['enabled']=False;p['exit_value_lamports']=None
+                p.pop('balance_observation',None);p['balance_checked_slot']=slot;continue
+            # A finalized manual swap can be accounted before interrupting a
+            # running copier. Transfers and ambiguous settlements still pause.
+            if actual<p['quantity_raw'] and not p.get('external_change') and sum(x['mint']==p['mint'] for x in state['positions'].values())==1:
+                from solana_external_sales import audit,book,stored_orders
+                removed=p['quantity_raw']-actual
+                cost=p['cost_lamports'] if actual==0 else p['cost_lamports']*removed//p['quantity_raw']
+                start=p.get('balance_checked_slot',p.get('opened_slot',0))
+                adjustment={'position_id':ident,'mint':p['mint'],'quantity_removed_raw':removed,
+                    'unreconciled_cost_lamports':cost,'observed_at':now,'start_slot':start,'finalized_slot':slot}
+                try:
+                    history=stored_orders()+state.get('_external_orders',[])
+                    result=audit(provider,state['wallet'],p['mint'],p.get('token_program',execution.TOKEN),removed,start,slot,history)
+                except execution.Unavailable:pass
+                else:
+                    external=book(state,adjustment,result,now)
+                    state.setdefault('_external_orders',[]).append(external)
+                    if actual==0:del state['positions'][ident]
+                    else:
+                        p.update(quantity_raw=actual,cost_lamports=p['cost_lamports']-cost,balance_checked_slot=slot,
+                            realized_lamports=p['realized_lamports']+result['native_delta']-cost,exit_value_lamports=None)
+                        p.pop('balance_observation',None)
+                    continue
+            blocked.add(ident);p['exit_value_lamports']=None
             state['error']='External wallet balance change detected. New buys paused; affected holdings require reconciliation.'
             first=p.get('balance_observation')
             if not first or first['quantity']!=actual:
@@ -325,6 +356,7 @@ def reconcile_balances(state,provider,now):
             state.setdefault('balance_adjustments',[]).append({'position_id':ident,'mint':p['mint'],
                 'quantity_removed_raw':removed,'unreconciled_cost_lamports':cost,'observed_at':now,
                 'first_slot':first['slot'],'finalized_slot':slot,'proceeds_lamports':None,
+                'start_slot':p.get('balance_checked_slot',p.get('opened_slot',0)),
                 'basis':'External wallet reduction; sale versus transfer and proceeds require transaction review.'})
             if actual==0:del state['positions'][ident]
             else:
@@ -334,7 +366,7 @@ def reconcile_balances(state,provider,now):
             blocked.add(ident);p['exit_value_lamports']=None
             state['error']='Finalized wallet balance unavailable. No new order for the affected holding.'
     if state.get('balance_adjustments'):
-        state['enabled']=False;state['error']='External wallet changes require accounting review. P/L is incomplete; new buys remain paused.'
+        state['error']='External wallet changes require accounting review. P/L is incomplete; new buys remain paused.'
         blocked.update(p['id'] for p in state['positions'].values() if p.get('external_change'))
     return blocked
 
@@ -346,6 +378,9 @@ def tick(provider=None):
     if state.get('balance_adjustments') and not orders(True):
         from solana_manual_accounting import reconcile_reviewed
         reconcile_reviewed(provider=provider)
+        from solana_external_sales import reconcile_pending
+        try:reconcile_pending(provider=provider)
+        except execution.Unavailable:pass
         state,_=load()
     if not state['enabled'] and not state['positions'] and not orders(True):return
     provider=provider or execution.Provider();owner=str(uuid.uuid4());now=time.time()
@@ -442,6 +477,7 @@ def tick(provider=None):
             if paper_only(e['wallet']):reason='Source wallet is paper-only; new live buys are disabled.'
             elif not entry_allowed(source_wallet=e['wallet']) or not entry_allowed(e['source_at'], e['wallet']):reason='Daily live entry pause: 2 PM to midnight America/New_York.'
             elif not state['enabled']:reason='Real buys paused.'
+            elif accounting_pending(state):reason='External wallet accounting is pending; new buys wait for finalized receipts.'
             elif e.get('status')!='paper_buy':reason='Source buy was not admitted by the paper copy rules.'
             elif not any(t['wallet']==e['wallet'] and t.get('active',True) for t in source['traders']):reason='Source wallet is no longer actively followed.'
             elif e['source_at']<state['started_at'] or not 0<=time.time()-e['source_at']<=90:reason='Outside the fresh live entry window.'

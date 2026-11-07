@@ -27,6 +27,7 @@ class Chain:
     def entry_rent(self,mint):return 4_000_000
     def rpc(self,method,params):
         if method=='getMinimumBalanceForRentExemption':return 2_000_000
+        if method=='getSignaturesForAddress':return []
         raise AssertionError(method)
     def build(self,owner,input_mint,output_mint,amount,policy):return {'otherAmountThreshold':str(self.exit_value)}
     def prepare(self,owner,side,mint,amount,policy,authorize,quote=None):
@@ -319,7 +320,20 @@ class RealWorkerTests(unittest.TestCase):
         state,_=live.load();p=state['positions'][p['id']]
         self.assertEqual(p['quantity_raw'],4_000_000);self.assertEqual(p['cost_lamports'],80_002_000)
         self.assertEqual(state['balance_adjustments'][0]['unreconciled_cost_lamports'],120_003_000)
-        self.assertEqual(len(self.chain.prepared),1);self.assertFalse(state['enabled'])
+        self.assertEqual(len(self.chain.prepared),1);self.assertTrue(state['enabled']);self.assertTrue(live.accounting_pending(state))
+
+    def test_accounting_hold_blocks_fresh_buys_and_signing_without_switching_off(self):
+        self.enter();self.event('b'*64,mint=str(Pubkey.new_unique()))
+        with patch.object(self.chain,'finalized_token_balance',return_value={'quantity':4_000_000,'slot':20}):live.tick(self.chain)
+        state,_=live.load();self.assertTrue(state['enabled']);self.assertFalse(live.public()['accounting_complete'])
+        self.assertEqual(len(self.chain.prepared),1)
+        with self.assertRaisesRegex(ex.Unavailable,'paused'):live.authorized(state,'buy')
+        # Also guard an observation not yet committed by the worker.
+        with closing(database.get_connection()) as conn:
+            clean=json.loads(json.dumps(state))
+            for p in clean['positions'].values():p.pop('balance_observation',None)
+            conn.execute('UPDATE solana_real_run SET state_json=? WHERE id=1',(json.dumps(clean),));conn.commit()
+        with self.assertRaisesRegex(ex.Unavailable,'paused'):live.authorized(state,'buy')
 
     def test_balance_read_failure_stale_slot_and_same_slot_never_remove_holdings(self):
         p=self.enter();start=time.time()+1
@@ -340,7 +354,7 @@ class RealWorkerTests(unittest.TestCase):
         with patch.object(self.chain,'finalized_token_balance',return_value={'quantity':20_000_000,'slot':21}),patch.object(live.time,'time',return_value=start+16):live.tick(self.chain)
         state,_=live.load();self.assertFalse(state['balance_adjustments']);self.assertEqual(state['positions'][p['id']]['quantity_raw'],10_000_000)
         with patch.object(self.chain,'finalized_token_balance',return_value={'quantity':10_000_000,'slot':22}):live.tick(self.chain)
-        self.assertNotIn('balance_observation',live.load()[0]['positions'][p['id']]);self.assertFalse(live.public()['enabled'])
+        self.assertNotIn('balance_observation',live.load()[0]['positions'][p['id']]);self.assertTrue(live.public()['enabled'])
         self.assertEqual(live.public()['realized_sol'],0)
 
     def test_disabled_default_never_fetches_or_signs_and_activation_is_explicit(self):

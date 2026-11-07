@@ -132,7 +132,7 @@ def guards(owner,mint,decimals,min_tokens,min_sol,program=TOKEN):
 
 class Provider:
     def rpc(self,method,params):
-        if method not in ('getGenesisHash','getBalance','getAccountInfo','getMultipleAccounts','getLatestBlockhash','getMinimumBalanceForRentExemption','getFeeForMessage','simulateTransaction','sendTransaction','getSignatureStatuses','getTransaction','getBlockHeight'):
+        if method not in ('getGenesisHash','getBalance','getAccountInfo','getMultipleAccounts','getLatestBlockhash','getMinimumBalanceForRentExemption','getFeeForMessage','simulateTransaction','sendTransaction','getSignatureStatuses','getSignaturesForAddress','getTransaction','getBlockHeight'):
             raise Unavailable('Unsupported execution RPC method.')
         url=os.getenv('SOLANA_REAL_RPC_URL','https://api.mainnet-beta.solana.com')
         parsed=urlsplit(url)
