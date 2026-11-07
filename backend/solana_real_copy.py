@@ -68,7 +68,7 @@ def public():
     level='ok' if active else 'paused' if can_start else 'warning';label='Copying live' if active else 'Ready to start' if can_start else 'Setup required'
     detail='Monitoring real holdings and fresh admitted copy signals.' if active else 'Real trades are off until you activate copying.'
     if active or held or runtime['pending_count'] or runtime.get('balance_adjustments'):
-        if runtime.get('balance_adjustments'):level='error';label='Wallet accounting review';detail='External wallet changes detected. New buys are paused and P/L is incomplete.'
+        if not runtime.get('accounting_complete',True):level='error';label='Wallet accounting review';detail='Checking finalized Phantom sale and settlement receipts. New buys wait; P/L is incomplete.'
         elif active and runtime['last_cycle'] is None and now-(runtime['started_at'] or 0)<=15:level='warning';label='Starting live worker';detail='Waiting for the first live monitoring cycle.'
         elif now-(runtime['last_cycle'] or 0)>60:level='error';label='Live worker delayed';detail='Live monitoring needs a fresh cycle.'
         elif not configured:level='error';label='Live signing unavailable';detail='Held assets may not be protected until server signing and swap access are restored.'
