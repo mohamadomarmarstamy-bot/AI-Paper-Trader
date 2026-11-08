@@ -474,7 +474,7 @@ def tick(provider=None):
             state['event_cursor']=cursor
             if e['side']!='buy':continue
             reason=None
-            if paper_only(e['wallet']):reason='Source wallet is paper-only; new live buys are disabled.'
+            if paper_only(e['wallet'],source['traders']):reason='Source wallet is paper-only; new live buys are disabled.'
             elif not entry_allowed(source_wallet=e['wallet']) or not entry_allowed(e['source_at'], e['wallet']):reason='Daily live entry pause: 2 PM to midnight America/New_York.'
             elif not state['enabled']:reason='Real buys paused.'
             elif accounting_pending(state):reason='External wallet accounting is pending; new buys wait for finalized receipts.'

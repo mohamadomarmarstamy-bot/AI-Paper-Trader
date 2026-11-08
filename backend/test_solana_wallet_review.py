@@ -28,3 +28,8 @@ class WalletReviewTests(unittest.TestCase):
         row = real_results([], [dict(side='sell', status='confirmed')])[0]
         self.assertEqual(row['name'], 'Unattributed')
         self.assertIsNone(row['net_realized_sol'])
+
+    def test_new_discovery_is_paper_only_without_automatic_promotion(self):
+        from solana_live_source_policy import paper_only
+        self.assertTrue(paper_only('new', [{'wallet':'new', 'paper_only':True}]))
+        self.assertFalse(paper_only('reviewed', [{'wallet':'reviewed'}]))

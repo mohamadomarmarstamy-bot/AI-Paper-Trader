@@ -271,6 +271,31 @@ class RealWorkerTests(unittest.TestCase):
         self.assertEqual(live.orders()[0]['status'],'canceled')
         self.assertIn('paper-only',live.orders()[0]['error'])
 
+    def test_discovered_paper_only_flag_blocks_live_selection(self):
+        source, _ = paper.load()
+        source['traders'][0]['paper_only'] = True
+        with closing(database.get_connection()) as conn:
+            conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1', (json.dumps(source),))
+            conn.commit()
+        self.activate(); self.event(); live.tick(self.chain)
+        self.assertFalse(self.chain.prepared)
+        self.assertFalse(self.chain.sent)
+
+    def test_discovered_paper_only_flag_blocks_recovered_broadcast(self):
+        self.activate(); self.event(); live.tick(self.chain)
+        order = live.orders(True)[0]
+        order.pop('send_started_at', None)
+        order['status'] = 'signed'
+        live.save_order(order)
+        source, _ = paper.load()
+        source['traders'][0]['paper_only'] = True
+        with closing(database.get_connection()) as conn:
+            conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1', (json.dumps(source),))
+            conn.commit()
+        self.chain.sent.clear(); live.tick(self.chain)
+        self.assertFalse(self.chain.sent)
+        self.assertEqual(live.orders()[0]['status'], 'canceled')
+
     def test_scheduled_pause_blocks_buys_but_protective_exits_continue(self):
         self.activate();self.event()
         with patch.object(live,'entry_allowed',return_value=False):live.tick(self.chain)
