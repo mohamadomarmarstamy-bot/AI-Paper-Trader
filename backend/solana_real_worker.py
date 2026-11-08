@@ -6,6 +6,7 @@ uncertain submissions block further signing until reconciled.
 """
 import asyncio
 from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal,ROUND_CEILING
 import hashlib
 import json
@@ -30,6 +31,16 @@ CREATE TABLE IF NOT EXISTS solana_real_decisions(
  source_id TEXT PRIMARY KEY,observed_at REAL NOT NULL,reason TEXT NOT NULL);'''
 DEFAULT_POLICY={'slippage_bps':100,'max_price_impact_percent':5,'max_priority_fee_lamports':100000}
 PENDING=('preparing','signed','submitted','unknown')
+_execution_loop = None
+_source_wakeup = None
+
+
+def notify_source_events():
+    """Thread-safe hint only; the existing ledger/lease still admits every order."""
+    loop,event=_execution_loop,_source_wakeup
+    if loop is not None and event is not None:
+        try:loop.call_soon_threadsafe(event.set)
+        except RuntimeError:pass  # Loop shut down; persisted events remain available.
 
 
 def initial():return {'enabled':False,'wallet':'','wallet_revision':None,'budget_revision':None,'started_at':None,
@@ -75,7 +86,7 @@ def public():
         if exists:
             from solana_activity_details import enrich_orders
             latest=enrich_orders(conn,latest,state)
-    latest=[{k:v for k,v in r.items() if k in ('id','side','mint','status','created_at','reason','signature','result','error','source_wallet','realized_pnl_lamports','timing_ms')} for r in latest]
+    latest=[{k:v for k,v in r.items() if k in ('id','side','mint','status','created_at','reason','signature','result','error','source_wallet','source_entry','realized_pnl_lamports','timing_ms')} for r in latest]
     return {'revision':revision,'enabled':state['enabled'],'wallet':state['wallet'],'last_cycle':state['last_cycle'],'confirmed_trade_count':count,
             'started_at':state['started_at'],
             'minimum_token_age_seconds':MINIMUM_SECONDS,'accounting_reviews':state.get('accounting_reviews',[]),
@@ -278,6 +289,9 @@ def begin_broadcast(order,state,lease_owner):
     if order['side']=='buy' and paper_only(order.get('source_wallet')):
         raise execution.Unavailable('Source wallet is paper-only; new live buys are disabled.')
     if order['side']=='buy':
+        from solana_copy_entry import check_quote
+        prepared=order['prepared']
+        check_quote(order.get('source_entry'),order['mint'],prepared['decimals'],prepared['input_amount'],prepared['minimum_output'])
         try:order['token_age_proof']=require_age(order['mint'])
         except AgeUnavailable as error:raise execution.Unavailable(str(error)) from None
     authorized(state,order['side'],order.get('source_at'),lease_owner,order.get('source_wallet'))
@@ -300,6 +314,10 @@ def begin_broadcast(order,state,lease_owner):
             sold=conn.execute("SELECT 1 FROM solana_copy_events WHERE observed_at>=? AND json_extract(details_json,'$.side')='sell' AND json_extract(details_json,'$.wallet')=? AND json_extract(details_json,'$.mint')=? AND CAST(json_extract(details_json,'$.source_at') AS INTEGER)>=? LIMIT 1",(int(order['source_at'])-5,order['source_wallet'],order['mint'],int(order['source_at']))).fetchone()
             if sold:raise execution.Unavailable('Source sold before live broadcast; buy canceled.')
         order.update(status='unknown',send_started_at=time.time())
+        if order['side']=='buy':
+            timings=order.setdefault('timing_ms',{})
+            timings['source_to_broadcast_ms']=round(max(0,order['send_started_at']-order['source_at'])*1000,3)
+            timings['detection_to_broadcast_ms']=round(max(0,order['send_started_at']-order['detected_at'])*1000,3)
         if order['side']=='sell' and order.get('detected_at') is not None:
             order.setdefault('timing_ms',{})['trigger_to_broadcast_ms']=round(max(0,order['send_started_at']-order['detected_at'])*1000,3)
         changed=conn.execute("UPDATE solana_real_orders SET status='unknown',details_json=? WHERE id=? AND status='signed'",(json.dumps(order,allow_nan=False),order['id']))
@@ -416,10 +434,11 @@ def tick(provider=None):
                 result=provider.reconcile(order)
                 if result['state'] in ('confirmed','failed'):
                     post_receipt(state,order,result,time.time());order.update(status=result['state'],result=result);terminal=order
-                    if order['side']=='sell':
+                    if order['side'] in ('buy','sell'):
                         observed=time.time();timings=order.setdefault('timing_ms',{})
                         timings['broadcast_to_finalized_ms']=round(max(0,observed-order['send_started_at'])*1000,3)
                         if order.get('detected_at') is not None:timings['trigger_to_finalized_ms']=round(max(0,observed-order['detected_at'])*1000,3)
+                        if order['side']=='buy':timings['source_to_finalized_ms']=round(max(0,observed-order['source_at'])*1000,3)
                     if result['state']=='failed':
                         schedule_failed_sell_retry(state,order,time.time())
                         order['error']='On-chain swap failed; no fill recorded. '+json.dumps(result.get('execution_error','Network execution failed'),separators=(',',':'))[:300]
@@ -492,6 +511,10 @@ def tick(provider=None):
                     known=conn.execute('SELECT 1 FROM solana_real_decisions WHERE source_id=?',(e['id'],)).fetchone()
                 if known:continue
                 chosen={'id':'buy:'+e['id'],'side':'buy','mint':e['mint'],'source_wallet':e['wallet'],'source_at':e['source_at'],'reason':'copy_buy',
+                    'source_entry':e.get('source_entry'),'detected_at':e.get('detected_at',e.get('observed_at',time.time())),
+                    'timing_ms':{'source_to_detection_ms':round(max(0,e.get('detected_at',e.get('observed_at',time.time()))-e['source_at'])*1000,3),
+                                 'feed_to_execution_ms':round(max(0,time.time()-e.get('feed_saved_at',e.get('observed_at',time.time())))*1000,3),
+                                 'source_processing_ms':round(max(0,e.get('feed_saved_at',e.get('observed_at',time.time()))-e.get('detected_at',e.get('observed_at',time.time())))*1000,3)},
                     'protection':{**{k:source['config'][k] for k in ('profit_take_enabled','profit_take_first_percent','stop_loss_cooldown_seconds')},
                                   'stop_loss_percent':__import__('solana_copy_exit_settings').live_stop(source['config'])}}
                 reason='Selected fresh admitted copy signal.'
@@ -502,11 +525,18 @@ def tick(provider=None):
             try:
                 policy={**state['policy'],'reserve_lamports':int(Decimal(str(cfg['config']['fee_reserve_sol']))*10**9)}
                 if chosen['side']=='buy':
+                    policy['source_entry']=chosen.get('source_entry')
                     try:order['token_age_proof']=require_age(chosen['mint'])
                     except AgeUnavailable as error:raise execution.Unavailable(str(error)) from None
-                    available=provider.balance(state['wallet'])-policy['reserve_lamports']-5000-policy['max_priority_fee_lamports']-provider.entry_rent(chosen['mint'])
+                    with measure(order.setdefault('timing_ms',{}),'funding_checks_ms'):
+                        with ThreadPoolExecutor(max_workers=3) as reads:
+                            balance=reads.submit(provider.balance,state['wallet'])
+                            rent=reads.submit(provider.entry_rent,chosen['mint'])
+                            price_read=reads.submit(budget.sol_price) if cfg['config']['buy_mode']=='fixed_usd' else None
+                            available=balance.result()-policy['reserve_lamports']-5000-policy['max_priority_fee_lamports']-rent.result()
+                            price=Decimal(str(price_read.result()['usd'])) if price_read is not None else None
                     if cfg['config']['buy_mode']=='fixed_usd':
-                        price=Decimal(str(budget.sol_price()['usd']));amount=int((Decimal(str(cfg['config']['buy_usd']))/price*10**9).to_integral_value(rounding=ROUND_CEILING))
+                        amount=int((Decimal(str(cfg['config']['buy_usd']))/price*10**9).to_integral_value(rounding=ROUND_CEILING))
                     else:amount=int(Decimal(max(0,available))*Decimal(str(cfg['config']['buy_percent']))/100)
                     if not 0<amount<=available:raise execution.Unavailable('Buy size does not fit the current wallet after fees and reserve.')
                 else:amount=chosen['quantity']
@@ -526,7 +556,7 @@ def tick(provider=None):
                 kwargs={'quote':quote} if quote is not None else {}
                 with measure(order.setdefault('timing_ms',{}),'prepare_ms'):
                     prepared=provider.prepare(state['wallet'],chosen['side'],chosen['mint'],amount,policy,lambda:authorized(state,chosen['side'],chosen.get('source_at'),owner,chosen.get('source_wallet')),**kwargs)
-                if chosen['side']=='sell':order['timing_ms'].update(prepared.get('timing_ms',{}))
+                order['timing_ms'].update(prepared.get('timing_ms',{}))
                 order.update(prepared=prepared,status='signed',signature=prepared['signature']);save_signed(order,owner)
                 begin_broadcast(order,state,owner)
                 try:
@@ -557,10 +587,18 @@ def cycle_delay():
 
 
 async def execution_loop():
-    while True:
-        try:await asyncio.to_thread(tick)
-        except Exception:pass
-        await asyncio.sleep(await asyncio.to_thread(cycle_delay))
+    global _execution_loop,_source_wakeup
+    _execution_loop=asyncio.get_running_loop();_source_wakeup=asyncio.Event()
+    try:
+        while True:
+            _source_wakeup.clear()
+            try:await asyncio.to_thread(tick)
+            except Exception:pass
+            delay=await asyncio.to_thread(cycle_delay)
+            try:await asyncio.wait_for(_source_wakeup.wait(),timeout=delay)
+            except asyncio.TimeoutError:pass
+    finally:
+        _execution_loop=None;_source_wakeup=None
 
 
 async def worker():

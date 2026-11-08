@@ -273,7 +273,7 @@ def signals(rows, wallet):
                 side = 'buy' if leg['type_swap'] == 'to' else 'sell'
                 raw_id = json.dumps([wallet,tx,row['ins_index'],row['inner_ins_index'],address,side],separators=(',',':'))
                 result.append({'id':hashlib.sha256(raw_id.encode()).hexdigest(),'wallet':wallet,'mint':address,'side':side,'source_at':timestamp,'tx_hash':tx,'instruction':str(row['ins_index'])+':'+str(row['inner_ins_index']),'source':row.get('source','birdeye'),
-                    'source_position_before':row.get('source_position_before')})
+                    'source_position_before':row.get('source_position_before'),'source_entry':row.get('source_entry')})
         except (KeyError, TypeError, ValueError): continue
     return sorted(result,key=lambda r:(r['source_at'],r['tx_hash'],r['instruction'],r['side']=='buy'))
 
@@ -444,25 +444,26 @@ def tick(*, provider=None, market=None, clock=time.time):
         watched={p['wallet'] for p in state['positions'].values()} | ({r['wallet'] for r in state['traders'] if r.get('active',True)} if enabled else set())
         last_polled=state.setdefault('last_polled',{})
         # Oldest first prevents a rate-limited large list starving its later wallets.
-        selected=sorted(watched,key=lambda w:(last_polled.get(w,0),w))[:3]
+        selected=select_wallets(state,watched,last_polled)
         # Network reads run independently; only the cycle thread merges state.
         # Do not abandon futures: a late result must never mutate saved cursors.
         def read_wallet(wallet):
             cursor=deepcopy(state['cursors'][wallet])
             try:
                 if isinstance(provider,Birdeye) and cursor.get('provider')=='rpc':
-                    return provider.trades(wallet,cursor,clock(),has_copied_positions=any(p['wallet']==wallet for p in state['positions'].values()))
-                return provider.trades(wallet,cursor,clock())
+                    result=provider.trades(wallet,cursor,clock(),has_copied_positions=any(p['wallet']==wallet for p in state['positions'].values()))
+                else:result=provider.trades(wallet,cursor,clock())
+                return result,clock()
             except DataUnavailable as error:return error
         for wallet in selected:last_polled[wallet]=clock()
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=5) as pool:
             results=list(pool.map(read_wallet,selected))
         for wallet,result in zip(selected,results):
             if isinstance(result,DataUnavailable):
                 state['error']=str(result)
                 continue
-            rows,cursor=result
-            gathered=state['cursors'][wallet].get('pending',[])+signals(rows,wallet)
+            (rows,cursor),detected_at=result
+            gathered=state['cursors'][wallet].get('pending',[])+[{**s,'detected_at':detected_at} for s in signals(rows,wallet)]
             if 'window' in cursor: cursor['pending']=gathered
             else: incoming.extend(gathered)
             cursor['provider']=state['cursors'][wallet].get('provider','birdeye')
@@ -570,7 +571,9 @@ def tick(*, provider=None, market=None, clock=time.time):
             conn.rollback()
             conn.execute('UPDATE solana_copy_state SET lease_until=0,lease_owner=NULL WHERE id=1 AND lease_owner=?',(owner,)); conn.commit()
             raise bot.Conflict('Copy settings changed; cycle discarded.')
-        for signal in events: conn.execute('INSERT OR IGNORE INTO solana_copy_events VALUES(?,?,?)',(signal['id'],signal['observed_at'],json.dumps(signal,allow_nan=False)))
+        for signal in events:
+            signal['feed_saved_at']=clock()
+            conn.execute('INSERT OR IGNORE INTO solana_copy_events VALUES(?,?,?)',(signal['id'],signal['observed_at'],json.dumps(signal,allow_nan=False)))
         for closed in closes: conn.execute('INSERT INTO solana_copy_closes VALUES(?,?,?)',(closed['id'],closed['closed_at'],json.dumps(closed,allow_nan=False)))
         conn.execute('SAVEPOINT trailing_comparison')
         try:
@@ -581,7 +584,36 @@ def tick(*, provider=None, market=None, clock=time.time):
             import logging
             logging.getLogger(__name__).exception('Paper trailing comparison failed; primary cycle preserved')
         conn.commit()
+    if events:
+        # Commit first: execution must never wake up to uncommitted signals.
+        from solana_real_worker import notify_source_events
+        notify_source_events()
     return public()
+
+
+def select_wallets(state,watched,last_polled):
+    ordered=sorted(watched,key=lambda w:(last_polled.get(w,0),w))
+    from solana_real_worker import load as live_load
+    from solana_live_source_policy import paper_only
+    live=live_load()[0]
+    if not live['enabled']:
+        return ordered[:3]
+    eligible={r['wallet'] for r in state['traders'] if r.get('active',True) and not paper_only(r['wallet'],state['traders'])}
+    eligible.update(p['source_wallet'] for p in live['positions'].values())
+    priority=[w for w in ordered if w in eligible][:4]
+    # Reserve a background slot; paper-only research still advances fairly.
+    return priority+[w for w in ordered if w not in priority][:max(1,5-len(priority))]
+
+
+def cycle_interval(state):
+    """A bounded faster cadence only while real entries are enabled."""
+    try:
+        from solana_real_worker import load as live_load
+        if state['config']['enabled'] and live_load()[0]['enabled']:
+            return 5
+    except Exception:
+        pass
+    return max(10,state['config']['poll_seconds'])
 
 
 async def worker():
@@ -590,4 +622,5 @@ async def worker():
         try: await asyncio.to_thread(tick)
         except Exception: pass
         state,_=await asyncio.to_thread(load)
-        await asyncio.sleep(max(.1,max(10,state['config']['poll_seconds'])-(time.monotonic()-started)))
+        interval=await asyncio.to_thread(cycle_interval,state)
+        await asyncio.sleep(max(.1,interval-(time.monotonic()-started)))

@@ -254,13 +254,19 @@ class Provider:
                     network.result();mint_info=mint_read.result()
                     if quote_read is not None:quote=quote_read.result()
             else:
-                self.network();mint_info=self.mint(mint)
+                with ThreadPoolExecutor(max_workers=2) as reads:
+                    network=reads.submit(self.network)
+                    mint_read=reads.submit(self.mint,mint)
+                    network.result();mint_info=mint_read.result()
                 quote=quote or self.build(owner,input_mint,output_mint,amount,policy)
         decimals=mint_info['decimals'];token_program=mint_info['program']
         if not 0<=time.time()-quote['_observed_at']<=20:raise Unavailable('Swap quote expired before preparation.')
         # Revalidate a caller-supplied quote before it can influence guards.
         if quote['inputMint']!=input_mint or quote['outputMint']!=output_mint or uint(quote['inAmount'])!=amount:raise Unavailable('Quote does not match the order.')
         minimum=uint(quote['otherAmountThreshold']);token_ata=ata(owner,mint,token_program);sol_ata=ata(owner,SOL)
+        if side=='buy':
+            from solana_copy_entry import check_quote
+            check_quote(policy.get('source_entry'),mint,decimals,amount,minimum)
         if side=='sell' and minimum<policy.get('minimum_sell_output_lamports',0):
             raise Unavailable('Profit trim deferred: fresh sale proceeds after fees do not meet the profit target.')
         with measure(timings,'balances_ms'):

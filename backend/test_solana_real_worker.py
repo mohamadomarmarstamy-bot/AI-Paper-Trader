@@ -32,7 +32,7 @@ class Chain:
     def build(self,owner,input_mint,output_mint,amount,policy):return {'otherAmountThreshold':str(self.exit_value)}
     def prepare(self,owner,side,mint,amount,policy,authorize,quote=None):
         authorize();value={'wire':'wire-'+str(len(self.prepared)),'signature':'signature-'+str(len(self.prepared)),
-            'input_amount':amount,'minimum_output':1,'last_valid_block_height':1000,'decimals':6}
+            'input_amount':amount,'minimum_output':10_000_000 if side=='buy' else 1,'last_valid_block_height':1000,'decimals':6}
         self.prepared.append((side,amount,value));return value
     def send(self,prepared):
         self.sent.append(prepared['wire'])
@@ -144,6 +144,7 @@ class RealWorkerTests(unittest.TestCase):
 
     def event(self,ident='a'*64,mint=None,side='buy',status='paper_buy',source_at=None):
         event={'id':ident,'wallet':self.source,'mint':mint or self.mint,'side':side,'status':status,'source_at':source_at or time.time(),'observed_at':time.time()}
+        if side=='buy':event['source_entry']={'mint':event['mint'],'quote_mint':ex.SOL,'quote_amount_raw':'200000000','token_amount_raw':'10000000','token_decimals':6}
         with closing(database.get_connection()) as conn:
             conn.execute('INSERT INTO solana_copy_events VALUES(?,?,?)',(ident,time.time(),json.dumps(event)));conn.commit()
         return event
@@ -209,6 +210,33 @@ class RealWorkerTests(unittest.TestCase):
             self.activate();self.event(ident=wallet);live.tick(self.chain)
         self.assertFalse(self.chain.prepared)
         self.assertFalse(self.chain.sent)
+
+    def test_buy_source_reference_and_timings_survive_receipt(self):
+        self.activate();event=self.event();live.tick(self.chain)
+        pending=live.orders(True)[0]
+        self.assertEqual(pending['source_entry'],event['source_entry'])
+        for name in ('source_to_detection_ms','feed_to_execution_ms','funding_checks_ms','prepare_ms','source_to_broadcast_ms','detection_to_broadcast_ms'):
+            self.assertGreaterEqual(pending['timing_ms'][name],0)
+        self.chain.receipt={'state':'confirmed','token_delta':10_000_000,'native_delta':-200_005_000,'fee_lamports':5000,'slot':1}
+        live.tick(self.chain)
+        public=live.public()['orders'][0]
+        self.assertEqual(public['source_entry'],event['source_entry'])
+        self.assertGreaterEqual(public['timing_ms']['source_to_finalized_ms'],public['timing_ms']['source_to_broadcast_ms'])
+        self.assertNotIn('prepared',public)
+
+    def test_recovered_signed_buy_without_reference_cannot_broadcast(self):
+        self.activate();self.event()
+        with patch.object(live,'begin_broadcast',side_effect=ex.Unavailable('Paused for recovery')):
+            live.tick(self.chain)
+        order=live.orders()[0]
+        # Recreate a pre-broadcast recovery state under the normal persistence gate.
+        order.update(status='signed');order.pop('source_entry',None)
+        with closing(database.get_connection()) as conn:
+            conn.execute('UPDATE solana_real_orders SET status=?,details_json=? WHERE id=?',('signed',json.dumps(order),order['id']));conn.commit()
+        live.tick(self.chain)
+        self.assertFalse(self.chain.sent)
+        self.assertEqual(live.orders()[0]['status'],'canceled')
+        self.assertIn('source entry price',live.orders()[0]['error'])
 
     def test_sell_timings_survive_uncertain_submission_and_finalized_receipt(self):
         self.enter();self.chain.exit_value=100_000_000
