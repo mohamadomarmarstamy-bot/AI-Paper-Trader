@@ -156,6 +156,114 @@ class RealWorkerTests(unittest.TestCase):
         self.chain.receipt={'state':'pending'}
         return live.load()[0]['positions']['buy:'+'a'*64]
 
+    def direct_event(self,side='buy',stamp=None,signature='2'*88,cursor=None):
+        import solana_live_source as direct
+        stamp=stamp or time.time()
+        row={'owner':self.source,'tx_hash':signature,'ins_index':0,'inner_ins_index':0,
+             'block_unix_time':stamp,'base':{'address':self.mint,'type_swap':'to' if side=='buy' else 'from'},
+             'quote':{'address':ex.SOL,'type_swap':'from' if side=='buy' else 'to'},'source':'solana_rpc_pump',
+             'source_entry':{'mint':self.mint,'quote_mint':ex.SOL,'quote_amount_raw':'200000000','token_amount_raw':'10000000','token_decimals':6}}
+        source=paper.load()[0];run=live.load()[0]
+        direct.publish(self.source,source,run,[row],cursor or {'provider':'rpc','rpc_coverage':{'checked_at':time.time(),'queued':0}},time.time())
+        return direct.events(0)[-1][1] if direct.events(0) else None
+
+    def test_direct_entry_does_not_wait_for_paper_prices_cash_or_simulated_fill(self):
+        self.activate()
+        with closing(database.get_connection()) as conn:
+            source=paper.load()[0];source.update(cash_usd=0,last_cycle=time.time()-300,error='PAPER prices unavailable')
+            conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1',(json.dumps(source),));conn.commit()
+        event=self.direct_event();live.tick(self.chain)
+        self.assertEqual(len(self.chain.sent),1)
+        self.assertEqual(live.orders(True)[0]['entry_path'],'verified_source')
+        self.assertEqual(live.orders(True)[0]['id'],'buy:'+event['id'])
+        self.assertEqual(live.source_events(0),[])
+
+    def test_direct_and_later_paper_event_cannot_buy_twice(self):
+        self.activate();event=self.direct_event();live.tick(self.chain)
+        self.chain.receipt={'state':'confirmed','token_delta':10_000_000,'native_delta':-200_005_000,'fee_lamports':5000,'slot':1}
+        live.tick(self.chain);self.chain.receipt={'state':'pending'}
+        self.event(ident=event['id']);live.tick(self.chain)
+        self.assertEqual(len(self.chain.prepared),1)
+        self.assertEqual(len(self.chain.sent),1)
+
+    def test_incomplete_direct_history_cannot_admit_new_buys(self):
+        self.activate()
+        self.assertIsNone(self.direct_event(cursor={'provider':'rpc','window':{'queue':[]},'rpc_coverage':{'queued':1}}))
+        live.tick(self.chain)
+        self.assertFalse(self.chain.prepared);self.assertFalse(self.chain.sent)
+
+    def test_direct_source_sell_supersedes_buy_in_same_second(self):
+        self.activate();stamp=time.time()
+        self.direct_event(stamp=stamp);self.direct_event('sell',stamp=stamp,signature='3'*88)
+        live.tick(self.chain)
+        self.assertFalse(self.chain.prepared);self.assertFalse(self.chain.sent)
+
+    def test_direct_sell_observed_during_preparation_cancels_before_broadcast(self):
+        self.activate();event=self.direct_event();original=self.chain.prepare
+        def prepare(*args,**kwargs):
+            value=original(*args,**kwargs)
+            self.direct_event('sell',stamp=event['source_at'],signature='3'*88)
+            return value
+        self.chain.prepare=prepare;live.tick(self.chain)
+        self.assertFalse(self.chain.sent)
+        self.assertIn('Source sold',live.orders()[0]['error'])
+
+    def test_source_pause_during_direct_preparation_cancels_before_broadcast(self):
+        self.activate();self.direct_event();original=self.chain.prepare
+        def prepare(*args,**kwargs):
+            value=original(*args,**kwargs)
+            source=paper.load()[0];paper.configure({'enabled':False},source['settings_revision'])
+            return value
+        self.chain.prepare=prepare;live.tick(self.chain)
+        self.assertFalse(self.chain.sent)
+        self.assertIn('Source copying paused',live.orders()[0]['error'])
+
+    def test_direct_entry_keeps_five_percent_price_cap(self):
+        self.activate();self.direct_event();original=self.chain.prepare
+        def prepare(*args,**kwargs):
+            value=original(*args,**kwargs)
+            value['minimum_output']=8_000_000
+            return value
+        self.chain.prepare=prepare;live.tick(self.chain)
+        self.assertFalse(self.chain.sent)
+        self.assertEqual(live.orders()[0]['status'],'rejected')
+
+    def test_source_removal_or_stale_history_during_preparation_cancels(self):
+        import solana_live_source as direct
+        for failure in ('removed','stale','incomplete'):
+            with self.subTest(failure=failure):
+                self.activate();self.direct_event(signature={'removed':'4','stale':'5','incomplete':'6'}[failure]*88)
+                original=self.chain.prepare
+                def prepare(*args,**kwargs):
+                    value=original(*args,**kwargs)
+                    with closing(database.get_connection()) as conn:
+                        if failure=='removed':
+                            source=paper.load()[0];source['traders']=[]
+                            conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1',(json.dumps(source),))
+                        else:
+                            conn.execute('UPDATE solana_live_source_health SET checked_at=?,complete=? WHERE wallet=?',
+                                         (time.time()-61 if failure=='stale' else time.time(),int(failure!='incomplete'),self.source))
+                        conn.commit()
+                    return value
+                self.chain.prepare=prepare;live.tick(self.chain);self.chain.prepare=original
+                self.assertFalse(self.chain.sent)
+                self.assertEqual(live.orders()[0]['status'],'rejected')
+                with closing(database.get_connection()) as conn:
+                    source=paper.load()[0];source['traders']=[{'wallet':self.source,'active':True}]
+                    conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1',(json.dumps(source),));conn.commit()
+
+    def test_trial_context_cannot_publish_into_live_ledger(self):
+        import solana_live_source as direct
+        self.activate()
+        with database.paper_trial_context():
+            direct.publish(self.source,{}, {}, [], {},time.time())
+        self.assertEqual(direct.events(0),[])
+
+    def test_resume_does_not_replay_direct_events_recorded_before_restart(self):
+        self.activate();self.direct_event();live.pause(live.public()['revision']);self.activate()
+        live.tick(self.chain)
+        self.assertFalse(self.chain.prepared);self.assertFalse(self.chain.sent)
+
     def test_profitable_monitor_quote_cannot_sign_a_losing_half_sale(self):
         self.enter();original=self.chain.build
         def quote(owner,input_mint,output_mint,amount,policy):

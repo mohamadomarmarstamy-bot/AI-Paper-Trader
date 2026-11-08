@@ -13,6 +13,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from solana_execution_timing import measure
 import requests
+import solana_http as http
 from solana_real_budget import SOL
 from solana_rpc_endpoints import execution_url, execution_source
 
@@ -150,7 +151,7 @@ class Provider:
         try:url=execution_url()
         except ValueError:raise Unavailable('An HTTPS Solana RPC URL is required.') from None
         try:
-            response=requests.post(url,json={'jsonrpc':'2.0','id':1,'method':method,'params':params},timeout=8,allow_redirects=False)
+            response=http.post(url,json={'jsonrpc':'2.0','id':1,'method':method,'params':params},timeout=8,allow_redirects=False)
             if response.status_code!=200 or len(response.content)>4_000_000:raise ValueError()
             data=response.json()
             if not isinstance(data,dict) or data.get('error') or 'result' not in data:raise ValueError()
@@ -205,7 +206,7 @@ class Provider:
         if not api_key:raise Unavailable('Jupiter API key is not configured.')
         try:
             start=time.monotonic()
-            response=requests.get('https://api.jup.ag/swap/v2/build',params={
+            response=http.get('https://api.jup.ag/swap/v2/build',params={
                 'inputMint':input_mint,'outputMint':output_mint,'amount':str(uint(amount)),'taker':owner,
                 'slippageBps':policy['slippage_bps'],'maxAccounts':48,'wrapAndUnwrapSol':'false',
                 'platformFeeBps':0,'transactionVersion':'0'},headers={'x-api-key':api_key},timeout=8,allow_redirects=False)

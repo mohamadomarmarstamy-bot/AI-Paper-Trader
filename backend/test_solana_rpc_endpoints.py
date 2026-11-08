@@ -39,7 +39,7 @@ class EndpointTests(unittest.TestCase):
     def test_send_uses_one_configured_endpoint_and_never_replays_on_failure(self):
         response=Mock(status_code=200,content=b'{}')
         response.json.return_value={'error':{'code':-32601}}
-        with patch.dict(os.environ, {'SOLANA_COPY_RPC_URL':'https://provider.test/private'},clear=True),patch.object(execution.requests,'post',return_value=response) as post:
+        with patch.dict(os.environ, {'SOLANA_COPY_RPC_URL':'https://provider.test/private'},clear=True),patch.object(execution.http,'post',return_value=response) as post:
             with self.assertRaises(execution.Unavailable):
                 execution.Provider().rpc('sendTransaction',['synthetic-not-signed-bytes'])
             self.assertEqual(post.call_count,1)
@@ -49,7 +49,7 @@ class EndpointTests(unittest.TestCase):
     def test_read_only_mainnet_check_runs_on_existing_provider(self):
         response=Mock(status_code=200,content=b'{}')
         response.json.return_value={'result':execution.MAINNET_GENESIS}
-        with patch.dict(os.environ, {'SOLANA_COPY_RPC_URL':'https://provider.test/private'},clear=True),patch.object(execution.requests,'post',return_value=response) as post:
+        with patch.dict(os.environ, {'SOLANA_COPY_RPC_URL':'https://provider.test/private'},clear=True),patch.object(execution.http,'post',return_value=response) as post:
             execution.Provider().network()
             self.assertEqual(post.call_args.kwargs['json']['method'],'getGenesisHash')
             self.assertEqual(post.call_args.args[0],'https://provider.test/private')

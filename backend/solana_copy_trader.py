@@ -414,13 +414,16 @@ def tick(*, provider=None, market=None, clock=time.time, urgent_wallets=None):
     except Exception:comparison_mints=[]
     events=[]; closes=[]; provider=provider or Birdeye(); market=market or bot.ReadOnlyProviders(); state['error']=None
     try:
-        # Fetch marks and protect existing lots BEFORE any potentially slow RPC
-        # polling. Missing prices never create synthetic fills or zero marks.
-        if state['positions'] or comparison_mints:
-            marks=prices([*(p['mint'] for p in state['positions'].values()),*comparison_mints],market,clock)
-            mark_time=clock()
-            mark_and_protect(state,marks,mark_time,closes)
-            comparison_actions.append(('mark',marks,mark_time,False))
+        from solana_real_worker import load as live_load
+        live_run=live_load()[0]
+        def protect_paper():
+            if state['positions'] or comparison_mints:
+                marks=prices([*(p['mint'] for p in state['positions'].values()),*comparison_mints],market,clock)
+                mark_time=clock()
+                mark_and_protect(state,marks,mark_time,closes)
+                comparison_actions.append(('mark',marks,mark_time,False))
+        fast_source=bool(live_run['enabled'] or live_run['positions']) and database._paper_trial_path.get() is None
+        if not fast_source:protect_paper()
         from solana_owner_roster import enroll
         enroll(state, clock())
         enabled=state['config']['enabled']; incoming=[]
@@ -442,8 +445,7 @@ def tick(*, provider=None, market=None, clock=time.time, urgent_wallets=None):
             state['cursors']={r['wallet']:{'at':enrolled} for r in leaders}
             if not leaders: raise DataUnavailable('No ranked wallets meet the historical-profit and win-rate checks.')
         watched={p['wallet'] for p in state['positions'].values()} | ({r['wallet'] for r in state['traders'] if r.get('active',True)} if enabled else set())
-        from solana_real_worker import load as live_load
-        live_held={p['source_wallet'] for p in live_load()[0]['positions'].values()}
+        live_held={p['source_wallet'] for p in live_run['positions'].values()}
         watched.update(w for w in live_held if w in state['cursors'])
         last_polled=state.setdefault('last_polled',{})
         # Oldest first prevents a rate-limited large list starving its later wallets.
@@ -455,19 +457,38 @@ def tick(*, provider=None, market=None, clock=time.time, urgent_wallets=None):
             from solana_wallet_stream import wakeup
             wakeup.acknowledge(selected)
             if urgent_wallets is not None:wakeup.acknowledge(set(urgent_wallets)-watched)
+        paper_held={p['wallet'] for p in state['positions'].values()}
         # Network reads run independently; only the cycle thread merges state.
         # Do not abandon futures: a late result must never mutate saved cursors.
         def read_wallet(wallet):
             cursor=deepcopy(state['cursors'][wallet])
             try:
                 if isinstance(provider,Birdeye) and cursor.get('provider')=='rpc':
-                    result=provider.trades(wallet,cursor,clock(),has_copied_positions=wallet in live_held or any(p['wallet']==wallet for p in state['positions'].values()))
+                    result=provider.trades(wallet,cursor,clock(),has_copied_positions=wallet in live_held or wallet in paper_held)
                 else:result=provider.trades(wallet,cursor,clock())
-                return result,clock()
-            except DataUnavailable as error:return error
+                detected_at=clock()
+                if fast_source and isinstance(provider,Birdeye) and cursor.get('provider')=='rpc':
+                    try:
+                        from solana_live_source import publish
+                        publish(wallet,state,live_run,result[0],result[1],detected_at)
+                    except Exception:
+                        import logging
+                        logging.getLogger(__name__).warning('Direct source observation could not be saved; normal source processing continues')
+                return result,detected_at
+            except DataUnavailable as error:
+                if fast_source and cursor.get('provider')=='rpc':
+                    try:
+                        from solana_live_source import failed
+                        failed(wallet,state,live_run,clock())
+                    except Exception:pass
+                return error
         for wallet in selected:last_polled[wallet]=clock()
         with ThreadPoolExecutor(max_workers=5) as pool:
-            results=list(pool.map(read_wallet,selected))
+            futures=[pool.submit(read_wallet,wallet) for wallet in selected]
+            # Live observations publish from each verified read independently.
+            # PAPER protection and pricing do not hold up that separate ledger.
+            if fast_source:protect_paper()
+            results=[future.result() for future in futures]
         for wallet,result in zip(selected,results):
             if isinstance(result,DataUnavailable):
                 state['error']=str(result)

@@ -5,6 +5,7 @@ import os
 from collections import deque
 from pathlib import Path
 import tempfile
+from threading import Event
 import unittest
 from unittest.mock import patch
 import database
@@ -100,6 +101,32 @@ class RpcTests(unittest.TestCase):
         self.assertEqual(read.call_args.args[0],WALLET)
         self.assertTrue(read.call_args.kwargs['preserve_exits'])
 
+    def test_verified_read_publishes_before_slow_peer_and_failed_paper_pricing(self):
+        import solana_live_source as direct
+        import solana_real_worker as live
+        self.enroll();other='1'*31+'4';state,_=copy.load()
+        state['traders'].append({'wallet':other,'selected_at':self.now,'active':True})
+        state['cursors'][other]={'at':self.now,'provider':'rpc'}
+        with closing(database.get_connection()) as conn:
+            conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1',(json.dumps(state),));conn.commit()
+        self.now+=10;published=Event();original=direct.publish
+        def publish(*args):
+            original(*args)
+            if args[0]==WALLET:
+                self.assertEqual(len(direct.events(0)),1)
+                published.set()
+        def read(wallet,cursor,now,**kwargs):
+            if wallet==other:self.assertTrue(published.wait(2),'Fast source waited for the slow peer')
+            rows=rpc.parse(tx(self.now-1),WALLET,'2'*88) if wallet==WALLET else []
+            return rows,{'at':now,'provider':'rpc','rpc_coverage':{'checked_at':now,'queued':0}}
+        market=Market()
+        with patch.object(live,'load',return_value=({'enabled':True,'positions':{}},0)),patch.object(copy.Birdeye,'trades',side_effect=read),patch.object(copy.Birdeye,'discover'),patch.object(direct,'publish',side_effect=publish),patch.object(market,'pairs',side_effect=copy.DataUnavailable('PAPER price service offline')):
+            result=copy.tick(market=market,clock=lambda:self.now)
+        self.assertTrue(published.is_set())
+        self.assertEqual(direct.events(0)[0][1]['status'],'verified_source')
+        self.assertEqual(result['positions'],[])
+        self.assertFalse(any(e['status']=='paper_buy' for e in result['events']))
+
     def test_window_is_frozen_buffered_and_null_transaction_retries_without_advancing(self):
         cursor={'provider':'rpc','at':self.now-10}
         rows=[{'signature':str(i)*88,'blockTime':self.now-i,'err':None,'confirmationStatus':'finalized'} for i in range(2,7)]
@@ -126,7 +153,7 @@ class RpcTests(unittest.TestCase):
         self.assertEqual(copy.load()[0]['positions'],state['positions'])
 
     def test_rpc_client_never_accepts_execution_methods(self):
-        with patch.object(rpc.requests,'post') as post:
+        with patch.object(rpc.http,'post') as post:
             with self.assertRaises(ValueError):rpc.request('sendTransaction',['anything'])
             post.assert_not_called()
 
@@ -295,13 +322,13 @@ class RpcConnectionTests(unittest.TestCase):
         return Mock(status_code=200,content=b'{}',json=lambda:{'result':[]})
 
     def test_default_endpoint_and_read_request_contract_are_preserved(self):
-        with patch.object(rpc.requests,'post',return_value=self.response()) as post:
+        with patch.object(rpc.http,'post',return_value=self.response()) as post:
             self.assertEqual(rpc.request('getSignaturesForAddress',['wallet',{'limit':1000}]),[])
         post.assert_called_once_with(rpc.ENDPOINT,json={'jsonrpc':'2.0','id':1,'method':'getSignaturesForAddress','params':['wallet',{'limit':1000}]},timeout=8,allow_redirects=False)
 
     def test_custom_endpoint_is_used_for_all_supported_reads_only(self):
         url='https://rpc.example.test/mainnet?api-key=synthetic-secret'
-        with patch.dict(os.environ,{'SOLANA_COPY_RPC_URL':url}),patch.object(rpc.requests,'post',return_value=self.response()) as post:
+        with patch.dict(os.environ,{'SOLANA_COPY_RPC_URL':url}),patch.object(rpc.http,'post',return_value=self.response()) as post:
             for method in ('getBalance','getTransaction','getSignaturesForAddress'):
                 rpc.request(method,['wallet'])
                 self.assertEqual(post.call_args.args,(url,))
@@ -310,39 +337,39 @@ class RpcConnectionTests(unittest.TestCase):
 
     def test_bad_configuration_fails_closed_without_sending_or_exposing_url(self):
         for url in ('http://rpc.example.test/secret','https://user:secret@rpc.example.test','https://rpc.example.test/#secret','https://rpc.example.test:bad/secret'):
-            with self.subTest(url=url),patch.dict(os.environ,{'SOLANA_COPY_RPC_URL':url}),patch.object(rpc.requests,'post') as post:
+            with self.subTest(url=url),patch.dict(os.environ,{'SOLANA_COPY_RPC_URL':url}),patch.object(rpc.http,'post') as post:
                 with self.assertRaises(copy.DataUnavailable) as caught:rpc.request('getBalance',['wallet'])
                 self.assertNotIn(url,str(caught.exception));post.assert_not_called()
 
     def test_provider_failure_does_not_leak_key_or_fall_back_to_public(self):
         url='https://rpc.example.test/?api-key=synthetic-secret'
         for error in (rpc.requests.Timeout(url),rpc.requests.ConnectionError(url),ValueError(url)):
-            with patch.dict(os.environ,{'SOLANA_COPY_RPC_URL':url}),patch.object(rpc.requests,'post',side_effect=error) as post:
+            with patch.dict(os.environ,{'SOLANA_COPY_RPC_URL':url}),patch.object(rpc.http,'post',side_effect=error) as post:
                 with self.assertRaises(copy.DataUnavailable) as caught:rpc.request('getBalance',['wallet'])
                 self.assertNotIn('synthetic-secret',str(caught.exception))
                 self.assertIn('Configured Solana RPC',str(caught.exception));post.assert_called_once()
 
     def test_custom_endpoint_keeps_existing_rate_limit_budget(self):
-        with patch.dict(os.environ,{'SOLANA_COPY_RPC_URL':'https://rpc.example.test'}),patch.object(rpc,'_calls',deque([rpc.time.monotonic()]*100)),patch.object(rpc.requests,'post') as post:
+        with patch.dict(os.environ,{'SOLANA_COPY_RPC_URL':'https://rpc.example.test'}),patch.object(rpc,'_calls',deque([rpc.time.monotonic()]*100)),patch.object(rpc.http,'post') as post:
             with self.assertRaises(copy.DataUnavailable):rpc.request('getBalance',['wallet'])
             post.assert_not_called()
 
 
 class RpcFailoverTests(RpcConnectionTests):
     def test_timeout_uses_explicit_backup(self):
-        with patch.dict(os.environ,{'SOLANA_COPY_RPC_BACKUP_URL':'https://backup.example.test'}),patch.object(rpc.requests,'post',side_effect=[rpc.requests.Timeout(),self.response()]) as post:
+        with patch.dict(os.environ,{'SOLANA_COPY_RPC_BACKUP_URL':'https://backup.example.test'}),patch.object(rpc.http,'post',side_effect=[rpc.requests.Timeout(),self.response()]) as post:
             self.assertEqual(rpc.request('getBalance',['wallet']),[])
             self.assertEqual(post.call_count,2)
             self.assertEqual(post.call_args.args[0],'https://backup.example.test')
 
     def test_public_rate_limit_can_use_backup_without_clearing_cooldown(self):
         from unittest.mock import Mock
-        with patch.dict(os.environ,{'SOLANA_COPY_RPC_BACKUP_URL':'https://backup.example.test'}),patch.object(rpc.requests,'post',side_effect=[Mock(status_code=429),self.response()]) as post:
+        with patch.dict(os.environ,{'SOLANA_COPY_RPC_BACKUP_URL':'https://backup.example.test'}),patch.object(rpc.http,'post',side_effect=[Mock(status_code=429),self.response()]) as post:
             self.assertEqual(rpc.request('getBalance',['wallet']),[])
             self.assertGreater(rpc._cooldown,rpc.time.monotonic())
             self.assertEqual(post.call_count,2)
 
     def test_invalid_backup_fails_before_network(self):
-        with patch.dict(os.environ,{'SOLANA_COPY_RPC_BACKUP_URL':'http://bad.test'}),patch.object(rpc.requests,'post') as post:
+        with patch.dict(os.environ,{'SOLANA_COPY_RPC_BACKUP_URL':'http://bad.test'}),patch.object(rpc.http,'post') as post:
             with self.assertRaises(copy.DataUnavailable):rpc.request('getBalance',['wallet'])
             post.assert_not_called()

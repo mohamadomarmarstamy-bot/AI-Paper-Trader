@@ -171,7 +171,7 @@ class ExecutionProviderTests(unittest.TestCase):
 
     def test_api_denial_is_reported_without_response_or_key_data(self):
         from types import SimpleNamespace
-        with patch.object(ex.requests,'get',return_value=SimpleNamespace(status_code=403)):
+        with patch.object(ex.http,'get',return_value=SimpleNamespace(status_code=403)):
             with self.assertRaisesRegex(ex.Unavailable,'key or plan') as error:ex.Provider().build(self.owner,ex.SOL,self.mint,100000000,self.policy)
         self.assertNotIn('synthetic-api-key',str(error.exception))
 
