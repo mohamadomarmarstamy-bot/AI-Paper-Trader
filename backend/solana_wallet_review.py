@@ -60,9 +60,14 @@ def public():
         closes = [json.loads(r[0]) for r in conn.execute('SELECT details_json FROM solana_copy_closes')] if 'solana_copy_closes' in tables else []
         orders = [json.loads(r[0]) for r in conn.execute('SELECT details_json FROM solana_real_orders ORDER BY created_at,rowid')] if 'solana_real_orders' in tables else []
         orders = enrich_orders(conn, orders, runtime) if orders else []
+    real = real_results(state['traders'], orders)
+    allocated = sum(round(r['net_realized_sol'] * 10**9) for r in real if r['net_realized_sol'] is not None)
+    difference = runtime['realized_lamports'] - allocated
     return dict(checked_at=time.time(), complete_history=True,
         paper=paper_results(state['traders'], closes, list(state['positions'].values())),
-        real=real_results(state['traders'], orders),
+        real=real, source_totals_reconciled=difference == 0 and all(r['net_realized_sol'] is not None for r in real),
+        ledger_realized_sol=runtime['realized_lamports']/10**9,
+        allocated_source_realized_sol=allocated/10**9, ledger_minus_source_pnl_sol=difference/10**9,
         paper_exit_records=sum(not r.get('voided') for r in closes), real_order_records=len(orders),
         real_accounting_complete=not live.accounting_pending(runtime),
         basis='All stored records. Paper uses modeled USD costs; real uses finalized SOL receipts and failed-transaction fees. Partial exits are not separate winning positions. Unknown sale allocation remains incomplete.')
