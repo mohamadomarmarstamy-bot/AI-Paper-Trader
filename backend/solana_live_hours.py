@@ -10,10 +10,6 @@ TIMEZONE = 'America/New_York'
 # manual pause, mint age and execution checks continue to apply independently.
 ALL_DAY_SOURCE_NAMES = {
     '4DdrfiDHpmx55i4SPssxVzS9ZaKLb8qr45NKY9Er9nNh': 'Mr. Frog',
-    'A3W8psibkTUvjxs4LRscbnjux6TFDXdvD4m4GsGpQ2KJ': 'Numero',
-    'J9TYAsWWidbrcZybmLSfrLzryANf4CgJBLdvwdGuC8MB': 'Johnson',
-    'DYAn4XpAkN5mhiXkRB7dGq4Jadnx6XYgu8L5b3WGhbrt': 'Kay The Doc',
-    'DVMkhiQe1D8yenuEgsW44NjRn9LfVQjGEpZcez5x7Mff': 'Iceman',
     'ApRnQN2HkbCn7W2WWiT2FEKvuKJp9LugRyAE1a9Hdz1': 'Solkrow',
 }
 ALL_DAY_SOURCES = frozenset(ALL_DAY_SOURCE_NAMES)
