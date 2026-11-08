@@ -32,7 +32,7 @@ class PaperTrialsTests(unittest.TestCase):
         result = trials.start()
         self.assertTrue(result['started']); self.assertFalse(result['live_execution_enabled'])
         self.assertFalse(result['automatic_promotion'])
-        self.assertEqual([r['name'] for r in result['traders']], ['Jijo', 'Tech', 'Kadenox'])
+        self.assertEqual([r['name'] for r in result['traders']], ['Jijo', 'Tech', 'Kadenox', 'Beaver'])
         self.assertFalse(result['config']['auto_discover'])
         for row in result['traders']:
             self.assertTrue(row['paper_only'])
@@ -114,6 +114,29 @@ class PaperTrialsTests(unittest.TestCase):
         state = {'traders': []}
         trials.TrialProvider().discover(state, lambda: 1)
         self.assertEqual(state['traders'], [])
+
+    def test_review_enrolls_only_new_candidate_without_resetting_history(self):
+        trials.start()
+        with database.paper_trial_context(), closing(database.get_connection()) as conn:
+            state, _ = paper.load()
+            state['traders'] = state['traders'][:3]
+            state['traders'][2]['active'] = True
+            state['cash_usd'] = 99987
+            conn.execute('UPDATE solana_copy_state SET state_json=? WHERE id=1', (json.dumps(state),))
+            conn.commit()
+            before = paper.load()[0]
+            trials.reviewed_roster()
+            after = paper.load()[0]
+            self.assertEqual(after['cash_usd'], 99987)
+            self.assertEqual(after['trial_started_at'], before['trial_started_at'])
+            self.assertFalse(after['traders'][2]['active'])
+            added = after['traders'][3]
+            self.assertEqual(added['name'], 'Beaver')
+            self.assertGreaterEqual(added['selected_at'], before['trial_started_at'])
+            self.assertEqual(after['cursors'][added['wallet']]['at'], added['selected_at'])
+            trials.reviewed_roster()
+            self.assertEqual(len(paper.load()[0]['traders']), 4)
+        self.assertEqual(Path(database.DATABASE_PATH).read_bytes(), self.original)
 
 
 if __name__ == '__main__': unittest.main()

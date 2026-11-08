@@ -91,11 +91,11 @@ class RealWorkerTests(unittest.TestCase):
                 self.assertFalse(live.public()['enabled'])
         self.assertFalse(self.chain.prepared);self.assertFalse(self.chain.sent)
 
-    def test_johnson_after_cutoff_reaches_signing_with_existing_guards(self):
+    def test_eligible_solkrow_after_cutoff_reaches_signing_with_existing_guards(self):
         from datetime import datetime
         from zoneinfo import ZoneInfo
         from solana_live_hours import entry_allowed
-        self.source='J9TYAsWWidbrcZybmLSfrLzryANf4CgJBLdvwdGuC8MB'
+        self.source='ApRnQN2HkbCn7W2WWiT2FEKvuKJp9LugRyAE1a9Hdz1'
         with closing(database.get_connection()) as conn:
             source,_=paper.load();source['traders']=[{'wallet':self.source,'active':True}]
             source['cursors']={self.source:{'provider':'rpc','rpc_coverage':{'checked_at':time.time()}}}
