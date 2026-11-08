@@ -421,6 +421,8 @@ def tick(*, provider=None, market=None, clock=time.time):
             mark_time=clock()
             mark_and_protect(state,marks,mark_time,closes)
             comparison_actions.append(('mark',marks,mark_time,False))
+        from solana_owner_roster import enroll
+        enroll(state, clock())
         enabled=state['config']['enabled']; incoming=[]
         rpc_wallets={r['wallet'] for r in state['traders'] if state['cursors'].get(r['wallet'],{}).get('provider')=='rpc'}
         connection_missing=enabled and isinstance(provider,Birdeye) and not configured() and not state.get('public_rpc_enabled') and not rpc_wallets

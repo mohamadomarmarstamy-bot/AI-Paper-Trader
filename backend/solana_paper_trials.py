@@ -17,6 +17,7 @@ CANDIDATES = (
     ('Tech', '5d3jQcuUvsuHyZkhdp78FFqc7WogrzZpTtec1X9VNkuE'),
     ('Kadenox', 'B32QbbdDAyhvUQzjcaM5j6ZVKwjCxAwGH5Xgvb9SJqnC'),
     ('Beaver', 'GM7Hrz2bDq33ezMtL6KGidSWZXMWgZ6qBuugkb5H8NvN'),
+    ('AH75', 'AH75Bn6QHSt5K2Ad4p1otns3JTwpSJWZTwiwKWNhmnKx'),
 )
 PAUSED = {'B32QbbdDAyhvUQzjcaM5j6ZVKwjCxAwGH5Xgvb9SJqnC'}
 
@@ -26,7 +27,9 @@ def reviewed_roster():
 
     Beaver reviewed 2026-11-08: https://kolexplorer.com/kol/beaver
     Reported 7/30/90-day profits and 1.09x equal-stake history warrant a paper
-    test only. Kadenox's forward trial is negative after eight closed positions.
+    test only. AH75 was owner-selected for paper only on 2026-11-08 from
+    https://dextrading.com/wallet/AH75Bn6QHSt5K2Ad4p1otns3JTwpSJWZTwiwKWNhmnKx/solana
+    Reported returns are unverified; enroll only future observed swaps. Kadenox's forward trial is negative after eight closed positions.
     """
     state, revision = paper.load()
     if not state.get('trial_started_at'):

@@ -32,7 +32,7 @@ class PaperTrialsTests(unittest.TestCase):
         result = trials.start()
         self.assertTrue(result['started']); self.assertFalse(result['live_execution_enabled'])
         self.assertFalse(result['automatic_promotion'])
-        self.assertEqual([r['name'] for r in result['traders']], ['Jijo', 'Tech', 'Kadenox', 'Beaver'])
+        self.assertEqual([r['name'] for r in result['traders']], ['Jijo', 'Tech', 'Kadenox', 'Beaver', 'AH75'])
         self.assertFalse(result['config']['auto_discover'])
         for row in result['traders']:
             self.assertTrue(row['paper_only'])
@@ -135,7 +135,7 @@ class PaperTrialsTests(unittest.TestCase):
             self.assertGreaterEqual(added['selected_at'], before['trial_started_at'])
             self.assertEqual(after['cursors'][added['wallet']]['at'], added['selected_at'])
             trials.reviewed_roster()
-            self.assertEqual(len(paper.load()[0]['traders']), 4)
+            self.assertEqual(len(paper.load()[0]['traders']), 5)
         self.assertEqual(Path(database.DATABASE_PATH).read_bytes(), self.original)
 
 
