@@ -240,28 +240,9 @@ class Provider:
         return uint(self.rpc('getMinimumBalanceForRentExemption',[info['account_size']]))+uint(self.rpc('getMinimumBalanceForRentExemption',[165]))
 
     def build(self,owner,input_mint,output_mint,amount,policy):
-        api_key=os.getenv('JUPITER_API_KEY','')
-        if not api_key:raise Unavailable('Jupiter API key is not configured.')
-        try:
-            start=time.monotonic()
-            response=http.get('https://api.jup.ag/swap/v2/build',params={
-                'inputMint':input_mint,'outputMint':output_mint,'amount':str(uint(amount)),'taker':owner,
-                'slippageBps':policy['slippage_bps'],'maxAccounts':48,'wrapAndUnwrapSol':'false',
-                'platformFeeBps':0,'transactionVersion':'0'},headers={'x-api-key':api_key},timeout=8,allow_redirects=False)
-            if response.status_code in (401,403):raise Unavailable('Jupiter API key or plan does not permit swap building.')
-            if response.status_code==429:raise Unavailable('Jupiter swap API is rate limited; no new transaction was built.')
-            if response.status_code!=200 or len(response.content)>500_000 or time.monotonic()-start>12:raise ValueError()
-            data=response.json()
-            if data['inputMint']!=input_mint or data['outputMint']!=output_mint or uint(data['inAmount'])!=amount or data['swapMode']!='ExactIn':raise ValueError()
-            out=uint(data['outAmount']);floor=uint(data['otherAmountThreshold'])
-            impact=Decimal(str(data['priceImpactPct']))
-            if not impact.is_finite() or abs(impact)*100>policy['max_price_impact_percent']:raise ValueError()
-            if data['slippageBps']!=policy['slippage_bps'] or not 0<floor<=out or floor<out*(10000-policy['slippage_bps'])//10000:raise ValueError()
-            if data.get('otherInstructions') or data.get('tipInstruction'):raise ValueError()
-            data['_observed_at']=time.time()
-            return data
-        except Unavailable:raise
-        except Exception:raise Unavailable('No supported Jupiter route within the configured slippage and price-impact limits.') from None
+        from solana_jupiter import build_quote
+        # Live orders always use normal routing. Research cannot enable fast.
+        return build_quote(owner,input_mint,output_mint,amount,policy)
 
     def prepare(self,owner,side,mint,amount,policy,authorize,quote=None):
         if side != 'buy':
