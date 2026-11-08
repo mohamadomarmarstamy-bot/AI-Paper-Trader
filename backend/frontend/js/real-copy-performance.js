@@ -1,7 +1,7 @@
 (() => {
  const $=id=>document.getElementById(id),node=(tag,text,cls)=>{const el=document.createElement(tag);el.textContent=text??'';if(cls)el.className=cls;return el;};
  let offset=0,receivedAt=0,busy=false,generation=0,total=0;
- const sol=n=>Number.isFinite(n)?`${(n/1e9).toLocaleString('en-US',{maximumFractionDigits:6})} SOL`:'Unavailable';
+ const sol=n=>Number.isFinite(n)?`${(n/1e9).toLocaleString('en-US',{maximumFractionDigits:9})} SOL`:'Unavailable';
  const seconds=n=>Number.isFinite(n)?`${(n/1000).toFixed(3)}s`:'—';
  const percent=n=>Number.isFinite(n)?`${n>=0?'+':''}${n.toFixed(2)}%`:'—';
  const price=n=>Number.isFinite(n)&&n>0?n.toPrecision(7):'—';
@@ -10,6 +10,29 @@
  function table(id,rows,empty){const target=$(id);target.replaceChildren();if(!rows.length){const tr=node('tr',''),td=node('td',empty);td.colSpan=12;tr.append(td);target.append(tr);return;}for(const cells of rows){const tr=node('tr','');for(const value of cells){const td=node('td','');if(value instanceof Node)td.append(value);else td.textContent=value;tr.append(td);}target.append(tr);}}
  function timing(rows,side,key){return rows.find(r=>r.side===side&&r.key===key)||{count:0,median:null,p90:null};}
  function sample(value,total){return `${value.count}/${total} recorded`;}
+ function renderAudit(data){
+  if(!data.reconciliation)return;
+  const r=data.reconciliation,adjustments=data.accounting_adjustments||[],issues=data.accounting_issues||[];
+  $('rc-audit-summary').textContent=data.accounting_complete?'Allocated results reconcile exactly with the ledger.':`Reconciliation needs review · ${issues.length} archived-evidence issues`;
+  table('rc-audit-bridge',[
+   ['Recorded sales minus failed transaction fees',sol(r.orders_net_lamports)],
+   ['Previously posted manual adjustments',sol(r.archived_adjustment_lamports)],
+   ['Total allocated realized result',sol(data.allocated_realized_lamports)],
+   ['Recorded ledger realized result',sol(data.ledger_realized_lamports)],
+   ['Remaining difference',sol(data.ledger_difference_lamports)]
+  ],'Waiting for accounting records.');
+  const box=$('rc-audit-adjustments');box.replaceChildren();
+  for(const a of adjustments){
+   const row=node('div','', 'rc-audit-adjustment'),coin=node('strong',short(a.mint));window.MemeCoinLabels?.attach(coin,a.mint);
+   const name=data.wallets.find(w=>w.wallet===a.source_wallet)?.name||short(a.source_wallet);
+   row.append(coin,node('p',`${name} · archived manual sale · ${sol(a.pnl_lamports)} realized`),node('small',`Recorded cost: ${sol(a.cost_lamports)} · net proceeds: ${sol(a.proceeds_lamports)}`));
+   const receipts=node('div','', 'rc-actions');
+   for(const [index,sig] of a.receipt_signatures.entries()){const link=node('a',`Receipt ${index+1} ↗`,'rc-link');link.href='https://solscan.io/tx/'+encodeURIComponent(sig);link.target='_blank';link.rel='noopener';receipts.append(link);}
+   row.append(receipts);box.append(row);
+  }
+  if(!adjustments.length)box.append(node('p',r.already_represented_repairs?'Archived adjustments are already represented by sell records.':'No additional archived adjustments allocated.','rc-note'));
+  $('rc-audit-issues').hidden=!issues.length;$('rc-audit-issues').textContent=issues.map(r=>r.reason).join(' ');
+ }
  function renderBenchmark(data){
   if(!data)return;
   $('rc-benchmark-status').textContent=`${data.sampling_status||'Idle-only sampling'} · ${data.comparable_pairs} comparable pairs · ${data.samples} sample records · live routing: normal${data.last_sample_at?` · latest ${new Date(data.last_sample_at*1000).toLocaleString()}`:''}`;
@@ -19,7 +42,7 @@
   $('rc-benchmark-basis').textContent=data.basis;
  }
  function render(data){
-  renderBenchmark(data.benchmark);
+  renderBenchmark(data.benchmark);renderAudit(data);
   total=data.entry_count;
   $('rc-report-time').textContent=`${data.wallet?short(data.wallet):'All recorded wallets'} · updated ${new Date(data.checked_at*1000).toLocaleTimeString()} · ${data.order_count} orders · ${data.pending_orders} pending`;
   const pnl=$('rc-report-pnl');pnl.textContent=data.accounting_complete?sol(data.ledger_realized_lamports):'Needs review';pnl.dataset.sign=data.accounting_complete?(data.ledger_realized_lamports<0?'negative':'positive'):'unknown';
@@ -29,7 +52,7 @@
   $('rc-report-premium').textContent=percent(data.entry_premium.median);
   $('rc-report-premium-count').textContent=`Median · ${data.entry_premium.count}/${data.entry_count} buys comparable`;
   const speed=timing(data.timings,'buy','source_to_broadcast_ms');$('rc-report-speed').textContent=seconds(speed.median);$('rc-report-speed-count').textContent=`Median · ${speed.count} settled buys with timing`;
-  $('rc-report-warning').textContent=data.accounting_complete?'':`Accounting incomplete. ${Number.isFinite(data.ledger_difference_lamports)?`Ledger minus allocated results: ${sol(data.ledger_difference_lamports)}. `:''}Unallocated sales, unknown fees or external wallet changes need review.`;
+  $('rc-report-warning').textContent=data.accounting_complete?'':`Accounting incomplete. ${Number.isFinite(data.ledger_difference_lamports)?`Ledger minus allocated results: ${sol(data.ledger_difference_lamports)}. `:''}Unallocated sales, archived adjustments, unknown fees or external wallet changes need review.`;
   $('rc-report-warning').hidden=data.accounting_complete;
   $('rc-report-basis').textContent=data.basis;$('rc-report-price-basis').textContent=data.price_basis;$('rc-report-comparison-basis').textContent=data.comparison_basis;
   table('rc-report-wallets',data.wallets.map(w=>[
@@ -37,7 +60,7 @@
    Number.isFinite(w.win_rate_percent)?`${w.win_rate_percent.toFixed(1)}%`:'—',w.open_positions,
    signed(node('span',sol(w.net_realized_lamports)),w.net_realized_lamports),sol(w.failed_fees_lamports),
    `${w.failed_orders} / ${w.rejected_orders}`,percent(w.entry_premium.median),
-   w.unallocated_sales||w.unknown_fee_records?`${w.unallocated_sales} sales / ${w.unknown_fee_records} fees unknown`:'Allocated'
+   w.unallocated_sales||w.unknown_fee_records?`${w.unallocated_sales} sales / ${w.unknown_fee_records} fees unknown`:w.manual_adjustment_count?`Includes ${w.manual_adjustment_count} archived adjustment(s)`:'Orders allocated'
   ]),'No copied real trades recorded.');
   table('rc-report-cohorts',data.cohorts.map(c=>{
    const buy=timing(c.timings,'buy','source_to_broadcast_ms'),sell=timing(c.timings,'sell','trigger_to_broadcast_ms');
