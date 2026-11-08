@@ -59,6 +59,7 @@ class AtomicGuardTests(unittest.TestCase):
 class ExecutionProviderTests(unittest.TestCase):
     def setUp(self):
         self.key=Keypair();self.owner=str(self.key.pubkey());self.mint=str(Pubkey.new_unique());self.policy={'slippage_bps':100,'max_price_impact_percent':5,'max_priority_fee_lamports':100000,'reserve_lamports':10000000}
+        self.policy['source_entry']={'mint':self.mint,'quote_mint':ex.SOL,'quote_amount_raw':'100000000','token_amount_raw':'100','token_decimals':6}
         p=patch.dict(os.environ,{'REAL_COPY_SIGNER_SECRET':str(self.key),'JUPITER_API_KEY':'synthetic-api-key','REAL_COPY_EXECUTION_ALLOWED':'true'},clear=True);p.start();self.addCleanup(p.stop)
 
     def quote(self):
@@ -85,6 +86,18 @@ class ExecutionProviderTests(unittest.TestCase):
             raise AssertionError(method)
         provider.rpc=rpc
         return provider
+
+    def test_source_price_guard_rejects_before_simulation_authorization_or_signing(self):
+        provider=self.provider();provider.rpc=unittest.mock.Mock(side_effect=AssertionError('No simulation or fee check'))
+        self.policy['source_entry']['quote_amount_raw']='90000000'
+        with self.assertRaisesRegex(ex.Unavailable,'exceeds source cost'):
+            provider.prepare(self.owner,'buy',self.mint,100000000,self.policy,lambda:self.fail('Must not authorize'),quote=self.quote())
+        provider.rpc.assert_not_called()
+
+    def test_source_price_reference_missing_rejects_before_signing(self):
+        self.policy.pop('source_entry')
+        with self.assertRaisesRegex(ex.Unavailable,'source entry price is unavailable'):
+            self.provider().prepare(self.owner,'buy',self.mint,100000000,self.policy,lambda:self.fail('Must not authorize'),quote=self.quote())
 
     def test_fresh_profit_trim_quote_cannot_drop_below_net_target(self):
         provider=self.provider();quote=self.quote()

@@ -135,10 +135,12 @@ def parse(transaction,wallet,signature):
         if (side=='buy' and delta<=0) or (side=='sell' and delta>=0):return []
         # Ignore unrelated token gifts/transfers and ambiguous multi-asset flows.
         if any(v and a not in CASH_MINTS and a!=address for a,v in balances.items()):return []
+        from solana_copy_entry import source_entry
+        reference=source_entry(transaction,wallet,address) if side=='buy' and quote=='So11111111111111111111111111111111111111112' else None
         at=num(transaction['blockTime'])
         return [{'owner':wallet,'tx_hash':signature,'ins_index':index,'inner_ins_index':0,'block_unix_time':at,
                  'base':{'address':address,'type_swap':'to' if side=='buy' else 'from'},
-                 'quote':{'address':quote,'type_swap':'from' if side=='buy' else 'to'},'source':'solana_rpc_pump','source_position_before':float(pre_balances.get(address,Decimal(0)))}]
+                 'quote':{'address':quote,'type_swap':'from' if side=='buy' else 'to'},'source':'solana_rpc_pump','source_entry':reference,'source_position_before':float(pre_balances.get(address,Decimal(0)))}]
     except (ValueError,TypeError,KeyError,IndexError,OverflowError):return []
 
 

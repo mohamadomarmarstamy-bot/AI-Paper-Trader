@@ -11,11 +11,11 @@
  const traderName=(address,data)=>data.paper_sync.blueprint.traders.find(t=>t.wallet===address)?.name||(address?short(address):'Unknown source wallet');
  const sol=n=>Number.isFinite(n)?`${n.toLocaleString('en-US',{maximumFractionDigits:9})} SOL`:'Unavailable';
  function sellTiming(order){
-  if(order.side!=='sell'||!order.timing_ms)return null;
-  const labels={quote_ms:'Quote checks',prepare_ms:'Preparation total',initial_checks_ms:'Initial checks (within preparation)',balances_ms:'Balance checks (within preparation)',route_checks_ms:'Route checks (within preparation)',fee_check_ms:'Fee check (within preparation)',simulation_ms:'Simulation (within preparation)',submit_ms:'Submission request',trigger_to_broadcast_ms:'Trigger → broadcast attempt',broadcast_to_finalized_ms:'Broadcast → verified finalization',trigger_to_finalized_ms:'Trigger → verified finalization'};
+  if(!order.timing_ms)return null;
+  const labels={source_to_detection_ms:'Source buy → detection',source_processing_ms:'Detection → saved signal',feed_to_execution_ms:'Saved signal → execution',source_to_broadcast_ms:'Source buy → broadcast attempt',detection_to_broadcast_ms:'Detection → broadcast attempt',source_to_finalized_ms:'Source buy → verified finalization',funding_checks_ms:'Funding checks',quote_ms:'Quote checks',prepare_ms:'Preparation total',initial_checks_ms:'Initial checks (within preparation)',balances_ms:'Balance checks (within preparation)',route_checks_ms:'Route checks (within preparation)',fee_check_ms:'Fee check (within preparation)',simulation_ms:'Simulation (within preparation)',submit_ms:'Submission request',trigger_to_broadcast_ms:'Trigger → broadcast attempt',broadcast_to_finalized_ms:'Broadcast → verified finalization',trigger_to_finalized_ms:'Trigger → verified finalization'};
   const rows=Object.entries(labels).filter(([key])=>Number.isFinite(order.timing_ms[key])&&order.timing_ms[key]>=0);
   if(!rows.length)return null;
-  const details=node('details','');details.append(node('summary','Sell timing'));
+  const details=node('details','');details.append(node('summary',order.side==='buy'?'Buy timing':'Sell timing'));
   for(const [key,label] of rows)details.append(node('small',`${label}: ${(order.timing_ms[key]/1000).toFixed(3)}s`));
   details.append(node('small','Preparation details overlap its total. Finalization includes network and polling time.'));
   return details;
