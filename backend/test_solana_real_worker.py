@@ -244,6 +244,8 @@ class RealWorkerTests(unittest.TestCase):
         event=self.direct_event();live.tick(self.chain)
         self.assertEqual(len(self.chain.sent),1)
         self.assertEqual(live.orders(True)[0]['entry_path'],'verified_source')
+        from solana_execution_timing import PROFILE
+        self.assertEqual(live.orders(True)[0]['execution_profile'],PROFILE)
         self.assertEqual(live.orders(True)[0]['id'],'buy:'+event['id'])
         self.assertEqual(live.source_events(0),[])
 

@@ -46,6 +46,13 @@ def build_router(*,require_session):
     def real_copy_status(request:Request):
         require_session(request)
         return JSONResponse(real_copy.public(),headers={'Cache-Control':'no-store'})
+    @router.get('/real-copy/performance')
+    def real_copy_performance(request:Request, offset:int=0, limit:int=20):
+        require_session(request)
+        from solana_copy_performance import public as performance
+        try:return JSONResponse(performance(offset=offset,limit=limit),headers={'Cache-Control':'no-store'})
+        except ValueError as error:raise HTTPException(422,str(error)) from None
+
     @router.post('/real-copy/challenge')
     async def real_copy_challenge(request:Request):
         payload=await body(request)
