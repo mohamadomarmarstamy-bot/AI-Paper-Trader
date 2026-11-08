@@ -2,7 +2,7 @@
 from contextlib import contextmanager
 import time
 
-PROFILE = 'parallel_checks_v1'
+PROFILE = 'paced_quotes_v2'
 
 
 @contextmanager

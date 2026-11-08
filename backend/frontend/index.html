@@ -1168,6 +1168,9 @@
 <p id="rc-report-basis" class="rc-note"></p><p class="rc-note">Win rate scores fully closed positions with known costs. Partial exits belong to the same position.</p>
 <h3>Earlier vs newly measured trades</h3><div class="rc-report-scroll" tabindex="0" role="region" aria-label="Execution comparison"><table><thead><tr><th scope="col">Group</th><th scope="col">Buys</th><th scope="col">Buy → broadcast · median</th><th scope="col">Sell trigger → broadcast · median</th><th scope="col">Entry premium · median</th></tr></thead><tbody id="rc-report-cohorts"></tbody></table></div><p id="rc-report-comparison-basis" class="rc-note"></p>
 <details><summary>Where execution spends time</summary><div class="rc-report-scroll" tabindex="0" role="region" aria-label="Execution timing"><table><thead><tr><th scope="col">Side</th><th scope="col">Stage</th><th scope="col">Median</th><th scope="col">90th percentile</th><th scope="col">Coverage</th></tr></thead><tbody id="rc-report-timings"></tbody></table></div><p class="rc-note">Settled orders only. Preparation stages overlap its total. Observed finalization includes network and polling time; broadcast time is not fill time.</p></details>
+<details class="rc-quote-benchmark" id="rc-quote-benchmark"><summary>Normal vs fast quotes · research only</summary><p id="rc-benchmark-status" class="rc-note">Waiting for idle-time samples. Live routing stays normal.</p>
+<div class="rc-report-scroll" tabindex="0" role="region" aria-label="Quote mode comparison"><table><thead><tr><th scope="col">Mode</th><th scope="col">Paired median time</th><th scope="col">Paired 90th percentile</th><th scope="col">Successful / attempted</th><th scope="col">Rate limited</th><th scope="col">Unavailable</th></tr></thead><tbody id="rc-benchmark-modes"></tbody></table></div>
+<p id="rc-benchmark-difference" class="rc-note"></p><p id="rc-benchmark-basis" class="rc-note"></p></details>
 <h3>Our entries vs source wallet</h3><div class="rc-report-scroll" tabindex="0" role="region" aria-label="Entry price comparison"><table><thead><tr><th scope="col">Buy time</th><th scope="col">Coin</th><th scope="col">Source wallet</th><th scope="col">Source SOL/token</th><th scope="col">Our SOL/token</th><th scope="col">Premium</th><th scope="col">Buy → broadcast</th><th scope="col">Transaction</th></tr></thead><tbody id="rc-report-entries"></tbody></table></div>
 <div class="rc-row rc-spacer"><button id="rc-report-prev" type="button" disabled>Previous</button><small id="rc-report-page">0 buys</small><button id="rc-report-next" type="button" disabled>Next</button></div><p id="rc-report-price-basis" class="rc-note"></p>
 </details>
@@ -1935,7 +1938,7 @@
     <script src="js/watchlist.js"></script>
     <script src="js/portfolio.js?v=history-recovery-v1"></script>
     <script src="js/phantom-session.js?v=trusted-v1"></script>
-    <script src="js/coin-labels.js?v=coin-names-v1"></script><script src="js/real-copy-performance.js?v=performance-v1"></script><script src="js/real-copy.js?v=performance-v1"></script>
+    <script src="js/coin-labels.js?v=coin-names-v1"></script><script src="js/real-copy-performance.js?v=quote-benchmark-v1"></script><script src="js/real-copy.js?v=performance-v1"></script>
     <script src="js/pro-ticker-manual.js"></script>
     <script src="js/pro-ticker-release.js"></script>
     <script src="js/pro-ticker-workspace.js?v=entry-settings-v1"></script>

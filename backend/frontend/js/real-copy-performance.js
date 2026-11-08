@@ -10,7 +10,16 @@
  function table(id,rows,empty){const target=$(id);target.replaceChildren();if(!rows.length){const tr=node('tr',''),td=node('td',empty);td.colSpan=12;tr.append(td);target.append(tr);return;}for(const cells of rows){const tr=node('tr','');for(const value of cells){const td=node('td','');if(value instanceof Node)td.append(value);else td.textContent=value;tr.append(td);}target.append(tr);}}
  function timing(rows,side,key){return rows.find(r=>r.side===side&&r.key===key)||{count:0,median:null,p90:null};}
  function sample(value,total){return `${value.count}/${total} recorded`;}
+ function renderBenchmark(data){
+  if(!data)return;
+  $('rc-benchmark-status').textContent=`${data.sampling_status||'Idle-only sampling'} · ${data.comparable_pairs} comparable pairs · ${data.samples} sample records · live routing: normal${data.last_sample_at?` · latest ${new Date(data.last_sample_at*1000).toLocaleString()}`:''}`;
+  table('rc-benchmark-modes',data.modes.map(m=>[m.mode==='fast'?'Fast (research)':'Normal',`${seconds(m.paired_latency_ms.median)} · n=${m.paired_latency_ms.count}`,seconds(m.paired_latency_ms.p90),`${m.successful} / ${m.attempts}`,m.rate_limited,m.unavailable]),'No quote samples yet.');
+  const latency=data.latency_change_ms.median,output=data.minimum_output_change_percent.median;
+  $('rc-benchmark-difference').textContent=data.comparable_pairs?`Fast minus normal: ${Number.isFinite(latency)?`${latency>=0?'+':''}${latency.toFixed(1)}ms`:'—'} median request time; ${percent(output)} median minimum token output. Negative time is faster; negative output means fewer tokens. ${data.comparable_pairs<20?'Small sample; collect more before judging.':''}`:'Collecting paired quotes. No speed or price conclusion yet.';
+  $('rc-benchmark-basis').textContent=data.basis;
+ }
  function render(data){
+  renderBenchmark(data.benchmark);
   total=data.entry_count;
   $('rc-report-time').textContent=`${data.wallet?short(data.wallet):'All recorded wallets'} · updated ${new Date(data.checked_at*1000).toLocaleTimeString()} · ${data.order_count} orders · ${data.pending_orders} pending`;
   const pnl=$('rc-report-pnl');pnl.textContent=data.accounting_complete?sol(data.ledger_realized_lamports):'Needs review';pnl.dataset.sign=data.accounting_complete?(data.ledger_realized_lamports<0?'negative':'positive'):'unknown';

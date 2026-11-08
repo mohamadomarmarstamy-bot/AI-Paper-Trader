@@ -130,7 +130,7 @@ def report(traders,runtime,orders,*,offset=0,limit=20,now=None):
     pending=bool(runtime.get('balance_adjustments') or any(p.get('balance_observation') or p.get('external_change') for p in runtime.get('positions',{}).values()))
     reconciled=complete and not pending and ledger==allocated
     cohorts=[]
-    for key,label in ((None,'Earlier · version unrecorded'),(PROFILE,'Current measured pipeline')):
+    for key,label in ((None,'Earlier recorded trades'),(PROFILE,'Current measured pipeline')):
         rows=[o for o in orders if (o.get('execution_profile')==PROFILE)==(key==PROFILE)]
         confirmed=[o for o in rows if o.get('side')=='buy' and o.get('status')=='confirmed']
         cohorts.append({'label':label,'orders':len(rows),'confirmed_buys':len(confirmed),
@@ -146,7 +146,7 @@ def report(traders,runtime,orders,*,offset=0,limit=20,now=None):
         'entries':entries,'entry_count':len(buys),'offset':offset,'limit':limit,
         'basis':'All stored real orders for this trading wallet. SOL results use finalized receipts, allocated entry costs and failed-transaction fees. Open holdings are excluded from realized P/L.',
         'price_basis':'All-in SOL per received token includes fees and account funding, which can push this premium above the 5% swap-price cap. No historical USD conversion is estimated.',
-        'comparison_basis':'Version tags begin with this report. Earlier trades may already use the speed updates. Different wallets, market conditions and missing samples prevent a causal before/after claim.'}
+        'comparison_basis':'The current group starts with paced quote requests. Earlier trades may have an older version tag or no tag. Different wallets, market conditions and missing samples prevent a causal before/after claim.'}
 
 
 def public(*,offset=0,limit=20):
@@ -162,6 +162,8 @@ def public(*,offset=0,limit=20):
         orders=[json.loads(r[0]) for r in conn.execute('SELECT details_json FROM solana_real_orders ORDER BY created_at,rowid')] if 'solana_real_orders' in tables else []
         if runtime.get('wallet'):orders=[o for o in orders if o.get('wallet')==runtime['wallet']]
         if orders:orders=enrich_orders(conn,orders,runtime)
+        from solana_quote_benchmark import public as benchmark_status
+        benchmark=benchmark_status(conn)
     # Release the read transaction before aggregating; report rendering must not
     # hold a database read lock while the live worker persists an order.
-    return report(paper.get('traders',[]),runtime,orders,offset=offset,limit=limit)
+    return {**report(paper.get('traders',[]),runtime,orders,offset=offset,limit=limit),'benchmark':benchmark}
