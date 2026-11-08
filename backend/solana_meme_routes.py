@@ -160,6 +160,11 @@ def build_router(*,require_session):
     def copy_status(request:Request):
         require_session(request)
         return copy_bot.public()
+    @router.get('/meme-coins/copy/wallet-review')
+    def wallet_review(request:Request):
+        require_session(request)
+        from solana_wallet_review import public as review
+        return JSONResponse(review(),headers={'Cache-Control':'no-store'})
     @router.post('/meme-coins/copy/config')
     async def copy_settings(request:Request):
         payload=await body(request)
