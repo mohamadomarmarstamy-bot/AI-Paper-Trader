@@ -11,6 +11,7 @@ import os
 import struct
 import time
 from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 from solana_execution_timing import measure
 import requests
 import solana_http as http
@@ -49,6 +50,9 @@ def signer():
 
 
 _network_check = {}
+_network_lock = Lock()
+NETWORK_CACHE_SECONDS = 30
+MINT_CACHE_SECONDS = 15
 
 
 def connection_status():
@@ -144,7 +148,16 @@ def guards(owner,mint,decimals,min_tokens,min_sol,program=TOKEN):
             transfer(TransferParams(from_pubkey=owner,to_pubkey=owner,lamports=uint(min_sol)))]
 
 
+def endpoint_identity():
+    try:return hashlib.sha256(execution_url().encode()).hexdigest()
+    except ValueError:raise Unavailable('An HTTPS Solana RPC URL is required.') from None
+
+
 class Provider:
+    def __init__(self):
+        self._mint_cache={}
+        self._mint_lock=Lock()
+
     def rpc(self,method,params):
         if method not in ('getGenesisHash','getBalance','getAccountInfo','getMultipleAccounts','getLatestBlockhash','getMinimumBalanceForRentExemption','getFeeForMessage','simulateTransaction','sendTransaction','getSignatureStatuses','getSignaturesForAddress','getTransaction','getBlockHeight'):
             raise Unavailable('Unsupported execution RPC method.')
@@ -160,13 +173,20 @@ class Provider:
 
     def network(self):
         global _network_check
-        _network_check={}
-        started=time.perf_counter()
-        value=self.rpc('getGenesisHash',[])
-        if value!=MAINNET_GENESIS:
-            raise Unavailable('The configured RPC is not Solana mainnet.')
-        _network_check={'identity':hashlib.sha256(execution_url().encode()).hexdigest(),'checked_at':time.time(),
-                        'mainnet_check_ms':round((time.perf_counter()-started)*1000,3)}
+        identity=endpoint_identity()
+        with _network_lock:
+            check=_network_check
+            if check.get('identity')==identity and 0<=time.monotonic()-check.get('monotonic_at',float('-inf'))<NETWORK_CACHE_SECONDS:
+                return
+            _network_check={}
+            started=time.perf_counter()
+            value=self.rpc('getGenesisHash',[])
+            if value!=MAINNET_GENESIS:
+                raise Unavailable('The configured RPC is not Solana mainnet.')
+            if endpoint_identity()!=identity:
+                raise Unavailable('Execution RPC changed during network verification.')
+            _network_check={'identity':identity,'checked_at':time.time(),'monotonic_at':time.monotonic(),
+                            'mainnet_check_ms':round((time.perf_counter()-started)*1000,3)}
 
     def balance(self,owner):return uint(self.rpc('getBalance',[owner,{'commitment':'confirmed'}])['value'])
 
@@ -177,6 +197,24 @@ class Provider:
         return data
 
     def mint(self,address):
+        # Only legacy mints with revoked mint/freeze authorities are cached.
+        # Token-2022 extension configuration remains a fresh read.
+        identity=endpoint_identity()
+        key=(identity,address)
+        with self._mint_lock:
+            cached=self._mint_cache.get(key)
+            if cached and 0<=time.monotonic()-cached[0]<MINT_CACHE_SECONDS:
+                return dict(cached[1])
+            info=self._read_mint(address)
+            if endpoint_identity()!=identity:
+                raise Unavailable('Execution RPC changed during mint verification.')
+            if info['program']==TOKEN:
+                self._mint_cache={k:v for k,v in self._mint_cache.items() if 0<=time.monotonic()-v[0]<MINT_CACHE_SECONDS}
+                if len(self._mint_cache)>=128:self._mint_cache.pop(next(iter(self._mint_cache)))
+                self._mint_cache[key]=(time.monotonic(),dict(info))
+            return info
+
+    def _read_mint(self,address):
         info=self.rpc('getAccountInfo',[address,{'encoding':'base64','commitment':'confirmed'}])['value']
         if not info:raise Unavailable('Token mint account is unavailable.')
         program=info.get('owner')

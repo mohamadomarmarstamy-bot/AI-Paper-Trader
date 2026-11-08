@@ -167,7 +167,7 @@ class ExecutionProviderTests(unittest.TestCase):
         provider=ex.Provider()
         with patch.object(provider,'rpc',return_value=ex.MAINNET_GENESIS):provider.network()
         for value in (ex.MAINNET_GENESIS[:32],ex.MAINNET_GENESIS[:-1]+'e',str(Pubkey.new_unique())):
-            with patch.object(provider,'rpc',return_value=value),self.assertRaises(ex.Unavailable):provider.network()
+            with patch.object(ex,'_network_check',{}),patch.object(provider,'rpc',return_value=value),self.assertRaises(ex.Unavailable):provider.network()
 
     def test_api_denial_is_reported_without_response_or_key_data(self):
         from types import SimpleNamespace

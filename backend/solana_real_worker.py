@@ -14,6 +14,7 @@ import time
 import uuid
 import database
 from solana_execution_timing import measure
+from solana_parallel_reads import read_many
 from solana_meme_bot import Conflict
 import solana_real_execution as execution
 from solana_live_source_policy import paper_only
@@ -350,64 +351,68 @@ def begin_broadcast(order,state,lease_owner):
         conn.commit()
 
 
-def reconcile_balances(state,provider,now):
+def reconcile_balances(state,provider,now,position_ids=None):
     """Read-only wallet drift detection, only after all stored swaps settle.
 
     External withdrawals are not assumed to be sales. Archive the missing cost
     separately and suppress incomplete P/L until the actual proceeds are audited.
     """
     blocked=set()
-    for ident,p in list(state['positions'].items()):
-        try:
-            observed=provider.finalized_token_balance(state['wallet'],p['mint'],p.get('token_program',execution.TOKEN))
-            actual=execution.uint(observed['quantity']);slot=execution.uint(observed['slot'])
-            if slot<max(p.get('opened_slot',0),p.get('balance_checked_slot',0)):raise execution.Unavailable('Finalized wallet balance is older than the last verified holding.')
-            if actual==p['quantity_raw']:
-                p.pop('balance_observation',None);p['balance_checked_slot']=slot;continue
-            # A finalized manual swap can be accounted before interrupting a
-            # running copier. Transfers and ambiguous settlements still pause.
-            if actual<p['quantity_raw'] and not p.get('external_change') and sum(x['mint']==p['mint'] for x in state['positions'].values())==1:
-                from solana_external_sales import audit,book,stored_orders
+    def read_balance(item):
+        _,p=item
+        return provider.finalized_token_balance(state['wallet'],p['mint'],p.get('token_program',execution.TOKEN))
+    with closing(read_many([(ident,p) for ident,p in state['positions'].items() if position_ids is None or ident in position_ids],read_balance)) as observations:
+        for (ident,p),observed in observations:
+            try:
+                if isinstance(observed,Exception):raise observed
+                actual=execution.uint(observed['quantity']);slot=execution.uint(observed['slot'])
+                if slot<max(p.get('opened_slot',0),p.get('balance_checked_slot',0)):raise execution.Unavailable('Finalized wallet balance is older than the last verified holding.')
+                if actual==p['quantity_raw']:
+                    p.pop('balance_observation',None);p['balance_checked_slot']=slot;continue
+                # A finalized manual swap can be accounted before interrupting a
+                # running copier. Transfers and ambiguous settlements still pause.
+                if actual<p['quantity_raw'] and not p.get('external_change') and sum(x['mint']==p['mint'] for x in state['positions'].values())==1:
+                    from solana_external_sales import audit,book,stored_orders
+                    removed=p['quantity_raw']-actual
+                    cost=p['cost_lamports'] if actual==0 else p['cost_lamports']*removed//p['quantity_raw']
+                    start=p.get('balance_checked_slot',p.get('opened_slot',0))
+                    adjustment={'position_id':ident,'mint':p['mint'],'quantity_removed_raw':removed,
+                        'unreconciled_cost_lamports':cost,'observed_at':now,'start_slot':start,'finalized_slot':slot}
+                    try:
+                        history=stored_orders()+state.get('_external_orders',[])
+                        result=audit(provider,state['wallet'],p['mint'],p.get('token_program',execution.TOKEN),removed,start,slot,history)
+                    except execution.Unavailable:pass
+                    else:
+                        external=book(state,adjustment,result,now)
+                        state.setdefault('_external_orders',[]).append(external)
+                        if actual==0:del state['positions'][ident]
+                        else:
+                            p.update(quantity_raw=actual,cost_lamports=p['cost_lamports']-cost,balance_checked_slot=slot,
+                                realized_lamports=p['realized_lamports']+result['native_delta']-cost,exit_value_lamports=None)
+                            p.pop('balance_observation',None)
+                        continue
+                blocked.add(ident);p['exit_value_lamports']=None
+                state['error']='External wallet balance change detected. New buys paused; affected holdings require reconciliation.'
+                first=p.get('balance_observation')
+                if not first or first['quantity']!=actual:
+                    p['balance_observation']={'quantity':actual,'slot':slot,'at':now};continue
+                if now-first['at']<15 or slot<=first['slot']:continue
+                # Extra deposited tokens never become bot-owned trading funds.
+                if actual>p['quantity_raw']:continue
                 removed=p['quantity_raw']-actual
                 cost=p['cost_lamports'] if actual==0 else p['cost_lamports']*removed//p['quantity_raw']
-                start=p.get('balance_checked_slot',p.get('opened_slot',0))
-                adjustment={'position_id':ident,'mint':p['mint'],'quantity_removed_raw':removed,
-                    'unreconciled_cost_lamports':cost,'observed_at':now,'start_slot':start,'finalized_slot':slot}
-                try:
-                    history=stored_orders()+state.get('_external_orders',[])
-                    result=audit(provider,state['wallet'],p['mint'],p.get('token_program',execution.TOKEN),removed,start,slot,history)
-                except execution.Unavailable:pass
+                state.setdefault('balance_adjustments',[]).append({'position_id':ident,'mint':p['mint'],
+                    'quantity_removed_raw':removed,'unreconciled_cost_lamports':cost,'observed_at':now,
+                    'first_slot':first['slot'],'finalized_slot':slot,'proceeds_lamports':None,
+                    'start_slot':p.get('balance_checked_slot',p.get('opened_slot',0)),
+                    'basis':'External wallet reduction; sale versus transfer and proceeds require transaction review.'})
+                if actual==0:del state['positions'][ident]
                 else:
-                    external=book(state,adjustment,result,now)
-                    state.setdefault('_external_orders',[]).append(external)
-                    if actual==0:del state['positions'][ident]
-                    else:
-                        p.update(quantity_raw=actual,cost_lamports=p['cost_lamports']-cost,balance_checked_slot=slot,
-                            realized_lamports=p['realized_lamports']+result['native_delta']-cost,exit_value_lamports=None)
-                        p.pop('balance_observation',None)
-                    continue
-            blocked.add(ident);p['exit_value_lamports']=None
-            state['error']='External wallet balance change detected. New buys paused; affected holdings require reconciliation.'
-            first=p.get('balance_observation')
-            if not first or first['quantity']!=actual:
-                p['balance_observation']={'quantity':actual,'slot':slot,'at':now};continue
-            if now-first['at']<15 or slot<=first['slot']:continue
-            # Extra deposited tokens never become bot-owned trading funds.
-            if actual>p['quantity_raw']:continue
-            removed=p['quantity_raw']-actual
-            cost=p['cost_lamports'] if actual==0 else p['cost_lamports']*removed//p['quantity_raw']
-            state.setdefault('balance_adjustments',[]).append({'position_id':ident,'mint':p['mint'],
-                'quantity_removed_raw':removed,'unreconciled_cost_lamports':cost,'observed_at':now,
-                'first_slot':first['slot'],'finalized_slot':slot,'proceeds_lamports':None,
-                'start_slot':p.get('balance_checked_slot',p.get('opened_slot',0)),
-                'basis':'External wallet reduction; sale versus transfer and proceeds require transaction review.'})
-            if actual==0:del state['positions'][ident]
-            else:
-                p.update(quantity_raw=actual,cost_lamports=p['cost_lamports']-cost,pending_reason=None)
-                p.pop('balance_observation',None);p['external_change']=True
-        except execution.Unavailable:
-            blocked.add(ident);p['exit_value_lamports']=None
-            state['error']='Finalized wallet balance unavailable. No new order for the affected holding.'
+                    p.update(quantity_raw=actual,cost_lamports=p['cost_lamports']-cost,pending_reason=None)
+                    p.pop('balance_observation',None);p['external_change']=True
+            except execution.Unavailable:
+                blocked.add(ident);p['exit_value_lamports']=None
+                state['error']='Finalized wallet balance unavailable. No new order for the affected holding.'
     if state.get('balance_adjustments'):
         state['error']='External wallet changes require accounting review. P/L is incomplete; new buys remain paused.'
         blocked.update(p['id'] for p in state['positions'].values() if p.get('external_change'))
@@ -477,7 +482,6 @@ def tick(provider=None):
                     try:provider.send(order['prepared'])
                     except execution.Unavailable:pass
             state['last_cycle']=time.time();commit_cycle(state,owner,terminal);return
-        blocked_positions=reconcile_balances(state,provider,time.time())
         source=paper.load()[0];cfg=budget.settings()
         if cfg['revision']!=state['budget_revision']:
             state['enabled']=False;state['error']='Buy settings changed. Restart copying to apply them; existing exits remain monitored.'
@@ -491,32 +495,53 @@ def tick(provider=None):
             if e['side']=='sell':
                 for p in state['positions'].values():
                     if p['mint']==e['mint'] and p['source_wallet']==e['wallet'] and e['source_at']>=p['source_at']:p['pending_reason']='source_sell'
+        urgent_ids={p['id'] for p in state['positions'].values() if p.get('pending_reason') in ('manual','source_sell') and exit_attempt_ready(p,p['pending_reason'],time.time())}
+        blocked_positions=reconcile_balances(state,provider,time.time(),urgent_ids if urgent_ids else None)
+        if urgent_ids and not any(p['id'] in urgent_ids-blocked_positions for p in state['positions'].values()):
+            # No urgent holding can trade. Complete ordinary accounting before
+            # evaluating another exit or allowing any new buy.
+            blocked_positions.update(reconcile_balances(state,provider,time.time()))
         # Current swap quotes, not chart marks, trigger live protective exits.
         chosen=None
-        for p in sorted(state['positions'].values(),key=lambda p:p['opened_at']):
-            if p['id'] in blocked_positions:continue
-            try:
-                quote_timing={}
-                with measure(quote_timing,'quote_ms'):
-                    q=provider.build(state['wallet'],p['mint'],budget.SOL,p['quantity_raw'],{**state['policy'],'reserve_lamports':0})
-                value=max(0,execution.uint(q['otherAmountThreshold'])-5000-state['policy']['max_priority_fee_lamports'])
-                p.update(marked_at=time.time(),exit_value_lamports=value)
-                gain=100*(value-p['cost_lamports'])/p['cost_lamports'];rules=p['protection'];reason=p['pending_reason'];quantity=p['quantity_raw']
-                trailing_exit=trailing_profit_trigger(p,value,5000+state['policy']['max_priority_fee_lamports'])
-                if reason not in ('manual','source_sell'):
-                    if rules['stop_loss_percent']>0 and gain<=-rules['stop_loss_percent']:reason='stop_loss'
-                    elif trailing_exit:reason='profit_protection'
-                    elif reason=='profit_take_half' and gain<p['next_gain_percent']:reason=None;p['pending_reason']=None
-                if reason=='profit_take_half':quantity=max(1,quantity//2)
-                if not reason and rules['profit_take_enabled'] and gain>=p['next_gain_percent'] and quantity>=2:
-                    reason='profit_take_half';quantity//=2
-                if reason and exit_attempt_ready(p,reason,time.time()):
-                    p.pop('exit_retry_at',None)
-                    p['pending_reason']=reason;p['last_exit_attempt_at']=time.time();p['last_exit_reason']=reason
-                    chosen={'id':str(uuid.uuid4()),'side':'sell','mint':p['mint'],'position_id':p['id'],'quantity':quantity,'reason':reason,'detected_at':time.time(),'timing_ms':quote_timing};break
-            except execution.Unavailable:
-                p['exit_value_lamports']=None;state['error']='A live exit quote is unavailable. Holdings remain unpriced and exits are retried.'
-            if time.time()-now>100:break
+        eligible=sorted((p for p in state['positions'].values() if p['id'] not in blocked_positions),key=lambda p:p['opened_at'])
+        # Explicit exits already have a reason. Their preparation obtains a fresh
+        # executable quote; unrelated monitoring requests must not delay them.
+        for p in eligible:
+            reason=p.get('pending_reason')
+            if reason in ('manual','source_sell') and exit_attempt_ready(p,reason,time.time()):
+                p.pop('exit_retry_at',None)
+                p.update(last_exit_attempt_at=time.time(),last_exit_reason=reason)
+                chosen={'id':str(uuid.uuid4()),'side':'sell','mint':p['mint'],'position_id':p['id'],
+                        'quantity':p['quantity_raw'],'reason':reason,'detected_at':time.time(),'timing_ms':{}}
+                break
+        def read_quote(p):
+            timings={}
+            with measure(timings,'quote_ms'):
+                q=provider.build(state['wallet'],p['mint'],budget.SOL,p['quantity_raw'],{**state['policy'],'reserve_lamports':0})
+            return q,timings
+        with closing(read_many(eligible if chosen is None else [],read_quote)) as quotes:
+            for p,result in quotes:
+                try:
+                    if isinstance(result,Exception):raise result
+                    q,quote_timing=result
+                    value=max(0,execution.uint(q['otherAmountThreshold'])-5000-state['policy']['max_priority_fee_lamports'])
+                    p.update(marked_at=time.time(),exit_value_lamports=value)
+                    gain=100*(value-p['cost_lamports'])/p['cost_lamports'];rules=p['protection'];reason=p['pending_reason'];quantity=p['quantity_raw']
+                    trailing_exit=trailing_profit_trigger(p,value,5000+state['policy']['max_priority_fee_lamports'])
+                    if reason not in ('manual','source_sell'):
+                        if rules['stop_loss_percent']>0 and gain<=-rules['stop_loss_percent']:reason='stop_loss'
+                        elif trailing_exit:reason='profit_protection'
+                        elif reason=='profit_take_half' and gain<p['next_gain_percent']:reason=None;p['pending_reason']=None
+                    if reason=='profit_take_half':quantity=max(1,quantity//2)
+                    if not reason and rules['profit_take_enabled'] and gain>=p['next_gain_percent'] and quantity>=2:
+                        reason='profit_take_half';quantity//=2
+                    if reason and exit_attempt_ready(p,reason,time.time()):
+                        p.pop('exit_retry_at',None)
+                        p['pending_reason']=reason;p['last_exit_attempt_at']=time.time();p['last_exit_reason']=reason
+                        chosen={'id':str(uuid.uuid4()),'side':'sell','mint':p['mint'],'position_id':p['id'],'quantity':quantity,'reason':reason,'detected_at':time.time(),'timing_ms':quote_timing};break
+                except execution.Unavailable:
+                    p['exit_value_lamports']=None;state['error']='A live exit quote is unavailable. Holdings remain unpriced and exits are retried.'
+                if time.time()-now>100:break
         for channel,cursor,e in events:
             state['live_source_cursor' if channel=='direct' else 'event_cursor']=cursor
             if e['side']!='buy':continue
