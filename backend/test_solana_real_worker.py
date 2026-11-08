@@ -45,7 +45,7 @@ class RealWorkerTests(unittest.TestCase):
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
         p=patch.object(database,'DATABASE_PATH',Path(temp.name)/'live.db');p.start();self.addCleanup(p.stop)
         hours=patch.object(live,'entry_allowed',return_value=True);hours.start();self.addCleanup(hours.stop)
-        age=patch.object(live,'require_age',return_value={'minimum_age_seconds':1800});age.start();self.addCleanup(age.stop)
+        age=patch.object(live,'require_age',return_value={'minimum_age_seconds':7200});age.start();self.addCleanup(age.stop)
         self.owner=str(Keypair().pubkey());self.source=str(Keypair().pubkey());self.mint=str(Pubkey.new_unique());self.chain=Chain()
         self.flags={'release_allowed':True,'signer_configured':True,'signer_matches':True,'jupiter_configured':True,'signer_address':self.owner,'executor_implemented':True,'network':'Solana mainnet'}
         for p in (patch.object(ex,'configuration',return_value=self.flags),patch.object(ex,'release_allowed',return_value=True),patch.object(budget,'sol_price',return_value={'usd':100})):
@@ -91,11 +91,11 @@ class RealWorkerTests(unittest.TestCase):
                 self.assertFalse(live.public()['enabled'])
         self.assertFalse(self.chain.prepared);self.assertFalse(self.chain.sent)
 
-    def test_eligible_solkrow_after_cutoff_reaches_signing_with_existing_guards(self):
+    def test_restored_latuche_after_cutoff_reaches_signing_with_existing_guards(self):
         from datetime import datetime
         from zoneinfo import ZoneInfo
         from solana_live_hours import entry_allowed
-        self.source='ApRnQN2HkbCn7W2WWiT2FEKvuKJp9LugRyAE1a9Hdz1'
+        self.source='GJA1HEbxGnqBhBifH9uQauzXSB53to5rhDrzmKxhSU65'
         with closing(database.get_connection()) as conn:
             source,_=paper.load();source['traders']=[{'wallet':self.source,'active':True}]
             source['cursors']={self.source:{'provider':'rpc','rpc_coverage':{'checked_at':time.time()}}}
@@ -130,11 +130,11 @@ class RealWorkerTests(unittest.TestCase):
 
     def test_underage_or_unverified_coin_never_reaches_signing(self):
         self.activate();self.event()
-        with patch.object(live,'require_age',side_effect=live.AgeUnavailable('Token under 30 minutes')):
+        with patch.object(live,'require_age',side_effect=live.AgeUnavailable('Token under 2 hours')):
             live.tick(self.chain)
         self.assertFalse(self.chain.prepared);self.assertFalse(self.chain.sent)
         self.assertEqual(live.orders()[0]['status'],'rejected')
-        self.assertIn('30 minutes',live.orders()[0]['error'])
+        self.assertIn('2 hours',live.orders()[0]['error'])
 
     def test_age_rule_does_not_block_exit_of_existing_young_coin(self):
         self.enter();self.chain.exit_value=100_000_000

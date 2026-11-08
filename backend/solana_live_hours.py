@@ -9,6 +9,7 @@ TIMEZONE = 'America/New_York'
 # Owner-selected current live roster. This changes hours only; source eligibility,
 # manual pause, mint age and execution checks continue to apply independently.
 ALL_DAY_SOURCE_NAMES = {
+    'GJA1HEbxGnqBhBifH9uQauzXSB53to5rhDrzmKxhSU65': 'Latuche',
     '4DdrfiDHpmx55i4SPssxVzS9ZaKLb8qr45NKY9Er9nNh': 'Mr. Frog',
     'ApRnQN2HkbCn7W2WWiT2FEKvuKJp9LugRyAE1a9Hdz1': 'Solkrow',
 }
