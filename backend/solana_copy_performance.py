@@ -76,12 +76,14 @@ def timing_summary(orders):
     return rows
 
 
-def wallet_results(traders,orders,positions):
+def wallet_results(traders,orders,positions,adjustments=()):
     names={t['wallet']:t.get('name') or t['wallet'] for t in traders}
-    wallets=set(o.get('source_wallet') or '__unattributed__' for o in orders)|{p['source_wallet'] for p in positions.values()}
+    wallets=set(o.get('source_wallet') or '__unattributed__' for o in orders)|{p['source_wallet'] for p in positions.values()}|{r['source_wallet'] for r in adjustments}
     results=[]
     for wallet in sorted(wallets):
         rows=[o for o in orders if (o.get('source_wallet') or '__unattributed__')==wallet]
+        repairs=[r for r in adjustments if r['source_wallet']==wallet]
+        repair_pnl=sum(r['pnl_lamports'] for r in repairs)
         sales=[o for o in rows if o.get('side')=='sell' and o.get('status')=='confirmed']
         failed=[o for o in rows if o.get('status')=='failed']
         known=[o['realized_pnl_lamports'] for o in sales if type(o.get('realized_pnl_lamports')) is int]
@@ -94,10 +96,11 @@ def wallet_results(traders,orders,positions):
         for buy in buys:
             quantity=(buy.get('result') or {}).get('token_delta')
             exits=[o for o in sales if o.get('position_id')==buy['id']]
-            quantities=[(o.get('result') or {}).get('token_delta') for o in exits]
-            costs=[o.get('realized_pnl_lamports') for o in exits]
+            repaired=[r for r in repairs if r['position_id']==buy['id']]
+            quantities=[(o.get('result') or {}).get('token_delta') for o in exits]+[-r['quantity_raw'] for r in repaired]
+            costs=[o.get('realized_pnl_lamports') for o in exits]+[r['pnl_lamports'] for r in repaired]
             group_fees=[(o.get('result') or {}).get('fee_lamports') for o in failed if o.get('position_id')==buy['id']]
-            if (type(quantity) is int and quantity>0 and exits and all(type(q) is int and q<0 for q in quantities)
+            if (type(quantity) is int and quantity>0 and (exits or repaired) and all(type(q) is int and q<0 for q in quantities)
                     and -sum(quantities)==quantity and all(type(c) is int for c in costs)
                     and all(type(f) is int and f>=0 for f in group_fees)):
                 completed.append(sum(costs)-sum(group_fees))
@@ -107,7 +110,8 @@ def wallet_results(traders,orders,positions):
             'winning_positions':sum(p>0 for p in completed),'win_rate_percent':100*sum(p>0 for p in completed)/len(completed) if completed else None,
             'open_positions':sum(p['source_wallet']==wallet for p in positions.values()),
             'allocated_sale_pnl_lamports':sum(known),'failed_fees_lamports':fees,'unknown_fee_records':missing_fees,
-            'unallocated_sales':len(sales)-len(known),'net_realized_lamports':sum(known)-fees if complete else None,
+            'unallocated_sales':len(sales)-len(known),'net_realized_lamports':sum(known)+repair_pnl-fees if complete else None,
+            'manual_adjustment_count':len(repairs),'manual_adjustment_pnl_lamports':repair_pnl,
             'failed_orders':len(failed),'rejected_orders':sum(o.get('status')=='rejected' for o in rows),
             'entry_premium':stats(premiums)})
     return results
@@ -123,12 +127,14 @@ def report(traders,runtime,orders,*,offset=0,limit=20,now=None):
             'source_name':names.get(o.get('source_wallet'),o.get('source_wallet') or 'Unattributed'),
             'created_at':o.get('created_at'),'signature':o.get('signature'),**entry_price(o),
             'source_to_broadcast_ms':timings.get('source_to_broadcast_ms') if number(timings.get('source_to_broadcast_ms')) and timings['source_to_broadcast_ms']>=0 else None})
-    wallets=wallet_results(traders,orders,runtime.get('positions',{}))
+    from solana_accounting_repairs import audit
+    repairs=audit(orders,runtime)
+    wallets=wallet_results(traders,orders,runtime.get('positions',{}),repairs['adjustments'])
     complete=all(w['net_realized_lamports'] is not None for w in wallets)
     allocated=sum(w['net_realized_lamports'] for w in wallets if w['net_realized_lamports'] is not None)
     ledger=runtime.get('realized_lamports',0)
     pending=bool(runtime.get('balance_adjustments') or any(p.get('balance_observation') or p.get('external_change') for p in runtime.get('positions',{}).values()))
-    reconciled=complete and not pending and ledger==allocated
+    reconciled=complete and not pending and not repairs['issues'] and ledger==allocated
     cohorts=[]
     for key,label in ((None,'Earlier recorded trades'),(PROFILE,'Current measured pipeline')):
         rows=[o for o in orders if (o.get('execution_profile')==PROFILE)==(key==PROFILE)]
@@ -138,13 +144,17 @@ def report(traders,runtime,orders,*,offset=0,limit=20,now=None):
     return {'checked_at':time.time() if now is None else now,'wallet':runtime.get('wallet') or None,
         'order_count':len(orders),'pending_orders':sum(o.get('status') in ('preparing','signed','submitted','unknown') for o in orders),
         'accounting_complete':reconciled,'ledger_realized_lamports':ledger,
+        'accounting_adjustments':repairs['adjustments'],'accounting_issues':repairs['issues'],
+        'reconciliation':{'orders_net_lamports':sum(w['allocated_sale_pnl_lamports']-w['failed_fees_lamports'] for w in wallets) if complete else None,
+                          'archived_adjustment_lamports':sum(r['pnl_lamports'] for r in repairs['adjustments']),
+                          'already_represented_repairs':len(repairs['already_represented'])},
         'allocated_realized_lamports':allocated if complete else None,'ledger_difference_lamports':ledger-allocated if complete else None,
         'failed_fees_lamports':sum(w['failed_fees_lamports'] for w in wallets),
         'unknown_fee_records':sum(w['unknown_fee_records'] for w in wallets),
         'entry_premium':stats([entry_price(o)['premium_percent'] for o in buys]),
         'wallets':wallets,'timings':timing_summary(orders),'cohorts':cohorts,
         'entries':entries,'entry_count':len(buys),'offset':offset,'limit':limit,
-        'basis':'All stored real orders for this trading wallet. SOL results use finalized receipts, allocated entry costs and failed-transaction fees. Open holdings are excluded from realized P/L.',
+        'basis':'All stored real orders for this trading wallet. SOL results use finalized receipts, allocated entry costs, failed-transaction fees and validated previously posted manual adjustments. Open holdings are excluded from realized P/L.',
         'price_basis':'All-in SOL per received token includes fees and account funding, which can push this premium above the 5% swap-price cap. No historical USD conversion is estimated.',
         'comparison_basis':'The current group starts with paced quote requests. Earlier trades may have an older version tag or no tag. Different wallets, market conditions and missing samples prevent a causal before/after claim.'}
 
