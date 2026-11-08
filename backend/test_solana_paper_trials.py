@@ -71,7 +71,7 @@ class PaperTrialsTests(unittest.TestCase):
         self.assertEqual(Path(database.DATABASE_PATH).read_bytes(), self.original)
 
     def test_real_simulator_records_only_future_trial_buys_in_trial_ledger(self):
-        age_patch = patch.object(paper, 'require_age', return_value={'minimum_age_seconds':1800})
+        age_patch = patch.object(paper, 'require_age', return_value={'minimum_age_seconds':7200})
         age_patch.start(); self.addCleanup(age_patch.stop)
         from test_solana_copy_trader import trade, Market, TOKEN
         trials.start()

@@ -3,7 +3,6 @@ from solana_paper_trials import CANDIDATES
 
 PAPER_ONLY_SOURCES = {
     **{wallet: name for name, wallet in CANDIDATES},
-    'GJA1HEbxGnqBhBifH9uQauzXSB53to5rhDrzmKxhSU65': 'Latuche',
     'CAPn1yH4oSywsxGU456jfgTrSSUidf9jgeAnHceNUJdw': 'Cap',
     '2kv8X2a9bxnBM8NKLc6BBTX2z13GFNRL4oRotMUJRva9': 'Gh0stee',
     '3H9LVHarjBoZ2YPEsgFbVD1zuERCGwfp4AeyHoHsFSEC': 'Jadawgs',

@@ -165,3 +165,8 @@ The worker accepts finalized direct recognized token-to-SOL swaps and the comple
 Sale receipts, allocated cost, realized SOL and the updated holding commit atomically. All recorded signatures, including every leg of prior manual receipts, are excluded from reuse. Partial sales preserve proportional remaining cost and existing protection settings. Stable finalized balance checkpoints prevent replaying earlier fills; older RPC observations cannot roll holdings back.
 
 An unfinished conversion holds new buys and hides incomplete P/L while existing unaffected exits remain monitored. A complete supported settlement clears the accounting hold automatically without changing the owner's run/stop selection. Legacy accounting-paused bots remain stopped after repair. Explicit stop requests made during receipt reads survive the commit. Bounded or missing history, unrelated transfers/deposits, extra tokens, different payout assets, incomplete sponsor refunds and mixed CASH activity retain the hold. No wallet key, signing permission, trading threshold or source setting is changed.
+
+
+## November 8, 2026 — Latuche and minimum token age
+
+Latuche is again eligible for new live copies alongside Mr. Frog and Solkrow. New entries in the main paper copier, isolated paper trials and live copier require finalized mint-existence evidence at least two hours old. Unverified age fails closed. Live broadcast checks age again; old 30-minute cached proofs cannot satisfy the new threshold. Existing exits are unaffected. Age alone does not establish liquidity or profitability.

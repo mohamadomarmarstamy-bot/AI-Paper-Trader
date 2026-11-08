@@ -103,7 +103,7 @@
   if(typeof data.live_execution_enabled!=='boolean'||typeof data.can_start!=='boolean')throw Error('Execution state unavailable.');
   snapshot=data;showSettings(data.buy_settings);
   $('rc-live-badge').textContent=data.live_execution_enabled?(data.operational_health?.level==='error'?'● REAL MONEY · needs attention':'● REAL MONEY · copying'):'● Live trading off';
-  $('rc-live-summary').textContent=data.live_runtime?.accounting_complete===false?'New buys wait while Phantom sale and settlement receipts are checked.':data.live_execution_enabled?'Real trades are active. Coins must be at least 30 minutes old; unverified ages are skipped.':'New buys paused. Coins must be at least 30 minutes old. Existing exits remain monitored.';
+  $('rc-live-summary').textContent=data.live_runtime?.accounting_complete===false?'New buys wait while Phantom sale and settlement receipts are checked.':data.live_execution_enabled?`Real trades are active. Coins must be at least ${(data.live_runtime?.minimum_token_age_seconds??7200)/3600} hours old; unverified ages are skipped.`:`New buys paused. Coins must be at least ${(data.live_runtime?.minimum_token_age_seconds??7200)/3600} hours old. Existing exits remain monitored.`;
   $('rc-live-count').textContent=String(data.live_trade_count??0);
   $('rc-summary-open').textContent=String(data.live_positions?.length??0);
   $('rc-live-pnl').dataset.sign=data.live_runtime?.accounting_complete!==false&&Number.isFinite(data.live_runtime?.realized_sol)?(data.live_runtime.realized_sol<0?'negative':'positive'):'unknown';

@@ -16,7 +16,7 @@ import requests
 import database
 import solana_meme_bot as bot
 import solana_copy_solscan as solscan
-from solana_token_age import require_age, AgeUnavailable
+from solana_token_age import require_age, AgeUnavailable, MINIMUM_SECONDS
 
 CASH_MINTS = {'So11111111111111111111111111111111111111112',
               'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
@@ -116,7 +116,7 @@ def public():
         closed = [json.loads(r[0]) for r in conn.execute("SELECT details_json FROM solana_copy_closes WHERE COALESCE(json_extract(details_json,'$.voided'),0)=0 ORDER BY rowid DESC LIMIT 100")] if exists else []
         totals = conn.execute("SELECT COUNT(*),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')),0),COALESCE(SUM(json_extract(details_json,'$.pnl_usd')>0),0),COALESCE(SUM(json_extract(details_json,'$.cost_usd')),0),COALESCE(SUM(json_extract(details_json,'$.cost_usd')>0),0) FROM solana_copy_closes WHERE COALESCE(json_extract(details_json,'$.voided'),0)=0").fetchone() if exists else (0,0,0,0,0)
         partial_count=conn.execute("SELECT COUNT(*) FROM solana_copy_closes WHERE COALESCE(json_extract(details_json,'$.voided'),0)=0 AND json_extract(details_json,'$.partial_exit')=1").fetchone()[0] if exists else 0
-    return {'trailing_comparison':__import__('solana_trailing_comparison').status(now), 'inactivity_alert':idle_summary('copy'),'paper': True, 'live_execution_enabled': False, 'provider_configured': configured(),'connection_checks':connection_status(),
+    return {'trailing_comparison':__import__('solana_trailing_comparison').status(now), 'inactivity_alert':idle_summary('copy'),'paper': True, 'minimum_token_age_seconds': MINIMUM_SECONDS, 'live_execution_enabled': False, 'provider_configured': configured(),'connection_checks':connection_status(),
             'solscan_configured':solscan.configured(),'discovery':{k:v for k,v in state.get('discovery',{}).items() if k!='pending'},'last_polled':state.get('last_polled',{}),
             'config': state['config'], 'revision': state['settings_revision'], 'health': state['health'],
             'operational_health':health_summary(state,now),

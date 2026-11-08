@@ -1,4 +1,4 @@
-"""Read-only proof a token mint existed at least 30 minutes before entry.
+"""Read-only proof a token mint existed at least 2 hours before entry.
 
 Pool age and a wallet's first purchase are not token creation timestamps.
 An older successful transaction with actual mint balances proves a conservative
@@ -8,7 +8,7 @@ from collections import OrderedDict
 from threading import Lock
 import time
 
-MINIMUM_SECONDS = 1800
+MINIMUM_SECONDS = 7200
 _proofs = OrderedDict()
 _lock = Lock()
 
@@ -21,7 +21,9 @@ def require_age(mint, *, rpc=None, now=None):
     now = time.time() if now is None else now
     with _lock:
         proof = _proofs.get(mint)
-        if proof and 0 <= now - proof['checked_at'] <= 3600:
+        if (proof and 0 <= now - proof['checked_at'] <= 3600
+                and proof.get('minimum_age_seconds') == MINIMUM_SECONDS
+                and 0 < proof.get('existed_at', 0) <= now - MINIMUM_SECONDS):
             return dict(proof)
     if rpc is None:
         from solana_copy_rpc import request as rpc
@@ -58,5 +60,5 @@ def require_age(mint, *, rpc=None, now=None):
                     _proofs.popitem(last=False)
             return dict(proof)
     except Exception:
-        raise AgeUnavailable('Buy skipped: token age could not be verified as at least 30 minutes.') from None
-    raise AgeUnavailable('Buy skipped: token is under 30 minutes old or older mint history could not be verified.')
+        raise AgeUnavailable('Buy skipped: token age could not be verified as at least 2 hours.') from None
+    raise AgeUnavailable('Buy skipped: token is under 2 hours old or older mint history could not be verified.')

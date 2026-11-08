@@ -25,12 +25,18 @@ class AgeTests(unittest.TestCase):
                     'transaction': {'signatures': ['proof'], 'message': {'instructions': []}}}
         return read
 
-    def test_29_minutes_rejected_and_exact_30_minutes_admitted(self):
-        with self.assertRaises(age.AgeUnavailable):age.require_age('coin', rpc=self.rpc(10000-1799), now=10000)
-        self.assertEqual(age.require_age('coin', rpc=self.rpc(8200), now=10000)['existed_at'], 8200)
+    def test_under_two_hours_rejected_and_exact_two_hours_admitted(self):
+        with self.assertRaises(age.AgeUnavailable):age.require_age('coin', rpc=self.rpc(10000-7199), now=10000)
+        self.assertEqual(age.require_age('coin', rpc=self.rpc(2800), now=10000)['existed_at'], 2800)
 
     def test_old_address_reference_without_mint_activity_is_not_age_proof(self):
         with self.assertRaises(age.AgeUnavailable):age.require_age('coin', rpc=self.rpc(1000, False), now=10000)
+
+    def test_old_thirty_minute_cache_cannot_bypass_two_hour_minimum(self):
+        age._proofs['coin'] = dict(mint='coin', checked_at=9999, existed_at=8200,
+                                  minimum_age_seconds=1800)
+        with self.assertRaises(age.AgeUnavailable):
+            age.require_age('coin', rpc=self.rpc(8200), now=10000)
 
     def test_missing_time_rpc_failure_and_future_time_fail_closed(self):
         for read in (lambda *a: [], lambda *a: [{'blockTime': None, 'err': None}], self.rpc(11000)):

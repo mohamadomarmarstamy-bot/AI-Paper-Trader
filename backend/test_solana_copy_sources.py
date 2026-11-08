@@ -117,7 +117,7 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(set(polled),set(wallets));self.assertEqual(len(polled),9)
 
     def test_solscan_prospective_buy_sell_and_permanent_dedup_use_paper_ledger(self):
-        age_patch = patch.object(copy, 'require_age', return_value={'minimum_age_seconds':1800})
+        age_patch = patch.object(copy, 'require_age', return_value={'minimum_age_seconds':7200})
         age_patch.start(); self.addCleanup(age_patch.stop)
         now=[1000.];provider=copy.Birdeye();rows=[]
         def request(path,**kw):
