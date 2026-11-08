@@ -42,6 +42,15 @@ class BudgetTests(unittest.TestCase):
             with budget.permit():pass
         self.assertEqual(budget.active,0)
 
+    def test_monitor_waiting_for_capacity_yields_to_execution_quote(self):
+        budget=jupiter.Budget();clock=[100.0]
+        def urgent_arrives(timeout):budget.execution_waiters=1
+        with patch.object(jupiter.time,'monotonic',side_effect=lambda:clock[0]),patch.object(budget.condition,'wait',side_effect=urgent_arrives):
+            with budget.permit(monitor=True):pass
+            with self.assertRaises(jupiter.Deferred):
+                with budget.permit(monitor=True):self.fail('Monitoring must yield to execution')
+        self.assertEqual(budget.active,0);self.assertEqual(budget.live_waiters,0)
+
     def test_http_date_retry_after_is_honored(self):
         from email.utils import formatdate
         budget=jupiter.Budget()

@@ -517,7 +517,7 @@ def tick(provider=None):
         def read_quote(p):
             timings={}
             with measure(timings,'quote_ms'):
-                q=provider.build(state['wallet'],p['mint'],budget.SOL,p['quantity_raw'],{**state['policy'],'reserve_lamports':0})
+                q=provider.build(state['wallet'],p['mint'],budget.SOL,p['quantity_raw'],{**state['policy'],'reserve_lamports':0,'_quote_priority':'monitor'})
             return q,timings
         with closing(read_many(eligible if chosen is None else [],read_quote)) as quotes:
             for p,result in quotes:

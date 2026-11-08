@@ -22,10 +22,10 @@ class RateLimited(Unavailable):pass
 class Budget:
     def __init__(self):
         self.condition=Condition();self.identity=None;self.next_at=0;self.cooldown=0
-        self.live_waiters=0;self.active=0;self.last_live=float('-inf');self.rate_limits=0
+        self.live_waiters=0;self.execution_waiters=0;self.active=0;self.last_live=float('-inf');self.rate_limits=0
 
     @contextmanager
-    def permit(self,research=False):
+    def permit(self,research=False,monitor=False):
         # Default matches Jupiter's published free-tier allowance. A paid plan
         # may explicitly configure its documented allowance; never auto-upgrade.
         try:rps=float(os.getenv('JUPITER_BUILD_RPS','1'))
@@ -36,10 +36,13 @@ class Budget:
             if self.identity!=identity:
                 self.identity=identity;self.next_at=self.cooldown=0
             deadline=time.monotonic()+8
-            if not research:self.live_waiters+=1;self.last_live=time.monotonic()
+            if not research:
+                self.live_waiters+=1;self.last_live=time.monotonic()
+                if not monitor:self.execution_waiters+=1;self.condition.notify_all()
             try:
                 while True:
                     now=time.monotonic()
+                    if monitor and self.execution_waiters:raise Deferred('Execution quotes have priority; monitoring deferred.')
                     if now<self.cooldown:raise RateLimited('Jupiter quote cooldown is active; no request sent.')
                     if research and (self.live_waiters or self.active or now-self.last_live<30):raise Deferred('Live quotes have priority; research deferred.')
                     delay=self.next_at-now
@@ -49,7 +52,9 @@ class Budget:
                     self.condition.wait(timeout=delay)
                 self.next_at=now+1.05/rps;self.active+=1
             finally:
-                if not research:self.live_waiters-=1
+                if not research:
+                    self.live_waiters-=1
+                    if not monitor:self.execution_waiters-=1
         try:yield
         finally:
             with self.condition:
@@ -88,7 +93,7 @@ def build_quote(owner,input_mint,output_mint,amount,policy,*,mode='standard',res
             'platformFeeBps':0,'transactionVersion':'0'}
     if mode=='fast':params['mode']='fast'
     try:
-        with _budget.permit(research=research):
+        with _budget.permit(research=research,monitor=not research and policy.get('_quote_priority')=='monitor'):
             start=time.monotonic()
             response=http.get('https://api.jup.ag/swap/v2/build',params=params,headers={'x-api-key':api_key},timeout=3 if research else 8,allow_redirects=False)
             elapsed=(time.monotonic()-start)*1000
