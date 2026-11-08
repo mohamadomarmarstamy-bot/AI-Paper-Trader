@@ -13,7 +13,7 @@ import json
 import time
 import uuid
 import database
-from solana_execution_timing import measure
+from solana_execution_timing import measure, PROFILE
 from solana_parallel_reads import read_many
 from solana_meme_bot import Conflict
 import solana_real_execution as execution
@@ -577,7 +577,7 @@ def tick(provider=None):
                 reason='Selected fresh admitted copy signal.'
             decide(e,reason,time.time())
         if chosen and execution.release_allowed() and time.time()-now<110:
-            order={**chosen,'wallet':state['wallet'],'created_at':time.time(),'status':'preparing'}
+            order={**chosen,'execution_profile':PROFILE,'wallet':state['wallet'],'created_at':time.time(),'status':'preparing'}
             save_order(order)
             try:
                 policy={**state['policy'],'reserve_lamports':int(Decimal(str(cfg['config']['fee_reserve_sol']))*10**9)}

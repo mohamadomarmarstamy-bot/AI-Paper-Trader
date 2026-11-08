@@ -131,7 +131,8 @@
   const signals=$('rc-signals');signals.replaceChildren();for(const e of s.signals){const row=node('div','', 'rc-signal');const side=node('span',e.side.toUpperCase(),e.side==='buy'?'rc-buy':'rc-sell');const info=node('div','');info.append(coin('strong',e),node('small',`Source wallet: ${traderName(e.wallet,data)}`),node('small',e.reason));row.append(side,info);signals.append(row);}if(!s.signals.length)signals.append(node('p','New paper signals will appear here.'));
   controls();health();
  }
- async function load(){if(busy)return;busy=true;controls();try{accept(await request('status'));message('');}catch(e){transportError=true;health();message(e.name==='AbortError'?'Status request timed out. Retrying automatically.':e.message);}finally{busy=false;controls();void restore();void loadBalance();}}
+ async function load(){
+  window.RealCopyPerformance?.refresh();if(busy)return;busy=true;controls();try{accept(await request('status'));message('');}catch(e){transportError=true;health();message(e.name==='AbortError'?'Status request timed out. Retrying automatically.':e.message);}finally{busy=false;controls();void restore();void loadBalance();}}
  async function liveAction(path,payload){
   if(busy||!snapshot)return;busy=true;controls();
   try{accept(await request(path,payload));message(path==='start'?'REAL copying activated.':path==='pause'?'New real buys paused. Existing exits remain monitored.':'Live exit queued. Waiting for a supported swap and on-chain confirmation.');}

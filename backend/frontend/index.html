@@ -1160,6 +1160,17 @@
 <article class="rc-stat"><p>Confirmed fills</p><strong id="rc-live-count">0</strong><small>Buys and sells · includes partial exits</small></article>
 </div>
 <div class="rc-layout rc-live-book"><article class="rc-panel"><div class="rc-row"><h3>Holdings</h3><button id="rc-close-all" type="button" disabled>Sell all &amp; pause</button></div><p class="rc-note">Finalized on-chain fills only. Realized P/L is shown above.</p><div id="rc-live-holdings" class="rc-list"></div></article><article class="rc-panel"><h3>Latest activity</h3><p class="rc-note">Signed, pending, finalized and failed transactions.</p><div id="rc-live-orders" class="rc-list"></div></article></div>
+<details class="rc-panel rc-performance" id="rc-performance"><summary>Trade performance · real money</summary>
+<div class="rc-row"><p class="rc-muted" id="rc-report-time">Complete stored trade history</p><button type="button" id="rc-report-refresh">Refresh report</button></div>
+<p id="rc-report-status" role="status" aria-live="polite"></p><p id="rc-report-warning" class="rc-report-warning" hidden></p>
+<div class="rc-summary-cards"><article class="rc-stat"><p>Realized P/L</p><strong id="rc-report-pnl">—</strong><small id="rc-report-ledger">Finalized receipts</small></article><article class="rc-stat"><p>Failed transaction fees</p><strong id="rc-report-fees">—</strong><small id="rc-report-fee-count"></small></article><article class="rc-stat"><p>Entry cost vs source</p><strong id="rc-report-premium">—</strong><small id="rc-report-premium-count"></small></article><article class="rc-stat"><p>Source buy → broadcast</p><strong id="rc-report-speed">—</strong><small id="rc-report-speed-count"></small></article></div>
+<h3>Results by copied wallet</h3><div class="rc-report-scroll" tabindex="0" role="region" aria-label="Wallet results"><table><thead><tr><th scope="col">Wallet</th><th scope="col">Buys</th><th scope="col">Scored closed positions</th><th scope="col">Win rate</th><th scope="col">Open</th><th scope="col">Allocated net P/L</th><th scope="col">Failed fees</th><th scope="col">Failed / rejected</th><th scope="col">Entry premium</th><th scope="col">Coverage</th></tr></thead><tbody id="rc-report-wallets"></tbody></table></div>
+<p id="rc-report-basis" class="rc-note"></p><p class="rc-note">Win rate scores fully closed positions with known costs. Partial exits belong to the same position.</p>
+<h3>Earlier vs newly measured trades</h3><div class="rc-report-scroll" tabindex="0" role="region" aria-label="Execution comparison"><table><thead><tr><th scope="col">Group</th><th scope="col">Buys</th><th scope="col">Buy → broadcast · median</th><th scope="col">Sell trigger → broadcast · median</th><th scope="col">Entry premium · median</th></tr></thead><tbody id="rc-report-cohorts"></tbody></table></div><p id="rc-report-comparison-basis" class="rc-note"></p>
+<details><summary>Where execution spends time</summary><div class="rc-report-scroll" tabindex="0" role="region" aria-label="Execution timing"><table><thead><tr><th scope="col">Side</th><th scope="col">Stage</th><th scope="col">Median</th><th scope="col">90th percentile</th><th scope="col">Coverage</th></tr></thead><tbody id="rc-report-timings"></tbody></table></div><p class="rc-note">Settled orders only. Preparation stages overlap its total. Observed finalization includes network and polling time; broadcast time is not fill time.</p></details>
+<h3>Our entries vs source wallet</h3><div class="rc-report-scroll" tabindex="0" role="region" aria-label="Entry price comparison"><table><thead><tr><th scope="col">Buy time</th><th scope="col">Coin</th><th scope="col">Source wallet</th><th scope="col">Source SOL/token</th><th scope="col">Our SOL/token</th><th scope="col">Premium</th><th scope="col">Buy → broadcast</th><th scope="col">Transaction</th></tr></thead><tbody id="rc-report-entries"></tbody></table></div>
+<div class="rc-row rc-spacer"><button id="rc-report-prev" type="button" disabled>Previous</button><small id="rc-report-page">0 buys</small><button id="rc-report-next" type="button" disabled>Next</button></div><p id="rc-report-price-basis" class="rc-note"></p>
+</details>
 <details class="rc-panel rc-funding-panel"><summary>Live buy settings</summary>
 <div class="rc-stats"><div><p class="rc-muted">Available SOL</p><strong id="rc-balance-sol">—</strong></div><div><p class="rc-muted">After fee reserve</p><strong id="rc-spendable">—</strong></div><div><p class="rc-muted">Next buy · preview</p><strong id="rc-next-buy">Not set</strong></div></div>
 <p id="rc-funding-status" class="rc-muted" role="status">Link Phantom to read its SOL balance.</p>
@@ -1924,7 +1935,7 @@
     <script src="js/watchlist.js"></script>
     <script src="js/portfolio.js?v=history-recovery-v1"></script>
     <script src="js/phantom-session.js?v=trusted-v1"></script>
-    <script src="js/coin-labels.js?v=coin-names-v1"></script><script src="js/real-copy.js?v=two-hour-entry-v1"></script>
+    <script src="js/coin-labels.js?v=coin-names-v1"></script><script src="js/real-copy-performance.js?v=performance-v1"></script><script src="js/real-copy.js?v=performance-v1"></script>
     <script src="js/pro-ticker-manual.js"></script>
     <script src="js/pro-ticker-release.js"></script>
     <script src="js/pro-ticker-workspace.js?v=entry-settings-v1"></script>

@@ -2,6 +2,8 @@
 from contextlib import contextmanager
 import time
 
+PROFILE = 'parallel_checks_v1'
+
 
 @contextmanager
 def measure(timings, name):
