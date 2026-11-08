@@ -1,7 +1,7 @@
 """Isolated, owner-activated live copy ledger. Disabled by default.
 
-Only fresh admitted PAPER source buys are entry candidates; PAPER balances and
-positions are never imported. Orders are persisted before broadcast and all
+Verified RPC source buys enter independently of PAPER simulation, with admitted
+PAPER events retained as a fallback. PAPER balances and positions are never imported. Orders are persisted before broadcast and all
 uncertain submissions block further signing until reconciled.
 """
 import asyncio
@@ -44,7 +44,7 @@ def notify_source_events():
 
 
 def initial():return {'enabled':False,'wallet':'','wallet_revision':None,'budget_revision':None,'started_at':None,
-    'event_cursor':0,'positions':{},'cooldowns':{},'realized_lamports':0,'last_cycle':None,'error':None,
+    'event_cursor':0,'live_source_cursor':0,'positions':{},'cooldowns':{},'realized_lamports':0,'last_cycle':None,'error':None,
     'policy':dict(DEFAULT_POLICY),'last_order_at':0,'balance_adjustments':[]}
 
 
@@ -57,7 +57,9 @@ def load():
     with closing(database.get_connection()) as conn:
         exists=conn.execute("SELECT 1 FROM sqlite_master WHERE name='solana_real_run'").fetchone()
         row=conn.execute('SELECT * FROM solana_real_run WHERE id=1').fetchone() if exists else None
-    return (json.loads(row['state_json']),row['revision']) if row else (initial(),0)
+    state=json.loads(row['state_json']) if row else initial()
+    state.setdefault('live_source_cursor',0)
+    return state,row['revision'] if row else 0
 
 
 def orders(pending=False):
@@ -86,7 +88,7 @@ def public():
         if exists:
             from solana_activity_details import enrich_orders
             latest=enrich_orders(conn,latest,state)
-    latest=[{k:v for k,v in r.items() if k in ('id','side','mint','status','created_at','reason','signature','result','error','source_wallet','source_entry','realized_pnl_lamports','timing_ms')} for r in latest]
+    latest=[{k:v for k,v in r.items() if k in ('id','side','mint','status','created_at','reason','signature','result','error','source_wallet','source_entry','entry_path','realized_pnl_lamports','timing_ms')} for r in latest]
     return {'revision':revision,'enabled':state['enabled'],'wallet':state['wallet'],'last_cycle':state['last_cycle'],'confirmed_trade_count':count,
             'live_notifications':__import__('solana_wallet_stream').public(),
             'started_at':state['started_at'],
@@ -125,7 +127,9 @@ def activate(expected_revision,wallet_revision,budget_revision,acknowledgement,p
         if state['wallet']!=saved['wallet_address']:state=initial()
         # Old source rows are never replayed on first start or resume.
         cursor=state['event_cursor'] if state['positions'] or orders(True) else conn.execute('SELECT COALESCE(MAX(rowid),0) FROM solana_copy_events').fetchone()[0]
-        state.update(enabled=True,wallet=saved['wallet_address'],wallet_revision=wallet_revision,budget_revision=budget_revision,
+        from solana_live_source import latest as latest_live_source
+        direct_cursor=state.get('live_source_cursor',0) if state['positions'] or orders(True) else latest_live_source(conn)
+        state.update(live_source_cursor=direct_cursor,enabled=True,wallet=saved['wallet_address'],wallet_revision=wallet_revision,budget_revision=budget_revision,
             started_at=time.time(),event_cursor=cursor,error=None)
         conn.execute('UPDATE solana_real_run SET revision=revision+1,state_json=? WHERE id=1',(json.dumps(state,allow_nan=False),));conn.commit()
     return public()
@@ -270,7 +274,14 @@ def decide(event,reason,now):
         conn.execute('INSERT OR IGNORE INTO solana_real_decisions VALUES(?,?,?)',(event['id'],now,reason));conn.commit()
 
 
-def authorized(state,side,source_at=None,lease_owner=None,source_wallet=None):
+def source_eligible(source,wallet,source_at,started_at):
+    trader=next((t for t in source['traders'] if t['wallet']==wallet and t.get('active',True)),None)
+    if not source['config']['enabled'] or trader is None or paper_only(wallet,source['traders']):return False
+    lower=max(started_at or 0,trader.get('selected_at') or 0,trader.get('buy_resume_at') or 0,source.get('buy_resume_at') or 0)
+    return source_at is not None and source_at>=lower
+
+
+def authorized(state,side,source_at=None,lease_owner=None,source_wallet=None,entry_path=None):
     import solana_real_copy as link
     import solana_real_budget as budget
     current,_=load();saved=link.wallet();flags=execution.configuration(saved['wallet_address'])
@@ -280,6 +291,15 @@ def authorized(state,side,source_at=None,lease_owner=None,source_wallet=None):
     if not all(flags[k] for k in ('release_allowed','signer_configured','signer_matches','jupiter_configured')):raise execution.Unavailable('Server trading setup is unavailable. No new transaction is signed.')
     if saved['wallet_address']!=state['wallet'] or saved['revision']!=state['wallet_revision']:raise execution.Unavailable('Live wallet binding changed. Signing is blocked.')
     if side=='buy' and (accounting_pending(current) or accounting_pending(state) or not current['enabled'] or budget.settings()['revision']!=state['budget_revision']):raise execution.Unavailable('New real buys are paused or buy settings changed.')
+    if side=='buy':
+        import solana_copy_trader as paper
+        source=paper.load()[0]
+        if paper_only(source_wallet,source['traders']):raise execution.Unavailable('Source wallet is paper-only; new live buys are disabled.')
+        if not source_eligible(source,source_wallet,source_at,state['started_at']):
+            raise execution.Unavailable('Source copying paused or source wallet is no longer eligible for this buy.')
+        if entry_path=='verified_source':
+            from solana_live_source import ready
+            if not ready(source_wallet,time.time()):raise execution.Unavailable('Verified source history is incomplete or stale.')
     if side=='buy' and (not entry_allowed(source_wallet=source_wallet) or source_at is not None and not entry_allowed(source_at, source_wallet)):
         raise execution.Unavailable('Daily live entry pause: 2 PM to midnight America/New_York.')
     if side=='buy' and source_at is not None and not 0<=time.time()-source_at<=90:raise execution.Unavailable('Source buy expired before signing or broadcast.')
@@ -295,7 +315,7 @@ def begin_broadcast(order,state,lease_owner):
         check_quote(order.get('source_entry'),order['mint'],prepared['decimals'],prepared['input_amount'],prepared['minimum_output'])
         try:order['token_age_proof']=require_age(order['mint'])
         except AgeUnavailable as error:raise execution.Unavailable(str(error)) from None
-    authorized(state,order['side'],order.get('source_at'),lease_owner,order.get('source_wallet'))
+    authorized(state,order['side'],order.get('source_at'),lease_owner,order.get('source_wallet'),order.get('entry_path'))
     with closing(database.get_connection()) as conn:
         conn.execute('BEGIN IMMEDIATE')
         row=conn.execute('SELECT * FROM solana_real_run WHERE id=1').fetchone()
@@ -310,10 +330,14 @@ def begin_broadcast(order,state,lease_owner):
         if order['side']=='buy':
             revision=conn.execute('SELECT revision FROM solana_real_copy_budget WHERE id=1').fetchone()[0]
             if not current['enabled'] or revision!=state['budget_revision']:raise execution.Unavailable('New real buy was paused before broadcast.')
+            source_row=conn.execute('SELECT state_json FROM solana_copy_state WHERE id=1').fetchone()
+            if not source_row or not source_eligible(json.loads(source_row[0]),order['source_wallet'],order['source_at'],state['started_at']):
+                raise execution.Unavailable('Source copying paused or source wallet changed before broadcast.')
             # Chain block times have second precision. Treat a same-second sell
             # as superseding the buy, including subsecond provider clock skew.
             sold=conn.execute("SELECT 1 FROM solana_copy_events WHERE observed_at>=? AND json_extract(details_json,'$.side')='sell' AND json_extract(details_json,'$.wallet')=? AND json_extract(details_json,'$.mint')=? AND CAST(json_extract(details_json,'$.source_at') AS INTEGER)>=? LIMIT 1",(int(order['source_at'])-5,order['source_wallet'],order['mint'],int(order['source_at']))).fetchone()
-            if sold:raise execution.Unavailable('Source sold before live broadcast; buy canceled.')
+            from solana_live_source import sold as direct_sold
+            if sold or direct_sold(conn,order):raise execution.Unavailable('Source sold before live broadcast; buy canceled.')
         order.update(status='unknown',send_started_at=time.time())
         if order['side']=='buy':
             timings=order.setdefault('timing_ms',{})
@@ -421,7 +445,7 @@ def tick(provider=None):
                 # Signed bytes are always saved before any broadcast is permitted.
                 order.update(status='abandoned',error='Interrupted before a signed transaction was persisted.');terminal=order
             elif not order.get('send_started_at'):
-                try:authorized(state,order['side'],order.get('source_at'),owner,order.get('source_wallet'))
+                try:authorized(state,order['side'],order.get('source_at'),owner,order.get('source_wallet'),order.get('entry_path'))
                 except execution.Unavailable as error:
                     order.update(status='canceled',error=str(error));terminal=order
                 else:
@@ -457,10 +481,13 @@ def tick(provider=None):
         source=paper.load()[0];cfg=budget.settings()
         if cfg['revision']!=state['budget_revision']:
             state['enabled']=False;state['error']='Buy settings changed. Restart copying to apply them; existing exits remain monitored.'
-        events=source_events(state['event_cursor']);latest_sell={}
-        for _,e in events:
+        import solana_live_source as direct_source
+        events=[('direct',cursor,event) for cursor,event in direct_source.events(state.get('live_source_cursor',0))]
+        events += [('paper',cursor,event) for cursor,event in source_events(state['event_cursor'])]
+        latest_sell={}
+        for _,_,e in events:
             if e['side']=='sell':latest_sell[(e['wallet'],e['mint'])]=max(e['source_at'],latest_sell.get((e['wallet'],e['mint']),0))
-        for _,e in events:
+        for _,_,e in events:
             if e['side']=='sell':
                 for p in state['positions'].values():
                     if p['mint']==e['mint'] and p['source_wallet']==e['wallet'] and e['source_at']>=p['source_at']:p['pending_reason']='source_sell'
@@ -490,19 +517,23 @@ def tick(provider=None):
             except execution.Unavailable:
                 p['exit_value_lamports']=None;state['error']='A live exit quote is unavailable. Holdings remain unpriced and exits are retried.'
             if time.time()-now>100:break
-        for cursor,e in events:
-            state['event_cursor']=cursor
+        for channel,cursor,e in events:
+            state['live_source_cursor' if channel=='direct' else 'event_cursor']=cursor
             if e['side']!='buy':continue
             reason=None
             if paper_only(e['wallet'],source['traders']):reason='Source wallet is paper-only; new live buys are disabled.'
             elif not entry_allowed(source_wallet=e['wallet']) or not entry_allowed(e['source_at'], e['wallet']):reason='Daily live entry pause: 2 PM to midnight America/New_York.'
             elif not state['enabled']:reason='Real buys paused.'
             elif accounting_pending(state):reason='External wallet accounting is pending; new buys wait for finalized receipts.'
-            elif e.get('status')!='paper_buy':reason='Source buy was not admitted by the paper copy rules.'
+            elif channel=='direct' and (e.get('status')!='verified_source' or e.get('source')!='solana_rpc_pump'):reason='Source receipt is not a supported verified swap.'
+            elif channel=='paper' and e.get('status')!='paper_buy':reason='Source buy was not admitted by the paper copy rules.'
             elif not any(t['wallet']==e['wallet'] and t.get('active',True) for t in source['traders']):reason='Source wallet is no longer actively followed.'
+            elif not source_eligible(source,e['wallet'],e['source_at'],state['started_at']):reason='Outside the prospective source follow window or source copying is paused.'
             elif e['source_at']<state['started_at'] or not 0<=time.time()-e['source_at']<=90:reason='Outside the fresh live entry window.'
             elif latest_sell.get((e['wallet'],e['mint']),0)>=e['source_at']:reason='Source already sold before live detection.'
-            elif not source['config']['enabled'] or time.time()-(source.get('last_cycle') or 0)>60 or source.get('error'):reason='Source feed is not current.'
+            elif not source['config']['enabled']:reason='Source copying is paused.'
+            elif channel=='direct' and not direct_source.ready(e['wallet'],time.time()):reason='Verified source history is incomplete or stale.'
+            elif channel=='paper' and (time.time()-(source.get('last_cycle') or 0)>60 or source.get('error')):reason='Source feed is not current.'
             elif any(p['mint']==e['mint'] for p in state['positions'].values()):reason='One live position per coin; repeated buys skipped.'
             elif any(p.get('exit_value_lamports') is None or time.time()-(p.get('marked_at') or 0)>60 for p in state['positions'].values()):reason='An existing live holding lacks a current exit quote.'
             elif state['cooldowns'].get(e['mint'],0)>time.time():reason='Protective-exit cooldown.'
@@ -512,7 +543,7 @@ def tick(provider=None):
                     known=conn.execute('SELECT 1 FROM solana_real_decisions WHERE source_id=?',(e['id'],)).fetchone()
                 if known:continue
                 chosen={'id':'buy:'+e['id'],'side':'buy','mint':e['mint'],'source_wallet':e['wallet'],'source_at':e['source_at'],'reason':'copy_buy',
-                    'source_entry':e.get('source_entry'),'detected_at':e.get('detected_at',e.get('observed_at',time.time())),
+                    'entry_path':'verified_source' if channel=='direct' else 'paper_admitted','source_entry':e.get('source_entry'),'detected_at':e.get('detected_at',e.get('observed_at',time.time())),
                     'timing_ms':{'source_to_detection_ms':round(max(0,e.get('detected_at',e.get('observed_at',time.time()))-e['source_at'])*1000,3),
                                  'feed_to_execution_ms':round(max(0,time.time()-e.get('feed_saved_at',e.get('observed_at',time.time())))*1000,3),
                                  'source_processing_ms':round(max(0,e.get('feed_saved_at',e.get('observed_at',time.time()))-e.get('detected_at',e.get('observed_at',time.time())))*1000,3)},
@@ -556,7 +587,7 @@ def tick(provider=None):
                         raise execution.Unavailable('Profit trim deferred: current half-sale proceeds after fees do not meet the profit target.')
                 kwargs={'quote':quote} if quote is not None else {}
                 with measure(order.setdefault('timing_ms',{}),'prepare_ms'):
-                    prepared=provider.prepare(state['wallet'],chosen['side'],chosen['mint'],amount,policy,lambda:authorized(state,chosen['side'],chosen.get('source_at'),owner,chosen.get('source_wallet')),**kwargs)
+                    prepared=provider.prepare(state['wallet'],chosen['side'],chosen['mint'],amount,policy,lambda:authorized(state,chosen['side'],chosen.get('source_at'),owner,chosen.get('source_wallet'),chosen.get('entry_path')),**kwargs)
                 order['timing_ms'].update(prepared.get('timing_ms',{}))
                 order.update(prepared=prepared,status='signed',signature=prepared['signature']);save_signed(order,owner)
                 begin_broadcast(order,state,owner)

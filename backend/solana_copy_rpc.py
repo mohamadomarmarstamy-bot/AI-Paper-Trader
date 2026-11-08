@@ -13,6 +13,7 @@ from pathlib import Path
 from threading import Lock
 import time
 import requests
+import solana_http as http
 
 ENDPOINT='https://api.mainnet.solana.com'
 SIGNATURE_PAGE_SIZE=1000
@@ -62,7 +63,7 @@ def _request(method,params,url,backup=False):
         if (now<(_backup_cooldown if backup else _cooldown)) or len(_calls)>=100:raise DataUnavailable(f'{label} cooling down; retrying automatically.')
         _calls.append(now)
     try:
-        response=requests.post(url,json={'jsonrpc':'2.0','id':1,'method':method,'params':params},timeout=8 if method=='getSignaturesForAddress' else 5,allow_redirects=False)
+        response=http.post(url,json={'jsonrpc':'2.0','id':1,'method':method,'params':params},timeout=8 if method=='getSignaturesForAddress' else 5,allow_redirects=False)
         if response.status_code==429:
             with _lock:
                 if backup:_backup_cooldown=time.monotonic()+60
