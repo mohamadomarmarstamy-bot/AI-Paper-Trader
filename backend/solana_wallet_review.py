@@ -13,7 +13,9 @@ def paper_results(traders, closes, positions):
         rows = [r for r in closes if r['wallet'] == wallet and not r.get('voided')]
         lots = {}
         for row in rows:
-            lots.setdefault(row['lot_id'], []).append(row)
+            # Early full-sale records predate staged exits and have no lot_id.
+            # Their immutable close id identifies the one completed position.
+            lots.setdefault(row.get('lot_id') or row['id'], []).append(row)
         completed = [sum(r['pnl_usd'] for r in lot) for lot in lots.values()
                      if any(not r.get('partial_exit', False) for r in lot)]
         gains = sum(p for p in completed if p > 0)
