@@ -8,6 +8,10 @@ PAPER_ONLY_SOURCES = {
     '2kv8X2a9bxnBM8NKLc6BBTX2z13GFNRL4oRotMUJRva9': 'Gh0stee',
     '3H9LVHarjBoZ2YPEsgFbVD1zuERCGwfp4AeyHoHsFSEC': 'Jadawgs',
     '4Be9CvxqHW6BYiRAxW9Q3xu1ycTMWaL5z8NX4HR3ha7t': 'Mitch',
+    'A3W8psibkTUvjxs4LRscbnjux6TFDXdvD4m4GsGpQ2KJ': 'Numero',
+    'J9TYAsWWidbrcZybmLSfrLzryANf4CgJBLdvwdGuC8MB': 'Johnson',
+    'DYAn4XpAkN5mhiXkRB7dGq4Jadnx6XYgu8L5b3WGhbrt': 'Kay The Doc',
+    'DVMkhiQe1D8yenuEgsW44NjRn9LfVQjGEpZcez5x7Mff': 'Iceman',
 }
 
 

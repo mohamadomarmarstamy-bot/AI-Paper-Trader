@@ -16,7 +16,39 @@ CANDIDATES = (
     ('Jijo', '4BdKaxN8G6ka4GYtQQWk4G4dZRUTX2vQH9GcXdBREFUk'),
     ('Tech', '5d3jQcuUvsuHyZkhdp78FFqc7WogrzZpTtec1X9VNkuE'),
     ('Kadenox', 'B32QbbdDAyhvUQzjcaM5j6ZVKwjCxAwGH5Xgvb9SJqnC'),
+    ('Beaver', 'GM7Hrz2bDq33ezMtL6KGidSWZXMWgZ6qBuugkb5H8NvN'),
 )
+PAUSED = {'B32QbbdDAyhvUQzjcaM5j6ZVKwjCxAwGH5Xgvb9SJqnC'}
+
+
+def reviewed_roster():
+    """Enroll new reviewed trials prospectively, preserving every prior result.
+
+    Beaver reviewed 2026-11-08: https://kolexplorer.com/kol/beaver
+    Reported 7/30/90-day profits and 1.09x equal-stake history warrant a paper
+    test only. Kadenox's forward trial is negative after eight closed positions.
+    """
+    state, revision = paper.load()
+    if not state.get('trial_started_at'):
+        return
+    now = time.time(); changed = False
+    for name, wallet in CANDIDATES:
+        trader = next((r for r in state['traders'] if r['wallet'] == wallet), None)
+        if trader is None:
+            state['traders'].append(dict(name=name, wallet=wallet, active=wallet not in PAUSED,
+                paper_only=True, selected_at=now, buy_resume_at=now,
+                qualification='owner_requested_paper_trial', trade_provider='rpc'))
+            state['cursors'][wallet] = {'at': now, 'provider': 'rpc'}
+            changed = True
+        elif wallet in PAUSED and trader.get('active', True):
+            trader['active'] = False
+            changed = True
+    if changed:
+        with closing(database.get_connection()) as conn:
+            if conn.execute('UPDATE solana_copy_state SET state_json=?,revision=revision+1 WHERE id=1 AND revision=?',
+                            (json.dumps(state, allow_nan=False), revision)).rowcount != 1:
+                raise paper.bot.Conflict('Trial roster changed. Retry without resetting results.')
+            conn.commit()
 
 
 def exists():
@@ -37,7 +69,7 @@ def start():
         state['cash_usd'] = 100000.
         state['public_rpc_enabled'] = True
         state['trial_started_at'] = now
-        state['traders'] = [dict(name=name, wallet=wallet, active=True,
+        state['traders'] = [dict(name=name, wallet=wallet, active=wallet not in PAUSED,
             paper_only=True, selected_at=now, buy_resume_at=now,
             qualification='owner_requested_paper_trial', trade_provider='rpc')
             for name, wallet in CANDIDATES]
@@ -70,6 +102,7 @@ def status():
             complete = [sum(r['pnl_usd'] for r in lot) for lot in lots.values()
                         if any(not r.get('partial_exit', False) for r in lot)]
             result['wallet_results'].append(dict(name=name, wallet=wallet,
+                active=next((r.get('active', True) for r in state['traders'] if r['wallet'] == wallet), False),
                 realized_pnl_usd=sum(r['pnl_usd'] for r in exits),
                 exit_count=len(exits), completed_positions=len(complete),
                 winning_completed_positions=sum(p > 0 for p in complete),
@@ -86,6 +119,7 @@ def tick():
     if not exists():
         return
     with database.paper_trial_context():
+        reviewed_roster()
         paper.tick(provider=TrialProvider())
 
 

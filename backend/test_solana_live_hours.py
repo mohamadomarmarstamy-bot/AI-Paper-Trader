@@ -11,7 +11,7 @@ class HoursTests(unittest.TestCase):
                 self.assertEqual(entry_allowed(at),allowed,(day,hour))
 
     def test_selected_live_roster_has_all_day_exception(self):
-        self.assertEqual(len(ALL_DAY_SOURCES),6)
+        self.assertEqual(len(ALL_DAY_SOURCES),2)
         for hour in (0,13,14,23):
             at=datetime(2026,11,2,hour,tzinfo=ZoneInfo('America/New_York')).timestamp()
             for wallet in ALL_DAY_SOURCES:self.assertTrue(entry_allowed(at, wallet))
@@ -26,5 +26,5 @@ class HoursTests(unittest.TestCase):
     def test_status_identifies_exact_all_day_roster(self):
         status=entry_status()
         self.assertEqual(set(status['all_day_source_names']),
-                         {'Mr. Frog','Numero','Johnson','Kay The Doc','Iceman','Solkrow'})
+                         {'Mr. Frog','Solkrow'})
         self.assertEqual(set(status['all_day_sources']),ALL_DAY_SOURCES)
