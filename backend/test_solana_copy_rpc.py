@@ -90,6 +90,16 @@ class RpcTests(unittest.TestCase):
             self.assertEqual(result['positions'],[]);self.assertEqual(result['closed_count'],1)
             self.assertAlmostEqual(result['cash_usd']-100000,result['realized_pnl_usd'])
 
+    def test_live_holding_keeps_full_source_exit_history_when_paper_is_flat_and_paused(self):
+        self.enroll();state,_=copy.load()
+        copy.configure({'enabled':False},state['settings_revision'])
+        import solana_real_worker as live
+        cursor={'at':self.now,'provider':'rpc','rpc_coverage':{'checked_at':self.now}}
+        with patch.object(live,'load',return_value=({'enabled':False,'positions':{'p':{'source_wallet':WALLET}}},0)),patch.object(rpc,'trades',return_value=([],cursor)) as read:
+            copy.tick(market=Market(),clock=lambda:self.now)
+        self.assertEqual(read.call_args.args[0],WALLET)
+        self.assertTrue(read.call_args.kwargs['preserve_exits'])
+
     def test_window_is_frozen_buffered_and_null_transaction_retries_without_advancing(self):
         cursor={'provider':'rpc','at':self.now-10}
         rows=[{'signature':str(i)*88,'blockTime':self.now-i,'err':None,'confirmationStatus':'finalized'} for i in range(2,7)]

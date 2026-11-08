@@ -107,6 +107,28 @@ class SourceTests(unittest.TestCase):
             self.assertEqual(result['health'],'waiting_for_data_key');self.assertEqual(result['positions'],[])
             self.assertEqual(result['cash_usd'],100000);get.assert_not_called()
 
+    def test_notification_checks_only_hinted_wallet(self):
+        from solana_wallet_stream import wakeup
+        wallets=['1'*31+c for c in '23456789'];polled=[]
+        def trades(wallet,cursor,now):polled.append(wallet);return [],{'at':now}
+        source=SimpleNamespace(leaders=lambda:[{'wallet':w} for w in wallets],trades=trades)
+        with patch.object(copy,'configured',return_value=True),patch.object(copy,'regular_metrics',return_value={'equity_usd':100000,'net_usd':0}):
+            copy.configure({'enabled':True},0)
+            wakeup.mark([wallets[-1]])
+            copy.tick(provider=source,clock=lambda:1000,urgent_wallets={wallets[-1]})
+        self.assertEqual(polled,[wallets[-1]])
+        self.assertNotIn(wallets[-1],wakeup.pending())
+
+    def test_paper_trial_cycle_cannot_consume_main_stream_hints(self):
+        from solana_wallet_stream import wakeup
+        source=SimpleNamespace(leaders=lambda:[],trades=lambda *args:([],{}))
+        wakeup.mark([WALLET])
+        try:
+            with database.paper_trial_context(),patch.object(copy,'regular_metrics',return_value={'equity_usd':100000,'net_usd':0}):
+                copy.tick(provider=source,clock=lambda:1000)
+            self.assertIn(WALLET,wakeup.pending())
+        finally:wakeup.acknowledge([WALLET])
+
     def test_oldest_poll_rotation_covers_every_followed_wallet(self):
         wallets=['1'*31+c for c in '23456789'];polled=[]
         def trades(wallet,cursor,now):polled.append(wallet);return [],{'at':now}
