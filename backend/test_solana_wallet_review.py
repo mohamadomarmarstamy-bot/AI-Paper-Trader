@@ -23,3 +23,8 @@ class WalletReviewTests(unittest.TestCase):
         self.assertEqual(a['net_realized_sol'], .0019)
         self.assertIsNone(b['net_realized_sol'])
         self.assertEqual(b['unallocated_sell_records'], 1)
+
+    def test_missing_source_is_visible(self):
+        row = real_results([], [dict(side='sell', status='confirmed')])[0]
+        self.assertEqual(row['name'], 'Unattributed')
+        self.assertIsNone(row['net_realized_sol'])

@@ -31,12 +31,13 @@ def paper_results(traders, closes, positions):
 def real_results(traders, orders):
     names = {r['wallet']: r.get('name', r['wallet']) for r in traders}
     results = []
-    for wallet in sorted(set(names) | {r.get('source_wallet') for r in orders if r.get('source_wallet')}):
-        rows = [r for r in orders if r.get('source_wallet') == wallet]
+    unattributed = '__unattributed__'
+    for wallet in sorted(set(names) | {r.get('source_wallet') or unattributed for r in orders}):
+        rows = [r for r in orders if (r.get('source_wallet') or unattributed) == wallet]
         sells = [r for r in rows if r['side'] == 'sell' and r['status'] == 'confirmed']
         failed_fees = sum((r.get('result') or {}).get('fee_lamports', 0) for r in rows if r['status'] == 'failed')
         known = [r['realized_pnl_lamports'] for r in sells if type(r.get('realized_pnl_lamports')) is int]
-        results.append(dict(wallet=wallet, name=names.get(wallet, wallet),
+        results.append(dict(wallet=wallet, name=names.get(wallet, 'Unattributed' if wallet == unattributed else wallet),
             confirmed_buys=sum(r['side'] == 'buy' and r['status'] == 'confirmed' for r in rows),
             confirmed_sell_records=len(sells), unallocated_sell_records=len(sells)-len(known),
             allocated_sale_pnl_sol=sum(known)/10**9, failed_transaction_fees_sol=failed_fees/10**9,
