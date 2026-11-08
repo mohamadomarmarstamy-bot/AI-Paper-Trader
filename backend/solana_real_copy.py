@@ -45,7 +45,7 @@ def public():
     roster=[{k:v for k,v in r.items() if k not in ('research_evidence','public_research_evidence')} for r in source['traders']]
     for trader in roster:
         trader['paper_active']=trader.get('active',True)
-        trader['paper_only']=paper_only(trader['wallet'])
+        trader['paper_only']=paper_only(trader['wallet'],source['traders'])
         if trader['paper_only']:trader['active']=False
     blueprint={'settings':rules,'entry_protection':source['entry_protection'],'traders':roster}
     digest=hashlib.sha256(json.dumps(blueprint,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()

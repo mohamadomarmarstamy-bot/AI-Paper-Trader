@@ -111,7 +111,7 @@ def advance(state,clock,*,fetcher=None):
                         existing.update(research_eligible=True,ranking_realized_usd=candidate['reported_realized_30d_usd'],reviewed_at=now)
                     continue
                 enrolled=clock()
-                state['traders'].append({'wallet':wallet,'name':candidate['name'],'active':False,'selected_at':enrolled,
+                state['traders'].append({'wallet':wallet,'name':candidate['name'],'active':False,'paper_only':True,'selected_at':enrolled,
                     'trade_provider':'rpc','qualification':'public_ranked_research','auto_discovered':True,'research_eligible':True,
                     'ranking_realized_usd':candidate['reported_realized_30d_usd'],'ranking_window':'30d · public report',
                     'historical_realized_usd':None,'win_rate_percent':None,'sell_count':None,'public_research_evidence':evidence,

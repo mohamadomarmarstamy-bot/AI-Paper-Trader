@@ -28,3 +28,15 @@ class WalletReviewTests(unittest.TestCase):
         row = real_results([], [dict(side='sell', status='confirmed')])[0]
         self.assertEqual(row['name'], 'Unattributed')
         self.assertIsNone(row['net_realized_sol'])
+
+    def test_new_discovery_is_paper_only_without_automatic_promotion(self):
+        from solana_live_source_policy import paper_only
+        self.assertTrue(paper_only('new', [{'wallet':'new', 'paper_only':True}]))
+        self.assertFalse(paper_only('reviewed', [{'wallet':'reviewed'}]))
+
+    def test_legacy_full_sales_without_lot_id_are_included(self):
+        rows = [dict(id='old-1', wallet='a', pnl_usd=5),
+                dict(id='old-2', wallet='a', pnl_usd=-2)]
+        result = paper_results([], rows, [])[0]
+        self.assertEqual(result['realized_pnl_usd'], 3)
+        self.assertEqual(result['completed_positions'], 2)
