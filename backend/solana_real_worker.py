@@ -88,6 +88,7 @@ def public():
             latest=enrich_orders(conn,latest,state)
     latest=[{k:v for k,v in r.items() if k in ('id','side','mint','status','created_at','reason','signature','result','error','source_wallet','source_entry','realized_pnl_lamports','timing_ms')} for r in latest]
     return {'revision':revision,'enabled':state['enabled'],'wallet':state['wallet'],'last_cycle':state['last_cycle'],'confirmed_trade_count':count,
+            'live_notifications':__import__('solana_wallet_stream').public(),
             'started_at':state['started_at'],
             'minimum_token_age_seconds':MINIMUM_SECONDS,'accounting_reviews':state.get('accounting_reviews',[]),
             'balance_adjustments':state.get('balance_adjustments',[]),'accounting_complete':not accounting_pending(state),'error':state['error'],'positions':list(state['positions'].values()),'pending_count':len(pending),

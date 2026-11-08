@@ -12,9 +12,9 @@ import struct
 import time
 from concurrent.futures import ThreadPoolExecutor
 from solana_execution_timing import measure
-from urllib.parse import urlsplit
 import requests
 from solana_real_budget import SOL
+from solana_rpc_endpoints import execution_url, execution_source
 
 TOKEN='TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
 TOKEN2022='TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'
@@ -47,6 +47,18 @@ def signer():
     except Exception:raise Unavailable('Trading signer is missing or invalid.') from None
 
 
+_network_check = {}
+
+
+def connection_status():
+    try:identity=hashlib.sha256(execution_url().encode()).hexdigest()
+    except ValueError:identity=None
+    check=dict(_network_check) if identity and _network_check.get('identity')==identity else {}
+    at=check.get('checked_at')
+    return {'source':execution_source(),'checked_at':at,'mainnet_check_ms':check.get('mainnet_check_ms'),
+            'mainnet_verified_recently':at is not None and 0<=time.time()-at<=120}
+
+
 def configuration(address):
     key_present=bool(os.getenv('REAL_COPY_SIGNER_SECRET'));key_address=None
     if key_present:
@@ -55,7 +67,8 @@ def configuration(address):
     return {'release_allowed':release_allowed(),'signer_configured':bool(key_address),
             'signer_matches':bool(address and key_address==address),'signer_address':key_address,
             'jupiter_configured':bool(os.getenv('JUPITER_API_KEY')),
-            'network':'Solana mainnet','executor_implemented':True}
+            'network':'Solana mainnet','executor_implemented':True,'rpc_source':execution_source(),
+            'rpc_connection':connection_status()}
 
 
 def pub(value):
@@ -134,9 +147,8 @@ class Provider:
     def rpc(self,method,params):
         if method not in ('getGenesisHash','getBalance','getAccountInfo','getMultipleAccounts','getLatestBlockhash','getMinimumBalanceForRentExemption','getFeeForMessage','simulateTransaction','sendTransaction','getSignatureStatuses','getSignaturesForAddress','getTransaction','getBlockHeight'):
             raise Unavailable('Unsupported execution RPC method.')
-        url=os.getenv('SOLANA_REAL_RPC_URL','https://api.mainnet-beta.solana.com')
-        parsed=urlsplit(url)
-        if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:raise Unavailable('An HTTPS Solana RPC URL is required.')
+        try:url=execution_url()
+        except ValueError:raise Unavailable('An HTTPS Solana RPC URL is required.') from None
         try:
             response=requests.post(url,json={'jsonrpc':'2.0','id':1,'method':method,'params':params},timeout=8,allow_redirects=False)
             if response.status_code!=200 or len(response.content)>4_000_000:raise ValueError()
@@ -146,9 +158,14 @@ class Provider:
         except Exception:raise Unavailable('Solana execution RPC unavailable; transaction state must be reconciled.') from None
 
     def network(self):
+        global _network_check
+        _network_check={}
+        started=time.perf_counter()
         value=self.rpc('getGenesisHash',[])
         if value!=MAINNET_GENESIS:
             raise Unavailable('The configured RPC is not Solana mainnet.')
+        _network_check={'identity':hashlib.sha256(execution_url().encode()).hexdigest(),'checked_at':time.time(),
+                        'mainnet_check_ms':round((time.perf_counter()-started)*1000,3)}
 
     def balance(self,owner):return uint(self.rpc('getBalance',[owner,{'commitment':'confirmed'}])['value'])
 

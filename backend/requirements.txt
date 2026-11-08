@@ -8,6 +8,7 @@ pandas>=2.2,<3.0
 numpy>=2.0,<3.0
 
 requests>=2.32
+websockets>=16,<17
 cryptography>=46,<51
 solders==0.29.0
 tzdata>=2025.2

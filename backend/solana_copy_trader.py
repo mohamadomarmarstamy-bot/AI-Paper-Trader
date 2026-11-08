@@ -402,7 +402,7 @@ def mark_and_protect(state, quotes, observed, closes, *, allow_profit_takes=Fals
         closes.append(record_close(state,key,quote,observed,'profit_take_half',fraction=.5))
 
 
-def tick(*, provider=None, market=None, clock=time.time):
+def tick(*, provider=None, market=None, clock=time.time, urgent_wallets=None):
     now=clock(); state,revision=load(); owner=str(uuid.uuid4())
     with closing(database.get_connection()) as conn:
         initialize(conn)
@@ -442,16 +442,26 @@ def tick(*, provider=None, market=None, clock=time.time):
             state['cursors']={r['wallet']:{'at':enrolled} for r in leaders}
             if not leaders: raise DataUnavailable('No ranked wallets meet the historical-profit and win-rate checks.')
         watched={p['wallet'] for p in state['positions'].values()} | ({r['wallet'] for r in state['traders'] if r.get('active',True)} if enabled else set())
+        from solana_real_worker import load as live_load
+        live_held={p['source_wallet'] for p in live_load()[0]['positions'].values()}
+        watched.update(w for w in live_held if w in state['cursors'])
         last_polled=state.setdefault('last_polled',{})
         # Oldest first prevents a rate-limited large list starving its later wallets.
-        selected=select_wallets(state,watched,last_polled)
+        if urgent_wallets is None:
+            selected=select_wallets(state,watched,last_polled)
+        else:
+            selected=sorted(watched & set(urgent_wallets),key=lambda w:(last_polled.get(w,0),w))[:4]
+        if database._paper_trial_path.get() is None:
+            from solana_wallet_stream import wakeup
+            wakeup.acknowledge(selected)
+            if urgent_wallets is not None:wakeup.acknowledge(set(urgent_wallets)-watched)
         # Network reads run independently; only the cycle thread merges state.
         # Do not abandon futures: a late result must never mutate saved cursors.
         def read_wallet(wallet):
             cursor=deepcopy(state['cursors'][wallet])
             try:
                 if isinstance(provider,Birdeye) and cursor.get('provider')=='rpc':
-                    result=provider.trades(wallet,cursor,clock(),has_copied_positions=any(p['wallet']==wallet for p in state['positions'].values()))
+                    result=provider.trades(wallet,cursor,clock(),has_copied_positions=wallet in live_held or any(p['wallet']==wallet for p in state['positions'].values()))
                 else:result=provider.trades(wallet,cursor,clock())
                 return result,clock()
             except DataUnavailable as error:return error
@@ -616,11 +626,29 @@ def cycle_interval(state):
     return max(10,state['config']['poll_seconds'])
 
 
+async def poll_loop():
+    from solana_wallet_stream import wakeup
+    wakeup.bind();last_full=0;interval=5
+    try:
+        while True:
+            started=time.monotonic();urgent=wakeup.pending()
+            full=not urgent or started-last_full>=interval
+            try:await asyncio.to_thread(tick,urgent_wallets=None if full else urgent)
+            except Exception:pass
+            if full:last_full=started
+            state,_=await asyncio.to_thread(load)
+            interval=await asyncio.to_thread(cycle_interval,state)
+            # Coalesce bursts; never spin or bypass the HTTP request budget.
+            await asyncio.sleep(max(0,1-(time.monotonic()-started)))
+            await wakeup.wait(max(.05,interval-(time.monotonic()-last_full)))
+    finally:
+        wakeup.loop=wakeup.event=None
+
+
 async def worker():
-    while True:
-        started=time.monotonic()
-        try: await asyncio.to_thread(tick)
-        except Exception: pass
-        state,_=await asyncio.to_thread(load)
-        interval=await asyncio.to_thread(cycle_interval,state)
-        await asyncio.sleep(max(.1,interval-(time.monotonic()-started)))
+    from solana_wallet_stream import worker as stream_worker
+    tasks=[asyncio.create_task(poll_loop()),asyncio.create_task(stream_worker())]
+    try:await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:task.cancel()
+        await asyncio.gather(*tasks,return_exceptions=True)

@@ -65,6 +65,13 @@ def public():
             {'name':'Unattended signer','level':'ok' if flags['signer_matches'] else 'warning','detail':'Matches linked wallet' if flags['signer_matches'] else 'Trading signer is missing or does not match the linked wallet'},
             {'name':'Swap API','level':'ok' if flags['jupiter_configured'] else 'warning','detail':'Jupiter API key configured' if flags['jupiter_configured'] else 'Jupiter API key needed'},
             {'name':'Live worker','level':'error' if (active or held) and now-(runtime['last_cycle'] or 0)>60 else 'ok' if active or held else 'paused','detail':'Updated recently' if runtime['last_cycle'] and now-runtime['last_cycle']<=60 else 'Waiting for activation' if not active and not held else 'No recent live cycle'}]
+    transport=runtime.get('live_notifications',{})
+    checks.append({'name':'Wallet notifications','level':'ok' if transport.get('connected') else 'warning' if active or held else 'paused',
+                   'detail':f"Connected · {transport.get('subscriptions',0)} wallets" if transport.get('connected') else 'Polling backup active' if active or held else 'Waiting for live sources'})
+    rpc_source=flags.get('rpc_source','public_fallback')
+    rpc_verified=flags.get('rpc_connection',{}).get('mainnet_verified_recently',False)
+    checks.append({'name':'Execution connection','level':'ok' if rpc_verified else 'warning',
+                   'detail':{'dedicated_execution':'Configured execution RPC','configured_wallet_provider':'Uses configured wallet RPC','public_fallback':'Shared public RPC fallback'}[rpc_source]+(' · network checked' if rpc_verified else ' · awaiting network check')})
     level='ok' if active else 'paused' if can_start else 'warning';label='Copying live' if active else 'Ready to start' if can_start else 'Setup required'
     detail='Monitoring real holdings and fresh admitted copy signals.' if active else 'Real trades are off until you activate copying.'
     if active or held or runtime['pending_count'] or runtime.get('balance_adjustments'):
