@@ -156,6 +156,75 @@ class RealWorkerTests(unittest.TestCase):
         self.chain.receipt={'state':'pending'}
         return live.load()[0]['positions']['buy:'+'a'*64]
 
+    def add_other_holding(self):
+        from copy import deepcopy
+        state,_=live.load();original=next(iter(state['positions'].values()))
+        other=deepcopy(original);other.update(id='other-position',mint=str(Pubkey.new_unique()),opened_at=time.time()+1)
+        state['positions'][other['id']]=other
+        with closing(database.get_connection()) as conn:
+            conn.execute('UPDATE solana_real_run SET state_json=? WHERE id=1',(json.dumps(state),));conn.commit()
+        return original,other
+
+    def test_source_exit_does_not_wait_for_unrelated_holding_reads(self):
+        self.enter();original,other=self.add_other_holding()
+        self.event(ident='c'*64,mint=other['mint'],side='sell',status='observed')
+        balance=self.chain.finalized_token_balance
+        def read(owner,mint,program):
+            self.assertEqual(mint,other['mint'],'Unrelated balance delayed an explicit exit')
+            return balance(owner,mint,program)
+        self.chain.finalized_token_balance=read
+        with patch.object(self.chain,'build',side_effect=AssertionError('Unnecessary monitoring quote')):
+            live.tick(self.chain)
+        order=live.orders(True)[0]
+        self.assertEqual(order['mint'],other['mint']);self.assertEqual(order['reason'],'source_sell')
+
+    def test_manual_exit_checks_its_balance_without_unrelated_monitoring(self):
+        self.enter();original,other=self.add_other_holding()
+        state,_=live.load();state['positions'][other['id']]['pending_reason']='manual'
+        with closing(database.get_connection()) as conn:
+            conn.execute('UPDATE solana_real_run SET state_json=? WHERE id=1',(json.dumps(state),));conn.commit()
+        balance=self.chain.finalized_token_balance
+        def read(owner,mint,program):
+            self.assertEqual(mint,other['mint'])
+            return balance(owner,mint,program)
+        self.chain.finalized_token_balance=read
+        with patch.object(self.chain,'build',side_effect=AssertionError('Unnecessary monitoring quote')):
+            live.tick(self.chain)
+        self.assertEqual(live.orders(True)[0]['reason'],'manual')
+
+    def test_parallel_holding_balance_reads_keep_failed_holding_blocked(self):
+        from threading import Barrier
+        self.enter();original,other=self.add_other_holding();barrier=Barrier(2)
+        balance=self.chain.finalized_token_balance
+        def read(owner,mint,program):
+            barrier.wait(2)
+            if mint==other['mint']:raise ex.Unavailable('Balance unavailable')
+            return balance(owner,mint,program)
+        self.chain.finalized_token_balance=read
+        state,_=live.load();blocked=live.reconcile_balances(state,self.chain,time.time())
+        self.assertEqual(blocked,{other['id']})
+        self.assertIsNone(state['positions'][other['id']]['exit_value_lamports'])
+        self.assertGreater(state['positions'][original['id']]['balance_checked_slot'],0)
+
+    def test_ready_protective_exit_does_not_wait_for_slow_monitor_quote(self):
+        from threading import Event
+        self.enter();original,other=self.add_other_holding();started=Event();release=Event();finished=Event()
+        def quote(owner,input_mint,output_mint,amount,policy):
+            if input_mint==original['mint']:
+                started.set();release.wait(3);finished.set()
+                return {'otherAmountThreshold':215_000_000}
+            self.assertTrue(started.wait(2),'Holding quotes were serialized')
+            return {'otherAmountThreshold':100_000_000}
+        self.chain.build=quote
+        try:
+            live.tick(self.chain)
+            self.assertFalse(finished.is_set(),'Slow monitoring read delayed the ready exit')
+            order=live.orders(True)[0]
+            self.assertEqual(order['mint'],other['mint']);self.assertEqual(order['reason'],'stop_loss')
+        finally:
+            release.set();self.assertTrue(finished.wait(2))
+        self.assertIsNone(live.load()[0]['positions'][original['id']]['marked_at'])
+
     def direct_event(self,side='buy',stamp=None,signature='2'*88,cursor=None):
         import solana_live_source as direct
         stamp=stamp or time.time()
