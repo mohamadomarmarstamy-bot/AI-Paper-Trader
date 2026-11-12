@@ -42,6 +42,7 @@
   $('rc-benchmark-basis').textContent=data.basis;
  }
  function render(data){
+  renderShadow(data.shadow);
   renderBenchmark(data.benchmark);renderAudit(data);
   total=data.entry_count;
   $('rc-report-time').textContent=`${data.wallet?short(data.wallet):'All recorded wallets'} · updated ${new Date(data.checked_at*1000).toLocaleTimeString()} · ${data.order_count} orders · ${data.pending_orders} pending`;
@@ -73,6 +74,28 @@
    return [Number.isFinite(e.created_at)?new Date(e.created_at*1000).toLocaleString():'—',coin,e.source_name,price(e.source_sol_per_token),price(e.our_sol_per_token),percent(e.premium_percent),seconds(e.source_to_broadcast_ms),link];
   }),'No confirmed real buys.');
   $('rc-report-page').textContent=data.entry_count?`${data.offset+1}–${Math.min(data.offset+data.limit,data.entry_count)} of ${data.entry_count} buys`:'0 buys';
+ }
+ function renderShadow(data){
+  if(!data)return;
+  $('rc-shadow-status').textContent=`${data.stale?'Comparison delayed · ':''}${data.status}${data.started_at?` · started ${new Date(data.started_at*1000).toLocaleString()}`:''}`;
+  $('rc-shadow-basis').textContent=data.basis;
+  $('rc-shadow-pnl').textContent=data.started?sol(data.realized_lamports):'Waiting';
+  $('rc-shadow-net').textContent=data.started?sol(data.net_lamports):'Waiting';
+  $('rc-shadow-coverage').textContent=data.started?`${data.signals} signals · ${data.open_positions} open · ${data.queued} waiting · ${data.skipped} skipped`:'';
+  $('rc-shadow-cash').textContent=data.started?`Simulated cash: ${sol(data.cash_lamports)} · ${data.unpriced_positions} unpriced holdings`:'';
+  const delay=data.delay_model;
+  $('rc-shadow-delay').textContent=delay?`Entry delay: ${delay.seconds.toFixed(3)}s · ${delay.basis} · n=${delay.samples}. Exit delay: ${(delay.exit_seconds??2).toFixed(3)}s · n=${delay.exit_samples??0}${delay.exit_samples?'':' (assumed)'}. Feed and capacity delays can make quotes later. Small samples do not establish profitability.`:'';
+  table('rc-shadow-wallets',(data.wallets||[]).map(w=>[node('span',w.name,'rc-report-name'),w.signals,w.closed,w.closed?`${(100*w.wins/w.closed).toFixed(1)}%`:'—',w.open,`${w.queued} / ${w.skipped}`,signed(node('span',sol(w.realized_lamports)),w.realized_lamports)]),'No forward wallet results yet.');
+  table('rc-shadow-entries',(data.entries||[]).map(e=>{
+   const coin=node('span',short(e.mint),'rc-report-name');window.MemeCoinLabels?.attach(coin,e.mint);
+   const label=node('div','');label.append(coin,node('small',e.source_name));
+   const usd=Number.isFinite(e.paper_realized_usd)?e.paper_realized_usd.toLocaleString('en-US',{style:'currency',currency:'USD'}):'—';
+   const actualParts=[e.actual_status,...(e.actual_exit_reasons||[])];
+   if(['rejected','failed'].includes(e.actual_status)&&e.actual_reason)actualParts.push(e.actual_reason);
+   const actual=node('span',actualParts.join(' · '));actual.title=e.actual_reason||'';
+   const outcome=node('span',`${e.status} · ${e.reason}`);outcome.title=e.last_quote_error||'';
+   return [label,`${usd} · ${e.paper_status}`,['open','closed'].includes(e.status)?sol(e.realized_lamports):'—',sol(e.actual_realized_lamports),outcome,actual,Number.isFinite(e.source_to_quote_seconds)?`${e.source_to_quote_seconds.toFixed(3)}s`:'—'];
+  }),'No forward source buys yet. Historical trades are not replayed.');
  }
  function controls(){if(!$('rc-performance'))return;$('rc-report-refresh').disabled=busy;$('rc-report-prev').disabled=busy||offset===0;$('rc-report-next').disabled=busy||offset+20>=total;}
  async function load(force=false){

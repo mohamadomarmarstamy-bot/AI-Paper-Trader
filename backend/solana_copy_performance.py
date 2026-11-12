@@ -174,6 +174,8 @@ def public(*,offset=0,limit=20):
         if orders:orders=enrich_orders(conn,orders,runtime)
         from solana_quote_benchmark import public as benchmark_status
         benchmark=benchmark_status(conn)
+        from solana_copy_shadow import public as shadow_status
+        shadow=shadow_status(conn,orders)
     # Release the read transaction before aggregating; report rendering must not
     # hold a database read lock while the live worker persists an order.
-    return {**report(paper.get('traders',[]),runtime,orders,offset=offset,limit=limit),'benchmark':benchmark}
+    return {**report(paper.get('traders',[]),runtime,orders,offset=offset,limit=limit),'benchmark':benchmark,'shadow':shadow}
