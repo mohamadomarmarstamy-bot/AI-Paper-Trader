@@ -447,6 +447,14 @@ def tick(*, provider=None, market=None, clock=time.time, urgent_wallets=None):
         watched={p['wallet'] for p in state['positions'].values()} | ({r['wallet'] for r in state['traders'] if r.get('active',True)} if enabled else set())
         live_held={p['source_wallet'] for p in live_run['positions'].values()}
         watched.update(w for w in live_held if w in state['cursors'])
+        # Reuse existing history reads for simulated exits after source buys pause.
+        # This never enrolls a source or enables either trading account.
+        try:
+            from solana_copy_shadow import held_sources
+            shadow_held=held_sources()
+        except Exception:
+            shadow_held=set()
+        watched.update(w for w in shadow_held if w in state['cursors'])
         last_polled=state.setdefault('last_polled',{})
         # Oldest first prevents a rate-limited large list starving its later wallets.
         if urgent_wallets is None:
@@ -464,7 +472,7 @@ def tick(*, provider=None, market=None, clock=time.time, urgent_wallets=None):
             cursor=deepcopy(state['cursors'][wallet])
             try:
                 if isinstance(provider,Birdeye) and cursor.get('provider')=='rpc':
-                    result=provider.trades(wallet,cursor,clock(),has_copied_positions=wallet in live_held or wallet in paper_held)
+                    result=provider.trades(wallet,cursor,clock(),has_copied_positions=wallet in live_held or wallet in paper_held or wallet in shadow_held)
                 else:result=provider.trades(wallet,cursor,clock())
                 detected_at=clock()
                 if fast_source and isinstance(provider,Birdeye) and cursor.get('provider')=='rpc':

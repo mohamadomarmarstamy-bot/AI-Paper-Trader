@@ -1837,6 +1837,8 @@ async def lifespan(app: FastAPI):
     real_copy_task = asyncio.create_task(real_copy_worker())
     from solana_quote_benchmark import worker as quote_benchmark_worker
     quote_benchmark_task = asyncio.create_task(quote_benchmark_worker())
+    from solana_copy_shadow import worker as copy_shadow_worker
+    copy_shadow_task = asyncio.create_task(copy_shadow_worker())
     from crypto_idle_alerts import worker as crypto_idle_worker
     crypto_idle_task = asyncio.create_task(crypto_idle_worker())
     from stock_auto_learning import worker as stock_learning_worker
@@ -1857,6 +1859,7 @@ async def lifespan(app: FastAPI):
         paper_trial_task.cancel()
         real_copy_task.cancel()
         quote_benchmark_task.cancel()
+        copy_shadow_task.cancel()
         crypto_idle_task.cancel()
         stock_learning_task.cancel()
         stock_research_task.cancel()
@@ -1872,6 +1875,7 @@ async def lifespan(app: FastAPI):
             paper_trial_task,
             real_copy_task,
             quote_benchmark_task,
+            copy_shadow_task,
             crypto_idle_task,
             stock_learning_task,
             stock_research_task,

@@ -1,0 +1,31 @@
+# Forward paper / realistic / real comparison
+
+The Real Copy Trade performance report now has a **Paper vs realistic vs real** section. This is an independent quote simulation, not another live executor. Deployment never activates either trading bot or changes wallet selections, size preferences, protection settings, original paper results or actual balances.
+
+## Start and inputs
+
+The background worker automatically starts a prospective comparison after a verified public wallet, the source account and a fresh native SOL balance are available. Its starting simulated cash is that balance; existing token holdings are not imported. Later deposits, withdrawals and manual sales never replenish simulated cash. Results are separated by linked wallet. It records the starting event cursors and ignores source transactions predating startup, so historical prices are never reconstructed as executable trades. If source buys are paused, it waits for future source observations; it does not restart them.
+
+The worker reads persisted verified source events and ordinary paper events, deduplicated by the original source-event ID. An RPC source signal can be considered even when original paper did not fill it. Non-RPC signals require paper admission, matching the live fallback path. Paper-only sources, paused or inactive sources, prospective follow windows, live entry hours, the 90-second freshness window, one position per mint, protective cooldowns, token age and supported mint restrictions remain in force.
+
+Entries use current live dollar/percentage sizing, simulated cash, the SOL reserve, rent estimate, live slippage and price-impact policy and the worst-case 5% source-price cap. Each entry saves its setting snapshot. Existing simulated positions retain their original exit policy, including the independent live stop, half-profit targets and post-trim trailing protection. Each half sale gets a separate quote for its exact size; it never receives half of a full-sale quote by arithmetic.
+
+## Price, costs and time
+
+Each simulated swap receives the quote's minimum output. Each side pays an estimated 5,000-lamport base fee plus the configured maximum priority fee. Entries also pay the provider's rent estimate with no assumed future refund. These are conservative assumptions, not measured transaction fees. No transaction is assembled for signing, simulated on chain, signed or submitted by this module.
+
+Entry timing uses the median recorded source-to-observed-finalization delay of recent confirmed buys tagged with the current execution profile, for the same execution wallet. Without samples, it explicitly assumes five seconds. Quotes are requested after the later of detection and source time plus this delay; detection delay is not counted twice. Exits wait the measured current-profile median trigger-to-observed-finalization delay, or an explicit two-second assumption, before obtaining a fresh quote. The five-second worker cadence and provider contention can add delay. Actual source-to-entry-quote time is recorded per row. Cohort changes, missing timings, polling lag and selective successful receipts limit these models.
+
+Comparison traffic uses existing low-priority research pacing and provider cooldowns, with at most one quote request per five seconds and no requests while a live transaction is pending. Live requests and the existing 30-second quiet period can defer comparison quotes. This shares provider quota and cannot guarantee zero contention. Waiting signals expire instead of being filled retroactively. The report keeps queued/skipped counts and the latest unavailable-quote reason visible. It does not present the sampled subset as proof of a profitable strategy.
+
+Missing exit routes retain the holding, invalidate its valuation and never create proceeds. A portfolio with an unpriced or stale holding has no displayed total net P/L. Partial realized gains are separate from completed-position win rate. Source-sale instructions persist until a quote is available even when new buys are paused. After a simulated half sale, the remaining holding is unpriced until its next full-size mark.
+
+## Comparison limits
+
+Rows match the original source-event ID to original paper closes and actual `buy:<source_id>` orders, including actual allocated realized exits and known failed-transaction fees. Actual results with unknown allocations or fees remain unavailable. Manual archived accounting repairs remain in the separate existing reconciliation report and are not invented as matched actual exits here. Original paper dollars and simulated/actual SOL are labelled separately because sizes, capital constraints and exit settings differ; there is no historical USD/SOL conversion.
+
+The simulation deliberately ignores the real executor's activation and signer availability so observation can run while real buys are paused. It does not reproduce execution-account accounting locks, actual account availability, transaction simulation failures, failed transaction probabilities, MEV, final landing prices, or external manual activity. A build quote is an estimate, not a fill. No wallet is automatically promoted, and no live setting changes in response to these results.
+
+## Validation
+
+Isolated-ledger tests cover independent balances, fees/rent, delayed entries/exits, missing routes, source-sale persistence, quote deferral/expiry, source-price and mint restrictions, the independent live stop, exact-size half sales, duplicate signals, live-order priority, matched paper/real records and unknown actual fees. Tests prohibit signing, preparation, submission and unmocked HTTP. The desktop/mobile report test covers the new comparison, unavailable total P/L, safe text rendering and existing pagination.
