@@ -98,7 +98,7 @@ def analyze(rows, orders, owner, decisions=None, started_at=None):
     conditions = Counter(); closed_excluded = Counter(); price_excluded = Counter(); exit_excluded = Counter()
     samples = defaultdict(list); historical = defaultdict(list); history_counts = Counter()
     examples = []; pair_gaps = []; missed_values = []; exact_entries = 0; exit_candidates = 0; exact_exits = 0
-    fallback_times = 0; matched_buys = 0; forward_failed_fees = 0; unknown_forward_fees = 0
+    fallback_times = 0; matched_buys = 0; entry_time_pairs = 0; forward_failed_fees = 0; unknown_forward_fees = 0
 
     # These checks also work on older real history, before the shadow started.
     for order in actual.values():
@@ -170,6 +170,10 @@ def analyze(rows, orders, owner, decisions=None, started_at=None):
             samples['entry_delay_error_seconds'].append(duration/1000-model['seconds'])
         else: price_excluded['unscored_timing_prediction'] += 1
         stamp, time_basis = receipt_time(buy); quote_at = row.get('entry_quote_at')
+        if finite(stamp) and finite(quote_at):
+            entry_time_pairs += 1
+            samples['entry_time_gap_seconds'].append(stamp-quote_at)
+            conditions['later_entry'] += stamp-quote_at > 1
         same_time = finite(stamp) and finite(quote_at) and abs(stamp-quote_at) <= MATCH_SECONDS
         quantity = receipt.get('token_delta'); debit = receipt.get('native_delta')
         if not same_size: price_excluded['different_or_unknown_size'] += 1
@@ -183,7 +187,6 @@ def analyze(rows, orders, owner, decisions=None, started_at=None):
             samples['entry_cost_error_percent'].append(cost_error)
             samples['entry_output_error_percent'].append(percent(quantity, row['quantity_raw']))
             conditions['higher_entry_cost'] += cost_error > 0
-            conditions['later_entry'] += stamp-quote_at > 1  # Receipt block times have second precision.
             paid_fee = receipt.get('fee_lamports'); predicted_fee = row.get('estimated_fee_lamports')
             if integer(paid_fee) and integer(predicted_fee): samples['fee_error_lamports'].append(paid_fee-predicted_fee)
             if integer(paid_fee) and integer(row.get('estimated_rent_lamports')):
@@ -220,6 +223,7 @@ def analyze(rows, orders, owner, decisions=None, started_at=None):
         ('entry_cost_error_percent', 'Actual all-in entry cost/token vs simulation', 'percent', matched_buys),
         ('entry_output_error_percent', 'Actual received tokens vs simulated minimum', 'percent', matched_buys),
         ('entry_delay_error_seconds', 'Actual observed entry delay minus saved prediction', 'seconds', matched_buys),
+        ('entry_time_gap_seconds', 'Actual receipt time minus simulated entry quote time', 'seconds', matched_buys),
         ('exit_net_error_percent', 'Actual net exit proceeds vs simulation', 'percent', exit_candidates),
         ('fee_error_lamports', 'Actual paid fee minus estimated fee', 'lamports', matched_buys+exit_candidates),
         ('other_debit_error_lamports', 'Other entry debit minus assumed rent', 'lamports', matched_buys),
@@ -234,7 +238,7 @@ def analyze(rows, orders, owner, decisions=None, started_at=None):
         'entry_outcomes': [{**b, 'estimated_missed_net_lamports': b['estimated_missed_net_lamports'] if b['estimated_closed_misses'] else None} for b in buckets.values() if b['count']],
         'conditions': [
             {'label': 'Higher actual entry cost per token', 'count': conditions['higher_entry_cost'], 'basis': f'{exact_entries} same-size entries quoted within five seconds of receipt time'},
-            {'label': 'Actual entry more than one second after simulated quote', 'count': conditions['later_entry'], 'basis': f'{exact_entries} comparable entries; not a dollar attribution'},
+            {'label': 'Actual entry more than one second after simulated quote', 'count': conditions['later_entry'], 'basis': f'{entry_time_pairs} matched signals with recorded times; size may differ, no five-second exclusion'},
             {'label': 'Different completed exit sequences', 'count': conditions['different_exits'], 'basis': f'{len(pair_gaps)} same-input, fully closed pairs'},
             {'label': 'Failed on-chain sell attempts', 'count': conditions['failed_sells'], 'basis': 'Finalized failures; no assumed successful exit'},
             {'label': 'Rejected sell attempts', 'count': conditions['rejected_sells'], 'basis': 'Rejected before broadcast; no paid fee assumed'},

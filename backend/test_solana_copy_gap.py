@@ -109,6 +109,15 @@ class GapTests(unittest.TestCase):
             result = self.report([prediction(delay_model=model)], [buy()])
             self.assertEqual(metric(result, 'entry_delay_error_seconds')['count'], 0)
 
+    def test_large_entry_delays_remain_visible_when_price_calibration_excludes_them(self):
+        entry = buy(result={'native_delta': -1050, 'token_delta': 105, 'block_time': 140},
+                    timing_ms={'source_to_finalized_ms': 41000})
+        result = self.report([prediction()], [entry])
+        self.assertEqual(result['calibration']['exact_entry_pairs'], 0)
+        self.assertEqual(metric(result, 'entry_time_gap_seconds')['median'], 35)
+        late = next(c for c in result['conditions'] if c['label'].startswith('Actual entry more than'))
+        self.assertEqual(late['count'], 1)
+
     def test_observed_finalization_time_fallback_is_labelled_and_legacy_missing_times_excluded(self):
         entry = buy(); del entry['result']['block_time']
         result = self.report([prediction()], [entry])
