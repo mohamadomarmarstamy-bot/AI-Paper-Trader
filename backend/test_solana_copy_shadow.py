@@ -185,7 +185,7 @@ class ShadowTests(unittest.TestCase):
     def test_measured_delay_does_not_add_detection_time_twice(self):
         from solana_execution_timing import PROFILE
         with closing(database.get_connection()) as conn:
-            o = {'id': 'prior', 'wallet': 'owner', 'side': 'buy', 'execution_profile': PROFILE, 'timing_ms': {'source_to_finalized_ms': 20000}}
+            o = {'id': 'prior', 'wallet': 'owner', 'side': 'buy', 'source_at': self.now-120, 'execution_profile': PROFILE, 'timing_ms': {'source_to_finalized_ms': 20000}}
             conn.execute('INSERT INTO solana_real_orders VALUES(?,?,?,?)', ('prior', self.now-100, 'confirmed', json.dumps(o))); conn.commit()
         self.event(); self.tick(6)
         self.assertFalse(self.calls); self.assertEqual(self.entry()['delay_model']['samples'], 1)
@@ -240,6 +240,23 @@ class ShadowTests(unittest.TestCase):
         self.event('too-large', mint='othermint'); self.tick(5, proportional); self.tick(5, proportional)
         self.assertEqual(self.entry('too-large')['status'], 'skipped')
         self.assertIn('does not fit', self.entry('too-large')['reason'])
+
+    def test_forward_model_excludes_its_own_fill_and_receipts_observed_after_signal(self):
+        from solana_execution_timing import PROFILE
+        with closing(database.get_connection()) as conn:
+            rows = [
+                {'id': 'self', 'source_at': self.now, 'timing_ms': {'source_to_finalized_ms': 1000}},
+                {'id': 'late-receipt', 'source_at': self.now-20, 'timing_ms': {'source_to_finalized_ms': 30000}},
+                {'id': 'prior-receipt', 'source_at': self.now-40, 'timing_ms': {'source_to_finalized_ms': 10000}},
+            ]
+            for entry in rows:
+                entry.update(wallet='owner', side='buy', execution_profile=PROFILE)
+                conn.execute('INSERT INTO solana_real_orders VALUES(?,?,?,?)', (entry['id'], self.now, 'confirmed', json.dumps(entry)))
+            conn.commit()
+        self.event(); self.tick(6)
+        model = self.entry()['delay_model']
+        self.assertEqual(model['samples'], 1); self.assertEqual(model['seconds'], 10)
+        self.assertEqual(model['training_cutoff_at'], self.now-6)
 
 
 if __name__ == '__main__': unittest.main()
