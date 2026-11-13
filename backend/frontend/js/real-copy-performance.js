@@ -1,6 +1,6 @@
 (() => {
  const $=id=>document.getElementById(id),node=(tag,text,cls)=>{const el=document.createElement(tag);el.textContent=text??'';if(cls)el.className=cls;return el;};
- let offset=0,receivedAt=0,busy=false,generation=0,total=0;
+ let offset=0,receivedAt=0,busy=false,generation=0,total=0,scorecard=null,selectedWallet='';
  const sol=n=>Number.isFinite(n)?`${(n/1e9).toLocaleString('en-US',{maximumFractionDigits:9})} SOL`:'Unavailable';
  const seconds=n=>Number.isFinite(n)?`${(n/1000).toFixed(3)}s`:'—';
  const percent=n=>Number.isFinite(n)?`${n>=0?'+':''}${n.toFixed(2)}%`:'—';
@@ -42,6 +42,7 @@
   $('rc-benchmark-basis').textContent=data.basis;
  }
  function render(data){
+  renderScorecard(data.scorecard);
   renderDiagnostics(data.diagnostics);
   renderShadow(data.shadow);
   renderBenchmark(data.benchmark);renderAudit(data);
@@ -120,6 +121,43 @@
   $('rc-calibration-basis').textContent=data.calibration_basis;
  }
  function controls(){if(!$('rc-performance'))return;$('rc-report-refresh').disabled=busy;$('rc-report-prev').disabled=busy||offset===0;$('rc-report-next').disabled=busy||offset+20>=total;}
+ function renderScorecard(data){
+  if(!data)return;scorecard=data;
+  $('rc-scorecard-status').textContent=`${data.wallets.length} wallets · evidence requires ${data.minimum_completed_positions} actual completed positions across ${data.minimum_active_close_dates} Eastern close dates · no automatic wallet changes`;
+  $('rc-scorecard-basis').textContent=data.basis;
+  const usd=n=>Number.isFinite(n)?n.toLocaleString('en-US',{style:'currency',currency:'USD'}):'Unavailable';
+  table('rc-scorecard-wallets',data.wallets.map(w=>{
+   const button=node('button',w.name,'rc-link');button.type='button';button.onclick=()=>{selectedWallet=w.wallet;$('rc-scorecard-select').value=w.wallet;$('rc-scorecard-details').open=true;renderWalletDetails();};
+   const evidence=node('span',w.evidence);evidence.title=`${w.actual.completed_positions} completed positions across ${w.actual.active_close_dates} close dates`;
+   return [button,evidence,signed(node('span',sol(w.actual.net_realized)),w.actual.net_realized),`${w.actual.completed_positions} / ${w.actual.winning_positions}`,`${percent(w.actual.entry_premium.median)} · n=${w.actual.entry_premium.count}`,sol(w.realistic.net_realized),usd(w.paper.net_realized)];
+  }),'No stored wallet observations yet.');
+  const select=$('rc-scorecard-select');select.replaceChildren();
+  for(const w of data.wallets){const option=node('option',w.name);option.value=w.wallet;select.append(option);}
+  if(!data.wallets.some(w=>w.wallet===selectedWallet))selectedWallet=data.wallets[0]?.wallet||'';
+  select.value=selectedWallet;select.disabled=!data.wallets.length;select.onchange=()=>{selectedWallet=select.value;$('rc-scorecard-details').open=true;renderWalletDetails();};
+  renderWalletDetails();
+ }
+ function renderWalletDetails(){
+  const w=scorecard?.wallets.find(w=>w.wallet===selectedWallet),usd=n=>Number.isFinite(n)?n.toLocaleString('en-US',{style:'currency',currency:'USD'}):'Unavailable';
+  if(!w){for(const id of ['actual','simulated','paper']){$('rc-scorecard-'+id).textContent='Unavailable';$('rc-scorecard-'+id+'-sample').textContent='';}$('rc-scorecard-selection').textContent='No selected wallet.';$('rc-scorecard-execution').textContent='';$('rc-scorecard-coverage').textContent='';table('rc-scorecard-risk',[],'No wallet risk records yet.');return;}
+  const a=w.actual,s=w.realistic,p=w.paper;
+  $('rc-scorecard-selection').textContent=`${w.name} · ${w.evidence} · ${w.paper_only?'paper-only source':w.active?'actively followed':'not currently active'}`;
+  for(const [id,m,format] of [['actual',a,sol],['simulated',s,sol],['paper',p,usd]]){
+   $('rc-scorecard-'+id).textContent=format(m.net_realized);
+   $('rc-scorecard-'+id+'-sample').textContent=`${m.completed_positions} completed · ${m.winning_positions} winners · ${m.open_positions} open`;
+  }
+  const count=n=>Number.isFinite(n)?String(n):'Unavailable',rate=n=>Number.isFinite(n)?`${n.toFixed(1)}%`:'Unavailable',factor=m=>Number.isFinite(m.profit_factor)?m.profit_factor.toFixed(2):m.no_completed_losses?'No completed losses':'Unavailable';
+  table('rc-scorecard-risk',[
+   ['Win rate · completed positions',rate(a.win_rate_percent),rate(s.win_rate_percent),rate(p.win_rate_percent)],
+   ['Profit factor · completed positions',factor(a),factor(s),factor(p)],
+   ['Max realized P/L drawdown',sol(a.max_realized_drawdown),sol(s.max_realized_drawdown),usd(p.max_realized_drawdown)],
+   ['Longest completed loss streak',count(a.max_completed_loss_streak),count(s.max_completed_loss_streak),count(p.max_completed_loss_streak)],
+   ['Distinct close dates · Eastern',a.active_close_dates,s.active_close_dates,p.active_close_dates],
+   ['First / last close date',[a.first_close_date,a.last_close_date].filter(Boolean).join(' / ')||'Unavailable',[s.first_close_date,s.last_close_date].filter(Boolean).join(' / ')||'Unavailable',[p.first_close_date,p.last_close_date].filter(Boolean).join(' / ')||'Unavailable']
+  ],'No wallet risk records yet.');
+  $('rc-scorecard-execution').textContent=`Actual: ${a.confirmed_buys} confirmed buys · ${a.failed_buys} failed / ${a.rejected_buys} rejected buys · ${a.failed_sells} failed / ${a.rejected_sells} rejected sells · ${a.pending_orders} pending. Paid failed-transaction fees: ${sol(a.paid_failed_fees)} (already in net). Entry premium: ${percent(a.entry_premium.median)} median, n=${a.entry_premium.count}. Realistic: ${s.signals} signals · ${s.skipped} skipped / ${s.queued} queued.`;
+  $('rc-scorecard-coverage').textContent=`Actual unknown: ${a.unknown_fee_records} fees, ${a.unknown_sale_allocations} sale allocations, ${a.unknown_event_times} settlement times; ${a.unscored_buys} buys lack a fully scored lifecycle. ${a.manual_external_sales??0} manual external sales and ${a.manual_adjustments} archived manual adjustments are included in net. ${s.accounting_complete?'':'Realistic accounting incomplete. '}${p.accounting_complete?'':'Original paper accounting incomplete. '}Drawdown excludes open holdings. Actual and original paper cover all stored history; realistic starts ${scorecard.shadow_started_at?new Date(scorecard.shadow_started_at*1000).toLocaleString():'when the forward comparison initializes'}. Sizes, rules and currencies differ.`;
+ }
  async function load(force=false){
   const panel=$('rc-performance');if(!panel?.open||busy||!force&&performance.now()-receivedAt<30000)return;
   busy=true;controls();$('rc-report-status').textContent='Loading trade report…';const ticket=++generation,controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);
