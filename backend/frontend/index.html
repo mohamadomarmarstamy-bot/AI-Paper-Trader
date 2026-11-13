@@ -1163,6 +1163,16 @@
 <details class="rc-panel rc-performance" id="rc-performance"><summary>Trade performance · real money</summary>
 <div class="rc-row"><p class="rc-muted" id="rc-report-time">Complete stored trade history</p><button type="button" id="rc-report-refresh">Refresh report</button></div>
 <p id="rc-report-status" role="status" aria-live="polite"></p><p id="rc-report-warning" class="rc-report-warning" hidden></p>
+<details id="rc-scorecard"><summary>Wallet copyability · evidence</summary>
+<p id="rc-scorecard-status" class="rc-note">Waiting for stored wallet results.</p>
+<div class="rc-report-scroll" tabindex="0" role="region" aria-label="Wallet copyability scorecard"><table><thead><tr><th scope="col">Wallet</th><th scope="col">Evidence</th><th scope="col">Actual net · SOL</th><th scope="col">Actual closed / wins</th><th scope="col">Entry premium</th><th scope="col">Realistic realized · SOL</th><th scope="col">Original paper realized · USD</th></tr></thead><tbody id="rc-scorecard-wallets"></tbody></table></div>
+<label for="rc-scorecard-select">Wallet details</label> <select id="rc-scorecard-select" aria-label="Select copied wallet"></select>
+<details id="rc-scorecard-details"><summary>Results, risk and execution</summary><p id="rc-scorecard-selection" class="rc-note"></p>
+<div class="rc-summary-cards"><article class="rc-stat"><p>Actual receipts · SOL</p><strong id="rc-scorecard-actual">—</strong><small id="rc-scorecard-actual-sample"></small></article><article class="rc-stat"><p>Realistic simulation · SOL</p><strong id="rc-scorecard-simulated">—</strong><small id="rc-scorecard-simulated-sample"></small></article><article class="rc-stat"><p>Original paper · USD</p><strong id="rc-scorecard-paper">—</strong><small id="rc-scorecard-paper-sample"></small></article></div>
+<div class="rc-report-scroll" tabindex="0" role="region" aria-label="Selected wallet risk and execution"><table><thead><tr><th scope="col">Measure</th><th scope="col">Actual</th><th scope="col">Realistic simulation</th><th scope="col">Original paper</th></tr></thead><tbody id="rc-scorecard-risk"></tbody></table></div>
+<p id="rc-scorecard-execution" class="rc-note"></p><p id="rc-scorecard-coverage" class="rc-note"></p></details>
+<details><summary>How evidence is scored</summary><p id="rc-scorecard-basis" class="rc-note"></p></details>
+</details>
 <details id="rc-gap"><summary>Why results differ · calibration</summary>
 <p id="rc-gap-status" class="rc-note">Waiting for recorded evidence.</p>
 <div class="rc-summary-cards"><article class="rc-stat"><p>Actual minus simulated · closed pairs</p><strong id="rc-gap-net">—</strong><small id="rc-gap-pairs"></small></article><article class="rc-stat"><p>Hypothetical missed result · simulation</p><strong id="rc-gap-missed">—</strong><small id="rc-gap-misses"></small></article><article class="rc-stat"><p>Actual paid failed-transaction fees</p><strong id="rc-gap-fees">—</strong><small id="rc-gap-fee-coverage"></small></article></div>
@@ -1955,7 +1965,7 @@
     <script src="js/watchlist.js"></script>
     <script src="js/portfolio.js?v=history-recovery-v1"></script>
     <script src="js/phantom-session.js?v=trusted-v1"></script>
-    <script src="js/coin-labels.js?v=coin-names-v1"></script><script src="js/real-copy-performance.js?v=gap-calibration-v1"></script><script src="js/real-copy.js?v=performance-v1"></script>
+    <script src="js/coin-labels.js?v=coin-names-v1"></script><script src="js/real-copy-performance.js?v=wallet-scorecard-v1"></script><script src="js/real-copy.js?v=performance-v1"></script>
     <script src="js/pro-ticker-manual.js"></script>
     <script src="js/pro-ticker-release.js"></script>
     <script src="js/pro-ticker-workspace.js?v=entry-settings-v1"></script>

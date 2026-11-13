@@ -182,8 +182,14 @@ def public(*,offset=0,limit=20):
             linked=conn.execute('SELECT wallet_address FROM solana_real_copy_wallet WHERE id=1').fetchone() if 'solana_real_copy_wallet' in tables else None
             gap_owner=linked[0] if linked else ''
         gap_context=read_context(conn,gap_owner)
+        from solana_wallet_scorecard import read_context as scorecard_context
+        scorecard_closes=scorecard_context(conn)
     # Release the read transaction before aggregating; report rendering must not
     # hold a database read lock while the live worker persists an order.
     from solana_copy_gap import analyze
     diagnostics=analyze(orders=orders,owner=gap_owner,**gap_context)
-    return {**report(paper.get('traders',[]),runtime,orders,offset=offset,limit=limit),'benchmark':benchmark,'shadow':shadow,'diagnostics':diagnostics}
+    result=report(paper.get('traders',[]),runtime,orders,offset=offset,limit=limit)
+    from solana_wallet_scorecard import build as wallet_scorecard
+    scorecard=wallet_scorecard(paper.get('traders',[]),orders,runtime,scorecard_closes,paper.get('positions',{}),
+                              gap_context['rows'],gap_context['started_at'],result)
+    return {**result,'benchmark':benchmark,'shadow':shadow,'diagnostics':diagnostics,'scorecard':scorecard}
