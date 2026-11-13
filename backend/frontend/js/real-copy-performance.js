@@ -42,6 +42,7 @@
   $('rc-benchmark-basis').textContent=data.basis;
  }
  function render(data){
+  renderDiagnostics(data.diagnostics);
   renderShadow(data.shadow);
   renderBenchmark(data.benchmark);renderAudit(data);
   total=data.entry_count;
@@ -96,6 +97,27 @@
    const outcome=node('span',`${e.status} · ${e.reason}`);outcome.title=e.last_quote_error||'';
    return [label,`${usd} · ${e.paper_status}`,['open','closed'].includes(e.status)?sol(e.realized_lamports):'—',sol(e.actual_realized_lamports),outcome,actual,Number.isFinite(e.source_to_quote_seconds)?`${e.source_to_quote_seconds.toFixed(3)}s`:'—'];
   }),'No forward source buys yet. Historical trades are not replayed.');
+ }
+ function renderDiagnostics(data){
+  if(!data)return;
+  $('rc-gap-status').textContent=`${data.signals} forward signals · ${data.matched_buys} matched actual buys${data.started_at?` · since ${new Date(data.started_at*1000).toLocaleString()}`:' · waiting for comparison startup'}`;
+  $('rc-gap-net').textContent=sol(data.actual_minus_simulated_lamports);
+  $('rc-gap-pairs').textContent=`${data.closed_pair_count} fully closed, equal-input pairs · negative means actual did worse`;
+  $('rc-gap-missed').textContent=sol(data.hypothetical_missed_net_lamports);
+  $('rc-gap-misses').textContent=`${data.hypothetical_missed_count} simulated closes · ${data.hypothetical_missed_winners} winners / ${data.hypothetical_missed_losers} losers · not an actual loss`;
+  $('rc-gap-fees').textContent=sol(data.known_failed_fees_lamports);
+  $('rc-gap-fee-coverage').textContent=`Matched forward signals only · ${data.unknown_failed_fees} unknown fee records · already included in actual P/L`;
+  table('rc-gap-outcomes',data.entry_outcomes.map(r=>[r.label,r.count,r.estimated_closed_misses,sol(r.estimated_missed_net_lamports)]),'No forward entry outcomes yet.');
+  table('rc-gap-conditions',data.conditions.map(r=>[r.label,r.count,r.basis]),'No execution observations yet.');
+  $('rc-gap-basis').textContent=data.basis;
+  const c=data.calibration,format=(v,u)=>!Number.isFinite(v)?'—':u==='lamports'?sol(v):u==='seconds'?`${v>=0?'+':''}${v.toFixed(3)}s`:percent(v);
+  const rows=(metrics,absolute=false)=>metrics.map(r=>[r.label,format(r.median,r.unit),...(absolute?[format(r.absolute_median,r.unit)]:[]),format(r.p90,r.unit),`${r.count} / ${r.eligible}`]);
+  $('rc-calibration-status').textContent=`${c.status} · ${c.exact_entry_pairs} entry pairs / ${c.exact_exit_pairs} exit pairs · ${c.polling_time_matches} use observed-finalization timing · settings unchanged`;
+  table('rc-calibration-metrics',rows(c.metrics,true),'No forward calibration samples.');
+  table('rc-calibration-history',rows(c.historical_metrics),'No stored live receipt samples.');
+  const describe=(label,counts)=>Object.entries(counts||{}).filter(([,v])=>v).map(([k,v])=>`${label}: ${k.replaceAll('_',' ')} (${v})`);
+  $('rc-calibration-exclusions').textContent=[...describe('Entry exclusion',c.entry_exclusions),...describe('Exit exclusion',c.exit_exclusions),...describe('Closed-pair exclusion',data.closed_pair_exclusions)].join(' · ')||'No recorded exclusions.';
+  $('rc-calibration-basis').textContent=data.calibration_basis;
  }
  function controls(){if(!$('rc-performance'))return;$('rc-report-refresh').disabled=busy;$('rc-report-prev').disabled=busy||offset===0;$('rc-report-next').disabled=busy||offset+20>=total;}
  async function load(force=false){

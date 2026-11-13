@@ -176,6 +176,14 @@ def public(*,offset=0,limit=20):
         benchmark=benchmark_status(conn)
         from solana_copy_shadow import public as shadow_status
         shadow=shadow_status(conn,orders)
+        from solana_copy_gap import read_context
+        gap_owner=runtime.get('wallet') or None
+        if not gap_owner:
+            linked=conn.execute('SELECT wallet_address FROM solana_real_copy_wallet WHERE id=1').fetchone() if 'solana_real_copy_wallet' in tables else None
+            gap_owner=linked[0] if linked else ''
+        gap_context=read_context(conn,gap_owner)
     # Release the read transaction before aggregating; report rendering must not
     # hold a database read lock while the live worker persists an order.
-    return {**report(paper.get('traders',[]),runtime,orders,offset=offset,limit=limit),'benchmark':benchmark,'shadow':shadow}
+    from solana_copy_gap import analyze
+    diagnostics=analyze(orders=orders,owner=gap_owner,**gap_context)
+    return {**report(paper.get('traders',[]),runtime,orders,offset=offset,limit=limit),'benchmark':benchmark,'shadow':shadow,'diagnostics':diagnostics}

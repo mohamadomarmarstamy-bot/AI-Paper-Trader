@@ -1163,6 +1163,14 @@
 <details class="rc-panel rc-performance" id="rc-performance"><summary>Trade performance · real money</summary>
 <div class="rc-row"><p class="rc-muted" id="rc-report-time">Complete stored trade history</p><button type="button" id="rc-report-refresh">Refresh report</button></div>
 <p id="rc-report-status" role="status" aria-live="polite"></p><p id="rc-report-warning" class="rc-report-warning" hidden></p>
+<details id="rc-gap"><summary>Why results differ · calibration</summary>
+<p id="rc-gap-status" class="rc-note">Waiting for recorded evidence.</p>
+<div class="rc-summary-cards"><article class="rc-stat"><p>Actual minus simulated · closed pairs</p><strong id="rc-gap-net">—</strong><small id="rc-gap-pairs"></small></article><article class="rc-stat"><p>Hypothetical missed result · simulation</p><strong id="rc-gap-missed">—</strong><small id="rc-gap-misses"></small></article><article class="rc-stat"><p>Actual paid failed-transaction fees</p><strong id="rc-gap-fees">—</strong><small id="rc-gap-fee-coverage"></small></article></div>
+<h3>Live entry outcomes</h3><div class="rc-report-scroll" tabindex="0" role="region" aria-label="Copy entry gap breakdown"><table><thead><tr><th scope="col">Recorded outcome</th><th scope="col">Signals</th><th scope="col">Simulated closed misses</th><th scope="col">Hypothetical net · SOL</th></tr></thead><tbody id="rc-gap-outcomes"></tbody></table></div>
+<h3>Observed differences</h3><div class="rc-report-scroll" tabindex="0" role="region" aria-label="Observed execution differences"><table><thead><tr><th scope="col">Observation</th><th scope="col">Count</th><th scope="col">Coverage</th></tr></thead><tbody id="rc-gap-conditions"></tbody></table></div><p id="rc-gap-basis" class="rc-note"></p>
+<h3>Simulator vs actual receipts</h3><p id="rc-calibration-status" class="rc-note"></p><div class="rc-report-scroll" tabindex="0" role="region" aria-label="Forward simulator calibration"><table><thead><tr><th scope="col">Measured difference</th><th scope="col">Signed median</th><th scope="col">Median absolute difference</th><th scope="col">Signed 90th percentile</th><th scope="col">Samples / eligible</th></tr></thead><tbody id="rc-calibration-metrics"></tbody></table></div><p id="rc-calibration-exclusions" class="rc-note"></p>
+<details><summary>Stored live quote and fee checks · all history</summary><div class="rc-report-scroll" tabindex="0" role="region" aria-label="Historical live receipt checks"><table><thead><tr><th scope="col">Receipt check</th><th scope="col">Median</th><th scope="col">90th percentile</th><th scope="col">Samples / eligible</th></tr></thead><tbody id="rc-calibration-history"></tbody></table></div></details><p id="rc-calibration-basis" class="rc-note"></p>
+</details>
 <details id="rc-shadow"><summary>Paper vs realistic vs real</summary>
 <p id="rc-shadow-status" class="rc-note">Waiting for forward comparison.</p>
 <div class="rc-summary-cards"><article class="rc-stat"><p>Realistic simulated P/L · realized</p><strong id="rc-shadow-pnl">—</strong><small id="rc-shadow-coverage"></small></article><article class="rc-stat"><p>Realistic simulated net · includes holdings</p><strong id="rc-shadow-net">—</strong><small id="rc-shadow-cash"></small></article></div>
@@ -1947,7 +1955,7 @@
     <script src="js/watchlist.js"></script>
     <script src="js/portfolio.js?v=history-recovery-v1"></script>
     <script src="js/phantom-session.js?v=trusted-v1"></script>
-    <script src="js/coin-labels.js?v=coin-names-v1"></script><script src="js/real-copy-performance.js?v=accounting-audit-v1"></script><script src="js/real-copy.js?v=performance-v1"></script>
+    <script src="js/coin-labels.js?v=coin-names-v1"></script><script src="js/real-copy-performance.js?v=gap-calibration-v1"></script><script src="js/real-copy.js?v=performance-v1"></script>
     <script src="js/pro-ticker-manual.js"></script>
     <script src="js/pro-ticker-release.js"></script>
     <script src="js/pro-ticker-workspace.js?v=entry-settings-v1"></script>

@@ -55,7 +55,7 @@ def held_sources():
     return {p['source_wallet'] for p in state.get('positions', {}).values()}
 
 
-def timing_model(conn, owner, names):
+def timing_model(conn, owner, names, *, before=None):
     """Recent measured current-pipeline source→observed-finalization, no backfill."""
     from solana_copy_performance import stats
     from solana_execution_timing import PROFILE
@@ -64,20 +64,27 @@ def timing_model(conn, owner, names):
         for row in conn.execute("SELECT details_json FROM solana_real_orders WHERE status='confirmed' ORDER BY created_at DESC LIMIT 200"):
             order = json.loads(row[0])
             value = (order.get('timing_ms') or {}).get('source_to_finalized_ms')
+            # Saved forward predictions must not train on their own trade or
+            # on an older trade whose receipt was not observed until later.
+            source_at = order.get('source_at'); detected_at = order.get('detected_at')
+            buy_observed = source_at+value/1000 if type(source_at) in (int,float) and type(value) in (int,float) else None
             if (order.get('wallet') == owner and order.get('side') == 'buy'
                     and order.get('execution_profile') == PROFILE
-                    and type(value) in (int, float) and 0 <= value <= 90000):
+                    and type(value) in (int, float) and 0 <= value <= 90000
+                    and (before is None or buy_observed is not None and buy_observed < before)):
                 values.append(value)
             exit_value = (order.get('timing_ms') or {}).get('trigger_to_finalized_ms')
+            sell_observed = detected_at+exit_value/1000 if type(detected_at) in (int,float) and type(exit_value) in (int,float) else None
             if (order.get('wallet') == owner and order.get('side') == 'sell'
                     and order.get('execution_profile') == PROFILE
-                    and type(exit_value) in (int, float) and 0 <= exit_value <= 90000):
+                    and type(exit_value) in (int, float) and 0 <= exit_value <= 90000
+                    and (before is None or sell_observed is not None and sell_observed < before)):
                 exits.append(exit_value)
     median = stats(values)['median']
     return {'seconds': max(0, median / 1000) if median is not None else 5,
             'samples': len(values), 'basis': 'Measured current-pipeline median' if values else 'Assumed 5 seconds; no measured samples',
             'exit_seconds': stats(exits)['median']/1000 if exits else 2,
-            'exit_samples': len(exits)}
+            'exit_samples': len(exits), 'training_cutoff_at': before}
 
 
 class Reader:
@@ -141,17 +148,19 @@ def ingest(conn, state, source, model, now):
                 sales.append(event); continue
             if event['id'] in updates or conn.execute('SELECT 1 FROM solana_copy_shadow_entries WHERE wallet=? AND source_id=?', (state['wallet'], event['id'])).fetchone(): continue
             reason = admission(event, source, state, now)
+            entry_model = timing_model(conn, state['wallet'], names, before=event['source_at'])
             updates[event['id']] = {'id': event['id'], 'mint': event['mint'], 'source_wallet': event['wallet'],
                 'source_at': event['source_at'], 'created_at': now, 'event': event,
                 'status': 'skipped' if reason else 'queued', 'reason': reason or 'Waiting for delayed quote',
-                'eligible_at': max(now, event['source_at']+model['seconds']), 'delay_model': model,
+                'eligible_at': max(now, event['source_at']+entry_model['seconds']), 'delay_model': entry_model,
                 'quote_attempts': 0, 'exits': [], 'realized_lamports': 0}
     # Persist source sells even when there is no quote capacity this cycle.
     for sale in sales:
         for p in state['positions'].values():
             if (p['source_wallet'], p['mint']) == (sale['wallet'], sale['mint']) and sale['source_at'] >= p['source_at']:
                 p['pending_reason'] = 'source_sell'
-                p.setdefault('exit_eligible_at', now+model['exit_seconds'])
+                p.setdefault('exit_eligible_at', now+p['exit_delay_seconds'])
+                p.setdefault('exit_trigger_at', now)
         for row in updates.values():
             if (row['source_wallet'], row['mint']) == (sale['wallet'], sale['mint']) and sale['source_at'] >= row['source_at']:
                 row.update(status='skipped', reason='Source already sold before simulated entry')
@@ -202,10 +211,10 @@ def buy(row, state, source, config, policy, reader, quote, clock):
          'opened_at': clock(), 'stages': 0, 'next_gain_percent': rules['profit_take_first_percent'],
          'protection': rules, 'policy': dict(policy), 'pending_reason': None, 'marked_at': None,
          'exit_value_lamports': None, 'last_exit_attempt_at': 0}
-    p['exit_delay_seconds'] = state['delay_model']['exit_seconds']
+    p['exit_delay_seconds'] = row['delay_model']['exit_seconds']
     state['positions'][row['id']] = p; state['cash_lamports'] -= cost
     row.update(status='open', reason='Simulated entry at minimum quoted output',
-               input_lamports=amount, entry_cost_lamports=cost, quantity_raw=minimum,
+               input_lamports=amount, entry_cost_lamports=cost, quantity_raw=minimum, token_decimals=info['decimals'],
                entry_quote_at=observed, source_to_quote_seconds=observed-row['source_at'],
                estimated_fee_lamports=fee(policy), estimated_rent_lamports=rent,
                settings={'buy': dict(config), 'policy': dict(policy), 'protection': rules,
@@ -226,8 +235,8 @@ def mark_or_sell(row, p, state, quote, clock):
         elif rules['profit_take_enabled'] and gain >= p['next_gain_percent'] and quantity >= 2: reason = 'profit_take_half'
     if reason:
         if not p.get('pending_reason'):
-            p['pending_reason'] = reason; p['exit_eligible_at'] = clock()+p['exit_delay_seconds']; return
-        if clock() >= p.get('exit_eligible_at', 0): sell(row, p, state, quantity, value, reason, at, now)
+            p['pending_reason'] = reason; p['exit_trigger_at'] = clock(); p['exit_eligible_at'] = clock()+p['exit_delay_seconds']; return
+        if clock() >= p.get('exit_eligible_at', 0): sell(row, p, state, quantity, value, reason, at, now, minimum)
 
 
 def trim(row, p, state, quote, clock):
@@ -237,18 +246,23 @@ def trim(row, p, state, quote, clock):
     target = int((Decimal(cost)*(100+Decimal(str(p['next_gain_percent'])))/100).to_integral_value(rounding=ROUND_CEILING))
     p['pending_reason'] = None
     p.pop('exit_eligible_at', None)
-    if value >= target: sell(row, p, state, quantity, value, 'profit_take_half', at, clock())
-    else: row['reason'] = 'Half-sale quote does not meet net profit target'
+    if value >= target: sell(row, p, state, quantity, value, 'profit_take_half', at, clock(), minimum)
+    else:
+        p.pop('exit_trigger_at', None)
+        row['reason'] = 'Half-sale quote does not meet net profit target'
 
 
-def sell(row, p, state, quantity, value, reason, at, now):
+def sell(row, p, state, quantity, value, reason, at, now, minimum=None):
     cost = p['cost_lamports'] if quantity == p['quantity_raw'] else p['cost_lamports']*quantity//p['quantity_raw']
     pnl = value-cost; state['cash_lamports'] += value; state['realized_lamports'] += pnl
     row['realized_lamports'] += pnl
     row['exits'].append({'quantity_raw': quantity, 'net_lamports': value, 'cost_lamports': cost,
-                         'pnl_lamports': pnl, 'reason': reason, 'quote_at': at})
+                         'pnl_lamports': pnl, 'reason': reason, 'quote_at': at,
+                         'estimated_fee_lamports': fee(p['policy']), 'minimum_output_lamports': minimum,
+                         'trigger_at': p.get('exit_trigger_at'), 'modeled_delay_seconds': p.get('exit_delay_seconds')})
     p['quantity_raw'] -= quantity; p['cost_lamports'] -= cost; p['pending_reason'] = None
     p.pop('exit_eligible_at', None)
+    p.pop('exit_trigger_at', None)
     row['reason'] = reason
     if reason == 'profit_take_half': p['stages'] += 1; p['next_gain_percent'] *= 2
     if not p['quantity_raw']:
