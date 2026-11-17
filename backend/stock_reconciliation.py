@@ -19,6 +19,9 @@ SCHEMA = '''CREATE TABLE IF NOT EXISTS stock_reconciliation_state(
 CREATE TABLE IF NOT EXISTS stock_reconciliation_audit(
  id INTEGER PRIMARY KEY, trade_book_id INTEGER NOT NULL, recorded_at REAL NOT NULL,
  before_json TEXT NOT NULL, after_json TEXT NOT NULL, evidence_json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS stock_broker_link_recovery_audit(
+ id INTEGER PRIMARY KEY,entry_order_id TEXT NOT NULL,recorded_at REAL NOT NULL,
+ before_json TEXT NOT NULL,evidence_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS stock_learning_exclusions(
  trade_book_id INTEGER PRIMARY KEY, reason TEXT NOT NULL);'''
 
@@ -66,7 +69,79 @@ def validate(trade, now):
     return qty, price, value / qty, pnl, pnl / (qty * price) * 100, exited - entered
 
 
-def reconcile(payload, *, now=None):
+def refresh_stale_links(payload, read_order, *, now=None):
+    """Recover original nested bracket evidence for up to five stale entries.
+
+    Uses an existing GET-only order reader. Never invents a bracket relation or
+    overwrites conflicting fill amounts. Writes evidence and audit atomically.
+    """
+    now = time.time() if now is None else now
+    result = {'checked': 0, 'refreshed': 0, 'unavailable': 0}
+    if (payload.get('paper') is not True or payload.get('source') != 'broker_fills_trade_book_link_then_fifo' or
+        payload.get('summary',{}).get('ledger_limit_reached') is not False):
+        return result
+    canonical = {t['entry_order_id']: t for t in payload['trades']}
+    with closing(database.get_connection()) as conn:
+        initialize(conn, now)
+        entries = [dict(r) for r in conn.execute("SELECT * FROM trade_book WHERE status='OPEN' AND entry_reason='auto_trader_entry' ORDER BY id")
+                   if r['entry_order_id'] in canonical and canonical[r['entry_order_id']]['status'] not in ('OPEN','PARTIAL')][:5]
+    for entry in entries:
+        result['checked'] += 1
+        try:
+            order = read_order(entry['entry_order_id'])
+            if (order['id'] != entry['entry_order_id'] or order['symbol'] != entry['symbol'] or
+                order['side'] != 'buy' or order['status'] != 'filled' or
+                not str(order.get('client_order_id','')).startswith('auto-entry-') or
+                not math.isclose(number(order['filled_qty']), entry['shares'], rel_tol=1e-8, abs_tol=1e-8) or
+                not math.isclose(number(order['filled_avg_price']), entry['entry_price'], rel_tol=1e-6, abs_tol=1e-6)):
+                raise ValueError('Original entry differs from saved record')
+            entered = stamp(order['filled_at'])
+            if entered is None or not math.isclose(entered,stamp(entry['entry_timestamp']),abs_tol=1):
+                raise ValueError('Original entry timestamp differs')
+            legs = []
+            for leg in order.get('legs') or []:
+                if leg.get('status') != 'filled':continue
+                qty,price,at = number(leg['filled_qty']),number(leg['filled_avg_price']),stamp(leg['filled_at'])
+                if (not leg.get('id') or leg['id']==order['id'] or leg.get('symbol')!=entry['symbol'] or
+                    leg.get('side')!='sell' or qty<=0 or qty>entry['shares'] or price<=0 or at is None or not entered<=at<=now):
+                    raise ValueError('Invalid original bracket leg')
+                legs.append(leg)
+            if not legs or sum(number(leg['filled_qty']) for leg in legs)>entry['shares']+1e-8:
+                raise ValueError('Missing or conflicting original bracket quantities')
+            with closing(database.get_connection()) as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                parent = conn.execute('SELECT * FROM broker_fills WHERE order_id=?',(order['id'],)).fetchone()
+                if (not parent or parent['symbol']!=entry['symbol'] or parent['side']!='BUY' or
+                    not math.isclose(parent['shares'],entry['shares'],abs_tol=1e-8) or
+                    not math.isclose(parent['price'],entry['entry_price'],rel_tol=1e-6,abs_tol=1e-6) or
+                    not math.isclose(stamp(parent['filled_at']),entered,abs_tol=1)):
+                    raise ValueError('Broker entry ledger conflict')
+                before = [dict(parent)]
+                for leg in legs:
+                    saved = conn.execute('SELECT * FROM broker_fills WHERE order_id=?',(leg['id'],)).fetchone()
+                    if saved and (saved['symbol']!=entry['symbol'] or saved['side']!='SELL' or
+                        not math.isclose(saved['shares'],number(leg['filled_qty']),abs_tol=1e-8) or
+                        not math.isclose(saved['price'],number(leg['filled_avg_price']),rel_tol=1e-6,abs_tol=1e-6) or
+                        not math.isclose(stamp(saved['filled_at']),stamp(leg['filled_at']),abs_tol=1)):
+                        raise ValueError('Broker exit ledger conflict')
+                    before.append(dict(saved) if saved else {'order_id':leg['id'],'missing':True})
+                iso = datetime.fromtimestamp(now,timezone.utc).isoformat()
+                conn.execute('UPDATE broker_fills SET raw_order_json=?,last_seen_at=? WHERE order_id=?',
+                             (json.dumps(order,allow_nan=False),iso,order['id']))
+                for leg in legs:
+                    conn.execute("""INSERT INTO broker_fills(order_id,symbol,side,shares,price,filled_at,source,raw_order_json,first_seen_at,last_seen_at)
+                        VALUES(?,?,'SELL',?,?,?,'alpaca_paper',?,?,?) ON CONFLICT(order_id) DO NOTHING""",
+                        (leg['id'],entry['symbol'],number(leg['filled_qty']),number(leg['filled_avg_price']),leg['filled_at'],json.dumps(leg,allow_nan=False),iso,iso))
+                conn.execute('INSERT INTO stock_broker_link_recovery_audit(entry_order_id,recorded_at,before_json,evidence_json) VALUES(?,?,?,?)',
+                             (order['id'],now,json.dumps(before),json.dumps(order,allow_nan=False)))
+                conn.commit()
+            result['refreshed'] += 1
+        except Exception:
+            result['unavailable'] += 1
+    return result
+
+
+def reconcile(payload, *, now=None, link_recovery=None):
     now = time.time() if now is None else now
     if payload.get('paper') is not True or payload.get('source') != 'broker_fills_trade_book_link_then_fifo':
         raise ValueError('Canonical PAPER ledger required')
@@ -80,6 +155,7 @@ def reconcile(payload, *, now=None):
             owners.setdefault(allocation.get('exit_order_id'), set()).add(trade.get('entry_order_id'))
     report = {'checked': len(trades), 'repaired': 0, 'imported': 0, 'unchanged': 0,
               'excluded_historical': 0, 'blocked': {}, 'examples': [], 'anomalies': []}
+    if link_recovery is not None:report['link_recovery'] = link_recovery
     def block(trade, reason):
         report['blocked'][reason] = report['blocked'].get(reason, 0) + 1
         if len(report['examples']) < 20:
@@ -170,11 +246,16 @@ def status(conn):
     return result
 
 
-async def worker(read_canonical):
+async def worker(read_canonical, read_order=None):
     while True:
         try:
             payload = await asyncio.to_thread(read_canonical)
-            await asyncio.to_thread(reconcile, payload)
+            recovered = None
+            if read_order is not None:
+                recovered = await asyncio.to_thread(refresh_stale_links, payload, read_order)
+                if recovered['refreshed']:
+                    payload = await asyncio.to_thread(read_canonical)
+            await asyncio.to_thread(reconcile, payload, link_recovery=recovered)
         except Exception:
             try:
                 with closing(database.get_connection()) as conn:

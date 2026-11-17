@@ -6,7 +6,10 @@ spent limited feature lookups on stocks outside the saved filters.
 
 ## Accounting
 
-A five-minute worker reads the existing canonical broker ledger and repairs or
+A five-minute worker first requests original nested PAPER orders for up to five
+stale internal entries. Only verified original bracket ownership and nonconflicting
+fill amounts can refresh the saved ledger; the evidence and prior ledger records
+are audited atomically. It then reads the canonical broker ledger and repairs or
 imports only fully closed automatic entries whose sell allocations have explicit
 broker bracket or saved order links. It requires a complete ledger, valid
 chronology, conserved quantities, consistent calculated P/L, unique entry IDs

@@ -83,3 +83,34 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(result['imported'],1)
         with closing(database.get_connection()) as conn:
             self.assertEqual(reconciliation.status(conn)['total_imports'],1)
+
+    def original_order(self):
+        return {'id':'entry-1','symbol':'TEST','side':'buy','status':'filled','client_order_id':'auto-entry-test-original',
+                'filled_qty':'10','filled_avg_price':'5','filled_at':self.trade['entry_timestamp'],
+                'legs':[{'id':'original-sell','symbol':'TEST','side':'sell','status':'filled',
+                         'filled_qty':'10','filled_avg_price':'5.2','filled_at':self.trade['exit_timestamp']}]}
+    def save_entry_fill(self):
+        database.upsert_broker_fill(order_id='entry-1',symbol='TEST',side='BUY',shares=10,price=5,
+            filled_at=self.trade['entry_timestamp'],raw_order={'client_order_id':'auto-entry-test-original'})
+    def test_missing_original_bracket_fills_can_be_recovered_then_reconciled(self):
+        from test_reporting_metrics import actual_functions
+        self.entry();self.save_entry_fill()
+        altered={**self.trade,'status':'CLOSED_INCOMPLETE','pnl_complete':False}
+        result=reconciliation.refresh_stale_links(self.payload([altered]),lambda ident:self.original_order(),now=self.now)
+        self.assertEqual(result['refreshed'],1)
+        payload=actual_functions(load_broker_fills=database.load_broker_fills,load_trade_book=database.load_trade_book)['auto_trader_canonical_broker_trades']()
+        self.assertEqual(payload['trades'][0]['status'],'CLOSED')
+        self.assertEqual(reconciliation.reconcile(payload,now=self.now)['repaired'],1)
+    def test_conflicting_original_exit_preserves_broker_ledger_and_open_entry(self):
+        self.entry();self.save_entry_fill()
+        database.upsert_broker_fill(order_id='original-sell',symbol='TEST',side='SELL',shares=10,price=9,
+                                   filled_at=self.trade['exit_timestamp'])
+        result=reconciliation.refresh_stale_links(self.payload(),lambda ident:self.original_order(),now=self.now)
+        self.assertEqual(result['unavailable'],1);self.assertEqual(result['refreshed'],0)
+        self.assertEqual(database.get_broker_fill('original-sell')['price'],9)
+        self.assertNotIn('legs',database.get_broker_fill('entry-1')['raw_order'])
+    def test_foreign_original_order_cannot_supply_exit_ownership(self):
+        self.entry();self.save_entry_fill()
+        result=reconciliation.refresh_stale_links(self.payload(),lambda ident:{**self.original_order(),'symbol':'OTHER'},now=self.now)
+        self.assertEqual(result['refreshed'],0);self.assertEqual(result['unavailable'],1)
+        self.assertIsNone(database.get_broker_fill('original-sell'))

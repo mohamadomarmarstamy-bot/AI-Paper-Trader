@@ -30,6 +30,7 @@
   if(accounting?.last_error)box.append(text('p',accounting.last_error));
   if(r){
    box.append(text('p',`Last reconciliation: ${new Date(accounting.last_tick*1000).toLocaleString()} · ${r.checked} broker entries checked · ${r.repaired} records repaired · ${r.imported} recovered · ${r.unchanged} already matched. Counts describe the latest check. Total audited updates: ${accounting.total_updates??0}, including ${accounting.total_imports??0} recovered entries.`));
+   if(r.link_recovery)box.append(text('p',`Original broker orders: ${r.link_recovery.checked} stale entries checked, ${r.link_recovery.refreshed} bracket records recovered, ${r.link_recovery.unavailable} unavailable or conflicting.`));
    const reasons=Object.entries(r.blocked||{}).map(([key,count])=>`${key.replaceAll('_',' ')}: ${count}`);
    if(reasons.length)box.append(text('p','Unresolved: '+reasons.join(' · ')));
    box.append(text('p',accounting.basis));

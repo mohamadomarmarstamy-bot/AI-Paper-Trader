@@ -1846,7 +1846,7 @@ async def lifespan(app: FastAPI):
     from stock_research import worker as stock_research_worker
     stock_research_task = asyncio.create_task(stock_research_worker(alpaca_market_data_request,_invalidate_auto_trader_settings_cache))
     from stock_reconciliation import worker as stock_reconciliation_worker
-    stock_reconciliation_task = asyncio.create_task(stock_reconciliation_worker(auto_trader_canonical_broker_trades))
+    stock_reconciliation_task = asyncio.create_task(stock_reconciliation_worker(auto_trader_canonical_broker_trades, get_alpaca_paper_order))
     from stock_forward_worker import worker as stock_forward_worker
     stock_forward_task = asyncio.create_task(stock_forward_worker(
         alpaca_market_data_request, alpaca_paper_request,
