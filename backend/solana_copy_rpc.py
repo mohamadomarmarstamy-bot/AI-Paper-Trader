@@ -52,7 +52,7 @@ def request(method,params):
 
 
 def _request(method,params,url,backup=False):
-    from solana_copy_trader import DataUnavailable
+    from solana_copy_trader import DataUnavailable, MissingSignatureBoundary
     global _cooldown,_backup_cooldown
     if method not in ('getSignaturesForAddress','getTransaction','getBalance'):
         raise ValueError('Only read-only wallet history methods are supported.')
@@ -77,6 +77,8 @@ def _request(method,params,url,backup=False):
             return {'unsupported_transaction_version':True}
         if isinstance(data,dict) and isinstance(data.get('error'),dict):
             code=data['error'].get('code')
+            if method=='getSignaturesForAddress' and code==-32020:
+                raise MissingSignatureBoundary(f'{label} cannot locate a saved history bookmark.')
             if type(code) is int:raise DataUnavailable(f'{label} {method}: provider error {code}; retrying automatically.')
         if not isinstance(data,dict) or data.get('error') or 'result' not in data:raise ValueError()
         return data['result']
@@ -146,7 +148,7 @@ def parse(transaction,wallet,signature):
 
 
 def trades(wallet,cursor,now,*,preserve_exits=True):
-    from solana_copy_trader import DataUnavailable
+    from solana_copy_trader import DataUnavailable, MissingSignatureBoundary
     from solana_meme_bot import mint,num
     if type(preserve_exits) is not bool:raise ValueError('Explicit copied-position coverage required.')
     wallet=mint(wallet);cursor=deepcopy(cursor)
@@ -170,7 +172,16 @@ def trades(wallet,cursor,now,*,preserve_exits=True):
         if cursor.get('latest'):options['until']=cursor['latest']
         if window is not None:options['before']=window['scan_before']
         requested=time.monotonic()
-        data=request('getSignaturesForAddress',[wallet,options])
+        try:
+            data=request('getSignaturesForAddress',[wallet,options])
+        except MissingSignatureBoundary:
+            if 'until' not in options:raise
+            # A different provider may have pruned the old tip signature. The
+            # saved time floor still bounds the same prospective history. Keep
+            # any before bookmark and buffered exits; never reset the cursor
+            # to now or declare a missing older page successfully reconciled.
+            options={k:v for k,v in options.items() if k!='until'}
+            data=request('getSignaturesForAddress',[wallet,options])
         received_at=now+max(0,time.monotonic()-requested)
         if not isinstance(data,list) or len(data)>SIGNATURE_PAGE_SIZE:raise DataUnavailable('Unsupported public RPC signature list.')
         queue=[];stale=0
