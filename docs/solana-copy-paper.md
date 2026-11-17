@@ -169,6 +169,14 @@ Rejected candidates included Vein (reported equal-stake result 0.99x), Crayohla 
 
 ## Optional dedicated wallet-history RPC
 
+If a history provider returns `-32020` for a saved signature filter, the copier
+retries that page once without the `until` tip. It retains the saved time floor,
+any `before` pagination boundary, buffered signals and held-wallet exit history.
+A missing older-page boundary remains an error; ordinary failures and rate limits
+do not trigger this recovery. No cursor is reset to the present and stale buys
+remain ineligible. This allows an explicitly configured fallback to recover when
+the original provider's old tip is no longer available on the fallback.
+
 Set the server-only Railway variable `SOLANA_COPY_RPC_URL` to your provider's HTTPS Solana mainnet JSON-RPC URL, then deploy. This endpoint must support `getSignaturesForAddress`, `getTransaction` and `getBalance`. Provider credentials may be included in the URL path or query; never put the URL into screenshots, browser settings or source control. User-info credentials and URL fragments are rejected.
 
 When unset or blank, the existing public endpoint remains the default. A configured endpoint failure does not silently fall back to public RPC, reset history cursors, or claim successful coverage. Error messages omit endpoint URLs and credentials. The existing request budget, cooldowns, polling schedule, history parsing, supported protocols, wallet roster, trade sizing, entry eligibility, stops, profit exits and PAPER accounting are unchanged. `SOLANA_REAL_RPC_URL` remains a separate live-execution setting; this variable does not enable real trading.

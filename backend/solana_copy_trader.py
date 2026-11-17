@@ -41,6 +41,10 @@ class DataUnavailable(ValueError):
     pass
 
 
+class MissingSignatureBoundary(DataUnavailable):
+    """The RPC cannot locate a saved before/until history bookmark."""
+
+
 def configured():
     import solana_profile
     try: return bool(solana_profile.api_key())

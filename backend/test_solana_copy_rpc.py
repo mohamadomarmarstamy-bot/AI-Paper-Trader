@@ -178,6 +178,36 @@ class RpcTests(unittest.TestCase):
         self.assertEqual(cur['rpc_coverage']['history_scope'],'full_exit_history')
         self.assertEqual(cur['rpc_coverage']['stale_references_skipped'],0)
 
+    def test_missing_until_rescans_saved_time_window_and_keeps_old_held_sell(self):
+        cursor={'provider':'rpc','at':self.now-1000,'latest':'pruned-tip'}
+        old={'signature':'3'*88,'blockTime':self.now-500,'err':None,'confirmationStatus':'confirmed'}
+        with patch.object(rpc,'request',side_effect=[copy.MissingSignatureBoundary('missing'),[old],tx(self.now-500,'sell','3'*88)]) as read:
+            rows,cur=rpc.trades(WALLET,cursor,self.now,preserve_exits=True)
+        self.assertEqual(read.call_args_list[0].args[1][1]['until'],'pruned-tip')
+        self.assertNotIn('until',read.call_args_list[1].args[1][1])
+        self.assertEqual(rows[0]['base']['type_swap'],'from')
+        self.assertEqual(cur['latest'],'3'*88)
+        self.assertEqual(cursor['latest'],'pruned-tip')
+
+    def test_missing_before_is_never_dropped_or_reported_as_complete(self):
+        cursor={'provider':'rpc','at':self.now-1000,'latest':'pruned-tip','window':{
+            'queue':[],'at':self.now-500,'newest':'new-tip','scan_before':'pruned-page',
+            'seen':1000,'failed':0,'unsupported':0,'decoded':0,'truncated':True}}
+        original=deepcopy(cursor)
+        with patch.object(rpc,'request',side_effect=copy.MissingSignatureBoundary('missing')) as read:
+            with self.assertRaises(copy.MissingSignatureBoundary):
+                rpc.trades(WALLET,cursor,self.now,preserve_exits=True)
+        self.assertEqual(read.call_count,2)
+        self.assertEqual(read.call_args.args[1][1]['before'],'pruned-page')
+        self.assertNotIn('until',read.call_args.args[1][1])
+        self.assertEqual(cursor,original)
+
+    def test_other_rpc_failure_never_retries_without_until(self):
+        with patch.object(rpc,'request',side_effect=copy.DataUnavailable('rate limited')) as read:
+            with self.assertRaises(copy.DataUnavailable):
+                rpc.trades(WALLET,{'provider':'rpc','at':self.now-1000,'latest':'tip'},self.now)
+        read.assert_called_once()
+
     def test_flat_wallet_keeps_fresh_buy_sell_order_and_drops_only_stale_references(self):
         rows=[{'signature':str(i)*88,'blockTime':at,'err':None,'confirmationStatus':'confirmed'} for i,at in [(4,self.now-2),(3,self.now-3),(2,self.now-200)]]
         calls=[]
@@ -353,6 +383,14 @@ class RpcConnectionTests(unittest.TestCase):
         with patch.dict(os.environ,{'SOLANA_COPY_RPC_URL':'https://rpc.example.test'}),patch.object(rpc,'_calls',deque([rpc.time.monotonic()]*100)),patch.object(rpc.http,'post') as post:
             with self.assertRaises(copy.DataUnavailable):rpc.request('getBalance',['wallet'])
             post.assert_not_called()
+
+    def test_missing_history_filter_has_a_specific_recoverable_error(self):
+        from unittest.mock import Mock
+        response=Mock(status_code=200,content=b'{}',json=lambda:{'error':{'code':-32020,'message':'private provider details'}})
+        with patch.object(rpc.http,'post',return_value=response):
+            with self.assertRaises(copy.MissingSignatureBoundary) as caught:
+                rpc.request('getSignaturesForAddress',['wallet',{'until':'old-tip'}])
+        self.assertNotIn('private provider details',str(caught.exception))
 
 
 class RpcFailoverTests(RpcConnectionTests):
