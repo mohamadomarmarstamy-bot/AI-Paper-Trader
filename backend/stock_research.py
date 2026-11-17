@@ -284,9 +284,40 @@ def step(request,*,now=None):
     eligible=list({c['symbol']:c for c in eligible if c['symbol'] not in recorded}.values())
     global _rotation
     if not eligible:return finish('already_sampled' if details['already_recorded'] else 'no_quality_candidates',details)
-    selected=(eligible+eligible)[_rotation%len(eligible):_rotation%len(eligible)+min(3,len(eligible))];_rotation+=3
+    # Quote all quality-eligible names in one bounded request before spending
+    # the three expensive float/intraday lookups. Test both frozen arms, so a
+    # valid candidate-only opportunity is not discarded by the baseline filter.
+    entry_quotes=quotes(request,[c['symbol'] for c in eligible],stamp,clock=clock)
+    plausible=[]
+    deferred={'float_millions_missing_or_invalid','intraday_evidence_missing_or_stale',
+              'time_volume_ratio_missing_or_invalid','vwap_distance_percent_missing_or_invalid',
+              'completed_breakout_or_vwap_pullback_missing'}
+    for candidate in eligible:
+        quote=entry_quotes.get(candidate['symbol'])
+        if not quote:
+            reject('fresh_entry_quote_unavailable');continue
+        failures=[];can_act=False
+        for trial in trials:
+            base=json.loads(trial['baseline_json'])
+            for config in (base,{**base,**json.loads(trial['changes_json'])}):
+                values={'price':quote['ask'],'spread_percent':quote['spread_percent'],
+                    'volume_ratio':momentum.number(candidate.get('volume_ratio')),
+                    'average_volume':momentum.number(candidate.get('average_volume')),
+                    'day_change_percent':momentum.number(candidate.get('momentum_move_percent',candidate.get('one_day_change',candidate.get('change')))),
+                    'gap_percent':momentum.number(candidate.get('gap_percent')),
+                    'atr_percent':momentum.number(candidate.get('atr_percent')),
+                    'news_latest_at':momentum.number(candidate.get('stock_news_latest_at'))}
+                failed=[r for r in momentum.evaluate(values,config,now=clock()) if r not in deferred]
+                failures.extend(failed)
+                if not failed:can_act=True
+        if can_act:plausible.append(candidate)
+        else:
+            for reason in set(failures):reject(reason)
+    details['quoted_candidates']=len(entry_quotes)
+    details['cheap_filter_eligible']=len(plausible)
+    if not plausible:return finish('no_cheap_filter_candidates',details)
+    selected=(plausible+plausible)[_rotation%len(plausible):_rotation%len(plausible)+min(3,len(plausible))];_rotation+=3
     details['selected']=len(selected)
-    entry_quotes=quotes(request,[c['symbol'] for c in selected],stamp,clock=clock)
     for candidate in selected:
         symbol=candidate['symbol'];quote=entry_quotes.get(symbol)
         attempt={'symbol':symbol};details['examples'].append(attempt)

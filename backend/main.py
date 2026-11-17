@@ -1845,6 +1845,12 @@ async def lifespan(app: FastAPI):
     stock_learning_task = asyncio.create_task(stock_learning_worker(_invalidate_auto_trader_settings_cache))
     from stock_research import worker as stock_research_worker
     stock_research_task = asyncio.create_task(stock_research_worker(alpaca_market_data_request,_invalidate_auto_trader_settings_cache))
+    from stock_reconciliation import worker as stock_reconciliation_worker
+    stock_reconciliation_task = asyncio.create_task(stock_reconciliation_worker(auto_trader_canonical_broker_trades, get_alpaca_paper_order))
+    from stock_forward_worker import worker as stock_forward_worker
+    stock_forward_task = asyncio.create_task(stock_forward_worker(
+        alpaca_market_data_request, alpaca_paper_request,
+        lambda: os.getenv('APP_QUOTE_FEED','iex'), fetch_pro_ticker_manual_signal_quote))
     try:
         yield
     finally:
@@ -1863,6 +1869,8 @@ async def lifespan(app: FastAPI):
         crypto_idle_task.cancel()
         stock_learning_task.cancel()
         stock_research_task.cancel()
+        stock_reconciliation_task.cancel()
+        stock_forward_task.cancel()
 
         for task in (
             refresh_task,
@@ -1879,6 +1887,8 @@ async def lifespan(app: FastAPI):
             crypto_idle_task,
             stock_learning_task,
             stock_research_task,
+            stock_reconciliation_task,
+            stock_forward_task,
         ):
             try:
                 await task
@@ -10593,8 +10603,15 @@ def log_new_broker_exit_fills() -> list[dict[str, Any]]:
                 )
             )
 
+            # A symbol-only match or one partial SELL cannot prove that an
+            # entire entry is closed. The canonical reconciliation worker
+            # aggregates linked fills before writing a learning outcome.
             if (
                 open_book_entry
+                and linked_book_entry is not None
+                and safe_float(open_book_entry.get("shares")) is not None
+                and shares is not None
+                and abs(float(open_book_entry["shares"]) - float(shares)) <= 0.00000001
                 and filled_price is not None
                 and filled_price > 0
                 and filled_at
@@ -11212,6 +11229,8 @@ def run_auto_trader_cycle() -> dict[str, Any]:
 
         try:
             from stock_research import enqueue_scanner
+            from stock_forward_worker import enqueue_scanner as enqueue_intraday_research
+            enqueue_intraday_research(scanner_results)
             enqueue_scanner(scanner_results,{'score_min':AUTO_TRADER_ENTRY_SCORE_MIN,
                 'confidence_min':AUTO_TRADER_ENTRY_CONFIDENCE_MIN,'max_scanner_rank':AUTO_TRADER_MAX_ENTRY_SCANNER_RANK,
                 'max_atr_percent':AUTO_TRADER_MAX_ENTRY_ATR_PERCENT})

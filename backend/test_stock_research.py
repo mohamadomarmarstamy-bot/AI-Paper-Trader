@@ -247,6 +247,23 @@ class StockResearchTests(unittest.TestCase):
             self.assertEqual(report['last_batch']['recorded'],1)
             self.assertEqual(report['last_batch']['failures']['feature_lookup_failed'],1)
             self.assertEqual(conn.execute('SELECT symbol FROM stock_shadow_opportunities').fetchone()[0],'TEST')
+    def test_basic_filters_do_not_spend_three_feature_slots_on_impossible_prices(self):
+        candidate,criteria=self.sample_candidate()
+        names=['EXPENSIVE1','EXPENSIVE2','EXPENSIVE3','TEST']
+        with patch.object(research.time,'time',return_value=self.start):
+            research.enqueue_scanner([{**candidate,'symbol':name} for name in names],criteria)
+        def response(method,path,params):
+            return {'quotes':{name:{'bp':99.99 if name.startswith('EXPENSIVE') else 4.99,
+                'ap':100 if name.startswith('EXPENSIVE') else 5,'bs':100,'as':100,
+                't':datetime.fromtimestamp(self.start,ET).isoformat()} for name in params['symbols'].split(',')}}
+        with patch('stock_momentum.reported_float',return_value={'float_shares':15e6}) as lookup:
+            research.step(Mock(side_effect=response),now=self.start)
+        self.assertEqual(lookup.call_count,1)
+        with closing(controls.connect()) as conn:
+            batch=research.status(conn)['sampling']['last_batch']
+            self.assertEqual(batch['cheap_filter_eligible'],1);self.assertEqual(batch['selected'],1)
+            self.assertEqual(batch['recorded'],1);self.assertEqual(batch['failures']['stock_max_price_usd'],3)
+
     def test_fresh_quote_requires_current_real_bid_ask_and_sizes(self):
         stamp=datetime.fromtimestamp(self.start,ET).isoformat()
         raw={'bp':5,'ap':5.01,'bs':100,'as':100,'t':stamp}
