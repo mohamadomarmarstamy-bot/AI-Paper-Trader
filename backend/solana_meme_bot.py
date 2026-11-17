@@ -595,7 +595,14 @@ def tick(*,providers=None,clock=time.time,force=False,manual_exits=None,manual_p
                     p.setdefault('entry_pair',p['pair'])
                     p['pool_changes']=(p.get('pool_changes',[])+[{'from':p['pair'],'to':row['pair'],'at':observed,'reason':'Active exact-mint pool recovery'}])[-20:]
                     p['pair']=row['pair']
-                value=p['quantity']*row['price_usd']*.99-.10
+                # Conservative constant-product estimate, not an executable swap quote.
+                # A spot-price mark cannot be redeemed for more than the pool's
+                # estimated quote-side reserves. Missing liquidity fails closed.
+                spot_notional=p['quantity']*row['price_usd']
+                pool_liquidity=row.get('liquidity_usd')
+                quote_reserve=(pool_liquidity/2) if learner.finite(pool_liquidity) and pool_liquidity>0 else 0
+                value=(spot_notional*quote_reserve/(quote_reserve+spot_notional)*.99-.10
+                       if quote_reserve>0 and learner.finite(spot_notional) and spot_notional>=0 else 0)
                 change=(value/p['cost_usd']-1)*100
                 p.update(marked_value_usd=value,marked_at=observed,peak_percent=max(p['peak_percent'],change),low_percent=min(p.get('low_percent',0),change))
                 reason=('manual_sell_all' if manual_exits is not None and manual_pause else 'manual_sell' if manual_exits is not None else 'stop_loss' if change<=-p['stop_percent'] else 'take_profit' if change>=p['target_percent']
