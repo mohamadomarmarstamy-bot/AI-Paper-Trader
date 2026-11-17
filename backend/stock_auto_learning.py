@@ -17,6 +17,7 @@ BATCH_SIZE=25
 SCHEMA='''CREATE TABLE IF NOT EXISTS stock_entry_evidence(order_id TEXT PRIMARY KEY,symbol TEXT NOT NULL,
  captured_at REAL NOT NULL,settings_revision TEXT NOT NULL,features_json TEXT NOT NULL,settings_json TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS stock_entry_revision_idx ON stock_entry_evidence(settings_revision,captured_at);
+CREATE TABLE IF NOT EXISTS stock_learning_exclusions(trade_book_id INTEGER PRIMARY KEY,reason TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS stock_learning_state(id INTEGER PRIMARY KEY CHECK(id=1),cursor INTEGER NOT NULL,status TEXT NOT NULL,last_error TEXT);
 CREATE TABLE IF NOT EXISTS stock_learning_batches(id TEXT PRIMARY KEY,cursor_after INTEGER UNIQUE NOT NULL,
  created_at TEXT NOT NULL,report_json TEXT NOT NULL,change_id TEXT);
@@ -57,6 +58,7 @@ def outcomes(conn,cursor,limit,*,revision=None,entered_after=None):
       LEFT JOIN stock_entry_evidence e ON e.order_id=t.entry_order_id
       LEFT JOIN stock_exit_observations x ON x.trade_book_id=t.id
       WHERE lo.id>? AND t.status='CLOSED' AND t.entry_reason='auto_trader_entry'
+      AND NOT EXISTS (SELECT 1 FROM stock_learning_exclusions q WHERE q.trade_book_id=t.id)
       AND (? IS NULL OR e.settings_revision=?) AND (? IS NULL OR e.captured_at>=?)
       ORDER BY lo.id LIMIT ?''',(cursor,revision,revision,entered_after,entered_after,limit)).fetchall()
     result=[]

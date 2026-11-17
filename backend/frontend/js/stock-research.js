@@ -10,17 +10,36 @@
   if(!box){box=document.createElement('section');box.id='stock-research-sampling';get('stock-parallel-trials').before(box);}
   box.replaceChildren(text('h4','Opportunity collection'));
   if(!sampling){box.append(text('p','Waiting for the first sampling breakdown. Zero recorded opportunities does not establish that rejected stocks lost money.'));return;}
-  const states={outside_session:'Outside the regular stock session',paused:'Prospective collection is paused',no_collecting_trials:'No current comparison is collecting',at_capacity:'Waiting for open observations to mature',late_session:'No new observations this close to the closing bell',waiting_for_scan:'Waiting for a fresh scanner batch',stale_scan:'Scanner batch expired; waiting for fresh data',already_sampled:'Eligible opportunities in this 15-minute window were already recorded',no_quality_candidates:'No candidates passed the shared scanner checks',sampled:'New opportunities recorded',no_opportunities_recorded:'This batch produced no qualifying opportunities'};
+  const states={outside_session:'Outside the regular stock session',paused:'Prospective collection is paused',no_collecting_trials:'No current comparison is collecting',at_capacity:'Waiting for open observations to mature',late_session:'No new observations this close to the closing bell',waiting_for_scan:'Waiting for a fresh scanner batch',stale_scan:'Scanner batch expired; waiting for fresh data',already_sampled:'Eligible opportunities in this 15-minute window were already recorded',no_cheap_filter_candidates:'No quoted candidates passed the basic saved filters',no_quality_candidates:'No candidates passed the shared scanner checks',sampled:'New opportunities recorded',no_opportunities_recorded:'This batch produced no qualifying opportunities'};
   box.append(text('p',`${states[sampling.state]||'Checking candidates'} · checked ${new Date(sampling.updated_at*1000).toLocaleTimeString()}`));
   const batch=sampling.last_batch;
   if(!batch?.at)return;
-  box.append(text('p',`Latest batch ${new Date(batch.at*1000).toLocaleTimeString()}: ${batch.scanner_count} scanned → ${batch.quality_eligible} passed scanner checks → ${batch.selected} selected for detailed checks → ${batch.fresh_quotes} fresh entry quotes → ${batch.evaluated} filter evaluations → ${batch.recorded} recorded opportunities. ${batch.already_recorded} eligible candidates already had an observation in this window.`));
+  box.append(text('p',`Latest batch ${new Date(batch.at*1000).toLocaleTimeString()}: ${batch.scanner_count} scanned → ${batch.quality_eligible} passed scanner checks → ${batch.cheap_filter_eligible??'—'} passed price/spread and basic filters → ${batch.selected} selected for detailed checks → ${batch.fresh_quotes} fresh entry quotes → ${batch.evaluated} filter evaluations → ${batch.recorded} recorded opportunities. ${batch.already_recorded} eligible candidates already had an observation in this window.`));
   const labels={signal_not_buy:'Not a BUY signal',score_below_adjusted_minimum:'Scanner score below minimum',confidence_below_minimum:'Confidence below minimum',scanner_rank_above_maximum:'Scanner rank outside entry range',atr_above_maximum:'Volatility above limit',overextended_momentum_chase_risk:'Price already overextended',scanner_stale_or_freshness_unknown:'Scanner data stale or unavailable',fresh_entry_quote_unavailable:'Fresh bid/ask with size unavailable',refreshed_quote_unavailable:'Entry quote could not be refreshed',feature_lookup_failed:'Market evidence lookup failed',float_millions_missing_or_invalid:'Reported float unavailable',stock_max_float_millions:'Float exceeds configured maximum',stock_min_float_millions:'Float below configured minimum',stock_min_price_usd:'Price below configured minimum',stock_max_price_usd:'Price above configured maximum',stock_max_spread_percent:'Spread above configured maximum',intraday_evidence_missing_or_stale:'Intraday evidence missing or stale',stock_min_time_volume_ratio:'Same-time volume below minimum',completed_breakout_or_vwap_pullback_missing:'No completed breakout or VWAP pullback',stock_max_vwap_distance_percent:'Price too far above VWAP',settings_changed:'Settings changed during the lookup',duplicate_opportunity:'Opportunity already recorded'};
   const label=reason=>labels[reason]||reason.replaceAll('_',' ');
   const failures=Object.entries(batch.failures||{}).sort((a,b)=>b[1]-a[1]);
   if(failures.length){box.append(text('p','Rejection counts for the latest batch; one candidate may fail several checks.'));const list=document.createElement('ul');for(const [reason,count] of failures.slice(0,10))list.append(text('li',`${label(reason)}: ${count}`));box.append(list);}
   for(const example of batch.examples||[]){const reasons=example.baseline_failures?.length?example.baseline_failures.map(label).join(', '):label(example.state);box.append(text('p',`${example.symbol}: ${reasons}${example.float_source?' · Float: '+example.float_source:''}${example.intraday_reason?' · Intraday: '+example.intraday_reason.replaceAll('_',' '):''}`));}
   box.append(text('p','Rejected candidates do not count as completed comparisons or trades. Missing evidence is never replaced with an assumed price or float.'));
+ }
+ function collectionHealth(data){
+  let box=get('stock-record-health');
+  if(!box){box=document.createElement('section');box.id='stock-record-health';get('stock-parallel-trials').before(box);}
+  box.replaceChildren(text('h4','Learning records and forward collection'));
+  const accounting=data.reconciliation,r=accounting?.report;
+  if(accounting?.last_error)box.append(text('p',accounting.last_error));
+  if(r){
+   box.append(text('p',`Last reconciliation: ${new Date(accounting.last_tick*1000).toLocaleString()} · ${r.checked} broker entries checked · ${r.repaired} records repaired · ${r.imported} recovered · ${r.unchanged} already matched. Counts describe the latest check. Total audited updates: ${accounting.total_updates??0}, including ${accounting.total_imports??0} recovered entries.`));
+   const reasons=Object.entries(r.blocked||{}).map(([key,count])=>`${key.replaceAll('_',' ')}: ${count}`);
+   if(reasons.length)box.append(text('p','Unresolved: '+reasons.join(' · ')));
+   box.append(text('p',accounting.basis));
+   for(const a of r.anomalies||[])box.append(text('p',`${a.symbol}: ${pct(a.return_percent)} · ${a.reason}`));
+  }else box.append(text('p','Waiting for the first broker reconciliation.'));
+  const forward=data.forward_collection,f=forward?.report;
+  if(f){box.append(text('p',`Forward collector: ${f.state.replaceAll('_',' ')} · ${new Date(forward.last_tick*1000).toLocaleString()} · ${f.intraday_observed??0} observations, ${f.intraday_evaluated??0} intraday outcomes and ${f.manual_reviews_evaluated??0} grade outcomes this cycle. ${f.missed_manual_horizons??0} older grade reviews missed their collection window.`));
+   if(f.errors?.length)box.append(text('p','Evidence unavailable: '+f.errors.map(x=>x.replaceAll('_',' ')).join(', ')));
+  }
+  if(forward)box.append(text('p',forward.basis));
  }
  function metricsTable(rows){
   const wrap=document.createElement('div');wrap.style.overflowX='auto';const table=document.createElement('table');table.className='stock-research-table';
@@ -41,6 +60,7 @@
   get('stock-parallel-basis').textContent=data.parallel.basis;
   const health=data.parallel.runtime;get('stock-parallel-status').textContent=`Prospective comparison ${data.enabled?'enabled':'paused'} · minimum ${data.parallel.minimum_pairs} matured pairs across ${data.parallel.minimum_sessions} sessions. ${health?.last_error||(!health?'Waiting for the research worker.':'Last worker check: '+new Date(health.last_tick*1000).toLocaleString())}`;
   samplingReport(data.parallel.sampling);
+  collectionHealth(data);
   const trials=get('stock-parallel-trials');trials.replaceChildren();
   if(!data.parallel.trials.length)trials.append(text('p','Comparisons will initialize from the current saved stock settings. No historical results are invented.'));
   for(const trial of data.parallel.trials){
