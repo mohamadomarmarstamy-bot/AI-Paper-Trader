@@ -7,6 +7,19 @@
   const sign = value => value > 0 ? 'positive' : value < 0 ? 'negative' : '';
   const result = value => value > 0 ? 'win' : value < 0 ? 'loss' : 'flat';
   const displayTime = value => date.format(new Date(value * 1000));
+
+  function displayDuration(seconds) {
+    if (seconds < 1) return '<1s';
+    const units = [[86400, 'd'], [3600, 'h'], [60, 'm'], [1, 's']];
+    const parts = [];
+    for (const [size, label] of units) {
+      const amount = Math.floor(seconds / size);
+      if (amount) parts.push(amount + label);
+      seconds %= size;
+    }
+    return parts.slice(0, 2).join(' ');
+  }
+
   let state, active, cursor, historyLoaded = false, statusBusy = false, historyBusy = false, runBusy = false;
 
   function el(tag, text = '', className = '') {
@@ -120,7 +133,10 @@
         cell.append(el('small', label), el('strong', money(amount), label === 'Net P/L' ? 'result-pnl' : ''));
         values.append(cell);
       }
-      row.append(title, el('p', trade.reason, 'history-reason'), values, el('small', displayTime(trade.closed) + ' ET'));
+      const reason = Number.isFinite(trade.held_seconds)
+        ? `${trade.reason} · Held ${displayDuration(trade.held_seconds)}`
+        : trade.reason;
+      row.append(title, el('p', reason, 'history-reason'), values, el('small', displayTime(trade.closed) + ' ET'));
       card.append(row);
     }
     return card;

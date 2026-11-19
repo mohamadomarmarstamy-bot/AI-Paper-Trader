@@ -466,7 +466,8 @@ def history(jarvis, before=None):
                 f'SELECT data FROM trades WHERE {condition} AND mint=? ORDER BY id DESC', (group['mint'],))]
             output.append({'mint': group['mint'], 'symbol': trades[0]['symbol'], 'trades': [
                 {'bot': BOTS[t['bot']][0], 'pnl': t['pnl'] / DOLLAR, 'cost': t['entry_cost'] / DOLLAR,
-                 'proceeds': t['banked'] / DOLLAR, 'reason': t['reason'], 'closed': t['closed']}
+                 'proceeds': t['banked'] / DOLLAR, 'reason': t['reason'], 'closed': t['closed'],
+                 'held_seconds': max(0, int(t['closed'] - t['opened']))}
                 for t in trades
             ]})
     return {'coins': output, 'next': groups[limit-1]['last_id'] if len(groups) > limit else None}
