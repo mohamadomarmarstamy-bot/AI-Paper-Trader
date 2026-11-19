@@ -66,6 +66,7 @@ class JarvisTests(unittest.TestCase):
         report = jarvis.history(False)
         self.assertEqual(report['coins'][0]['mint'], MINT)
         self.assertAlmostEqual(report['coins'][0]['trades'][0]['pnl'], -5.35)
+        self.assertEqual(report['coins'][0]['trades'][0]['held_seconds'], 5)
         self.assertFalse(self.state()['bots']['instant-step']['positions'])
         self.assertIn(MINT, self.state()['bots']['instant-trim']['positions'])
         self.assertFalse(jarvis.history(True)['coins'])
