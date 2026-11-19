@@ -46,7 +46,6 @@
     if (bot.id === 'jarvis' && !state.strategy) return bot.open ? 'Waiting for strategy · exits monitored' : 'Waiting for strategy';
     if (!state.enabled) return bot.open ? 'Paused · exits monitored' : 'Paused';
     if (!state.last_cycle || Date.now() / 1000 - state.last_cycle > 30) return 'Waiting for scan';
-    if (bot.unpriced) return 'Running · estimated valuation';
     return 'Running';
   }
 
@@ -105,9 +104,14 @@
       $('jarvis-health-bots').replaceChildren(...state.bots.map(bot => {
         const pnl = bot.pnl ?? bot.estimated_pnl;
         const estimate = estimateNote(bot);
-        const card = portfolioCard(bot.name, money(pnl), botState(bot), sign(pnl));
-        if (estimate) card.append(el('small', `Estimated P/L · ${estimate}`));
-        card.append(el('p', `${bot.wins} wins · ${bot.losses} losses`), el('small', `${money(bot.realized)} realized · ${bot.quote_misses} exit quote misses`));
+        const card = portfolioCard(bot.name, money(pnl), estimate ? 'Estimated total P/L' : 'Total P/L', sign(pnl));
+        if (estimate) card.append(el('small', estimate));
+        card.append(
+          el('p', `Closed trades P/L ${money(bot.realized)}`),
+          el('p', `Open positions P/L ${money(pnl == null ? null : pnl - bot.realized)}`),
+          el('small', `${bot.wins} wins · ${bot.losses} ${bot.losses === 1 ? 'loss' : 'losses'}`),
+          el('small', `${botState(bot)} · ${bot.quote_misses} exit quote misses`),
+        );
         return card;
       }));
     }
