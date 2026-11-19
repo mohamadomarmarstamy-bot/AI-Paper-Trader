@@ -1,3 +1,5 @@
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 import json
 from fastapi import APIRouter, HTTPException, Request
@@ -8,11 +10,52 @@ from solana_meme_bot import public, configure, tick, manual_close, Conflict
 
 
 def build_router(*,require_session):
-    router=APIRouter()
     import solana_copy_trader as copy_bot
     import solana_profile as profile
     import solana_real_copy as real_copy
     import solana_paper_trials as trials
+    import jarvis_test_bot as jarvis
+
+    @asynccontextmanager
+    async def jarvis_lifespan(_app):
+        task = asyncio.create_task(jarvis.worker())
+        try:
+            yield
+        finally:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    router = APIRouter(lifespan=jarvis_lifespan)
+
+    @router.get('/meme-coins.css')
+    def meme_style():
+        return FileResponse(Path(__file__).parent/'frontend'/'meme-coins.css', media_type='text/css')
+
+    @router.get('/jarvis-test-bot')
+    def jarvis_page(request: Request):
+        require_session(request)
+        return FileResponse(Path(__file__).parent/'frontend'/'jarvis-test-bot.html')
+
+    @router.get('/jarvis-test-bot/status')
+    def jarvis_status(request: Request):
+        require_session(request)
+        return JSONResponse(jarvis.status(), headers={'Cache-Control': 'no-store'})
+
+    @router.get('/jarvis-test-bot/history')
+    def jarvis_history(request: Request, jarvis_only: bool = False, before: int | None = None):
+        require_session(request)
+        if before is not None and not 0 < before < 2**63:
+            raise HTTPException(422, 'Invalid history cursor.')
+        return JSONResponse(jarvis.history(jarvis_only, before), headers={'Cache-Control': 'no-store'})
+
+    @router.post('/jarvis-test-bot/run')
+    async def jarvis_run(request: Request):
+        payload = await body(request)
+        if not isinstance(payload, dict) or set(payload) != {'enabled'} or type(payload['enabled']) is not bool:
+            raise HTTPException(422, 'Expected a paper-run toggle.')
+        return JSONResponse(await run_in_threadpool(jarvis.set_enabled, payload['enabled']),
+                            headers={'Cache-Control': 'no-store'})
 
     @router.get('/meme-coins/token-labels')
     def token_labels(request:Request, mints:str=''):

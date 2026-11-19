@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jarvis test Bot</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/meme-coins.css">
+  <style>
+    .jarvis-health { grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); }
+    .jarvis-coin header { padding: 0 0 8px; border: 0; }
+    .jarvis-daily { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .jarvis-daily h2 { margin-bottom: 0; }
+    .jarvis-coin .history-card > small { grid-row: 1 / span 2; }
+    #jarvis-note:empty { display: none; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="brand"><span>◎</span> Jarvis test Bot <small>/ Solana</small></div>
+    <div class="toolbar">
+      <span class="meme-badge">PAPER · Virtual money</span>
+      <a class="secondary-button" href="/">Dashboard ↗</a>
+      <a class="secondary-button" href="/meme-coins">Meme Coins ↗</a>
+    </div>
+  </header>
+  <nav aria-label="Jarvis test pages">
+    <a href="#instant-step">Instant Ladder</a>
+    <a href="#instant-trim">Instant Trim</a>
+    <a href="#patient-step">Pullback Ladder</a>
+    <a href="#patient-trim">Pullback Trim</a>
+    <a href="#jarvis">Jarvis Trader</a>
+    <a href="#history">History</a>
+    <a href="#health">Health</a>
+  </nav>
+  <p id="jarvis-note" class="status-strip" role="status"></p>
+  <section id="jarvis-bot">
+    <div class="page-title">
+      <div><h1 id="jarvis-title">Jarvis test Bot</h1><p id="jarvis-description" class="meme-muted"></p></div>
+      <button id="jarvis-run" type="button" class="primary-button" disabled>Start paper tests</button>
+    </div>
+    <div id="jarvis-portfolio" class="meme-grid"></div>
+    <section class="panel">
+      <div class="jarvis-daily"><h2>Today’s P/L · realized</h2><strong id="jarvis-today" class="meme-stat"></strong></div>
+      <p id="jarvis-today-details" class="meme-muted"></p>
+      <small>Based on completed positions. Resets at midnight Eastern Time.</small>
+    </section>
+    <section id="jarvis-strategy" class="panel" hidden>
+      <h2>Strategy</h2>
+      <p id="jarvis-review" class="meme-muted"></p>
+    </section>
+    <section class="panel">
+      <h2>Holdings</h2>
+      <div id="jarvis-holdings" class="meme-scroll"></div>
+    </section>
+  </section>
+  <section id="jarvis-health" hidden>
+    <div class="page-title"><div><h1>Health</h1><p id="jarvis-cycle" class="meme-muted"></p></div></div>
+    <div id="jarvis-health-bots" class="meme-grid jarvis-health"></div>
+  </section>
+  <section id="jarvis-history" hidden>
+    <section class="panel">
+      <h2 id="jarvis-history-title">History</h2>
+      <div id="jarvis-history-summary" class="history-summary"></div>
+      <div id="jarvis-history-rows"></div>
+      <button id="jarvis-more" type="button" hidden>Load older trades</button>
+    </section>
+  </section>
+</main>
+<script src="/js/jarvis-test-bot.js"></script>
+</body>
+</html>
