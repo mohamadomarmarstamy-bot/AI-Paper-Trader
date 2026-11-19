@@ -24,6 +24,7 @@ TRADE = 50 * DOLLAR
 BUY_COST = TRADE + 250_000  # $0.10 network allowance plus $0.15 estimated account rent
 SELL_FEE = 100_000
 JARVIS_BUDGET = 20_000 * DOLLAR
+FIRST_REVIEW = 1000
 REVIEW_EVERY = 500
 POLL = 5
 BOTS = {
@@ -238,12 +239,19 @@ def apply_exit(completed, portfolio, bot, p, quote_size, amount, now):
         sell(completed, portfolio, bot, p, quote_size, amount, now, reason)
 
 
+def review_size(reviewed):
+    return REVIEW_EVERY if reviewed else FIRST_REVIEW
+
+
 def evaluate(conn, state):
     total = conn.execute("SELECT count(*) FROM trades WHERE bot!='jarvis'").fetchone()[0]
-    while total >= state['reviewed'] + REVIEW_EVERY:
+    while True:
         start = state['reviewed']
+        batch_size = review_size(start)
+        if total < start + batch_size:
+            return
         rows = conn.execute("SELECT data FROM trades WHERE bot!='jarvis' ORDER BY id LIMIT ? OFFSET ?",
-                            (REVIEW_EVERY, start)).fetchall()
+                            (batch_size, start)).fetchall()
         trades = [json.loads(row['data']) for row in rows]
         # Keep a mint together across variants and hold back the newest mints.
         ordered_mints = list(dict.fromkeys(trade['mint'] for trade in trades))
@@ -265,7 +273,7 @@ def evaluate(conn, state):
                         candidates.append((fit_score, check_score, bot, liquidity, min_age, len(check)))
         # Select on training only, then evaluate that single choice on the holdout.
         best = max(candidates, key=lambda row: (row[0], row[5]), default=None)
-        state['reviewed'] += REVIEW_EVERY
+        state['reviewed'] += batch_size
         state['review'] = {'closed_reviewed': state['reviewed'], 'distinct_mints': len(ordered_mints),
                            'result': 'No rules earned a positive score on both samples.'}
         if best and best[0] > 0 and best[1] > 0:
@@ -274,8 +282,8 @@ def evaluate(conn, state):
                                  'exit': BOTS[bot][2], 'min_liquidity': liquidity, 'min_age': age,
                                  'validation_pnl': validation, 'validation_count': samples}
             state['review']['result'] = 'Strategy adopted for new Jarvis entries.'
-        else:
-            state['strategy'] = None
+        elif state['strategy']:
+            state['review']['result'] = 'No new rules passed validation. Jarvis kept its current strategy.'
 
 
 def entry_jobs(conn, state, now):
@@ -440,7 +448,7 @@ def status():
             })
     return {'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
             'bots': rows, 'strategy': state['strategy'], 'review': state['review'], 'reviewed': state['reviewed'],
-            'review_every': REVIEW_EVERY, 'watching': len(state['watch'])}
+            'review_every': review_size(state['reviewed']), 'watching': len(state['watch'])}
 
 
 def history(jarvis, before=None):

@@ -98,26 +98,49 @@ class JarvisTests(unittest.TestCase):
         self.assertEqual(position['banked'], 31_900_000)
         self.assertFalse(completed)
 
-    def test_review_at_500_activates_jarvis_only_on_independent_holdout(self):
+    def test_reviews_start_at_1000_then_use_only_new_batches_of_500(self):
+        self.assertEqual(jarvis.status()['review_every'], 1000)
         with jarvis.connection() as conn, conn:
             state = jarvis.initial()
-            for index in range(500):
-                bot = jarvis.FIXED[index % 4]
-                mint = f'test-{index // 4}'
-                pnl = 1_000_000 if bot == 'patient-step' else -1_000_000
-                row = {'bot': bot, 'mint': mint, 'liquidity': 150_000, 'age': 200, 'pnl': pnl}
-                if index == 499:
-                    jarvis.evaluate(conn, state)
-                    self.assertIsNone(state['strategy'])
-                conn.execute('INSERT INTO trades(bot,mint,opened,closed,day,pnl,entry_cost,data) VALUES (?,?,?,?,?,?,?,?)',
-                             (bot, mint, index, index, '2026-11-19', pnl, jarvis.BUY_COST, json.dumps(row)))
-            jarvis.evaluate(conn, state)
-            self.assertEqual(state['strategy']['version'], 500)
+
+            def close_batch(start, end, winner):
+                for index in range(start, end):
+                    bot = jarvis.FIXED[index % 4]
+                    mint = f'test-{index // 4}'
+                    pnl = 1_000_000 if bot == winner else -1_000_000
+                    row = {'bot': bot, 'mint': mint, 'liquidity': 150_000, 'age': 200, 'pnl': pnl}
+                    conn.execute(
+                        'INSERT INTO trades(bot,mint,opened,closed,day,pnl,entry_cost,data) VALUES (?,?,?,?,?,?,?,?)',
+                        (bot, mint, index, index, '2026-11-19', pnl, jarvis.BUY_COST, json.dumps(row)),
+                    )
+                jarvis.evaluate(conn, state)
+
+            close_batch(0, 500, 'patient-step')
+            self.assertIsNone(state['strategy'])
+            close_batch(500, 999, 'patient-step')
+            self.assertIsNone(state['strategy'])
+            close_batch(999, 1000, 'patient-step')
+            self.assertEqual(state['strategy']['version'], 1000)
             self.assertEqual(state['strategy']['entry'], 'pullback')
             self.assertEqual(state['strategy']['exit'], 'step')
+
+            close_batch(1000, 1499, 'instant-trim')
+            self.assertEqual(state['strategy']['version'], 1000)
+            close_batch(1499, 1500, 'instant-trim')
+            self.assertEqual(state['strategy']['version'], 1500)
+            self.assertEqual(state['strategy']['entry'], 'instant')
+            self.assertEqual(state['strategy']['exit'], 'trim')
+
+            close_batch(1500, 2000, None)
+            self.assertEqual(state['reviewed'], 2000)
+            self.assertEqual(state['strategy']['version'], 1500)
+            self.assertIn('kept its current strategy', state['review']['result'])
             self.assertEqual(state['bots']['jarvis']['cash'], jarvis.JARVIS_BUDGET)
             self.assertEqual([jarvis.BOTS[bot][1] for bot in jarvis.FIXED],
                              ['instant', 'instant', 'pullback', 'pullback'])
+
+            conn.execute('UPDATE run SET state=? WHERE id=1', (json.dumps(state),))
+        self.assertEqual(jarvis.status()['review_every'], 500)
 
     def test_jarvis_cannot_auto_fund(self):
         state = jarvis.initial()
