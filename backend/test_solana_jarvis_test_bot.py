@@ -72,6 +72,79 @@ class JarvisTests(unittest.TestCase):
         self.assertFalse(jarvis.history(True)['coins'])
         self.assertFalse(database.DATABASE_PATH.exists())
 
+    def test_estimated_totals_keep_last_sell_quote_and_value_unquoted_holdings_at_cost(self):
+        jarvis.set_enabled(True)
+        self.advance()
+        self.sell = 50_000_000
+        self.advance()
+        with jarvis.connection() as conn, conn:
+            state, _ = jarvis.read(conn)
+            quoted = state['bots']['instant-step']['positions'][MINT]
+            self.assertEqual(quoted['mark'], 49_900_000)
+            jarvis.open_trade(state, 'instant-step', {
+                'mint': 'new-holding', 'symbol': 'Unquoted', 'liquidity_usd': 120_000, 'age_minutes': 300,
+            }, 10, self.now)
+            conn.execute('UPDATE run SET state=? WHERE id=1', (json.dumps(state),))
+
+        def missing_quote(*_args):
+            raise ValueError('No sell route')
+
+        self.now += 16
+        jarvis.tick(providers=self.market, get_quote=missing_quote, clock=lambda: self.now)
+        self.now += jarvis.POLL
+        jarvis.tick(providers=self.market, get_quote=missing_quote, clock=lambda: self.now)
+        with patch.object(jarvis.time, 'time', return_value=self.now):
+            bot = jarvis.status()['bots'][0]
+        self.assertIsNone(bot['balance'])
+        self.assertAlmostEqual(bot['estimated_balance'], 100.15)
+        self.assertAlmostEqual(bot['estimated_pnl'], -.35)
+        self.assertEqual(bot['valuation'], {'at_cost': 1, 'last_quote': 1})
+        self.assertEqual([item['valuation_basis'] for item in bot['holdings']], ['last_quote', 'cost'])
+
+    def test_quote_capacity_reserves_exits_and_deferral_does_not_spend_a_slot(self):
+        with jarvis.connection() as conn:
+            state = jarvis.initial()
+            state.update(enabled=True, next_discovery=self.now + 60)
+            for mint in ('a', 'b', 'c'):
+                jarvis.open_trade(state, 'instant-step', {
+                    'mint': mint, 'symbol': mint, 'liquidity_usd': 1, 'age_minutes': 1,
+                }, 10, self.now - 20)
+            state['watch']['candidate'] = {'mint': 'candidate', 'symbol': 'Candidate',
+                                           'first': self.now, 'last': self.now, 'pullback': None,
+                                           'liquidity_usd': 1, 'age_minutes': 1}
+            calls = []
+
+            def quote(input_mint, output_mint, _amount):
+                calls.append((input_mint, output_mint))
+                if len(calls) == 1:
+                    raise jarvis.Deferred('Quote slot reserved upstream')
+                return 10 if input_mint == jarvis.USDC else 50_000_000
+
+            for offset in range(0, 8, 2):
+                jarvis.step(conn, state, self.market, quote, self.now + offset)
+
+            self.assertEqual([source for source, _ in calls], ['a', 'a', 'b', jarvis.USDC])
+            self.assertIn('candidate', state['bots']['instant-step']['positions'])
+            self.assertIn('candidate', state['bots']['instant-trim']['positions'])
+
+    def test_discovery_checks_two_provider_batches_and_rotates_without_skipping(self):
+        mints = [f'mint-{i}' for i in range(60)]
+        batches = []
+
+        class BatchProvider:
+            def profiles(self):
+                return mints
+
+            def pairs(self, addresses):
+                batches.append(addresses)
+                return []
+
+        state = jarvis.initial()
+        jarvis.observe(state, BatchProvider(), self.now)
+        jarvis.observe(state, BatchProvider(), self.now + 20)
+        self.assertEqual([len(batch) for batch in batches], [20, 20, 20, 20])
+        self.assertEqual(batches[:3], [mints[:20], mints[20:40], mints[40:]])
+
     def test_pullback_reuses_the_same_discovery_and_waits_for_rebound(self):
         state = jarvis.initial()
         jarvis.observe(state, self.market, self.now)

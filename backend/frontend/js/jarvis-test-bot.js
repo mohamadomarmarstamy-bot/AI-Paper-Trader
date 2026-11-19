@@ -46,8 +46,16 @@
     if (bot.id === 'jarvis' && !state.strategy) return bot.open ? 'Waiting for strategy · exits monitored' : 'Waiting for strategy';
     if (!state.enabled) return bot.open ? 'Paused · exits monitored' : 'Paused';
     if (!state.last_cycle || Date.now() / 1000 - state.last_cycle > 30) return 'Waiting for scan';
-    if (bot.unpriced) return 'Holding valuation incomplete';
+    if (bot.unpriced) return 'Running · estimated valuation';
     return 'Running';
+  }
+
+  function estimateNote(bot) {
+    const counts = bot.valuation || {};
+    return [
+      counts.last_quote ? `${counts.last_quote} at last sell quote` : '',
+      counts.at_cost ? `${counts.at_cost} at cost` : '',
+    ].filter(Boolean).join(' · ');
   }
 
   function render() {
@@ -63,10 +71,13 @@
       $('jarvis-description').textContent = selected.description;
       $('jarvis-run').textContent = state.enabled ? 'Pause paper entries' : 'Start paper tests';
       $('jarvis-run').disabled = runBusy;
+      const estimate = estimateNote(selected);
+      const balance = selected.balance ?? selected.estimated_balance;
+      const pnl = selected.pnl ?? selected.estimated_pnl;
       $('jarvis-portfolio').replaceChildren(
-        portfolioCard('Total balance', money(selected.balance), selected.unpriced ? `${selected.unpriced} holding quote(s) missing` : 'Cash + current sell quotes'),
+        portfolioCard(estimate ? 'Estimated total balance' : 'Total balance', money(balance), estimate || 'Cash + current sell quotes'),
         portfolioCard('Available cash', money(selected.cash), jarvis ? '$20,000 starting budget' : 'Automatic virtual top-ups'),
-        portfolioCard('Total P/L', money(selected.pnl), `Net of ${money(selected.funding)} virtual funding`, sign(selected.pnl)),
+        portfolioCard(estimate ? 'Estimated total P/L' : 'Total P/L', money(pnl), `Net of ${money(selected.funding)} virtual funding`, sign(pnl)),
         portfolioCard('Open holdings', String(selected.open), botState(selected)),
       );
       $('jarvis-today').textContent = money(selected.today.realized);
@@ -82,7 +93,9 @@
       }
       const holdings = selected.holdings.map(holding => {
         const row = el('div', '', 'meme-row');
-        row.append(el('strong', holding.symbol), el('p', `${money(holding.mark)} · Opened ${displayTime(holding.opened)} ET`));
+        const value = holding.mark ?? holding.estimated_value;
+        const basis = holding.valuation_basis === 'cost' ? ' · at cost' : holding.valuation_basis === 'last_quote' ? ' · last sell quote' : '';
+        row.append(el('strong', holding.symbol), el('p', `${money(value)}${basis} · Opened ${displayTime(holding.opened)} ET`));
         return row;
       });
       $('jarvis-holdings').replaceChildren(...(holdings.length ? holdings : [el('p', 'No open holdings.', 'meme-muted')]));
@@ -90,7 +103,10 @@
     if (active === 'health') {
       $('jarvis-cycle').textContent = state.last_cycle ? `Last cycle ${displayTime(state.last_cycle)} ET · ${state.watching} coins on watch` : 'Waiting for the first cycle.';
       $('jarvis-health-bots').replaceChildren(...state.bots.map(bot => {
-        const card = portfolioCard(bot.name, money(bot.pnl), botState(bot), sign(bot.pnl));
+        const pnl = bot.pnl ?? bot.estimated_pnl;
+        const estimate = estimateNote(bot);
+        const card = portfolioCard(bot.name, money(pnl), botState(bot), sign(pnl));
+        if (estimate) card.append(el('small', `Estimated P/L · ${estimate}`));
         card.append(el('p', `${bot.wins} wins · ${bot.losses} losses`), el('small', `${money(bot.realized)} realized · ${bot.quote_misses} exit quote misses`));
         return card;
       }));

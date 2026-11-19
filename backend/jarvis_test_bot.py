@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 import database
 import solana_http
 from solana_jupiter import Deferred, RateLimited, _budget
-from solana_meme_bot import ReadOnlyProviders, normalize_pair
+from solana_meme_bot import MAX_SCAN_TOKENS, ReadOnlyProviders, normalize_pair
 
 LOG = logging.getLogger(__name__)
 ET = ZoneInfo('America/New_York')
@@ -26,7 +26,11 @@ SELL_FEE = 100_000
 JARVIS_BUDGET = 20_000 * DOLLAR
 FIRST_REVIEW = 1000
 REVIEW_EVERY = 500
-POLL = 5
+POLL = 2
+DISCOVERY_INTERVAL = 20
+EXIT_QUOTES_PER_ENTRY = 2
+DISCOVERY_BATCH = 2 * MAX_SCAN_TOKENS
+MARK_MAX_AGE = 90
 BOTS = {
     'instant-step': ('Instant Ladder', 'instant', 'step'),
     'instant-trim': ('Instant Trim', 'instant', 'trim'),
@@ -58,7 +62,7 @@ CREATE INDEX IF NOT EXISTS trades_mint ON trades(mint);
 
 def initial():
     return {
-        'enabled': False, 'last_cycle': None, 'error': None, 'offset': 0, 'turn': 0,
+        'enabled': False, 'last_cycle': None, 'error': None, 'offset': 0,
         'watch': {}, 'strategy': None, 'reviewed': 0, 'review': None,
         'bots': {bot: {'cash': JARVIS_BUDGET if bot == 'jarvis' else 0,
                        'funding': JARVIS_BUDGET if bot == 'jarvis' else 0,
@@ -92,6 +96,7 @@ def set_enabled(enabled):
         if state['enabled'] != enabled:
             state['enabled'] = enabled
             state['error'] = None
+            state.pop('next_discovery', None)
             if not enabled:
                 state['watch'].clear()
             conn.execute('UPDATE run SET state=?,revision=? WHERE id=1', (json.dumps(state), revision + 1))
@@ -131,14 +136,24 @@ def observe(state, providers, now):
     if not mints:
         return
     tracked = [mint for mint, row in sorted(state['watch'].items(), key=lambda item: item[1]['last'])
-               if not row['pullback']][:8]
+               if not row['pullback']][:12]
     offset = state['offset'] % len(mints)
     rotated = mints[offset:] + mints[:offset]
-    fresh = [mint for mint in rotated if mint not in tracked][:20-len(tracked)]
-    state['offset'] = (offset + max(1, len(fresh))) % len(mints)
-    requested = set(tracked + fresh)
+    fresh = rotated[:DISCOVERY_BATCH - len(tracked)]
+    state['offset'] = (offset + len(fresh)) % len(mints)
+    addresses = list(dict.fromkeys(tracked + fresh))
+    requested = set(addresses)
+    pairs = []
+    failed_batches = 0
+    for start in range(0, len(addresses), MAX_SCAN_TOKENS):
+        try:
+            pairs.extend(providers.pairs(addresses[start:start + MAX_SCAN_TOKENS]))
+        except (ValueError, OSError, RuntimeError):
+            failed_batches += 1
+    if failed_batches:
+        state['error'] = 'Some discovery data is unavailable.' if pairs else 'Discovery data unavailable.'
     best = {}
-    for pair in providers.pairs(tracked + fresh):
+    for pair in pairs:
         try:
             mint = pair['baseToken']['address']
             if mint not in requested:
@@ -205,7 +220,7 @@ def sell(completed, portfolio, bot, position, quantity, amount, now, reason):
     if position['quantity']:
         position['trims'] += 1
         position['target'] *= 2
-        position.update(mark=None, mark_at=None)
+        position.update(mark=None, mark_at=None, mark_stale=False)
         return
     pnl = position['banked'] - position['entry_cost']
     event = {**position, 'bot': bot, 'closed': now, 'pnl': pnl, 'reason': reason}
@@ -222,7 +237,7 @@ def apply_exit(completed, portfolio, bot, p, quote_size, amount, now):
             p['pending'] = None
         return
     value = max(0, amount - SELL_FEE)
-    p.update(mark=value, mark_at=now)
+    p.update(mark=value, mark_at=now, mark_stale=False)
     gain = 100 * (value - p['cost']) / p['cost']
     p['peak'] = max(p['peak'], gain)
     reason = None
@@ -323,15 +338,18 @@ def step(conn, state, providers, get_quote, now):
     completed = []
     if state['enabled']:
         state['watch'] = {mint: row for mint, row in state['watch'].items() if now - row['first'] <= 900}
-        if state['turn'] % 4 == 0:
+        if now >= state.get('next_discovery', 0):
+            state['next_discovery'] = now + DISCOVERY_INTERVAL
             try:
                 observe(state, providers, now)
             except (ValueError, OSError, RuntimeError):
                 state['error'] = 'Discovery data unavailable.'
     exits = quote_jobs(state, now)
     entries = entry_jobs(conn, state, now) if state['enabled'] else {}
-    state['turn'] += 1
-    buy = entries and (not exits or state['turn'] % 3 == 0)
+    # Reserve two exit quotes per entry when both queues have work. Provider
+    # deferrals do not spend an attempt in either queue.
+    exit_attempts = state.get('exit_attempts_since_entry', 0)
+    buy = entries and (not exits or exit_attempts >= EXIT_QUOTES_PER_ENTRY)
     if buy:
         mint = min(entries, key=lambda mint: state['watch'][mint]['first'])
         row = state['watch'][mint]
@@ -340,11 +358,13 @@ def step(conn, state, providers, get_quote, now):
         except (Deferred, RateLimited):
             state['error'] = 'Quote capacity temporarily unavailable.'
         except Exception:
+            state['exit_attempts_since_entry'] = 0
             row['retry'] = now + 30
             for bot in entries[mint]:
                 state['bots'][bot]['entry_misses'] += 1
             state['error'] = 'Entry route unavailable for a candidate.'
         else:
+            state['exit_attempts_since_entry'] = 0
             for bot in entries[mint]:
                 open_trade(state, bot, row, quantity, now)
     elif exits:
@@ -356,11 +376,13 @@ def step(conn, state, providers, get_quote, now):
         except (Deferred, RateLimited):
             state['error'] = 'Quote capacity temporarily unavailable.'
         except Exception:
+            state['exit_attempts_since_entry'] = min(exit_attempts + 1, EXIT_QUOTES_PER_ENTRY)
             for bot, p in group:
-                p.update(due=now + 45, mark=None, mark_at=None, pending=None)
+                p.update(due=now + 45, mark_stale=True, pending=None)
                 state['bots'][bot]['quote_misses'] += 1
             state['error'] = 'An exit route is unavailable; holding remains open.'
         else:
+            state['exit_attempts_since_entry'] = min(exit_attempts + 1, EXIT_QUOTES_PER_ENTRY)
             for bot, p in group:
                 p['due'] = now + (POLL if p['pending'] else 15)
                 apply_exit(completed, state['bots'][bot], bot, p, size, amount, now)
@@ -413,6 +435,18 @@ def stats(row):
     return {'closed': row['closed'], 'wins': row['wins'], 'losses': row['losses'], 'realized': row['pnl'] / DOLLAR}
 
 
+def holding_value(position, now):
+    # Use the last exact-size quote if available. A trim invalidates that quote
+    # and the remaining cost is only an estimate until the next full mark.
+    amount = position.get('mark')
+    at = position.get('mark_at')
+    if amount is None:
+        return position['cost'], 'cost'
+    if at is None or position.get('mark_stale') or not 0 <= now - at <= MARK_MAX_AGE:
+        return amount, 'last_quote'
+    return amount, 'current_quote'
+
+
 def status():
     now = time.time()
     day = datetime.fromtimestamp(now, ET).date().isoformat()
@@ -426,9 +460,11 @@ def status():
         for bot, (name, entry, exit_rule) in BOTS.items():
             portfolio = state['bots'][bot]
             positions = list(portfolio['positions'].values())
-            known = [p['mark'] for p in positions if p['mark'] is not None and 0 <= now - p['mark_at'] <= 90]
-            missing = len(positions) - len(known)
-            total = portfolio['cash'] + sum(known) if not missing else None
+            valuations = [holding_value(p, now) for p in positions]
+            cost_count = sum(basis == 'cost' for _, basis in valuations)
+            stale_count = sum(basis == 'last_quote' for _, basis in valuations)
+            missing = cost_count + stale_count
+            estimate = portfolio['cash'] + sum(value for value, _ in valuations)
             if bot == 'jarvis' and state['strategy']:
                 entry, exit_rule = (state['strategy'][key] for key in ('entry', 'exit'))
             description = f'{DESCRIPTIONS[entry]} {DESCRIPTIONS[exit_rule]}' if entry else (
@@ -438,13 +474,17 @@ def status():
                 **stats(conn.execute(totals_sql, (bot,)).fetchone()),
                 'today': stats(conn.execute(totals_sql + ' AND day=?', (bot, day)).fetchone()),
                 'cash': portfolio['cash'] / DOLLAR, 'funding': portfolio['funding'] / DOLLAR,
-                'balance': total / DOLLAR if total is not None else None,
-                'pnl': (total - portfolio['funding']) / DOLLAR if total is not None else None,
+                'balance': estimate / DOLLAR if not missing else None,
+                'pnl': (estimate - portfolio['funding']) / DOLLAR if not missing else None,
+                'estimated_balance': estimate / DOLLAR,
+                'estimated_pnl': (estimate - portfolio['funding']) / DOLLAR,
+                'valuation': {'at_cost': cost_count, 'last_quote': stale_count},
                 'open': len(positions), 'unpriced': missing, 'quote_misses': portfolio['quote_misses'],
                 'entry_misses': portfolio['entry_misses'],
                 'holdings': [{'mint': p['mint'], 'symbol': p['symbol'], 'opened': p['opened'],
-                              'mark': p['mark'] / DOLLAR if p['mark'] is not None and
-                              0 <= now - p['mark_at'] <= 90 else None} for p in positions],
+                              'mark': value / DOLLAR if basis == 'current_quote' else None,
+                              'estimated_value': value / DOLLAR, 'valuation_basis': basis}
+                             for p, (value, basis) in zip(positions, valuations)],
             })
     return {'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
             'bots': rows, 'strategy': state['strategy'], 'review': state['review'], 'reviewed': state['reviewed'],
