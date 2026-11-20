@@ -43,7 +43,7 @@ DESCRIPTIONS = {
     'instant': 'Buys at the first available quote after discovery.',
     'pullback': 'Waits for a 3–15% dip from the observed high and a 2% rebound from the low.',
     'step': 'Starts at −10%. Each 10-point gain in the observed peak raises the full exit trigger 10 points.',
-    'trim': 'Sells half at +20%, +40%, +80% and subsequent doubled targets. After the first trim, the remainder has the existing net break-even floor.',
+    'trim': 'Sells half at +20%, +40%, +80% and subsequent doubled targets. Starts with a −10% stop. Each 10-point gain in the observed peak raises the full exit trigger 10 points.',
 }
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS run (
@@ -240,18 +240,12 @@ def apply_exit(completed, portfolio, bot, p, quote_size, amount, now):
     p.update(mark=value, mark_at=now, mark_stale=False)
     gain = 100 * (value - p['cost']) / p['cost']
     p['peak'] = max(p['peak'], gain)
-    reason = None
-    if p['policy']['exit'] == 'step':
-        floor = exit_floor(p['peak'])
-        if gain <= floor:
-            reason = 'Step stop' if floor <= 0 else 'Step profit protection'
-    else:
-        if p['trims'] and value <= p['cost']:
-            reason = 'Post-trim break-even protection'
-        if not reason and gain >= p['target'] and p['quantity'] >= 2:
-            p['pending'] = 'trim'
-    if reason:
+    floor = exit_floor(p['peak'])
+    if gain <= floor:
+        reason = 'Step stop' if floor <= 0 else 'Step profit protection'
         sell(completed, portfolio, bot, p, quote_size, amount, now, reason)
+    elif p['policy']['exit'] == 'trim' and gain >= p['target'] and p['quantity'] >= 2:
+        p['pending'] = 'trim'
 
 
 def review_size(reviewed):
