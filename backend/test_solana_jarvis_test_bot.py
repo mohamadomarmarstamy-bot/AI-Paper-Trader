@@ -129,6 +129,37 @@ class JarvisTests(unittest.TestCase):
             self.assertIn('candidate', state['bots']['instant-step']['positions'])
             self.assertIn('candidate', state['bots']['instant-trim']['positions'])
 
+    def test_failed_routes_keep_retrying_without_blocking_fresh_quotes(self):
+        state = jarvis.initial()
+        portfolio = state['bots']['instant-step']
+        for mint in ('retry', 'fresh'):
+            jarvis.open_trade(state, 'instant-step', {
+                'mint': mint, 'symbol': mint, 'liquidity_usd': 1, 'age_minutes': 1,
+            }, 10, self.now - 10)
+        retry = portfolio['positions']['retry']
+        retry.update(mark_stale=True, quote_due_since=self.now - 3600, route_failures=3)
+        jobs = jarvis.quote_jobs(state, self.now)
+        pressure = jarvis.exit_queue(jobs, self.now)
+        self.assertEqual(pressure['retry_due'], 1)
+        self.assertFalse(pressure['backed_up'])
+        self.assertEqual(jarvis.next_exit(jobs, 0), ('fresh', 10))
+        self.assertEqual(jarvis.next_exit(jobs, 5), ('retry', 10))
+
+        def unavailable(*args):
+            raise jarvis.QuoteUnavailable('Jupiter returned no route')
+
+        state['exit_quote_attempts'] = 5
+        with jarvis.connection() as conn:
+            jarvis.step(conn, state, self.market, unavailable, self.now)
+            self.assertEqual(retry['due'], self.now + 360)
+            self.assertEqual(retry['route_failures'], 4)
+            self.assertEqual(retry['quote_due_since'], self.now - 3600)
+            state['exit_quote_attempts'] = 11
+            jarvis.step(conn, state, self.market, lambda *args: 50_000_000, retry['due'])
+        self.assertNotIn('route_failures', retry)
+        self.assertNotIn('quote_due_since', retry)
+        self.assertFalse(retry['mark_stale'])
+
     def test_exit_priority_reserves_every_third_attempt_for_oldest(self):
         state = jarvis.initial()
         portfolio = state['bots']['instant-step']

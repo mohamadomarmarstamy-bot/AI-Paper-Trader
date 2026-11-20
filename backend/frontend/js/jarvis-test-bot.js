@@ -181,7 +181,12 @@
     if (active === 'health') {
       $('jarvis-cycle').textContent = state.last_cycle ? `Last cycle ${displayTime(state.last_cycle)} ET · ${state.watching} coins on watch` : 'Waiting for the first cycle.';
       const queue = state.exit_queue;
-      $('jarvis-exit-queue').textContent = queue?.due ? `${queue.due} exit quotes due · Oldest waiting ${displayDuration(queue.oldest_wait)}${queue.backed_up ? ' · Entries slowed while exits catch up' : ''}` : 'No exit quotes due';
+      const regular = (queue?.due || 0) - (queue?.retry_due || 0);
+      const retry = queue?.retry_positions ? ` · ${queue.retry_positions} holdings awaiting a retry` : '';
+      const failure = state.last_quote_failures?.exit;
+      $('jarvis-exit-queue').textContent = (regular
+        ? `${regular} regular exit quotes due · Oldest waiting ${displayDuration(queue.oldest_wait)}${queue.backed_up ? ' · Entries slowed while exits catch up' : ''}`
+        : 'No regular exit quotes due') + retry + (failure ? ` · Last exit quote failure: ${failure.reason}` : '');
       $('jarvis-health-bots').replaceChildren(...state.bots.map(bot => {
         const pnl = bot.pnl ?? bot.estimated_pnl;
         const estimate = estimateNote(bot);
