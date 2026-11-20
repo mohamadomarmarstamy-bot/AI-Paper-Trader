@@ -70,10 +70,36 @@
     const candidate = review.candidate;
     if (candidate) {
       rows.push(el('p', `Candidate: ${candidate.name} · ${candidate.entry_filter.replaceAll('_', ' ')} · ${money(candidate.min_liquidity)} minimum liquidity · ${candidate.min_age} min minimum age`));
+      if (candidate.avoid_pattern) rows.push(el('small', `Proposed skip rule: ${candidate.avoid_pattern}`));
       rows.push(el('small', `${money(candidate.training)} per training opportunity · ${money(candidate.holdout)} per held-out opportunity, after removing the largest winner from each sample`));
     }
     $('jarvis-early-results').replaceChildren(...rows,
       el('small', 'The first strategy can activate after the 1,000-trade review.'));
+  }
+
+  function renderOutcomes(review, legacy, activeWarning) {
+    $('jarvis-outcome-summary').textContent =
+      `Recent baseline closes · ${review.wins} wins · ${review.losses} losses · ${review.flat} flat. ${activeWarning ? 'Active skip rule: ' + activeWarning : 'Waiting for a validated skip rule.'}`;
+    const entries = review.warnings.filter(item => item.wins || item.losses).map(item =>
+      el('p', `${item.label} · ${item.losses} losses · ${item.wins} wins`));
+    for (const [label, trades] of Object.entries(review.examples)) {
+      const group = el('div', '', 'meme-row');
+      group.append(el('strong', label === 'winners' ? 'Recent winners' : 'Recent losers'));
+      for (const item of trades) {
+        const signs = [...item.positive, ...item.warnings];
+        group.append(el('p', `${item.name} · ${money(item.pnl / 1000000)}${signs.length ? ' · ' + signs.join(', ') : ''}`));
+      }
+      entries.push(group);
+    }
+    if (legacy) {
+      const sources = el('div', '', 'meme-row');
+      sources.append(el('strong', 'Older Auto Trader · reference sample'),
+        el('p', `${legacy.wins} wins · ${legacy.losses} losses · ${legacy.flat} flat`));
+      for (const item of legacy.warnings) if (item.wins || item.losses)
+        sources.append(el('p', `${item.label} · ${item.losses} losses · ${item.wins} wins`));
+      entries.push(sources);
+    }
+    $('jarvis-outcomes').replaceChildren(...entries);
   }
 
   function renderComparison(study) {
@@ -86,6 +112,8 @@
         el('p', `${money(arm.per_opportunity)} per settled opportunity · ${money(arm.drawdown)} settled drawdown`),
         el('p', `${arm.closed} closed · ${study.running[mode]} open · ${arm.skipped} skipped · ${arm.unpriced} unpriced at deadline`),
         el('small', `${arm.failed_entries} entry quote misses · ${arm.failed_exits} exit quote misses`));
+      if (arm.matched_instant != null) row.append(el('small',
+        `Instant on the same ${arm.opportunities} coins: ${money(arm.matched_instant)} per opportunity`));
       if (arm.avg_entry_wait != null) row.append(el('small',
         `Average entry delay ${displayDuration(arm.avg_entry_wait)} · Exit quote overdue by ${displayDuration(arm.avg_exit_wait)} on average`));
       return row;
@@ -93,7 +121,7 @@
     const history = study.reviews.map(review =>
       el('small', `Review through coin ${review.checkpoint} · ${review.result}`));
     $('jarvis-experiment-rows').replaceChildren(...notes, ...history,
-      el('small', 'Same $50 size and Ladder exit rules, with a 15-minute time exit. Unpriced positions at the deadline are scored at zero proceeds. Stats cover up to 250 settled coins.'));
+      el('small', 'Same $50 size and 15-minute time exit. The 20% trail starts after a 20% gain and compares with Instant Ladder. Unpriced positions at the deadline are scored at zero proceeds. Stats cover up to 250 settled coins.'));
   }
 
   function render() {
@@ -122,6 +150,7 @@
       $('jarvis-today').className = 'meme-stat ' + sign(selected.today.realized);
       $('jarvis-today-details').textContent = `${selected.today.closed} closed · ${selected.today.wins} wins · ${selected.today.losses} losses · ${state.day} ET`;
       $('jarvis-strategy').hidden = !jarvis;
+      $('jarvis-outcome-review').hidden = !jarvis || !state.outcome_review;
       $('jarvis-early-review').hidden = !jarvis || !state.early_review;
       $('jarvis-experiments').hidden = !jarvis || !state.comparison;
       if (jarvis) {
@@ -136,6 +165,7 @@
           ? `Recent chart or social research on ${sources.recent_coins} coins · X ${sources.x_configured ? 'configured' : 'awaiting API token'}${proposal ? ` · Code proposal from review ${proposal.version} ${proposal.sent ? 'emailed' : 'queued'}` : ''}`
           : '';
         $('jarvis-review').textContent = `${summary} ${completed}/${next} completed baseline trades toward the next review. ${state.review?.result || ''} ${state.entry_guard?.reason || ''}`;
+        if (state.outcome_review) renderOutcomes(state.outcome_review, state.legacy_outcomes, state.active_warning);
         if (state.early_review) renderEarlyReview(state.early_review);
         if (state.comparison) renderComparison(state.comparison);
       }

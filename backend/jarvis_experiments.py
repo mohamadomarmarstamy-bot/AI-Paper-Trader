@@ -1,6 +1,8 @@
 """Matched Solana paper entry experiments with delayed, exact-size quotes."""
 import json
 
+from solana_meme_learning import finite
+
 DOLLAR = 1_000_000
 ENTRY_DELAY = 8
 ENTRY_WINDOW = 300
@@ -14,6 +16,8 @@ MODES = {
     'pullback': 'Pullback',
     'breakout_retest': 'Chart retest',
     'chart_social': 'Chart retest + Bluesky',
+    'instant_trailing_20': 'Instant + 20% trailing stop',
+    'instant_older_deep': 'Instant + 2h / $100k pool filter',
 }
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS experiment_coins(
@@ -33,8 +37,11 @@ INSERT OR IGNORE INTO experiment_state(id) VALUES (1);
 
 
 def signal(mode, row, evidence, now):
-    if mode == 'instant':
+    if mode in ('instant', 'instant_trailing_20'):
         return True
+    if mode == 'instant_older_deep':
+        liquidity, age = row.get('liquidity_usd'), row.get('age_minutes')
+        return finite(liquidity) and finite(age) and liquidity >= 100_000 and age >= 120
     if mode == 'pullback':
         return row.get('pullback') is not None and 0 <= now - row['pullback'] <= 90
     if (evidence.get('chart') or {}).get('pattern') != 'breakout_retest':
@@ -44,11 +51,12 @@ def signal(mode, row, evidence, now):
 
 def new_coin(row, now):
     return {'mint': row['mint'], 'pair': row['pair'], 'opened': now,
-            'arms': {mode: {'status': 'waiting', 'misses': 0, 'entry_misses': 0} for mode in MODES}}
+            'arms': {mode: {'status': 'waiting', 'misses': 0, 'entry_misses': 0,
+                            'trail_percent': 20 if mode == 'instant_trailing_20' else None} for mode in MODES}}
 
 
 def advance(coin, row, evidence, now, budget, buy_cost):
-    """Refresh signals and build quote jobs. All arms share the same exit."""
+    """Refresh signals and build exact-size quote jobs for comparable paper arms."""
     jobs = {}
     age = now - coin['opened']
     for mode, arm in coin['arms'].items():
@@ -90,14 +98,24 @@ def quotes(arms, side, value, now, buy_cost, sell_fee, exit_floor):
         gain = (proceeds / buy_cost - 1) * 100
         arm['peak'] = max(gain, arm['peak'])
         arm.update(mark=proceeds, due=now + ENTRY_DELAY)
+        trailing = arm.get('trail_percent')
         floor = exit_floor(arm['peak'])
+        if trailing and arm['peak'] >= 20:
+            floor = max(0, (100 + arm['peak']) * (1 - trailing / 100) - 100)
         if gain <= floor or now >= arm['bought'] + HOLD_SECONDS:
             arm.update(status='closed', pnl=proceeds - buy_cost, settled=now, exit_wait=wait,
                        gap=max(0, floor - gain) if gain <= floor else None)
 
 
 def table(coins):
-    return {mode: metrics([coin['arms'][mode] for coin in coins]) for mode in MODES}
+    result = {}
+    for mode in MODES:
+        matched = [coin for coin in coins if mode in coin['arms']]
+        row = metrics([coin['arms'][mode] for coin in matched])
+        if matched and mode != 'instant':
+            row['matched_instant'] = metrics([coin['arms']['instant'] for coin in matched])['per_opportunity']
+        result[mode] = row
+    return result
 
 
 def metrics(arms):
@@ -120,6 +138,8 @@ def metrics(arms):
 
 
 def score(coins, mode):
+    if any(mode not in coin['arms'] for coin in coins):
+        return None
     arms = [coin['arms'][mode] for coin in coins]
     if sum(a['status'] == 'closed' for a in arms) < 8:
         return None
@@ -163,7 +183,7 @@ def read_board(conn):
     return {'policy': policy, 'completed': len(coins), 'active': len(live),
             'reviews': [json.loads(r['data']) for r in reviews],
             'arms': {mode: {'name': MODES[mode], **result} for mode, result in table(coins).items()},
-            'running': {mode: sum(coin['arms'][mode]['status'] == 'open' for coin in live) for mode in MODES}}
+            'running': {mode: sum(coin['arms'].get(mode, {}).get('status') == 'open' for coin in live) for mode in MODES}}
 
 
 def update_policy(conn):

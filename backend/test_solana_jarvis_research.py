@@ -1,3 +1,4 @@
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 import json
@@ -6,7 +7,9 @@ import unittest
 from unittest.mock import patch
 
 import database
+import jarvis_outcomes as outcomes
 import jarvis_research as research
+import solana_meme_learning as legacy
 import jarvis_test_bot as jarvis
 
 NOW = 1_800_000_000
@@ -127,6 +130,47 @@ class JarvisResearchTests(unittest.TestCase):
         self.assertIsNone(report['strategy'])
         self.assertEqual(report['reviewed'], 0)
         self.assertEqual(report['review_every'], 1000)
+
+    def test_loss_rule_counts_winners_it_would_skip(self):
+        retained = [{'mint': f'r{i}', 'pnl': 3_000_000, 'liquidity': 200000, 'age': 200}
+                    for i in range(12)]
+        losing_pattern = [{'mint': f'l{i}', 'pnl': -7_000_000, 'liquidity': 20000, 'age': 20}
+                          for i in range(6)]
+        self.assertGreater(jarvis.score_rule(retained + losing_pattern, 'baseline', 10,
+                                             avoid='young_thin_pool'), 0)
+        winning_conflict = {**losing_pattern[0], 'pnl': 50_000_000}
+        self.assertIsNone(jarvis.score_rule(retained + losing_pattern[1:] + [winning_conflict],
+                                            'baseline', 10, avoid='young_thin_pool'))
+
+    def test_legacy_labeled_outcomes_stay_in_reference_sample(self):
+        rows = [
+            {'id': str(index), 'mint': f'old-{index}', 'closed_at': NOW + index,
+             'pnl_usd': pnl, 'exit_source': source,
+             'entry_features': {'liquidity_usd': 20000, 'age_minutes': 15}}
+            for index, (pnl, source) in enumerate(((-5, 'automatic'), (9, 'automatic'), (6, 'manual')))
+        ]
+        with closing(database.get_connection()) as conn, conn:
+            conn.executescript(legacy.SCHEMA)
+            legacy.archive(conn, rows)
+        report = outcomes.legacy_counts(database.DATABASE_PATH)
+        self.assertEqual((report['wins'], report['losses']), (1, 1))
+        jarvis.refresh_legacy_outcomes(NOW)
+        status = jarvis.status()
+        self.assertEqual(status['legacy_outcomes'], report)
+        self.assertEqual(status['reviewed'], 0)
+        self.assertIsNone(status['strategy'])
+
+    def test_loss_rule_only_blocks_jarvis_when_strategy_uses_it(self):
+        state = jarvis.initial()
+        row = {'mint': MINT, 'pair': PAIR, 'first': NOW, 'last': NOW, 'pullback': None,
+               'liquidity_usd': 40000, 'age_minutes': 60}
+        state['watch'][MINT] = row
+        state['strategy'] = {'entry': 'instant', 'activated_at': NOW - 1,
+                             'min_liquidity': 0, 'min_age': 0, 'avoid_pattern': 'young_thin_pool'}
+        with jarvis.connection() as conn:
+            self.assertEqual(jarvis.entry_jobs(conn, state, NOW)[MINT], ['instant-step', 'instant-trim'])
+            row['age_minutes'] = 120
+            self.assertEqual(jarvis.entry_jobs(conn, state, NOW)[MINT], ['instant-step', 'instant-trim', 'jarvis'])
 
     def test_validated_filter_controls_only_jarvis_entries(self):
         state = jarvis.initial()
