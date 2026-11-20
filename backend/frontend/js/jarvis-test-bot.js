@@ -87,7 +87,13 @@
         const completed = state.bots.filter(bot => bot.id !== 'jarvis').reduce((sum, bot) => sum + bot.closed, 0);
         const next = state.reviewed + state.review_every;
         const strategy = state.strategy;
-        const summary = strategy ? `Version ${strategy.version} · minimum liquidity ${money(strategy.min_liquidity)} · minimum pool age ${strategy.min_age} min.` : 'Waiting for a validated strategy.';
+        const filter = (strategy?.entry_filter || 'baseline').replaceAll('_', ' ');
+        const summary = strategy ? `Version ${strategy.version} · minimum liquidity ${money(strategy.min_liquidity)} · minimum pool age ${strategy.min_age} min · Entry filter: ${filter}.` : 'Waiting for a validated strategy.';
+        const sources = state.research;
+        const proposal = sources?.latest_proposal;
+        $('jarvis-research').textContent = sources
+          ? `Recent chart or social research on ${sources.recent_coins} coins · X ${sources.x_configured ? 'configured' : 'awaiting API token'}${proposal ? ` · Code proposal from review ${proposal.version} ${proposal.sent ? 'emailed' : 'queued'}` : ''}`
+          : '';
         $('jarvis-review').textContent = `${summary} ${completed}/${next} completed baseline trades toward the next review. ${state.review?.result || ''}`;
       }
       const holdings = selected.holdings.map(holding => {
@@ -165,7 +171,12 @@
       const reason = Number.isFinite(trade.held_seconds)
         ? `${trade.reason} · Held ${displayDuration(trade.held_seconds)}`
         : trade.reason;
-      row.append(title, el('p', reason, 'history-reason'), values, el('small', displayTime(trade.closed) + ' ET'));
+      const evidence = [
+        trade.entry_pattern && trade.entry_pattern !== 'none' ? trade.entry_pattern.replaceAll('_', ' ') : '',
+        trade.social_match ? 'mint mentioned by multiple social accounts' : '',
+      ].filter(Boolean).join(' · ');
+      row.append(title, el('p', evidence ? `${reason} · Entry: ${evidence}` : reason, 'history-reason'),
+        values, el('small', displayTime(trade.closed) + ' ET'));
       card.append(row);
     }
     return card;

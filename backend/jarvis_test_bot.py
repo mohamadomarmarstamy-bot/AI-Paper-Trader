@@ -11,6 +11,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import database
+import jarvis_research as research
 import solana_http
 from solana_jupiter import Deferred, RateLimited, _budget
 from solana_meme_bot import MAX_SCAN_TOKENS, ReadOnlyProviders, normalize_pair
@@ -82,7 +83,7 @@ def connection():
     path = database.DATABASE_PATH.with_name('jarvis_paper.sqlite3')
     with closing(sqlite3.connect(path, timeout=5)) as conn:
         conn.row_factory = sqlite3.Row
-        conn.executescript(SCHEMA)
+        conn.executescript(SCHEMA + research.SCHEMA)
         conn.execute('INSERT OR IGNORE INTO run(id,state) VALUES (1,?)', (json.dumps(initial()),))
         conn.commit()
         yield conn
@@ -179,8 +180,8 @@ def observe(state, providers, now):
                                     'dip': None, 'pullback': None}
             continue
         price = row['price_usd']
-        old.update(last=now, liquidity_usd=row['liquidity_usd'], volume_m5_usd=row['volume_m5_usd'],
-                   age_minutes=row['age_minutes'])
+        old.update(last=now, buys_m5=row['buys_m5'], sells_m5=row['sells_m5'],
+                   liquidity_usd=row['liquidity_usd'], volume_m5_usd=row['volume_m5_usd'], age_minutes=row['age_minutes'])
         if price > old['high'] or price < .85 * old['high']:
             old.update(high=price, dip=None)
         elif price <= .97 * old['high']:
@@ -194,7 +195,7 @@ def exit_floor(peak):
     return (max(0, math.floor(peak / 10)) - 1) * 10
 
 
-def open_trade(state, bot, row, quantity, now):
+def open_trade(state, bot, row, quantity, now, evidence=None):
     portfolio = state['bots'][bot]
     if bot != 'jarvis' and portfolio['cash'] < BUY_COST:
         funding = BUY_COST - portfolio['cash']
@@ -206,7 +207,7 @@ def open_trade(state, bot, row, quantity, now):
     portfolio['positions'][row['mint']] = {
         'mint': row['mint'], 'symbol': row['symbol'], 'opened': now, 'quantity': quantity,
         'entry_cost': BUY_COST, 'cost': BUY_COST, 'banked': 0, 'peak': 0,
-        'exit_cohort': EXIT_COHORT,
+        'exit_cohort': EXIT_COHORT, 'entry_evidence': evidence or {},
         'target': 20, 'trims': 0, 'mark': None, 'mark_at': None, 'due': now + POLL,
         'pending': None, 'liquidity': row['liquidity_usd'], 'age': row['age_minutes'],
         'policy': dict(state['strategy']) if bot == 'jarvis' else {'entry': BOTS[bot][1], 'exit': BOTS[bot][2]},
@@ -247,6 +248,8 @@ def apply_exit(completed, portfolio, bot, p, quote_size, amount, now):
         return
     value = max(0, amount - SELL_FEE)
     p.update(mark=value, mark_at=now, mark_stale=False, pending=None)
+    if p['trims'] == 0 and 'first_sell_quote' not in p:
+        p['first_sell_quote'] = {'net_usdc': value, 'seconds_after_entry': now - p['opened']}
     gain = 100 * (value - p['cost']) / p['cost']
     p['peak'] = max(p['peak'], gain)
     floor = exit_floor(p['peak'])
@@ -289,26 +292,55 @@ def evaluate(conn, state):
                 for min_age in (0, 30, 120):
                     selected = [trade for trade in subset
                                 if trade['liquidity'] >= liquidity and trade['age'] >= min_age]
-                    fit = [trade['pnl'] for trade in selected if trade['mint'] in training]
-                    check = [trade['pnl'] for trade in selected if trade['mint'] not in training]
-                    if len(fit) >= 20 and len(check) >= 10:
-                        # Remove the largest winner before scoring a candidate.
-                        fit_score = (sum(fit) - max(fit)) / (len(fit)-1)
-                        check_score = (sum(check) - max(check)) / (len(check)-1)
-                        candidates.append((fit_score, check_score, bot, liquidity, min_age, len(check)))
-        # Select on training only, then evaluate that single choice on the holdout.
-        best = max(candidates, key=lambda row: (row[0], row[5]), default=None)
+                    fit = [trade for trade in selected if trade['mint'] in training]
+                    check = [trade for trade in selected if trade['mint'] not in training]
+                    for rule in research.RULES:
+                        fit_score = score_rule(fit, rule, 20)
+                        check_score = score_rule(check, rule, 10)
+                        if fit_score is not None:
+                            candidates.append((fit_score, check_score, bot, liquidity, min_age, len(check), rule))
+        # Pick a rule on training data only. Keep a mint together across variants.
+        best = max(candidates, key=lambda row: row[0], default=None)
         state['reviewed'] += batch_size
         state['review'] = {'closed_reviewed': state['reviewed'], 'distinct_mints': len(ordered_mints),
                            'result': 'No rules earned a positive score on both samples.'}
-        if best and best[0] > 0 and best[1] > 0:
-            _, validation, bot, liquidity, age, samples = best
+        if best and best[0] > 0 and best[1] is not None and best[1] > 0:
+            _, validation, bot, liquidity, age, samples, rule = best
             state['strategy'] = {'version': state['reviewed'], 'source': bot, 'entry': BOTS[bot][1],
                                  'exit': BOTS[bot][2], 'min_liquidity': liquidity, 'min_age': age,
-                                 'validation_pnl': validation, 'validation_count': samples}
+                                 'entry_filter': rule, 'validation_pnl': validation, 'validation_count': samples}
             state['review']['result'] = 'Strategy adopted for new Jarvis entries.'
         elif state['strategy']:
             state['review']['result'] = 'No new rules passed validation. Jarvis kept its current strategy.'
+        proposal = research.recommendation([t for t in trades if 'entry_evidence' in t])
+        if proposal:
+            conn.execute('INSERT OR IGNORE INTO research_mail(version, body, due) VALUES (?,?,?)',
+                         (state['reviewed'], f"Jarvis paper review {state['reviewed']}\n\n{state['review']['result']}\n\n{proposal}", 0))
+
+
+def score_rule(trades, rule, minimum):
+    pnl = [t['pnl'] for t in trades if research.allows(rule, t.get('entry_evidence') or {})]
+    if len(pnl) < minimum:
+        return None
+    # Skipped opportunities count as zero. Remove the biggest observed winner.
+    score = (sum(pnl) - max(0, max(pnl))) / (len(trades) - 1)
+    if rule != 'baseline':
+        baseline = score_rule(trades, 'baseline', minimum)
+        if score <= baseline:
+            return None
+    return score
+
+
+def entry_evidence(conn, row, now):
+    found = conn.execute('SELECT evidence FROM research WHERE mint=? AND pair=?',
+                         (row['mint'], row.get('pair'))).fetchone()
+    if not found:
+        return {}
+    evidence = {key: record['value'] for key, record in json.loads(found['evidence']).items()
+                if record['value'] is not None and 0 <= now - record['at'] <= research.FRESH_SECONDS}
+    if 'chart' in evidence and not 0 <= now - evidence['chart']['closed_at'] <= research.FRESH_SECONDS:
+        del evidence['chart']
+    return evidence
 
 
 def entry_jobs(conn, state, now):
@@ -324,6 +356,9 @@ def entry_jobs(conn, state, now):
                 strategy = state['strategy']
                 if (not strategy or portfolio['cash'] < BUY_COST or row['first'] < strategy['activated_at']
                         or row['liquidity_usd'] < strategy['min_liquidity'] or row['age_minutes'] < strategy['min_age']):
+                    continue
+                rule = strategy.get('entry_filter', 'baseline')
+                if rule != 'baseline' and not research.allows(rule, entry_evidence(conn, row, now)):
                     continue
                 entry = strategy['entry']
             else:
@@ -407,8 +442,10 @@ def step(conn, state, providers, get_quote, now):
             state['error'] = 'Entry route unavailable for a candidate.'
         else:
             state['exit_attempts_since_entry'] = 0
+            evidence = entry_evidence(conn, row, now)
+            evidence['market'] = {key: row.get(key) for key in ('volume_m5_usd', 'buys_m5', 'sells_m5', 'liquidity_usd')}
             for bot in entries[mint]:
-                open_trade(state, bot, row, quantity, now)
+                open_trade(state, bot, row, quantity, now, evidence)
     elif exits:
         attempts = state.get('exit_quote_attempts', 0)
         job = next_exit(exits, attempts)
@@ -549,7 +586,13 @@ def status():
                               'estimated_value': value / DOLLAR, 'valuation_basis': basis}
                              for p, (value, basis) in zip(positions, valuations)],
             })
+        coverage = conn.execute("""SELECT count(*) FROM research WHERE checked>=? AND (
+            json_extract(evidence,'$.chart.value') IS NOT NULL OR json_extract(evidence,'$.bluesky.value') IS NOT NULL
+            OR json_extract(evidence,'$.x.value') IS NOT NULL)""", (now - research.FRESH_SECONDS,)).fetchone()[0]
+        latest_mail = conn.execute('SELECT version, sent FROM research_mail ORDER BY version DESC LIMIT 1').fetchone()
     return {'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
+            'research': {'recent_coins': coverage, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
+                         'latest_proposal': dict(latest_mail) if latest_mail else None},
             'exit_queue': exit_queue(quote_jobs(state, now), now),
             'bots': rows, 'strategy': state['strategy'], 'review': state['review'], 'reviewed': state['reviewed'],
             'review_every': review_size(state['reviewed']), 'watching': len(state['watch'])}
@@ -571,7 +614,9 @@ def history(jarvis, before=None):
             output.append({'mint': group['mint'], 'symbol': trades[0]['symbol'], 'trades': [
                 {'bot': BOTS[t['bot']][0], 'pnl': t['pnl'] / DOLLAR, 'cost': t['entry_cost'] / DOLLAR,
                  'proceeds': t['banked'] / DOLLAR, 'reason': t['reason'], 'closed': t['closed'],
-                 'held_seconds': max(0, int(t['closed'] - t['opened']))}
+                 'held_seconds': max(0, int(t['closed'] - t['opened'])),
+                 'entry_pattern': (t.get('entry_evidence', {}).get('chart') or {}).get('pattern'),
+                 'social_match': research.allows('social_confirmed', t.get('entry_evidence', {}))}
                 for t in trades
             ]})
     return {'coins': output, 'next': groups[limit-1]['last_id'] if len(groups) > limit else None}
@@ -585,3 +630,83 @@ async def worker():
         except Exception:
             LOG.exception('Jarvis paper run tick failed')
         await asyncio.sleep(max(.1, POLL - (time.monotonic() - started)))
+
+
+def claim_research(conn, now):
+    """Reserve provider calls independently of the two-second trading worker."""
+    state, _ = read(conn)
+    if not state['enabled']:
+        return []
+    rows = [r for r in state['watch'].values()
+            if 0 <= now - r['last'] <= 90
+            and all(research.ADDRESS.fullmatch(r[field]) for field in ('mint', 'pair'))]
+    if not rows:
+        return []
+    records = {r['mint']: (r['pair'], json.loads(r['evidence']))
+               for r in conn.execute('SELECT mint,pair,evidence FROM research WHERE checked>=?', (now - 900,))}
+    tasks = []
+    for source, interval in (('chart', 12), ('bluesky', 30), ('x', research.X_INTERVAL)):
+        if source == 'x' and not os.getenv('JARVIS_X_BEARER_TOKEN', '').strip():
+            continue
+        due = conn.execute('SELECT due FROM research_tasks WHERE name=?', (source,)).fetchone()
+        if due and due['due'] > now:
+            continue
+
+        def priority(row):
+            pair, evidence = records.get(row['mint'], (None, {}))
+            last = evidence.get(source, {}).get('at', 0) if pair == row['pair'] else 0
+            fresh = now - last < research.FRESH_SECONDS
+            return (fresh, last if fresh else -row['first'])
+
+        if not tasks:
+            # Keep recurring storage bounded and retain recent coverage for diagnosis.
+            conn.execute('DELETE FROM research WHERE checked<?', (now - 900,))
+        chosen = min(rows, key=priority)
+        conn.execute('INSERT OR REPLACE INTO research_tasks(name,due) VALUES (?,?)', (source, now + interval))
+        tasks.append((source, chosen))
+    return tasks
+
+
+def research_tick(clock=time.time, chart=research.chart, social=research.social_source, deliver=research.deliver):
+    now = clock()
+    with connection() as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        tasks = claim_research(conn, now)
+        mail = conn.execute('SELECT version,body FROM research_mail WHERE sent IS NULL AND due<=? ORDER BY version LIMIT 1',
+                            (now,)).fetchone()
+        if mail:
+            conn.execute('UPDATE research_mail SET due=? WHERE version=?', (now + 900, mail['version']))
+    if mail:
+        try:
+            sent = deliver(mail['version'], mail['body'])
+        except Exception:
+            LOG.warning('Jarvis code proposal email could not be delivered')
+        else:
+            if sent:
+                with connection() as conn, conn:
+                    conn.execute('UPDATE research_mail SET sent=? WHERE version=?', (clock(), mail['version']))
+    for source, row in tasks:
+        try:
+            value = chart(row, clock()) if source == 'chart' else social(source, row, clock())
+        except Exception:
+            LOG.warning('Jarvis %s research is unavailable', source)
+            value = None
+        at = clock()
+        with connection() as conn, conn:
+            conn.execute('BEGIN IMMEDIATE')
+            existing = conn.execute('SELECT evidence FROM research WHERE mint=? AND pair=?',
+                                    (row['mint'], row['pair'])).fetchone()
+            evidence = json.loads(existing['evidence']) if existing else {}
+            # Missing data never qualifies as positive research evidence.
+            evidence[source] = {'at': at, 'value': value}
+            conn.execute('INSERT OR REPLACE INTO research(mint,pair,checked,evidence) VALUES (?,?,?,?)',
+                         (row['mint'], row['pair'], at, json.dumps(evidence)))
+
+
+async def research_worker():
+    while True:
+        try:
+            await asyncio.to_thread(research_tick)
+        except Exception:
+            LOG.exception('Jarvis research cycle failed')
+        await asyncio.sleep(10)

@@ -18,13 +18,14 @@ def build_router(*,require_session):
 
     @asynccontextmanager
     async def jarvis_lifespan(_app):
-        task = asyncio.create_task(jarvis.worker())
+        tasks = [asyncio.create_task(jarvis.worker()), asyncio.create_task(jarvis.research_worker())]
         try:
             yield
         finally:
-            task.cancel()
+            for task in tasks:
+                task.cancel()
             with suppress(asyncio.CancelledError):
-                await task
+                await asyncio.gather(*tasks)
 
     router = APIRouter(lifespan=jarvis_lifespan)
 
