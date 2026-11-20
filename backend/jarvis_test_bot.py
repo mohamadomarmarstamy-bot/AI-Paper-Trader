@@ -11,6 +11,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import database
+import jarvis_experiments as experiments
 import jarvis_research as research
 import solana_http
 from solana_jupiter import Deferred, RateLimited, _budget
@@ -83,7 +84,7 @@ def connection():
     path = database.DATABASE_PATH.with_name('jarvis_paper.sqlite3')
     with closing(sqlite3.connect(path, timeout=5)) as conn:
         conn.row_factory = sqlite3.Row
-        conn.executescript(SCHEMA + research.SCHEMA)
+        conn.executescript(SCHEMA + research.SCHEMA + experiments.SCHEMA)
         conn.execute('INSERT OR IGNORE INTO run(id,state) VALUES (1,?)', (json.dumps(initial()),))
         conn.commit()
         yield conn
@@ -306,10 +307,15 @@ def evaluate(conn, state):
                            'result': 'No rules earned a positive score on both samples.'}
         if best and best[0] > 0 and best[1] is not None and best[1] > 0:
             _, validation, bot, liquidity, age, samples, rule = best
-            state['strategy'] = {'version': state['reviewed'], 'source': bot, 'entry': BOTS[bot][1],
-                                 'exit': BOTS[bot][2], 'min_liquidity': liquidity, 'min_age': age,
-                                 'entry_filter': rule, 'validation_pnl': validation, 'validation_count': samples}
-            state['review']['result'] = 'Strategy adopted for new Jarvis entries.'
+            settings = {'source': bot, 'entry': BOTS[bot][1], 'exit': BOTS[bot][2],
+                        'min_liquidity': liquidity, 'min_age': age, 'entry_filter': rule}
+            current = {'entry_filter': 'baseline', **(state['strategy'] or {})}
+            if state.get('entry_guard') and all(current.get(key) == value for key, value in settings.items()):
+                state['review']['result'] = 'The paused strategy led this review. Entries remain paused.'
+            else:
+                state['strategy'] = {**settings, 'version': state['reviewed'],
+                                     'validation_pnl': validation, 'validation_count': samples}
+                state['review']['result'] = 'Strategy adopted for new Jarvis entries.'
         elif state['strategy']:
             state['review']['result'] = 'No new rules passed validation. Jarvis kept its current strategy.'
         proposal = research.recommendation([t for t in trades if 'entry_evidence' in t])
@@ -354,7 +360,7 @@ def entry_jobs(conn, state, now):
                 continue
             if bot == 'jarvis':
                 strategy = state['strategy']
-                if (not strategy or portfolio['cash'] < BUY_COST or row['first'] < strategy['activated_at']
+                if (state.get('entry_guard') or not strategy or portfolio['cash'] < BUY_COST or row['first'] < strategy['activated_at']
                         or row['liquidity_usd'] < strategy['min_liquidity'] or row['age_minutes'] < strategy['min_age']):
                     continue
                 rule = strategy.get('entry_filter', 'baseline')
@@ -506,12 +512,37 @@ def tick(*, providers=None, get_quote=quote, clock=time.time):
                 old_version = (state['strategy'] or {}).get('version')
                 if completed:
                     evaluate(conn, state)
+                    guard_entries(conn, state)
                 if state['strategy'] and state['strategy']['version'] != old_version:
                     state['strategy']['activated_at'] = clock()
+                    state.pop('entry_guard', None)
                 conn.execute('UPDATE run SET state=?,revision=revision+1 WHERE id=1', (json.dumps(state),))
         finally:
             with conn:
                 conn.execute('UPDATE run SET lease_until=0 WHERE id=1 AND lease_until=?', (lease,))
+
+
+def guard_entries(conn, state):
+    strategy = state['strategy']
+    if not strategy or strategy.get('activated_at') is None:
+        return
+    if (state.get('entry_guard') or {}).get('version') != strategy['version']:
+        state.pop('entry_guard', None)
+    if state.get('entry_guard'):
+        return
+    matched = conn.execute("""
+        SELECT main.pnl AS own, baseline.pnl AS baseline
+        FROM trades main JOIN trades baseline ON main.mint=baseline.mint AND baseline.bot=?
+        WHERE main.bot='jarvis' AND json_extract(main.data,'$.policy.version')=?
+        ORDER BY main.id DESC LIMIT 25
+    """, (strategy['source'], strategy['version'])).fetchall()
+    if len(matched) != 25:
+        return
+    pnl = sum(row['own'] for row in matched)
+    difference = sum(row['own'] - row['baseline'] for row in matched)
+    if pnl <= -5 * DOLLAR and difference <= -5 * DOLLAR:
+        state['entry_guard'] = {'version': strategy['version'], 'reason':
+            'Entries paused after 25 matched trades lost money and lagged the source bot. Open exits remain monitored.'}
 
 
 def stats(row):
@@ -590,10 +621,12 @@ def status():
             json_extract(evidence,'$.chart.value') IS NOT NULL OR json_extract(evidence,'$.bluesky.value') IS NOT NULL
             OR json_extract(evidence,'$.x.value') IS NOT NULL)""", (now - research.FRESH_SECONDS,)).fetchone()[0]
         latest_mail = conn.execute('SELECT version, sent FROM research_mail ORDER BY version DESC LIMIT 1').fetchone()
+        comparison = experiments.read_board(conn)
     return {'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
             'research': {'recent_coins': coverage, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
                          'latest_proposal': dict(latest_mail) if latest_mail else None},
             'exit_queue': exit_queue(quote_jobs(state, now), now),
+            'comparison': comparison, 'entry_guard': state.get('entry_guard'),
             'bots': rows, 'strategy': state['strategy'], 'review': state['review'], 'reviewed': state['reviewed'],
             'review_every': review_size(state['reviewed']), 'watching': len(state['watch'])}
 
@@ -642,6 +675,8 @@ def claim_research(conn, now):
             and all(research.ADDRESS.fullmatch(r[field]) for field in ('mint', 'pair'))]
     if not rows:
         return []
+    study_mints = {r['mint'] for r in conn.execute(
+        'SELECT mint FROM experiment_coins WHERE done IS NULL AND opened>?', (now - experiments.ENTRY_WINDOW,))}
     records = {r['mint']: (r['pair'], json.loads(r['evidence']))
                for r in conn.execute('SELECT mint,pair,evidence FROM research WHERE checked>=?', (now - 900,))}
     tasks = []
@@ -656,7 +691,7 @@ def claim_research(conn, now):
             pair, evidence = records.get(row['mint'], (None, {}))
             last = evidence.get(source, {}).get('at', 0) if pair == row['pair'] else 0
             fresh = now - last < research.FRESH_SECONDS
-            return (fresh, last if fresh else -row['first'])
+            return (fresh, row['mint'] not in study_mints, last if fresh else -row['first'])
 
         if not tasks:
             # Keep recurring storage bounded and retain recent coverage for diagnosis.
@@ -710,3 +745,79 @@ async def research_worker():
         except Exception:
             LOG.exception('Jarvis research cycle failed')
         await asyncio.sleep(10)
+
+
+def experiment_tick(get_quote=quote, clock=time.time):
+    now = clock()
+    with connection() as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        state, _ = read(conn)
+        # Give the main portfolios precedence when exits are waiting.
+        if exit_queue(quote_jobs(state, now), now)['backed_up']:
+            return
+        active = conn.execute('SELECT id,data FROM experiment_coins WHERE done IS NULL ORDER BY id').fetchall()
+        if not state['enabled'] and not active:
+            return
+        lease = now + 35
+        claimed = conn.execute('UPDATE experiment_state SET lease=? WHERE id=1 AND lease<=?', (lease, now))
+        if not claimed.rowcount:
+            return
+        last = conn.execute('SELECT opened FROM experiment_coins ORDER BY id DESC LIMIT 1').fetchone()
+        if state['enabled'] and len(active) < experiments.MAX_OPEN and (not last or now - last['opened'] >= experiments.START_INTERVAL):
+            for row in sorted(state['watch'].values(), key=lambda item: item['first'], reverse=True):
+                if not 0 <= now - row['first'] <= 90:
+                    break
+                coin = experiments.new_coin(row, now)
+                inserted = conn.execute(
+                    'INSERT OR IGNORE INTO experiment_coins(mint,opened,data) VALUES (?,?,?)',
+                    (row['mint'], now, json.dumps(coin)))
+                if inserted.rowcount:
+                    active = [*active, {'id': inserted.lastrowid, 'data': json.dumps(coin)}]
+                    break
+        plans = []
+        updated = {}
+        for item in active:
+            coin = json.loads(item['data'])
+            mint = coin['mint']
+            row = state['watch'].get(mint)
+            evidence = entry_evidence(conn, row, now) if row else {}
+            updated[item['id']] = coin
+            jobs = experiments.advance(coin, row, evidence, now, TRADE, BUY_COST)
+            for (side, size), arms in jobs.items():
+                if state['enabled'] or side == 'sell':
+                    plans.append((side, size, mint, arms))
+    outcome = None
+    if plans:
+        side, size, mint, arms = min(plans, key=lambda plan: min(arm['due'] for arm in plan[3]))
+        source, target = (USDC, mint) if side == 'buy' else (mint, USDC)
+        try:
+            amount = get_quote(source, target, size)
+        except (Deferred, RateLimited):
+            pass
+        except Exception:
+            outcome = (arms, side, None, clock())
+        else:
+            outcome = (arms, side, amount, clock())
+    with connection() as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        current = conn.execute('SELECT lease FROM experiment_state WHERE id=1').fetchone()[0]
+        if current != lease or clock() >= lease:
+            return
+        if outcome and (outcome[1] == 'sell' or read(conn)[0]['enabled']):
+            experiments.quotes(*outcome, BUY_COST, SELL_FEE, exit_floor)
+        for key, coin in updated.items():
+            done = all('pnl' in arm for arm in coin['arms'].values())
+            conn.execute('UPDATE experiment_coins SET done=?,data=? WHERE id=?',
+                         (clock() if done else None, json.dumps(coin), key))
+        experiments.update_policy(conn)
+        # Keep the reservation until the next worker interval on every replica.
+        conn.execute('UPDATE experiment_state SET lease=? WHERE id=1', (now + experiments.ENTRY_DELAY,))
+
+
+async def experiment_worker():
+    while True:
+        try:
+            await asyncio.to_thread(experiment_tick)
+        except Exception:
+            LOG.exception('Jarvis experiment cycle failed')
+        await asyncio.sleep(experiments.ENTRY_DELAY)

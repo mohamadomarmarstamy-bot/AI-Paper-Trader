@@ -44,6 +44,7 @@
 
   function botState(bot) {
     if (bot.id === 'jarvis' && !state.strategy) return bot.open ? 'Waiting for strategy · exits monitored' : 'Waiting for strategy';
+    if (bot.id === 'jarvis' && state.entry_guard) return 'Entries paused · exits monitored';
     if (!state.enabled) return bot.open ? 'Paused · exits monitored' : 'Paused';
     if (!state.last_cycle || Date.now() / 1000 - state.last_cycle > 30) return 'Waiting for scan';
     return 'Running';
@@ -55,6 +56,26 @@
       counts.last_quote ? `${counts.last_quote} at last sell quote` : '',
       counts.at_cost ? `${counts.at_cost} at cost` : '',
     ].filter(Boolean).join(' · ');
+  }
+
+  function renderComparison(study) {
+    const leader = study.arms[study.policy.mode || 'instant'].name;
+    $('jarvis-experiment-summary').textContent =
+      `${study.completed} matched coins settled · ${study.active} in progress · Experiment leader: ${leader}. ${study.policy.result || ''}`;
+    const notes = Object.entries(study.arms).map(([mode, arm]) => {
+      const row = el('div', '', 'meme-row');
+      row.append(el('strong', arm.name),
+        el('p', `${money(arm.per_opportunity)} per settled opportunity · ${money(arm.drawdown)} settled drawdown`),
+        el('p', `${arm.closed} closed · ${study.running[mode]} open · ${arm.skipped} skipped · ${arm.unpriced} unpriced at deadline`),
+        el('small', `${arm.failed_entries} entry quote misses · ${arm.failed_exits} exit quote misses`));
+      if (arm.avg_entry_wait != null) row.append(el('small',
+        `Average entry delay ${displayDuration(arm.avg_entry_wait)} · Exit quote overdue by ${displayDuration(arm.avg_exit_wait)} on average`));
+      return row;
+    });
+    const history = study.reviews.map(review =>
+      el('small', `Review through coin ${review.checkpoint} · ${review.result}`));
+    $('jarvis-experiment-rows').replaceChildren(...notes, ...history,
+      el('small', 'Same $50 size and Ladder exit rules, with a 15-minute time exit. Unpriced positions at the deadline are scored at zero proceeds. Stats cover up to 250 settled coins.'));
   }
 
   function render() {
@@ -83,6 +104,7 @@
       $('jarvis-today').className = 'meme-stat ' + sign(selected.today.realized);
       $('jarvis-today-details').textContent = `${selected.today.closed} closed · ${selected.today.wins} wins · ${selected.today.losses} losses · ${state.day} ET`;
       $('jarvis-strategy').hidden = !jarvis;
+      $('jarvis-experiments').hidden = !jarvis || !state.comparison;
       if (jarvis) {
         const completed = state.bots.filter(bot => bot.id !== 'jarvis').reduce((sum, bot) => sum + bot.closed, 0);
         const next = state.reviewed + state.review_every;
@@ -94,7 +116,8 @@
         $('jarvis-research').textContent = sources
           ? `Recent chart or social research on ${sources.recent_coins} coins · X ${sources.x_configured ? 'configured' : 'awaiting API token'}${proposal ? ` · Code proposal from review ${proposal.version} ${proposal.sent ? 'emailed' : 'queued'}` : ''}`
           : '';
-        $('jarvis-review').textContent = `${summary} ${completed}/${next} completed baseline trades toward the next review. ${state.review?.result || ''}`;
+        $('jarvis-review').textContent = `${summary} ${completed}/${next} completed baseline trades toward the next review. ${state.review?.result || ''} ${state.entry_guard?.reason || ''}`;
+        if (state.comparison) renderComparison(state.comparison);
       }
       const holdings = selected.holdings.map(holding => {
         const row = el('div', '', 'meme-row');

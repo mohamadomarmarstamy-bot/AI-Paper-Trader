@@ -18,7 +18,8 @@ def build_router(*,require_session):
 
     @asynccontextmanager
     async def jarvis_lifespan(_app):
-        tasks = [asyncio.create_task(jarvis.worker()), asyncio.create_task(jarvis.research_worker())]
+        tasks = [asyncio.create_task(worker()) for worker in
+                 (jarvis.worker, jarvis.research_worker, jarvis.experiment_worker)]
         try:
             yield
         finally:
