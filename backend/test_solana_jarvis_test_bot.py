@@ -1,6 +1,7 @@
 from contextlib import closing
 from pathlib import Path
 import json
+import math
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -128,6 +129,68 @@ class JarvisTests(unittest.TestCase):
             self.assertIn('candidate', state['bots']['instant-step']['positions'])
             self.assertIn('candidate', state['bots']['instant-trim']['positions'])
 
+    def test_exit_priority_reserves_every_third_attempt_for_oldest(self):
+        state = jarvis.initial()
+        portfolio = state['bots']['instant-step']
+        for mint, delay, mark in [('old', 30, None), ('near', 10, 47_000_000), ('below', 3, 44_000_000)]:
+            jarvis.open_trade(state, 'instant-step', {
+                'mint': mint, 'symbol': mint, 'liquidity_usd': 1, 'age_minutes': 1,
+            }, 10, self.now - delay)
+            portfolio['positions'][mint]['mark'] = mark
+
+        jobs = jarvis.quote_jobs(state, self.now)
+        self.assertEqual(jarvis.next_exit(jobs, 1), ('below', 10))
+        del jobs[('below', 10)]
+        self.assertEqual(jarvis.next_exit(jobs, 2), ('near', 10))
+        self.assertEqual(jarvis.next_exit(jobs, 3), ('old', 10))
+
+    def test_exit_backlog_uses_six_quote_attempts_before_entry(self):
+        with jarvis.connection() as conn:
+            state = jarvis.initial()
+            state.update(enabled=True, next_discovery=self.now + 60)
+            for index in range(7):
+                mint = f'exit-{index}'
+                jarvis.open_trade(state, 'instant-step', {
+                    'mint': mint, 'symbol': mint, 'liquidity_usd': 1, 'age_minutes': 1,
+                }, 10, self.now - 100)
+            state['watch']['candidate'] = {'mint': 'candidate', 'symbol': 'Candidate',
+                                           'first': self.now, 'last': self.now, 'pullback': None,
+                                           'liquidity_usd': 1, 'age_minutes': 1}
+            calls = []
+
+            def quote(input_mint, _output_mint, _amount):
+                calls.append(input_mint)
+                return 10 if input_mint == jarvis.USDC else 45_000_000
+
+            for offset in range(0, 14, 2):
+                jarvis.step(conn, state, self.market, quote, self.now + offset)
+
+        self.assertEqual(calls, [f'exit-{index}' for index in range(6)] + [jarvis.USDC])
+        self.assertIn('exit-6', state['bots']['instant-step']['positions'])
+        self.assertIn('candidate', state['bots']['instant-step']['positions'])
+
+    def test_health_reports_new_cohort_without_mixing_prior_trades(self):
+        jarvis.set_enabled(True)
+        self.advance()
+        jarvis.set_enabled(False)
+        with jarvis.connection() as conn, conn:
+            state, _ = jarvis.read(conn)
+            del state['bots']['instant-step']['positions'][MINT]['exit_cohort']
+            conn.execute('UPDATE run SET state=? WHERE id=1', (json.dumps(state),))
+
+        self.advance()
+        with patch.object(jarvis.time, 'time', return_value=self.now):
+            ladder, trim = jarvis.status()['bots'][:2]
+
+        self.assertEqual(ladder['closed'], 1)
+        self.assertEqual(ladder['exit_sample']['closed'], 0)
+        sample = trim['exit_sample']
+        self.assertEqual(sample['closed'], 1)
+        self.assertAlmostEqual(sample['pnl'], -5.35)
+        self.assertEqual(sample['quote_wait'], 3)
+        self.assertEqual(sample['stop_exits'], 1)
+        self.assertAlmostEqual(sample['stop_gap'], 100 * (1 - 44_900_000 / jarvis.BUY_COST) - 10)
+
     def test_discovery_checks_two_provider_batches_and_rotates_without_skipping(self):
         mints = [f'mint-{i}' for i in range(60)]
         batches = []
@@ -172,6 +235,34 @@ class JarvisTests(unittest.TestCase):
         self.assertEqual(position['target'], 40)
         self.assertEqual(position['banked'], 31_900_000)
         self.assertFalse(completed)
+
+    def test_fifth_profit_take_requires_quote_for_full_remainder(self):
+        state = jarvis.initial()
+        row = {'mint': MINT, 'symbol': 'Example', 'liquidity_usd': 120_000, 'age_minutes': 300}
+        bot = 'instant-trim'
+        jarvis.open_trade(state, bot, row, 160, self.now)
+        portfolio = state['bots'][bot]
+        position = portfolio['positions'][MINT]
+        completed = []
+        now = self.now + jarvis.POLL
+
+        for target in (20, 40, 80, 160):
+            quantity, cost = position['quantity'], position['cost']
+            amount = math.ceil(cost * (1 + target / 100)) + jarvis.SELL_FEE + 1
+            jarvis.apply_exit(completed, portfolio, bot, position, quantity, amount, now)
+            self.assertEqual(position['pending'], 'trim')
+            jarvis.apply_exit(completed, portfolio, bot, position, quantity // 2, amount // 2 + jarvis.SELL_FEE, now)
+            self.assertFalse(completed)
+
+        self.assertEqual((position['quantity'], position['trims'], position['target']), (10, 4, 320))
+        position['pending'] = 'trim'
+        self.assertEqual(list(jarvis.quote_jobs(state, now)), [(MINT, 10)])
+        amount = math.ceil(position['cost'] * 4.2) + jarvis.SELL_FEE + 1
+        jarvis.apply_exit(completed, portfolio, bot, position, 5, amount, now)
+        self.assertEqual(position['quantity'], 10)
+        jarvis.apply_exit(completed, portfolio, bot, position, 10, amount, now)
+        self.assertNotIn(MINT, portfolio['positions'])
+        self.assertEqual(completed[0]['reason'], 'Took profit · fifth sell closed remainder')
 
     def test_trim_steps_up_to_ten_percent_and_closes_the_remainder(self):
         state = jarvis.initial()
