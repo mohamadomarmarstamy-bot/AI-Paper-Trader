@@ -27,6 +27,8 @@ BUY_COST = TRADE + 250_000  # $0.10 network allowance plus $0.15 estimated accou
 SELL_FEE = 100_000
 JARVIS_BUDGET = 20_000 * DOLLAR
 FIRST_REVIEW = 1000
+EARLY_REVIEW_MIN = 500
+EARLY_REVIEW_INTERVAL = 25
 REVIEW_EVERY = 500
 POLL = 2
 DISCOVERY_INTERVAL = 20
@@ -282,28 +284,9 @@ def evaluate(conn, state):
         rows = conn.execute("SELECT data FROM trades WHERE bot!='jarvis' ORDER BY id LIMIT ? OFFSET ?",
                             (batch_size, start)).fetchall()
         trades = [json.loads(row['data']) for row in rows]
-        # Keep a mint together across variants and hold back the newest mints.
-        ordered_mints = list(dict.fromkeys(trade['mint'] for trade in trades))
-        cutoff = int(.7 * len(ordered_mints))
-        training = set(ordered_mints[:cutoff])
-        candidates = []
-        for bot in FIXED:
-            subset = [trade for trade in trades if trade['bot'] == bot]
-            for liquidity in (0, 25_000, 100_000, 250_000):
-                for min_age in (0, 30, 120):
-                    selected = [trade for trade in subset
-                                if trade['liquidity'] >= liquidity and trade['age'] >= min_age]
-                    fit = [trade for trade in selected if trade['mint'] in training]
-                    check = [trade for trade in selected if trade['mint'] not in training]
-                    for rule in research.RULES:
-                        fit_score = score_rule(fit, rule, 20)
-                        check_score = score_rule(check, rule, 10)
-                        if fit_score is not None:
-                            candidates.append((fit_score, check_score, bot, liquidity, min_age, len(check), rule))
-        # Pick a rule on training data only. Keep a mint together across variants.
-        best = max(candidates, key=lambda row: row[0], default=None)
+        best, mint_count = review_candidate(trades)
         state['reviewed'] += batch_size
-        state['review'] = {'closed_reviewed': state['reviewed'], 'distinct_mints': len(ordered_mints),
+        state['review'] = {'closed_reviewed': state['reviewed'], 'distinct_mints': mint_count,
                            'result': 'No rules earned a positive score on both samples.'}
         if best and best[0] > 0 and best[1] is not None and best[1] > 0:
             _, validation, bot, liquidity, age, samples, rule = best
@@ -322,6 +305,63 @@ def evaluate(conn, state):
         if proposal:
             conn.execute('INSERT OR IGNORE INTO research_mail(version, body, due) VALUES (?,?,?)',
                          (state['reviewed'], f"Jarvis paper review {state['reviewed']}\n\n{state['review']['result']}\n\n{proposal}", 0))
+
+
+def review_candidate(trades):
+    # Keep a mint together across variants and hold out the latest entries.
+    ordered_mints = list(dict.fromkeys(trade['mint'] for trade in sorted(trades, key=lambda item: item.get('opened', 0))))
+    cutoff = int(.7 * len(ordered_mints))
+    training = set(ordered_mints[:cutoff])
+    candidates = []
+    for bot in FIXED:
+        subset = [trade for trade in trades if trade['bot'] == bot]
+        for liquidity in (0, 25_000, 100_000, 250_000):
+            for min_age in (0, 30, 120):
+                selected = [trade for trade in subset
+                            if trade['liquidity'] >= liquidity and trade['age'] >= min_age]
+                fit = [trade for trade in selected if trade['mint'] in training]
+                check = [trade for trade in selected if trade['mint'] not in training]
+                for rule in research.RULES:
+                    fit_score = score_rule(fit, rule, 20)
+                    check_score = score_rule(check, rule, 10)
+                    if fit_score is not None:
+                        candidates.append((fit_score, check_score, bot, liquidity, min_age, len(check), rule))
+    # Pick a rule on training data only. Keep a mint together across variants.
+    best = max(candidates, key=lambda row: row[0], default=None)
+    return best, len(ordered_mints)
+
+
+def refresh_early_review(conn, state):
+    if state['reviewed']:
+        return
+    last = (state.get('early_review') or {}).get('closed', 0)
+    count = conn.execute("SELECT count(*) FROM trades WHERE bot!='jarvis'").fetchone()[0]
+    if count < EARLY_REVIEW_MIN or count >= FIRST_REVIEW or count < last + EARLY_REVIEW_INTERVAL:
+        return
+    trades = [json.loads(row['data']) for row in conn.execute(
+        "SELECT data FROM trades WHERE bot!='jarvis' ORDER BY id LIMIT ?", (count,))]
+    best, mint_count = review_candidate(trades)
+    bots = {}
+    for bot in FIXED:
+        sample = [t for t in trades if t['bot'] == bot]
+        pnl = [trade['pnl'] for trade in sample]
+        net = sum(pnl)
+        bots[bot] = {
+            'name': BOTS[bot][0], 'closed': len(sample), 'net': net / DOLLAR,
+            'per_trade': net / (len(sample) * DOLLAR) if sample else None,
+        }
+    chart = sum(bool((t.get('entry_evidence') or {}).get('chart')) for t in trades)
+    social = sum(any(key in (t.get('entry_evidence') or {}) for key in ('x', 'bluesky')) for t in trades)
+    result = ('The training leader did not pass the held-out coin test.' if best else
+              'Too few comparable closes to select a training candidate.')
+    candidate = None
+    if best and best[0] > 0 and best[1] is not None and best[1] > 0:
+        fit, holdout, bot, liquidity, age, _, rule = best
+        candidate = {'name': BOTS[bot][0], 'min_liquidity': liquidity, 'min_age': age,
+                     'entry_filter': rule, 'training': fit / DOLLAR, 'holdout': holdout / DOLLAR}
+        result = 'A candidate passed this early review. Jarvis can reconsider it at the first full review.'
+    state['early_review'] = {'closed': count, 'mints': mint_count, 'chart': chart, 'social': social,
+                             'bots': bots, 'candidate': candidate, 'result': result}
 
 
 def score_rule(trades, rule, minimum):
@@ -513,6 +553,9 @@ def tick(*, providers=None, get_quote=quote, clock=time.time):
                 if completed:
                     evaluate(conn, state)
                     guard_entries(conn, state)
+                if completed or not state.get('early_review_initialized'):
+                    refresh_early_review(conn, state)
+                    state['early_review_initialized'] = True
                 if state['strategy'] and state['strategy']['version'] != old_version:
                     state['strategy']['activated_at'] = clock()
                     state.pop('entry_guard', None)
@@ -627,6 +670,7 @@ def status():
                          'latest_proposal': dict(latest_mail) if latest_mail else None},
             'exit_queue': exit_queue(quote_jobs(state, now), now),
             'comparison': comparison, 'entry_guard': state.get('entry_guard'),
+            'early_review': state.get('early_review'),
             'bots': rows, 'strategy': state['strategy'], 'review': state['review'], 'reviewed': state['reviewed'],
             'review_every': review_size(state['reviewed']), 'watching': len(state['watch'])}
 
