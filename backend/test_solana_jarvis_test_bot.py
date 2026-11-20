@@ -68,7 +68,8 @@ class JarvisTests(unittest.TestCase):
         self.assertAlmostEqual(report['coins'][0]['trades'][0]['pnl'], -5.35)
         self.assertEqual(report['coins'][0]['trades'][0]['held_seconds'], 5)
         self.assertFalse(self.state()['bots']['instant-step']['positions'])
-        self.assertIn(MINT, self.state()['bots']['instant-trim']['positions'])
+        self.assertFalse(self.state()['bots']['instant-trim']['positions'])
+        self.assertEqual(len(report['coins'][0]['trades']), 2)
         self.assertFalse(jarvis.history(True)['coins'])
         self.assertFalse(database.DATABASE_PATH.exists())
 
@@ -171,6 +172,32 @@ class JarvisTests(unittest.TestCase):
         self.assertEqual(position['target'], 40)
         self.assertEqual(position['banked'], 31_900_000)
         self.assertFalse(completed)
+
+    def test_trim_steps_up_to_ten_percent_and_closes_the_remainder(self):
+        state = jarvis.initial()
+        row = {'mint': MINT, 'symbol': 'Example', 'liquidity_usd': 120_000, 'age_minutes': 300}
+        bot = 'patient-trim'
+        jarvis.open_trade(state, bot, row, 100, self.now)
+        portfolio = state['bots'][bot]
+        position = portfolio['positions'][MINT]
+        completed = []
+
+        # A net +20% full-size quote raises the floor to +10% and queues a trim.
+        jarvis.apply_exit(completed, portfolio, bot, position, 100, 60_400_000, self.now)
+        self.assertEqual(position['peak'], 20)
+        self.assertEqual(position['pending'], 'trim')
+        jarvis.apply_exit(completed, portfolio, bot, position, 50, 30_250_000, self.now + 2)
+        self.assertEqual(position['quantity'], 50)
+        self.assertEqual(position['target'], 40)
+
+        # A +12% quote stays above the ratcheted stop. A +9% quote closes it.
+        jarvis.apply_exit(completed, portfolio, bot, position, 50, 28_240_000, self.now + 4)
+        self.assertFalse(completed)
+        self.assertEqual(position['peak'], 20)
+        jarvis.apply_exit(completed, portfolio, bot, position, 50, 27_486_250, self.now + 6)
+        self.assertNotIn(MINT, portfolio['positions'])
+        self.assertEqual(completed[0]['reason'], 'Step profit protection')
+        self.assertEqual(completed[0]['pnl'], 7_286_250)
 
     def test_reviews_start_at_1000_then_use_only_new_batches_of_500(self):
         self.assertEqual(jarvis.status()['review_every'], 1000)
