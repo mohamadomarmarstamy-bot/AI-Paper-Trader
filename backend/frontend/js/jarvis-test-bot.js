@@ -58,6 +58,24 @@
     ].filter(Boolean).join(' · ');
   }
 
+  function renderEarlyReview(review) {
+    $('jarvis-early-summary').textContent =
+      `${review.closed} closed trades across ${review.mints} coins · ${review.chart} with chart data · ${review.social} with social data. ${review.result}`;
+    const rows = Object.values(review.bots).map(bot => {
+      const row = el('div', '', 'meme-row');
+      row.append(el('strong', bot.name),
+        el('p', `${bot.closed} closed · ${money(bot.net)} realized · ${money(bot.per_trade)} per close`));
+      return row;
+    });
+    const candidate = review.candidate;
+    if (candidate) {
+      rows.push(el('p', `Candidate: ${candidate.name} · ${candidate.entry_filter.replaceAll('_', ' ')} · ${money(candidate.min_liquidity)} minimum liquidity · ${candidate.min_age} min minimum age`));
+      rows.push(el('small', `${money(candidate.training)} per training opportunity · ${money(candidate.holdout)} per held-out opportunity, after removing the largest winner from each sample`));
+    }
+    $('jarvis-early-results').replaceChildren(...rows,
+      el('small', 'The first strategy can activate after the 1,000-trade review.'));
+  }
+
   function renderComparison(study) {
     const leader = study.arms[study.policy.mode || 'instant'].name;
     $('jarvis-experiment-summary').textContent =
@@ -104,6 +122,7 @@
       $('jarvis-today').className = 'meme-stat ' + sign(selected.today.realized);
       $('jarvis-today-details').textContent = `${selected.today.closed} closed · ${selected.today.wins} wins · ${selected.today.losses} losses · ${state.day} ET`;
       $('jarvis-strategy').hidden = !jarvis;
+      $('jarvis-early-review').hidden = !jarvis || !state.early_review;
       $('jarvis-experiments').hidden = !jarvis || !state.comparison;
       if (jarvis) {
         const completed = state.bots.filter(bot => bot.id !== 'jarvis').reduce((sum, bot) => sum + bot.closed, 0);
@@ -117,6 +136,7 @@
           ? `Recent chart or social research on ${sources.recent_coins} coins · X ${sources.x_configured ? 'configured' : 'awaiting API token'}${proposal ? ` · Code proposal from review ${proposal.version} ${proposal.sent ? 'emailed' : 'queued'}` : ''}`
           : '';
         $('jarvis-review').textContent = `${summary} ${completed}/${next} completed baseline trades toward the next review. ${state.review?.result || ''} ${state.entry_guard?.reason || ''}`;
+        if (state.early_review) renderEarlyReview(state.early_review);
         if (state.comparison) renderComparison(state.comparison);
       }
       const holdings = selected.holdings.map(holding => {

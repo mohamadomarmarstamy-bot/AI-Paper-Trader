@@ -103,6 +103,31 @@ class JarvisResearchTests(unittest.TestCase):
         self.assertEqual(state['strategy']['version'], 1000)
         self.assertGreater(state['strategy']['validation_pnl'], 0)
 
+    def test_early_review_uses_existing_closes_without_activating_jarvis(self):
+        state = jarvis.initial()
+        with jarvis.connection() as conn, conn:
+            for index in range(595):
+                mint = f'coin-{index}'
+                pnl = -1_000_000
+                data = {'mint': mint, 'opened': NOW + index, 'bot': 'instant-step', 'pnl': pnl,
+                        'liquidity': 10000, 'age': 1}
+                conn.execute('INSERT INTO trades(bot,mint,opened,closed,day,pnl,entry_cost,data) VALUES (?,?,?,?,?,?,?,?)',
+                             ('instant-step', mint, NOW + index, NOW + 700, 'test-day', pnl, jarvis.BUY_COST,
+                              json.dumps(data)))
+            conn.execute('UPDATE run SET state=?', (json.dumps({**state, 'enabled': True, 'next_discovery': NOW + 70}),))
+
+        jarvis.tick(clock=lambda: NOW)
+        report = jarvis.status()
+        preview = report['early_review']
+        self.assertEqual(preview['closed'], 595)
+        self.assertEqual(preview['chart'], 0)
+        self.assertEqual(preview['social'], 0)
+        self.assertIsNone(preview['candidate'])
+        self.assertEqual(preview['bots']['instant-step']['net'], -595)
+        self.assertIsNone(report['strategy'])
+        self.assertEqual(report['reviewed'], 0)
+        self.assertEqual(report['review_every'], 1000)
+
     def test_validated_filter_controls_only_jarvis_entries(self):
         state = jarvis.initial()
         row = {'mint': MINT, 'pair': PAIR, 'first': NOW, 'last': NOW, 'pullback': None,
