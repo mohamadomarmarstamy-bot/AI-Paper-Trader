@@ -25,11 +25,11 @@ class ExperimentTests(unittest.TestCase):
         self.assertFalse(lab.advance(coin, self.row, evidence, NOW + 7, jarvis.TRADE, jarvis.BUY_COST))
         jobs = lab.advance(coin, self.row, evidence, NOW + 8, jarvis.TRADE, jarvis.BUY_COST)
         arms = jobs['buy', jarvis.TRADE]
-        self.assertEqual(len(arms), 3)
+        self.assertEqual(len(arms), 4)
         lab.quotes(arms, 'buy', 100, NOW + 8, jarvis.BUY_COST, jarvis.SELL_FEE, jarvis.exit_floor)
         self.assertEqual(coin['arms']['chart_social']['entry_wait'], 8)
         jobs = lab.advance(coin, self.row, evidence, NOW + 16, jarvis.TRADE, jarvis.BUY_COST)
-        self.assertEqual(len(jobs['sell', 100]), 3)
+        self.assertEqual(len(jobs['sell', 100]), 4)
         lab.quotes(jobs['sell', 100], 'sell', None, NOW + 16, jarvis.BUY_COST, jarvis.SELL_FEE, jarvis.exit_floor)
         lab.advance(coin, self.row, evidence, NOW + 8 + lab.HOLD_SECONDS + lab.ROUTE_GRACE, jarvis.TRADE, jarvis.BUY_COST)
         score = lab.table([coin])
@@ -37,6 +37,27 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(score['chart_social']['unpriced'], 1)
         self.assertEqual(score['chart_social']['failed_exits'], 1)
         self.assertEqual(score['pullback']['per_opportunity'], 0)
+
+    def test_trailing_arm_differs_only_after_arming_gain(self):
+        coin = lab.new_coin(self.row, NOW)
+        instant, trailing = (coin['arms'][mode] for mode in ('instant', 'instant_trailing_20'))
+        arms = [instant, trailing]
+        for arm in arms:
+            arm['signal_at'] = NOW
+        lab.quotes(arms, 'buy', 100, NOW + 8, jarvis.BUY_COST, jarvis.SELL_FEE, jarvis.exit_floor)
+        lab.quotes(arms, 'sell', 65_000_000, NOW + 16, jarvis.BUY_COST, jarvis.SELL_FEE, jarvis.exit_floor)
+        lab.quotes(arms, 'sell', 54_000_000, NOW + 24, jarvis.BUY_COST, jarvis.SELL_FEE, jarvis.exit_floor)
+        self.assertEqual(instant['status'], 'closed')
+        self.assertEqual(trailing['status'], 'open')
+        lab.quotes([trailing], 'sell', 50_000_000, NOW + 32, jarvis.BUY_COST, jarvis.SELL_FEE, jarvis.exit_floor)
+        self.assertEqual(trailing['status'], 'closed')
+
+    def test_legacy_coins_are_excluded_from_new_arm_denominator(self):
+        old = lab.new_coin(self.row, NOW)
+        del old['arms']['instant_trailing_20']
+        fresh = lab.new_coin(self.row, NOW + 60)
+        self.assertEqual(lab.table([old, fresh])['instant_trailing_20']['opportunities'], 1)
+        self.assertIsNone(lab.score([old, fresh], 'instant_trailing_20'))
 
     def test_promotion_needs_two_fresh_batches_then_rolls_back(self):
         def batch(best):

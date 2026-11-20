@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 import database
 import jarvis_experiments as experiments
+import jarvis_outcomes as outcomes
 import jarvis_research as research
 import solana_http
 from solana_jupiter import Deferred, RateLimited, _budget
@@ -86,7 +87,7 @@ def connection():
     path = database.DATABASE_PATH.with_name('jarvis_paper.sqlite3')
     with closing(sqlite3.connect(path, timeout=5)) as conn:
         conn.row_factory = sqlite3.Row
-        conn.executescript(SCHEMA + research.SCHEMA + experiments.SCHEMA)
+        conn.executescript(SCHEMA + research.SCHEMA + experiments.SCHEMA + outcomes.SCHEMA)
         conn.execute('INSERT OR IGNORE INTO run(id,state) VALUES (1,?)', (json.dumps(initial()),))
         conn.commit()
         yield conn
@@ -289,10 +290,10 @@ def evaluate(conn, state):
         state['review'] = {'closed_reviewed': state['reviewed'], 'distinct_mints': mint_count,
                            'result': 'No rules earned a positive score on both samples.'}
         if best and best[0] > 0 and best[1] is not None and best[1] > 0:
-            _, validation, bot, liquidity, age, samples, rule = best
+            _, validation, bot, liquidity, age, samples, rule, avoid = best
             settings = {'source': bot, 'entry': BOTS[bot][1], 'exit': BOTS[bot][2],
-                        'min_liquidity': liquidity, 'min_age': age, 'entry_filter': rule}
-            current = {'entry_filter': 'baseline', **(state['strategy'] or {})}
+                        'min_liquidity': liquidity, 'min_age': age, 'entry_filter': rule, 'avoid_pattern': avoid}
+            current = {'entry_filter': 'baseline', 'avoid_pattern': None, **(state['strategy'] or {})}
             if state.get('entry_guard') and all(current.get(key) == value for key, value in settings.items()):
                 state['review']['result'] = 'The paused strategy led this review. Entries remain paused.'
             else:
@@ -325,9 +326,16 @@ def review_candidate(trades):
                     fit_score = score_rule(fit, rule, 20)
                     check_score = score_rule(check, rule, 10)
                     if fit_score is not None:
-                        candidates.append((fit_score, check_score, bot, liquidity, min_age, len(check), rule))
+                        candidates.append((fit_score, check_score, bot, liquidity, min_age, len(check), rule, None))
+                        for avoid in outcomes.WARNINGS:
+                            if avoid == 'failed_breakout' and rule not in ('baseline', 'social_confirmed'):
+                                continue
+                            warning_score = score_rule(fit, rule, 20, avoid=avoid)
+                            if warning_score is not None:
+                                warning_check = score_rule(check, rule, 10, avoid=avoid)
+                                candidates.append((warning_score, warning_check, bot, liquidity, min_age, len(check), rule, avoid))
     # Pick a rule on training data only. Keep a mint together across variants.
-    best = max(candidates, key=lambda row: row[0], default=None)
+    best = max(candidates, key=lambda row: (row[0], row[-1] is None), default=None)
     return best, len(ordered_mints)
 
 
@@ -356,21 +364,37 @@ def refresh_early_review(conn, state):
               'Too few comparable closes to select a training candidate.')
     candidate = None
     if best and best[0] > 0 and best[1] is not None and best[1] > 0:
-        fit, holdout, bot, liquidity, age, _, rule = best
+        fit, holdout, bot, liquidity, age, _, rule, avoid = best
         candidate = {'name': BOTS[bot][0], 'min_liquidity': liquidity, 'min_age': age,
-                     'entry_filter': rule, 'training': fit / DOLLAR, 'holdout': holdout / DOLLAR}
+                     'entry_filter': rule, 'avoid_pattern': outcomes.WARNINGS.get(avoid), 'training': fit / DOLLAR, 'holdout': holdout / DOLLAR}
         result = 'A candidate passed this early review. Jarvis can reconsider it at the first full review.'
     state['early_review'] = {'closed': count, 'mints': mint_count, 'chart': chart, 'social': social,
                              'bots': bots, 'candidate': candidate, 'result': result}
 
 
-def score_rule(trades, rule, minimum):
-    pnl = [t['pnl'] for t in trades if research.allows(rule, t.get('entry_evidence') or {})]
+def refresh_outcome_review(conn, state):
+    count = conn.execute("SELECT COUNT(*) FROM trades WHERE bot!='jarvis'").fetchone()[0]
+    previous = state.get('outcome_review')
+    if previous and count < previous['closed'] + 25:
+        return
+    recent = conn.execute("SELECT data FROM trades WHERE bot!='jarvis' ORDER BY id DESC LIMIT 1000").fetchall()
+    trades = [json.loads(row['data']) for row in reversed(recent)]
+    state['outcome_review'] = {'closed': count, **outcomes.collection(trades)}
+
+
+def score_rule(trades, rule, minimum, *, avoid=None):
+    eligible = [t for t in trades if research.allows(rule, t.get('entry_evidence') or {})]
+    if avoid:
+        blocked, eligible = outcomes.split(avoid, eligible)
+        # Both losers avoided and winners sacrificed count at their original net P/L.
+        if len(blocked) < minimum // 2 or sum(t['pnl'] for t in blocked) >= 0:
+            return None
+    pnl = [t['pnl'] for t in eligible]
     if len(pnl) < minimum:
         return None
     # Skipped opportunities count as zero. Remove the biggest observed winner.
     score = (sum(pnl) - max(0, max(pnl))) / (len(trades) - 1)
-    if rule != 'baseline':
+    if rule != 'baseline' or avoid:
         baseline = score_rule(trades, 'baseline', minimum)
         if score <= baseline:
             return None
@@ -389,6 +413,12 @@ def entry_evidence(conn, row, now):
     return evidence
 
 
+def opportunity_evidence(conn, row, now):
+    evidence = entry_evidence(conn, row, now)
+    evidence['market'] = {key: row.get(key) for key in ('volume_m5_usd', 'buys_m5', 'sells_m5', 'liquidity_usd')}
+    return evidence
+
+
 def entry_jobs(conn, state, now):
     possible = {}
     for mint, row in state['watch'].items():
@@ -404,8 +434,12 @@ def entry_jobs(conn, state, now):
                         or row['liquidity_usd'] < strategy['min_liquidity'] or row['age_minutes'] < strategy['min_age']):
                     continue
                 rule = strategy.get('entry_filter', 'baseline')
-                if rule != 'baseline' and not research.allows(rule, entry_evidence(conn, row, now)):
-                    continue
+                avoid = strategy.get('avoid_pattern')
+                if rule != 'baseline' or avoid:
+                    evidence = opportunity_evidence(conn, row, now)
+                    if not research.allows(rule, evidence) or outcomes.warning(
+                            avoid, evidence, row['liquidity_usd'], row['age_minutes']):
+                        continue
                 entry = strategy['entry']
             else:
                 entry = BOTS[bot][1]
@@ -488,8 +522,7 @@ def step(conn, state, providers, get_quote, now):
             state['error'] = 'Entry route unavailable for a candidate.'
         else:
             state['exit_attempts_since_entry'] = 0
-            evidence = entry_evidence(conn, row, now)
-            evidence['market'] = {key: row.get(key) for key in ('volume_m5_usd', 'buys_m5', 'sells_m5', 'liquidity_usd')}
+            evidence = opportunity_evidence(conn, row, now)
             for bot in entries[mint]:
                 open_trade(state, bot, row, quantity, now, evidence)
     elif exits:
@@ -553,6 +586,8 @@ def tick(*, providers=None, get_quote=quote, clock=time.time):
                 if completed:
                     evaluate(conn, state)
                     guard_entries(conn, state)
+                if completed or 'outcome_review' not in state:
+                    refresh_outcome_review(conn, state)
                 if completed or not state.get('early_review_initialized'):
                     refresh_early_review(conn, state)
                     state['early_review_initialized'] = True
@@ -665,12 +700,15 @@ def status():
             OR json_extract(evidence,'$.x.value') IS NOT NULL)""", (now - research.FRESH_SECONDS,)).fetchone()[0]
         latest_mail = conn.execute('SELECT version, sent FROM research_mail ORDER BY version DESC LIMIT 1').fetchone()
         comparison = experiments.read_board(conn)
+        legacy_summary = conn.execute('SELECT data FROM legacy_outcome_summary WHERE id=1').fetchone()
     return {'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
             'research': {'recent_coins': coverage, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
                          'latest_proposal': dict(latest_mail) if latest_mail else None},
             'exit_queue': exit_queue(quote_jobs(state, now), now),
             'comparison': comparison, 'entry_guard': state.get('entry_guard'),
-            'early_review': state.get('early_review'),
+            'early_review': state.get('early_review'), 'outcome_review': state.get('outcome_review'),
+            'legacy_outcomes': json.loads(legacy_summary['data']) if legacy_summary else None,
+            'active_warning': outcomes.WARNINGS.get((state['strategy'] or {}).get('avoid_pattern')),
             'bots': rows, 'strategy': state['strategy'], 'review': state['review'], 'reviewed': state['reviewed'],
             'review_every': review_size(state['reviewed']), 'watching': len(state['watch'])}
 
@@ -746,6 +784,20 @@ def claim_research(conn, now):
     return tasks
 
 
+def refresh_legacy_outcomes(now):
+    with connection() as conn, conn:
+        claimed = conn.execute("""
+            INSERT INTO research_tasks(name,due) VALUES ('legacy-outcomes',?)
+            ON CONFLICT(name) DO UPDATE SET due=excluded.due WHERE due<=?
+        """, (now + 900, now)).rowcount
+    if not claimed:
+        return
+    report = outcomes.legacy_counts(database.DATABASE_PATH)
+    if report is not None:
+        with connection() as conn, conn:
+            conn.execute('INSERT OR REPLACE INTO legacy_outcome_summary(id,data) VALUES (1,?)', (json.dumps(report),))
+
+
 def research_tick(clock=time.time, chart=research.chart, social=research.social_source, deliver=research.deliver):
     now = clock()
     with connection() as conn, conn:
@@ -786,6 +838,7 @@ async def research_worker():
     while True:
         try:
             await asyncio.to_thread(research_tick)
+            await asyncio.to_thread(refresh_legacy_outcomes, time.time())
         except Exception:
             LOG.exception('Jarvis research cycle failed')
         await asyncio.sleep(10)
