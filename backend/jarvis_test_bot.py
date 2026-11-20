@@ -38,6 +38,8 @@ BACKLOG_EXIT_QUOTES_PER_ENTRY = 6
 EXIT_BACKLOG_AGE = 90
 NEAR_STOP_POINTS = 5
 OLDEST_EXIT_INTERVAL = 3
+EXIT_RETRY_INTERVAL = 6
+EXIT_RETRY_LIMIT = 900
 FINAL_PROFIT_SELL = 5
 EXIT_COHORT = 'priority-stop-v1'
 DISCOVERY_BATCH = 2 * MAX_SCAN_TOKENS
@@ -114,6 +116,10 @@ def set_enabled(enabled):
     return status()
 
 
+class QuoteUnavailable(ValueError):
+    pass
+
+
 def quote(input_mint, output_mint, amount):
     """Use a minimum Jupiter output without requesting a transaction or supplying a wallet."""
     key = os.getenv('JUPITER_API_KEY')
@@ -125,19 +131,20 @@ def quote(input_mint, output_mint, amount):
         if response.status_code == 429:
             _budget.limited(response.headers)
             raise RateLimited('Quote provider rate limited.')
-        response.raise_for_status()
         if response.status_code != 200:
-            raise ValueError('Unexpected quote status.')
+            raise QuoteUnavailable(f'Jupiter HTTP {response.status_code}')
         if len(response.content) > 500_000:
             raise ValueError('Quote too large.')
         data = response.json()
+    if not data.get('routePlan'):
+        raise QuoteUnavailable('Jupiter returned no route')
     if (data.get('inputMint') != input_mint or data.get('outputMint') != output_mint
             or str(data.get('inAmount')) != str(amount) or data.get('transaction')
-            or data.get('swapMode') != 'ExactIn' or data.get('slippageBps') != 100 or not data.get('routePlan')):
-        raise ValueError('Missing exact-size quote.')
+            or data.get('swapMode') != 'ExactIn' or data.get('slippageBps') != 100):
+        raise QuoteUnavailable('Jupiter returned an invalid exact-size quote')
     expected, minimum = int(data['outAmount']), int(data['otherAmountThreshold'])
     if not 0 < minimum <= expected or minimum < expected * 99 // 100:
-        raise ValueError('Invalid quote floor.')
+        raise QuoteUnavailable('Jupiter returned an invalid quote floor')
     return minimum
 
 
@@ -464,9 +471,15 @@ def quote_due_since(position):
     return position.get('quote_due_since', position['due'])
 
 
+def retry_group(group):
+    return all(p.get('mark_stale') and 'quote_due_since' in p for _, p in group)
+
+
 def exit_queue(jobs, now):
-    oldest = max((now - quote_due_since(p) for group in jobs.values() for _, p in group), default=0)
-    return {'due': len(jobs), 'oldest_wait': max(0, oldest), 'backed_up': oldest >= EXIT_BACKLOG_AGE}
+    regular = [group for group in jobs.values() if not retry_group(group)]
+    oldest = max((now - p['due'] for group in regular for _, p in group), default=0)
+    return {'due': len(jobs), 'oldest_wait': max(0, oldest), 'backed_up': oldest >= EXIT_BACKLOG_AGE,
+            'retry_due': len(jobs) - len(regular)}
 
 
 def stop_distance(position):
@@ -478,15 +491,29 @@ def stop_distance(position):
 
 
 def next_exit(jobs, attempts):
+    regular = {job: group for job, group in jobs.items() if not retry_group(group)}
+    retries = {job: group for job, group in jobs.items() if job not in regular}
+    if regular and retries:
+        jobs = retries if (attempts + 1) % EXIT_RETRY_INTERVAL == 0 else regular
+
     def oldest(job):
         return min(quote_due_since(p) for _, p in jobs[job])
 
     if attempts % OLDEST_EXIT_INTERVAL:
         urgent = [job for job, group in jobs.items()
-                  if any(stop_distance(p) <= NEAR_STOP_POINTS for _, p in group)]
+                  if not retry_group(group) and any(stop_distance(p) <= NEAR_STOP_POINTS for _, p in group)]
         if urgent:
             return min(urgent, key=lambda job: (min(stop_distance(p) for _, p in jobs[job]), oldest(job)))
     return min(jobs, key=oldest)
+
+
+def record_quote_failure(state, side, error, now):
+    failure = str(error) if isinstance(error, QuoteUnavailable) else type(error).__name__
+    key = 'last_' + side + '_quote_failure'
+    last = state.get(key, {})
+    if last.get('reason') != failure or now - last.get('at', 0) >= 120:
+        LOG.warning('Jarvis %s quote failed: %s', side, failure)
+        state[key] = {'reason': failure, 'at': now}
 
 
 def step(conn, state, providers, get_quote, now):
@@ -514,7 +541,8 @@ def step(conn, state, providers, get_quote, now):
             quantity = get_quote(USDC, mint, TRADE)
         except (Deferred, RateLimited):
             state['error'] = 'Quote capacity temporarily unavailable.'
-        except Exception:
+        except Exception as error:
+            record_quote_failure(state, 'entry', error, now)
             state['exit_attempts_since_entry'] = 0
             row['retry'] = now + 30
             for bot in entries[mint]:
@@ -534,12 +562,16 @@ def step(conn, state, providers, get_quote, now):
             amount = get_quote(mint, USDC, size)
         except (Deferred, RateLimited):
             state['error'] = 'Quote capacity temporarily unavailable.'
-        except Exception:
+        except Exception as error:
+            record_quote_failure(state, 'exit', error, now)
             state['exit_quote_attempts'] = attempts + 1
             state['exit_attempts_since_entry'] = min(exit_attempts + 1, BACKLOG_EXIT_QUOTES_PER_ENTRY)
             for bot, p in group:
                 p.setdefault('quote_due_since', p['due'])
-                p.update(due=now + 45, mark_stale=True, pending=None)
+                # Existing failed routes start at the second interval after upgrade.
+                failures = min(6, p.get('route_failures', int(p.get('mark_stale', False))) + 1)
+                delay = min(EXIT_RETRY_LIMIT, 45 * 2 ** (failures - 1))
+                p.update(due=now + delay, mark_stale=True, pending=None, route_failures=failures)
                 state['bots'][bot]['quote_misses'] += 1
             state['error'] = 'An exit route is unavailable; holding remains open.'
         else:
@@ -549,6 +581,7 @@ def step(conn, state, providers, get_quote, now):
                 was_pending = p['pending']
                 apply_exit(completed, state['bots'][bot], bot, p, size, amount, now)
                 p.pop('quote_due_since', None)
+                p.pop('route_failures', None)
                 p['due'] = now + (POLL if was_pending or p['pending'] else 15)
     state['last_cycle'] = now
     return completed
@@ -700,11 +733,14 @@ def status():
             OR json_extract(evidence,'$.x.value') IS NOT NULL)""", (now - research.FRESH_SECONDS,)).fetchone()[0]
         latest_mail = conn.execute('SELECT version, sent FROM research_mail ORDER BY version DESC LIMIT 1').fetchone()
         comparison = experiments.read_board(conn)
+        route_retries = sum(bool(p.get('mark_stale') and 'quote_due_since' in p)
+                            for bot in state['bots'].values() for p in bot['positions'].values())
         legacy_summary = conn.execute('SELECT data FROM legacy_outcome_summary WHERE id=1').fetchone()
     return {'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
             'research': {'recent_coins': coverage, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
                          'latest_proposal': dict(latest_mail) if latest_mail else None},
-            'exit_queue': exit_queue(quote_jobs(state, now), now),
+            'exit_queue': {**exit_queue(quote_jobs(state, now), now), 'retry_positions': route_retries},
+            'last_quote_failures': {side: state.get(f'last_{side}_quote_failure') for side in ('entry', 'exit')},
             'comparison': comparison, 'entry_guard': state.get('entry_guard'),
             'early_review': state.get('early_review'), 'outcome_review': state.get('outcome_review'),
             'legacy_outcomes': json.loads(legacy_summary['data']) if legacy_summary else None,
