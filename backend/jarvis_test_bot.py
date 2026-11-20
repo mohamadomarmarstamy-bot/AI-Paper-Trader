@@ -29,6 +29,12 @@ REVIEW_EVERY = 500
 POLL = 2
 DISCOVERY_INTERVAL = 20
 EXIT_QUOTES_PER_ENTRY = 2
+BACKLOG_EXIT_QUOTES_PER_ENTRY = 6
+EXIT_BACKLOG_AGE = 90
+NEAR_STOP_POINTS = 5
+OLDEST_EXIT_INTERVAL = 3
+FINAL_PROFIT_SELL = 5
+EXIT_COHORT = 'priority-stop-v1'
 DISCOVERY_BATCH = 2 * MAX_SCAN_TOKENS
 MARK_MAX_AGE = 90
 BOTS = {
@@ -43,7 +49,7 @@ DESCRIPTIONS = {
     'instant': 'Buys at the first available quote after discovery.',
     'pullback': 'Waits for a 3–15% dip from the observed high and a 2% rebound from the low.',
     'step': 'Starts at −10%. Each 10-point gain in the observed peak raises the full exit trigger 10 points.',
-    'trim': 'Sells half at +20%, +40%, +80% and subsequent doubled targets. Starts with a −10% stop. Each 10-point gain in the observed peak raises the full exit trigger 10 points.',
+    'trim': 'Sells half at +20%, +40%, +80%, and +160%. Sells the full remainder at +320%. Starts with a −10% stop. Each 10-point gain in the observed peak raises the full exit trigger 10 points.',
 }
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS run (
@@ -200,6 +206,7 @@ def open_trade(state, bot, row, quantity, now):
     portfolio['positions'][row['mint']] = {
         'mint': row['mint'], 'symbol': row['symbol'], 'opened': now, 'quantity': quantity,
         'entry_cost': BUY_COST, 'cost': BUY_COST, 'banked': 0, 'peak': 0,
+        'exit_cohort': EXIT_COHORT,
         'target': 20, 'trims': 0, 'mark': None, 'mark_at': None, 'due': now + POLL,
         'pending': None, 'liquidity': row['liquidity_usd'], 'age': row['age_minutes'],
         'policy': dict(state['strategy']) if bot == 'jarvis' else {'entry': BOTS[bot][1], 'exit': BOTS[bot][2]},
@@ -230,6 +237,8 @@ def sell(completed, portfolio, bot, position, quantity, amount, now, reason):
 
 def apply_exit(completed, portfolio, bot, p, quote_size, amount, now):
     if quote_size != p['quantity']:
+        if p['trims'] >= FINAL_PROFIT_SELL - 1:
+            return
         target = p['cost'] * quote_size / p['quantity'] * (1 + p['target'] / 100)
         if amount - SELL_FEE >= target:
             sell(completed, portfolio, bot, p, quote_size, amount, now, 'Took profit · sold half')
@@ -237,15 +246,22 @@ def apply_exit(completed, portfolio, bot, p, quote_size, amount, now):
             p['pending'] = None
         return
     value = max(0, amount - SELL_FEE)
-    p.update(mark=value, mark_at=now, mark_stale=False)
+    p.update(mark=value, mark_at=now, mark_stale=False, pending=None)
     gain = 100 * (value - p['cost']) / p['cost']
     p['peak'] = max(p['peak'], gain)
     floor = exit_floor(p['peak'])
     if gain <= floor:
         reason = 'Step stop' if floor <= 0 else 'Step profit protection'
+        p['stop_gap_points'] = floor - gain
+    elif p['policy']['exit'] == 'trim' and gain >= p['target']:
+        reason = 'Took profit · fifth sell closed remainder' if p['trims'] >= FINAL_PROFIT_SELL - 1 else None
+        if reason is None and p['quantity'] >= 2:
+            p['pending'] = 'trim'
+    else:
+        reason = None
+    if reason:
+        p['exit_quote_wait'] = max(0, now - quote_due_since(p))
         sell(completed, portfolio, bot, p, quote_size, amount, now, reason)
-    elif p['policy']['exit'] == 'trim' and gain >= p['target'] and p['quantity'] >= 2:
-        p['pending'] = 'trim'
 
 
 def review_size(reviewed):
@@ -323,9 +339,39 @@ def quote_jobs(state, now):
     for bot, portfolio in state['bots'].items():
         for mint, p in portfolio['positions'].items():
             if p['due'] <= now:
-                quantity = p['quantity'] // 2 if p['pending'] == 'trim' else p['quantity']
+                partial = p['pending'] == 'trim' and p['trims'] < FINAL_PROFIT_SELL - 1 and p['quantity'] >= 2
+                quantity = p['quantity'] // 2 if partial else p['quantity']
                 jobs.setdefault((mint, quantity), []).append((bot, p))
     return jobs
+
+
+def quote_due_since(position):
+    return position.get('quote_due_since', position['due'])
+
+
+def exit_queue(jobs, now):
+    oldest = max((now - quote_due_since(p) for group in jobs.values() for _, p in group), default=0)
+    return {'due': len(jobs), 'oldest_wait': max(0, oldest), 'backed_up': oldest >= EXIT_BACKLOG_AGE}
+
+
+def stop_distance(position):
+    mark = position['mark']
+    if mark is None:
+        return math.inf
+    gain = 100 * (mark - position['cost']) / position['cost']
+    return gain - exit_floor(position['peak'])
+
+
+def next_exit(jobs, attempts):
+    def oldest(job):
+        return min(quote_due_since(p) for _, p in jobs[job])
+
+    if attempts % OLDEST_EXIT_INTERVAL:
+        urgent = [job for job, group in jobs.items()
+                  if any(stop_distance(p) <= NEAR_STOP_POINTS for _, p in group)]
+        if urgent:
+            return min(urgent, key=lambda job: (min(stop_distance(p) for _, p in jobs[job]), oldest(job)))
+    return min(jobs, key=oldest)
 
 
 def step(conn, state, providers, get_quote, now):
@@ -340,10 +386,12 @@ def step(conn, state, providers, get_quote, now):
                 state['error'] = 'Discovery data unavailable.'
     exits = quote_jobs(state, now)
     entries = entry_jobs(conn, state, now) if state['enabled'] else {}
-    # Reserve two exit quotes per entry when both queues have work. Provider
-    # deferrals do not spend an attempt in either queue.
+    # Keep new entries moving at a reduced rate during sustained exit pressure.
+    # Provider deferrals do not spend an attempt in either queue.
     exit_attempts = state.get('exit_attempts_since_entry', 0)
-    buy = entries and (not exits or exit_attempts >= EXIT_QUOTES_PER_ENTRY)
+    queued = exit_queue(exits, now)
+    exit_budget = BACKLOG_EXIT_QUOTES_PER_ENTRY if queued['backed_up'] else EXIT_QUOTES_PER_ENTRY
+    buy = entries and (not exits or exit_attempts >= exit_budget)
     if buy:
         mint = min(entries, key=lambda mint: state['watch'][mint]['first'])
         row = state['watch'][mint]
@@ -362,7 +410,8 @@ def step(conn, state, providers, get_quote, now):
             for bot in entries[mint]:
                 open_trade(state, bot, row, quantity, now)
     elif exits:
-        job = min(exits, key=lambda job: min(p['due'] for _, p in exits[job]))
+        attempts = state.get('exit_quote_attempts', 0)
+        job = next_exit(exits, attempts)
         mint, size = job
         group = exits[job]
         try:
@@ -370,18 +419,21 @@ def step(conn, state, providers, get_quote, now):
         except (Deferred, RateLimited):
             state['error'] = 'Quote capacity temporarily unavailable.'
         except Exception:
-            state['exit_attempts_since_entry'] = min(exit_attempts + 1, EXIT_QUOTES_PER_ENTRY)
+            state['exit_quote_attempts'] = attempts + 1
+            state['exit_attempts_since_entry'] = min(exit_attempts + 1, BACKLOG_EXIT_QUOTES_PER_ENTRY)
             for bot, p in group:
+                p.setdefault('quote_due_since', p['due'])
                 p.update(due=now + 45, mark_stale=True, pending=None)
                 state['bots'][bot]['quote_misses'] += 1
             state['error'] = 'An exit route is unavailable; holding remains open.'
         else:
-            state['exit_attempts_since_entry'] = min(exit_attempts + 1, EXIT_QUOTES_PER_ENTRY)
+            state['exit_quote_attempts'] = attempts + 1
+            state['exit_attempts_since_entry'] = min(exit_attempts + 1, BACKLOG_EXIT_QUOTES_PER_ENTRY)
             for bot, p in group:
-                p['due'] = now + (POLL if p['pending'] else 15)
+                was_pending = p['pending']
                 apply_exit(completed, state['bots'][bot], bot, p, size, amount, now)
-                if p['pending']:
-                    p['due'] = now + POLL
+                p.pop('quote_due_since', None)
+                p['due'] = now + (POLL if was_pending or p['pending'] else 15)
     state['last_cycle'] = now
     return completed
 
@@ -450,6 +502,14 @@ def status():
     with connection() as conn:
         conn.execute('BEGIN')
         state, _ = read(conn)
+        reviewed = {row['bot']: dict(row) for row in conn.execute(
+            'SELECT bot, count(*) AS closed, sum(pnl) AS pnl, '
+            "avg(json_extract(data,'$.exit_quote_wait')) AS quote_wait, "
+            "avg(json_extract(data,'$.stop_gap_points')) AS stop_gap, "
+            "count(json_extract(data,'$.stop_gap_points')) AS stop_exits "
+            "FROM trades WHERE json_extract(data,'$.exit_cohort')=? GROUP BY bot",
+            (EXIT_COHORT,),
+        )}
         rows = []
         for bot, (name, entry, exit_rule) in BOTS.items():
             portfolio = state['bots'][bot]
@@ -463,7 +523,16 @@ def status():
                 entry, exit_rule = (state['strategy'][key] for key in ('entry', 'exit'))
             description = f'{DESCRIPTIONS[entry]} {DESCRIPTIONS[exit_rule]}' if entry else (
                 'Waiting for a validated strategy learned from the four fixed bots.')
+            sample = reviewed.get(bot)
             rows.append({
+                'exit_sample': {
+                    'open': sum(p.get('exit_cohort') == EXIT_COHORT for p in positions),
+                    'closed': sample['closed'] if sample else 0,
+                    'pnl': sample['pnl'] / DOLLAR if sample else 0,
+                    'quote_wait': sample['quote_wait'] if sample else None,
+                    'stop_gap': sample['stop_gap'] if sample else None,
+                    'stop_exits': sample['stop_exits'] if sample else 0,
+                },
                 'id': bot, 'name': name, 'description': description,
                 **stats(conn.execute(totals_sql, (bot,)).fetchone()),
                 'today': stats(conn.execute(totals_sql + ' AND day=?', (bot, day)).fetchone()),
@@ -481,6 +550,7 @@ def status():
                              for p, (value, basis) in zip(positions, valuations)],
             })
     return {'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
+            'exit_queue': exit_queue(quote_jobs(state, now), now),
             'bots': rows, 'strategy': state['strategy'], 'review': state['review'], 'reviewed': state['reviewed'],
             'review_every': review_size(state['reviewed']), 'watching': len(state['watch'])}
 

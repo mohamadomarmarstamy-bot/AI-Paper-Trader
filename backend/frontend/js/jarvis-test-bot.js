@@ -101,6 +101,8 @@
     }
     if (active === 'health') {
       $('jarvis-cycle').textContent = state.last_cycle ? `Last cycle ${displayTime(state.last_cycle)} ET · ${state.watching} coins on watch` : 'Waiting for the first cycle.';
+      const queue = state.exit_queue;
+      $('jarvis-exit-queue').textContent = queue?.due ? `${queue.due} exit quotes due · Oldest waiting ${displayDuration(queue.oldest_wait)}${queue.backed_up ? ' · Entries slowed while exits catch up' : ''}` : 'No exit quotes due';
       $('jarvis-health-bots').replaceChildren(...state.bots.map(bot => {
         const pnl = bot.pnl ?? bot.estimated_pnl;
         const estimate = estimateNote(bot);
@@ -112,6 +114,13 @@
           el('small', `${bot.wins} wins · ${bot.losses} ${bot.losses === 1 ? 'loss' : 'losses'}`),
           el('small', `${botState(bot)} · ${bot.quote_misses} exit quote misses`),
         );
+        const sample = bot.exit_sample;
+        if (sample) {
+          card.append(el('p', 'Trades opened after the exit upgrade'),
+            el('small', `${sample.open} open · ${sample.closed} closed · ${money(sample.pnl)} closed P/L after fees`));
+          if (sample.quote_wait != null) card.append(el('small', `Avg. exit quote wait ${displayDuration(sample.quote_wait)}`));
+          if (sample.stop_gap != null) card.append(el('small', `Avg. fill below stop ${sample.stop_gap.toFixed(1)} percentage points across ${sample.stop_exits} exits`));
+        }
         return card;
       }));
     }
