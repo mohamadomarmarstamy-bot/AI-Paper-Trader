@@ -1,6 +1,7 @@
 """Independent, quote-only Solana paper portfolios and strategy evaluation."""
 import asyncio
 from contextlib import closing, contextmanager
+from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import math
@@ -32,6 +33,7 @@ EARLY_REVIEW_MIN = 500
 EARLY_REVIEW_INTERVAL = 25
 REVIEW_EVERY = 500
 POLL = 2
+WORKER_INTERVAL = 1.1  # Fill available default quote slots; shared provider pacing still applies.
 DISCOVERY_INTERVAL = 10
 EXIT_QUOTES_PER_ENTRY = 2
 BACKLOG_EXIT_QUOTES_PER_ENTRY = 6
@@ -164,11 +166,17 @@ def observe(state, providers, now):
     requested = set(addresses)
     pairs = []
     failed_batches = 0
-    for start in range(0, len(addresses), MAX_SCAN_TOKENS):
-        try:
-            pairs.extend(providers.pairs(addresses[start:start + MAX_SCAN_TOKENS]))
-        except (ValueError, OSError, RuntimeError):
-            failed_batches += 1
+    batches = [addresses[start:start + MAX_SCAN_TOKENS]
+               for start in range(0, len(addresses), MAX_SCAN_TOKENS)]
+    # Independent read-only batches overlap, keeping discovery from serially
+    # blocking the next exit/entry quote. Consume results in discovery order.
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        pending = [pool.submit(providers.pairs, batch) for batch in batches]
+        for future in pending:
+            try:
+                pairs.extend(future.result())
+            except (ValueError, OSError, RuntimeError):
+                failed_batches += 1
     if failed_batches:
         state['error'] = 'Some discovery data is unavailable.' if pairs else 'Discovery data unavailable.'
     best = {}
@@ -520,6 +528,8 @@ def record_quote_failure(state, side, error, now):
 
 def step(conn, state, providers, get_quote, now):
     completed = []
+    activity = state.setdefault('quote_activity', {'since': now, 'entry_quotes': 0, 'paper_entries': 0,
+                                                  'exit_quotes': 0, 'deferrals': 0})
     if state['enabled']:
         state['watch'] = {mint: row for mint, row in state['watch'].items() if now - row['first'] <= 900}
         if now >= state.get('next_discovery', 0):
@@ -542,6 +552,7 @@ def step(conn, state, providers, get_quote, now):
         try:
             quantity = get_quote(USDC, mint, TRADE)
         except (Deferred, RateLimited):
+            activity['deferrals'] += 1
             state['error'] = 'Quote capacity temporarily unavailable.'
         except Exception as error:
             record_quote_failure(state, 'entry', error, now)
@@ -553,8 +564,10 @@ def step(conn, state, providers, get_quote, now):
         else:
             state['exit_attempts_since_entry'] = 0
             evidence = opportunity_evidence(conn, row, now)
+            activity['entry_quotes'] += 1
             for bot in entries[mint]:
                 open_trade(state, bot, row, quantity, now, evidence)
+                activity['paper_entries'] += 1
     elif exits:
         attempts = state.get('exit_quote_attempts', 0)
         job = next_exit(exits, attempts)
@@ -563,6 +576,7 @@ def step(conn, state, providers, get_quote, now):
         try:
             amount = get_quote(mint, USDC, size)
         except (Deferred, RateLimited):
+            activity['deferrals'] += 1
             state['error'] = 'Quote capacity temporarily unavailable.'
         except Exception as error:
             record_quote_failure(state, 'exit', error, now)
@@ -579,6 +593,7 @@ def step(conn, state, providers, get_quote, now):
         else:
             state['exit_quote_attempts'] = attempts + 1
             state['exit_attempts_since_entry'] = min(exit_attempts + 1, BACKLOG_EXIT_QUOTES_PER_ENTRY)
+            activity['exit_quotes'] += 1
             for bot, p in group:
                 was_pending = p['pending']
                 apply_exit(completed, state['bots'][bot], bot, p, size, amount, now)
@@ -749,6 +764,8 @@ def status():
             'active_warning': outcomes.WARNINGS.get((state['strategy'] or {}).get('avoid_pattern')),
             'bots': rows, 'strategy': state['strategy'], 'review': state['review'], 'reviewed': state['reviewed'],
             'review_every': review_size(state['reviewed']), 'watching': len(state['watch']),
+            'quote_activity': state.get('quote_activity'),
+            'worker_interval_seconds': WORKER_INTERVAL,
             'discovery': {'batch_size': DISCOVERY_BATCH, 'interval_seconds': DISCOVERY_INTERVAL,
                           'instant_entry_window_seconds': ENTRY_WINDOW,
                           'coverage': 'Discoverable active Solana pairs; not the entire meme-coin market.'}}
@@ -785,7 +802,7 @@ async def worker():
             await asyncio.to_thread(tick)
         except Exception:
             LOG.exception('Jarvis paper run tick failed')
-        await asyncio.sleep(max(.1, POLL - (time.monotonic() - started)))
+        await asyncio.sleep(max(.1, WORKER_INTERVAL - (time.monotonic() - started)))
 
 
 def claim_research(conn, now):

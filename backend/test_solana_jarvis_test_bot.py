@@ -3,6 +3,8 @@ from pathlib import Path
 import json
 import math
 import tempfile
+from threading import Barrier
+import solana_jupiter
 import unittest
 from unittest.mock import patch
 
@@ -238,8 +240,59 @@ class JarvisTests(unittest.TestCase):
         jarvis.observe(state, BatchProvider(), self.now)
         jarvis.observe(state, BatchProvider(), self.now + 20)
         self.assertEqual([len(batch) for batch in batches], [20] * 10)
-        self.assertEqual(batches[:3], [mints[:20], mints[20:40], mints[40:60]])
-        self.assertEqual([mint for batch in batches for mint in batch], mints[:200])
+        ordered = sorted(batches, key=lambda batch: int(batch[0].split('-')[1]))
+        self.assertEqual([mint for batch in ordered for mint in batch], mints[:200])
+
+    def test_discovery_overlaps_batches_and_retains_partial_results(self):
+        barrier = Barrier(5)
+        market = self.market
+
+        class ParallelProvider:
+            def profiles(self):
+                return [MINT] + [f'mint-{i}' for i in range(99)]
+
+            def pairs(self, addresses):
+                barrier.wait(timeout=5)
+                if MINT in addresses:
+                    return market.pairs([MINT])
+                raise ValueError('One source batch unavailable')
+
+        state = jarvis.initial()
+        jarvis.observe(state, ParallelProvider(), self.now)
+        self.assertIn(MINT, state['watch'])
+        self.assertEqual(state['error'], 'Some discovery data is unavailable.')
+
+    def test_faster_cadence_uses_more_quotes_without_exceeding_shared_budget(self):
+        def run(interval):
+            state = jarvis.initial()
+            state.update(enabled=True, next_discovery=self.now + 1000)
+            for i in range(100):
+                state['watch'][f'candidate-{i}'] = {
+                    'mint': f'candidate-{i}', 'symbol': 'Candidate',
+                    'first': self.now, 'last': self.now, 'pullback': self.now,
+                    'liquidity_usd': 1, 'age_minutes': 1,
+                }
+            budget = solana_jupiter.Budget()
+            clock = [self.now]
+            starts = []
+
+            def quote(source, target, amount):
+                with budget.permit(research=True):
+                    starts.append(clock[0])
+                    return 10 if source == jarvis.USDC else 45_000_000
+
+            with jarvis.connection() as conn, patch.object(solana_jupiter.time, 'monotonic', side_effect=lambda: clock[0]), patch.dict('os.environ', {'JUPITER_BUILD_RPS': '1'}):
+                for i in range(int(60 / interval)):
+                    clock[0] = self.now + i * interval
+                    jarvis.step(conn, state, self.market, quote, clock[0])
+            self.assertTrue(all(b - a >= 1.049 for a, b in zip(starts, starts[1:])))
+            self.assertEqual(state['quote_activity']['deferrals'], 0)
+            # One exact-size quote funds all four eligible virtual variants.
+            self.assertEqual(state['quote_activity']['paper_entries'], 4 * state['quote_activity']['entry_quotes'])
+            self.assertGreater(state['quote_activity']['exit_quotes'], 0)
+            return state['quote_activity']['entry_quotes']
+
+        self.assertGreaterEqual(run(jarvis.WORKER_INTERVAL), 1.5 * run(2))
 
     def test_instant_entry_survives_quote_backlog_but_requires_fresh_observation(self):
         state = jarvis.initial()
