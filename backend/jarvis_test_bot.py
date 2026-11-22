@@ -11,6 +11,8 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import requests
+
 import database
 import jarvis_experiments as experiments
 import jarvis_outcomes as outcomes
@@ -120,7 +122,36 @@ def set_enabled(enabled):
 
 
 class QuoteUnavailable(ValueError):
-    pass
+    def __init__(self, message, category='invalid_quote'):
+        super().__init__(message)
+        self.category = category
+
+
+def quote_error(response, data):
+    # Only fixed diagnostic labels are persisted; never echo arbitrary provider
+    # bodies, credentials, HTML or transaction data into logs/the dashboard.
+    status = response.status_code
+    message = str(data.get('error', '')).lower().replace('_', ' ') if isinstance(data, dict) else ''
+    if status in (401, 403):
+        return QuoteUnavailable('Jupiter API access denied; check key or plan.', 'access')
+    if status >= 500 or status in (408, 425):
+        return QuoteUnavailable('Jupiter temporarily unavailable.', 'temporary')
+    if status == 400 and any(text in message for text in (
+            'failed to get quotes', 'could not find any route', 'no route', 'not tradable')):
+        return QuoteUnavailable('Jupiter has no quote for this token and exact amount.', 'no_route')
+    return QuoteUnavailable(f'Jupiter rejected the quote request (HTTP {status}).', 'request')
+
+
+def quote_uint(value, *, allow_zero=False):
+    if type(value) is int:
+        result = value
+    elif isinstance(value, str) and value.isascii() and value.isdigit() and len(value) <= 20:
+        result = int(value)
+    else:
+        raise QuoteUnavailable('Jupiter returned invalid quote amounts.')
+    if not (0 if allow_zero else 1) <= result <= 2**64 - 1:
+        raise QuoteUnavailable('Jupiter returned invalid quote amounts.')
+    return result
 
 
 def quote(input_mint, output_mint, amount):
@@ -128,25 +159,43 @@ def quote(input_mint, output_mint, amount):
     key = os.getenv('JUPITER_API_KEY')
     headers = {'x-api-key': key} if key else {}
     params = {'inputMint': input_mint, 'outputMint': output_mint, 'amount': str(amount), 'slippageBps': 100}
-    with _budget.permit(research=True):
-        response = solana_http.get('https://api.jup.ag/swap/v2/order', params=params, headers=headers,
-                                   timeout=3, allow_redirects=False)
-        if response.status_code == 429:
-            _budget.limited(response.headers)
-            raise RateLimited('Quote provider rate limited.')
-        if response.status_code != 200:
-            raise QuoteUnavailable(f'Jupiter HTTP {response.status_code}')
-        if len(response.content) > 500_000:
-            raise ValueError('Quote too large.')
-        data = response.json()
-    if not data.get('routePlan'):
-        raise QuoteUnavailable('Jupiter returned no route')
+    try:
+        with _budget.permit(research=True):
+            response = solana_http.get('https://api.jup.ag/swap/v2/order', params=params, headers=headers,
+                                       timeout=8, allow_redirects=False)
+            if response.status_code == 429:
+                _budget.limited(response.headers)
+                raise RateLimited('Quote provider rate limited.')
+            if len(response.content) > 500_000:
+                raise QuoteUnavailable('Jupiter quote response too large.')
+            try:
+                data = response.json()
+            except ValueError:
+                if response.status_code != 200:
+                    raise quote_error(response, {}) from None
+                raise QuoteUnavailable('Jupiter returned invalid quote JSON.', 'temporary') from None
+            if response.status_code != 200:
+                raise quote_error(response, data)
+    except requests.RequestException:
+        raise QuoteUnavailable('Jupiter quote connection failed; retry pending.', 'temporary') from None
+    if not isinstance(data, dict):
+        raise QuoteUnavailable('Jupiter returned an invalid quote response.')
+    if data.get('error') or data.get('errorCode') is not None:
+        raise QuoteUnavailable('Jupiter returned a quote error.', 'request')
+    if not isinstance(data.get('routePlan'), list) or not data['routePlan']:
+        raise QuoteUnavailable('Jupiter returned no route', 'no_route')
     if (data.get('inputMint') != input_mint or data.get('outputMint') != output_mint
-            or str(data.get('inAmount')) != str(amount) or data.get('transaction')
-            or data.get('swapMode') != 'ExactIn' or data.get('slippageBps') != 100):
+            or quote_uint(data.get('inAmount')) != amount or data.get('transaction')
+            or data.get('taker') or data.get('swapMode') != 'ExactIn'):
         raise QuoteUnavailable('Jupiter returned an invalid exact-size quote')
-    expected, minimum = int(data['outAmount']), int(data['otherAmountThreshold'])
-    if not 0 < minimum <= expected or minimum < expected * 99 // 100:
+    slippage = quote_uint(data.get('slippageBps'), allow_zero=True)
+    if slippage > 100:
+        raise QuoteUnavailable('Jupiter quote exceeds the 1% slippage limit.')
+    expected = quote_uint(data.get('outAmount'))
+    minimum = quote_uint(data.get('otherAmountThreshold'))
+    # A tighter quote (including JupiterZ's zero-slippage RFQ) is valid.
+    # Its floor must still match its own tolerance and our 1% maximum.
+    if not 0 < minimum <= expected or minimum < expected * (10000 - slippage) // 10000:
         raise QuoteUnavailable('Jupiter returned an invalid quote floor')
     return minimum
 
@@ -517,13 +566,14 @@ def next_exit(jobs, attempts):
     return min(jobs, key=oldest)
 
 
-def record_quote_failure(state, side, error, now):
+def record_quote_failure(state, side, error, now, mint=None, amount=None):
     failure = str(error) if isinstance(error, QuoteUnavailable) else type(error).__name__
     key = 'last_' + side + '_quote_failure'
     last = state.get(key, {})
     if last.get('reason') != failure or now - last.get('at', 0) >= 120:
         LOG.warning('Jarvis %s quote failed: %s', side, failure)
-        state[key] = {'reason': failure, 'at': now}
+        state[key] = {'reason': failure, 'at': now, 'category': getattr(error, 'category', 'unknown'),
+                      'mint': mint, 'amount': amount}
 
 
 def step(conn, state, providers, get_quote, now):
@@ -555,7 +605,7 @@ def step(conn, state, providers, get_quote, now):
             activity['deferrals'] += 1
             state['error'] = 'Quote capacity temporarily unavailable.'
         except Exception as error:
-            record_quote_failure(state, 'entry', error, now)
+            record_quote_failure(state, 'entry', error, now, mint, TRADE)
             state['exit_attempts_since_entry'] = 0
             row['retry'] = now + 30
             for bot in entries[mint]:
@@ -579,14 +629,18 @@ def step(conn, state, providers, get_quote, now):
             activity['deferrals'] += 1
             state['error'] = 'Quote capacity temporarily unavailable.'
         except Exception as error:
-            record_quote_failure(state, 'exit', error, now)
+            record_quote_failure(state, 'exit', error, now, mint, size)
             state['exit_quote_attempts'] = attempts + 1
             state['exit_attempts_since_entry'] = min(exit_attempts + 1, BACKLOG_EXIT_QUOTES_PER_ENTRY)
             for bot, p in group:
                 p.setdefault('quote_due_since', p['due'])
                 # Existing failed routes start at the second interval after upgrade.
                 failures = min(6, p.get('route_failures', int(p.get('mark_stale', False))) + 1)
-                delay = min(EXIT_RETRY_LIMIT, 45 * 2 ** (failures - 1))
+                temporary = getattr(error, 'category', None) == 'temporary'
+                delay = min(30 if temporary else EXIT_RETRY_LIMIT,
+                            (6 if temporary else 45) * 2 ** (failures - 1))
+                p['route_failure'] = {'category': getattr(error, 'category', 'unknown'),
+                                      'reason': str(error) if isinstance(error, QuoteUnavailable) else type(error).__name__}
                 p.update(due=now + delay, mark_stale=True, pending=None, route_failures=failures)
                 state['bots'][bot]['quote_misses'] += 1
             state['error'] = 'An exit route is unavailable; holding remains open.'
@@ -599,6 +653,7 @@ def step(conn, state, providers, get_quote, now):
                 apply_exit(completed, state['bots'][bot], bot, p, size, amount, now)
                 p.pop('quote_due_since', None)
                 p.pop('route_failures', None)
+                p.pop('route_failure', None)
                 p['due'] = now + (POLL if was_pending or p['pending'] else 15)
     state['last_cycle'] = now
     return completed
@@ -742,7 +797,8 @@ def status():
                 'entry_misses': portfolio['entry_misses'],
                 'holdings': [{'mint': p['mint'], 'symbol': p['symbol'], 'opened': p['opened'],
                               'mark': value / DOLLAR if basis == 'current_quote' else None,
-                              'estimated_value': value / DOLLAR, 'valuation_basis': basis}
+                              'estimated_value': value / DOLLAR, 'valuation_basis': basis,
+                              'route_failure': p.get('route_failure'), 'next_quote_at': p['due']}
                              for p, (value, basis) in zip(positions, valuations)],
             })
         coverage = conn.execute("""SELECT count(*) FROM research WHERE checked>=? AND (

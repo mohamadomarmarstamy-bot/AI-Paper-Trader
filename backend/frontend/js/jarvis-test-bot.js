@@ -174,6 +174,7 @@
         const value = holding.mark ?? holding.estimated_value;
         const basis = holding.valuation_basis === 'cost' ? ' · at cost' : holding.valuation_basis === 'last_quote' ? ' · last sell quote' : '';
         row.append(el('strong', holding.symbol), el('p', `${money(value)}${basis} · Opened ${displayTime(holding.opened)} ET`));
+        if (holding.route_failure) row.append(el('small', `${holding.route_failure.reason} Next quote check ${displayTime(holding.next_quote_at)} ET.`));
         return row;
       });
       $('jarvis-holdings').replaceChildren(...(holdings.length ? holdings : [el('p', 'No open holdings.', 'meme-muted')]));

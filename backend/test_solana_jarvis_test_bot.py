@@ -162,6 +162,30 @@ class JarvisTests(unittest.TestCase):
         self.assertNotIn('quote_due_since', retry)
         self.assertFalse(retry['mark_stale'])
 
+    def test_temporary_exit_failure_retries_quickly_without_changing_accounting(self):
+        state = jarvis.initial()
+        jarvis.open_trade(state, 'instant-step', {
+            'mint': MINT, 'symbol': 'Example', 'liquidity_usd': 1, 'age_minutes': 1,
+        }, 10, self.now - 10)
+        portfolio = state['bots']['instant-step']
+        position = portfolio['positions'][MINT]
+        cash, cost = portfolio['cash'], position['cost']
+
+        def unavailable(*args):
+            raise jarvis.QuoteUnavailable('Jupiter temporarily unavailable.', 'temporary')
+
+        with jarvis.connection() as conn:
+            jarvis.step(conn, state, self.market, unavailable, self.now)
+            self.assertEqual(position['due'], self.now + 6)
+            self.assertEqual(position['route_failure']['category'], 'temporary')
+            self.assertEqual((portfolio['cash'], position['cost'], position['quantity']), (cash, cost, 10))
+            jarvis.step(conn, state, self.market, lambda *args: 50_000_000, self.now + 6)
+        self.assertNotIn('route_failure', position)
+        self.assertNotIn('route_failures', position)
+        self.assertFalse(position['mark_stale'])
+        self.assertEqual(state['last_exit_quote_failure']['mint'], MINT)
+        self.assertEqual(state['last_exit_quote_failure']['amount'], 10)
+
     def test_exit_priority_reserves_every_third_attempt_for_oldest(self):
         state = jarvis.initial()
         portfolio = state['bots']['instant-step']
