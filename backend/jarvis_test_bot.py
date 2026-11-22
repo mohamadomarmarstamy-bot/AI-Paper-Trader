@@ -32,7 +32,7 @@ EARLY_REVIEW_MIN = 500
 EARLY_REVIEW_INTERVAL = 25
 REVIEW_EVERY = 500
 POLL = 2
-DISCOVERY_INTERVAL = 20
+DISCOVERY_INTERVAL = 10
 EXIT_QUOTES_PER_ENTRY = 2
 BACKLOG_EXIT_QUOTES_PER_ENTRY = 6
 EXIT_BACKLOG_AGE = 90
@@ -42,7 +42,8 @@ EXIT_RETRY_INTERVAL = 6
 EXIT_RETRY_LIMIT = 900
 FINAL_PROFIT_SELL = 5
 EXIT_COHORT = 'priority-stop-v1'
-DISCOVERY_BATCH = 2 * MAX_SCAN_TOKENS
+DISCOVERY_BATCH = 5 * MAX_SCAN_TOKENS
+ENTRY_WINDOW = 900
 MARK_MAX_AGE = 90
 BOTS = {
     'instant-step': ('Instant Ladder', 'instant', 'step'),
@@ -451,7 +452,8 @@ def entry_jobs(conn, state, now):
             else:
                 entry = BOTS[bot][1]
             signal = row['first'] if entry == 'instant' else row['pullback']
-            if signal is not None and 0 <= now - signal <= 90:
+            window = ENTRY_WINDOW if entry == 'instant' else 90
+            if signal is not None and 0 <= now - signal <= window:
                 possible.setdefault(mint, []).append(bot)
     return possible
 
@@ -746,7 +748,10 @@ def status():
             'legacy_outcomes': json.loads(legacy_summary['data']) if legacy_summary else None,
             'active_warning': outcomes.WARNINGS.get((state['strategy'] or {}).get('avoid_pattern')),
             'bots': rows, 'strategy': state['strategy'], 'review': state['review'], 'reviewed': state['reviewed'],
-            'review_every': review_size(state['reviewed']), 'watching': len(state['watch'])}
+            'review_every': review_size(state['reviewed']), 'watching': len(state['watch']),
+            'discovery': {'batch_size': DISCOVERY_BATCH, 'interval_seconds': DISCOVERY_INTERVAL,
+                          'instant_entry_window_seconds': ENTRY_WINDOW,
+                          'coverage': 'Discoverable active Solana pairs; not the entire meme-coin market.'}}
 
 
 def history(jarvis, before=None):

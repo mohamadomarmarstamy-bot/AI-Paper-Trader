@@ -222,8 +222,8 @@ class JarvisTests(unittest.TestCase):
         self.assertEqual(sample['stop_exits'], 1)
         self.assertAlmostEqual(sample['stop_gap'], 100 * (1 - 44_900_000 / jarvis.BUY_COST) - 10)
 
-    def test_discovery_checks_two_provider_batches_and_rotates_without_skipping(self):
-        mints = [f'mint-{i}' for i in range(60)]
+    def test_discovery_checks_five_provider_batches_and_rotates_without_skipping(self):
+        mints = [f'mint-{i}' for i in range(240)]
         batches = []
 
         class BatchProvider:
@@ -237,8 +237,23 @@ class JarvisTests(unittest.TestCase):
         state = jarvis.initial()
         jarvis.observe(state, BatchProvider(), self.now)
         jarvis.observe(state, BatchProvider(), self.now + 20)
-        self.assertEqual([len(batch) for batch in batches], [20, 20, 20, 20])
-        self.assertEqual(batches[:3], [mints[:20], mints[20:40], mints[40:]])
+        self.assertEqual([len(batch) for batch in batches], [20] * 10)
+        self.assertEqual(batches[:3], [mints[:20], mints[20:40], mints[40:60]])
+        self.assertEqual([mint for batch in batches for mint in batch], mints[:200])
+
+    def test_instant_entry_survives_quote_backlog_but_requires_fresh_observation(self):
+        state = jarvis.initial()
+        jarvis.observe(state, self.market, self.now)
+        with jarvis.connection() as conn:
+            jobs = jarvis.entry_jobs(conn, state, self.now + 80)
+            self.assertTrue(jobs)
+            for row in state['watch'].values():
+                row['last'] = self.now + 120
+            self.assertTrue(jarvis.entry_jobs(conn, state, self.now + 120))
+            self.assertFalse(jarvis.entry_jobs(conn, state, self.now + 220))
+            for row in state['watch'].values():
+                row['last'] = self.now + 901
+            self.assertFalse(jarvis.entry_jobs(conn, state, self.now + 901))
 
     def test_pullback_reuses_the_same_discovery_and_waits_for_rebound(self):
         state = jarvis.initial()
