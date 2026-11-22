@@ -180,6 +180,9 @@
     }
     if (active === 'health') {
       $('jarvis-cycle').textContent = state.last_cycle ? `Last cycle ${displayTime(state.last_cycle)} ET · ${state.watching} coins on watch` : 'Waiting for the first cycle.';
+      const activity = state.quote_activity;
+      if (state.discovery) $('jarvis-cycle').textContent += ` · Up to ${state.discovery.batch_size} candidates per ${state.discovery.interval_seconds}s`;
+      if (activity) $('jarvis-cycle').textContent += ` · Since ${displayTime(activity.since)} ET: ${activity.paper_entries} paper entries from ${activity.entry_quotes} buy quotes · ${activity.exit_quotes} sell quotes · ${activity.deferrals} capacity deferrals`;
       const queue = state.exit_queue;
       const regular = (queue?.due || 0) - (queue?.retry_due || 0);
       const retry = queue?.retry_positions ? ` · ${queue.retry_positions} holdings awaiting a retry` : '';
