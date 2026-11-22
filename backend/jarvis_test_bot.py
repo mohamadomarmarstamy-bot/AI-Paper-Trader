@@ -15,6 +15,7 @@ import requests
 
 import database
 import jarvis_experiments as experiments
+import jarvis_strategies as lab
 import jarvis_outcomes as outcomes
 import jarvis_research as research
 import solana_http
@@ -54,6 +55,7 @@ BOTS = {
     'instant-trim': ('Instant Trim', 'instant', 'trim'),
     'patient-step': ('Pullback Ladder', 'pullback', 'step'),
     'patient-trim': ('Pullback Trim', 'pullback', 'trim'),
+    **lab.BOTS,
     'jarvis': ('Jarvis Trader', None, None),
 }
 FIXED = tuple(BOTS)[:-1]
@@ -102,7 +104,10 @@ def connection():
 
 def read(conn):
     row = conn.execute('SELECT state,revision FROM run WHERE id=1').fetchone()
-    return json.loads(row['state']), row['revision']
+    state = json.loads(row['state'])
+    for bot, portfolio in initial()['bots'].items():
+        state['bots'].setdefault(bot, portfolio)
+    return state, row['revision']
 
 
 def set_enabled(enabled):
@@ -247,10 +252,12 @@ def observe(state, providers, now):
         if old is None or old['pair'] != row['pair']:
             state['watch'][mint] = {**row, 'first': now, 'last': now, 'high': row['price_usd'],
                                     'dip': None, 'pullback': None}
+            lab.observe(state['watch'][mint], now)
             continue
         price = row['price_usd']
-        old.update(last=now, buys_m5=row['buys_m5'], sells_m5=row['sells_m5'],
+        old.update(last=now, price_usd=price, buys_m5=row['buys_m5'], sells_m5=row['sells_m5'],
                    liquidity_usd=row['liquidity_usd'], volume_m5_usd=row['volume_m5_usd'], age_minutes=row['age_minutes'])
+        lab.observe(old, now)
         if price > old['high'] or price < .85 * old['high']:
             old.update(high=price, dip=None)
         elif price <= .97 * old['high']:
@@ -274,9 +281,10 @@ def open_trade(state, bot, row, quantity, now, evidence=None):
         return
     portfolio['cash'] -= BUY_COST
     portfolio['positions'][row['mint']] = {
-        'mint': row['mint'], 'symbol': row['symbol'], 'opened': now, 'quantity': quantity,
+        'mint': row['mint'], 'pair': row.get('pair'), 'symbol': row['symbol'], 'opened': now, 'quantity': quantity,
         'entry_cost': BUY_COST, 'cost': BUY_COST, 'banked': 0, 'peak': 0,
         'exit_cohort': EXIT_COHORT, 'entry_evidence': evidence or {},
+        'strategy_version': lab.VERSION if bot in lab.BOTS or (state.get('strategy') or {}).get('source') in lab.BOTS else None,
         'target': 20, 'trims': 0, 'mark': None, 'mark_at': None, 'due': now + POLL,
         'pending': None, 'liquidity': row['liquidity_usd'], 'age': row['age_minutes'],
         'policy': dict(state['strategy']) if bot == 'jarvis' else {'entry': BOTS[bot][1], 'exit': BOTS[bot][2]},
@@ -305,7 +313,7 @@ def sell(completed, portfolio, bot, position, quantity, amount, now, reason):
     del portfolio['positions'][position['mint']]
 
 
-def apply_exit(completed, portfolio, bot, p, quote_size, amount, now):
+def apply_exit(completed, portfolio, bot, p, quote_size, amount, now, evidence=None, market=None):
     if quote_size != p['quantity']:
         if p['trims'] >= FINAL_PROFIT_SELL - 1:
             return
@@ -320,9 +328,17 @@ def apply_exit(completed, portfolio, bot, p, quote_size, amount, now):
     if p['trims'] == 0 and 'first_sell_quote' not in p:
         p['first_sell_quote'] = {'net_usdc': value, 'seconds_after_entry': now - p['opened']}
     gain = 100 * (value - p['cost']) / p['cost']
+    if gain > p['peak']:
+        p['last_high_at'] = now
     p['peak'] = max(p['peak'], gain)
-    floor = exit_floor(p['peak'])
-    if gain <= floor:
+    chart = (evidence or {}).get('chart') or {}
+    special = lab.exit_reason(p, gain, amount, now, chart, market or {}, TRADE)
+    floor = lab.floor(p['policy']['exit'], p['peak'], exit_floor)
+    if special:
+        reason = special
+    elif p['policy']['exit'] == 'tp5':
+        reason = None
+    elif gain <= floor:
         reason = 'Step stop' if floor <= 0 else 'Step profit protection'
         p['stop_gap_points'] = floor - gain
     elif p['policy']['exit'] == 'trim' and gain >= p['target']:
@@ -480,6 +496,7 @@ def entry_evidence(conn, row, now):
 
 def opportunity_evidence(conn, row, now):
     evidence = entry_evidence(conn, row, now)
+    evidence['lab_signal'] = {key: lab.entry_signal(key, row, evidence, now) for key in ('pressure', 'volume', 'liquidity', 'vwap', 'trend')}
     evidence['market'] = {key: row.get(key) for key in ('volume_m5_usd', 'buys_m5', 'sells_m5', 'liquidity_usd')}
     return evidence
 
@@ -489,6 +506,7 @@ def entry_jobs(conn, state, now):
     for mint, row in state['watch'].items():
         if now - row['last'] > 90 or now < row.get('retry', 0):
             continue
+        market_evidence = entry_evidence(conn, row, now)
         closed = {r['bot'] for r in conn.execute('SELECT bot FROM trades WHERE mint=?', (mint,))}
         for bot, portfolio in state['bots'].items():
             if bot in closed or mint in portfolio['positions']:
@@ -508,7 +526,7 @@ def entry_jobs(conn, state, now):
                 entry = strategy['entry']
             else:
                 entry = BOTS[bot][1]
-            signal = row['first'] if entry == 'instant' else row['pullback']
+            signal = lab.entry_signal(entry, row, market_evidence, now)
             window = ENTRY_WINDOW if entry == 'instant' else 90
             if signal is not None and 0 <= now - signal <= window:
                 possible.setdefault(mint, []).append(bot)
@@ -546,7 +564,7 @@ def stop_distance(position):
     if mark is None:
         return math.inf
     gain = 100 * (mark - position['cost']) / position['cost']
-    return gain - exit_floor(position['peak'])
+    return gain - lab.floor(position['policy']['exit'], position['peak'], exit_floor)
 
 
 def next_exit(jobs, attempts):
@@ -650,7 +668,10 @@ def step(conn, state, providers, get_quote, now):
             activity['exit_quotes'] += 1
             for bot, p in group:
                 was_pending = p['pending']
-                apply_exit(completed, state['bots'][bot], bot, p, size, amount, now)
+                current = state['watch'].get(mint) or {}
+                fresh = current and 0 <= now - current['last'] <= 90 and (not p.get('pair') or p['pair'] == current['pair'])
+                evidence = entry_evidence(conn, current, now) if fresh else {}
+                apply_exit(completed, state['bots'][bot], bot, p, size, amount, now, evidence, current if fresh else {})
                 p.pop('quote_due_since', None)
                 p.pop('route_failures', None)
                 p.pop('route_failure', None)
@@ -772,8 +793,9 @@ def status():
             estimate = portfolio['cash'] + sum(value for value, _ in valuations)
             if bot == 'jarvis' and state['strategy']:
                 entry, exit_rule = (state['strategy'][key] for key in ('entry', 'exit'))
-            description = f'{DESCRIPTIONS[entry]} {DESCRIPTIONS[exit_rule]}' if entry else (
-                'Waiting for a validated strategy learned from the four fixed bots.')
+            description = ((DESCRIPTIONS.get(entry) or lab.DESCRIPTIONS[entry]) + ' ' +
+                           (DESCRIPTIONS.get(exit_rule) or lab.DESCRIPTIONS.get(exit_rule + '_exit') or lab.DESCRIPTIONS[exit_rule])) if entry else (
+                'Waiting for a validated strategy learned from the paper bots.')
             sample = reviewed.get(bot)
             rows.append({
                 'exit_sample': {
@@ -784,7 +806,7 @@ def status():
                     'stop_gap': sample['stop_gap'] if sample else None,
                     'stop_exits': sample['stop_exits'] if sample else 0,
                 },
-                'id': bot, 'name': name, 'description': description,
+                'id': bot, 'name': name, 'description': description, 'lab': bot in lab.BOTS,
                 **stats(conn.execute(totals_sql, (bot,)).fetchone()),
                 'today': stats(conn.execute(totals_sql + ' AND day=?', (bot, day)).fetchone()),
                 'cash': portfolio['cash'] / DOLLAR, 'funding': portfolio['funding'] / DOLLAR,
@@ -827,19 +849,24 @@ def status():
                           'coverage': 'Discoverable active Solana pairs; not the entire meme-coin market.'}}
 
 
-def history(jarvis, before=None):
+def history(jarvis, before=None, bot=None):
     limit = 25
     condition = "bot='jarvis'" if jarvis else "bot!='jarvis'"
+    parameters = ()
+    if bot is not None:
+        if bot not in BOTS:
+            raise ValueError('Unknown paper bot.')
+        condition, parameters = 'bot=?', (bot,)
     with connection() as conn:
         groups = conn.execute(
             f"""SELECT mint, MAX(id) AS last_id FROM trades WHERE {condition}
                 GROUP BY mint HAVING MAX(id) < ? ORDER BY last_id DESC LIMIT ?""",
-            (before if before is not None else 2**63-1, limit + 1),
+            (*parameters, before if before is not None else 2**63-1, limit + 1),
         ).fetchall()
         output = []
         for group in groups[:limit]:
             trades = [json.loads(row['data']) for row in conn.execute(
-                f'SELECT data FROM trades WHERE {condition} AND mint=? ORDER BY id DESC', (group['mint'],))]
+                f'SELECT data FROM trades WHERE {condition} AND mint=? ORDER BY id DESC', (*parameters, group['mint']))]
             output.append({'mint': group['mint'], 'symbol': trades[0]['symbol'], 'trades': [
                 {'bot': BOTS[t['bot']][0], 'pnl': t['pnl'] / DOLLAR, 'cost': t['entry_cost'] / DOLLAR,
                  'proceeds': t['banked'] / DOLLAR, 'reason': t['reason'], 'closed': t['closed'],

@@ -14,6 +14,13 @@
     .jarvis-daily { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
     .jarvis-daily h2 { margin-bottom: 0; }
     .jarvis-coin .history-card > small { grid-row: 1 / span 2; }
+    .lab-summary { display: grid; grid-template-columns: minmax(170px, 2fr) repeat(3, minmax(90px, 1fr)); gap: 12px; align-items: center; cursor: pointer; padding: 14px; }
+    .lab-summary small { display: block; font-size: .78rem; opacity: .72; margin-top: 3px; }
+    .lab-row { border: 1px solid #ffffff20; border-radius: 10px; margin: 8px 0; background: #ffffff04; }
+    .lab-details { border-top: 1px solid #ffffff15; padding: 14px; }
+    .lab-details .meme-scroll { max-height: 300px; overflow: auto; }
+    .lab-details h3 { margin: 12px 0 6px; }
+    @media (max-width: 650px) { .lab-summary { grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px; } }
     #jarvis-note:empty { display: none; }
   </style>
 </head>
@@ -32,6 +39,7 @@
     <a href="#instant-trim">Instant Trim</a>
     <a href="#patient-step">Pullback Ladder</a>
     <a href="#patient-trim">Pullback Trim</a>
+    <a href="#lab">Strategy Lab</a>
     <a href="#jarvis">Jarvis Trader</a>
     <a href="#history">History</a>
     <a href="#health">Health</a>
@@ -73,6 +81,15 @@
       <div id="jarvis-holdings" class="meme-scroll"></div>
     </section>
   </section>
+  <section id="jarvis-lab" hidden>
+    <div class="page-title">
+      <div><h1>Strategy Lab</h1><p class="meme-muted">Nine paper strategies. Tap a row for rules, holdings and history.</p></div>
+      <button id="jarvis-lab-run" type="button" class="primary-button" disabled>Start all paper tests</button>
+    </div>
+    <p id="jarvis-lab-summary" class="meme-muted"></p>
+    <p class="meme-muted">$50 per paper entry · Identical quotes are shared · Exits use available quotes and include modeled costs</p>
+    <div id="jarvis-lab-rows"></div>
+  </section>
   <section id="jarvis-health" hidden>
     <div class="page-title"><div><h1>Health</h1><p id="jarvis-cycle" class="meme-muted"></p></div></div>
     <p id="jarvis-exit-queue" class="meme-muted"></p>
@@ -87,6 +104,6 @@
     </section>
   </section>
 </main>
-<script src="/js/jarvis-test-bot.js?v=quote-validation"></script>
+<script src="/js/jarvis-test-bot.js?v=strategy-lab-v1"></script>
 </body>
 </html>
