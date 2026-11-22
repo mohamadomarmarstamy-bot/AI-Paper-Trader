@@ -72,7 +72,7 @@ class JarvisTests(unittest.TestCase):
         self.assertEqual(report['coins'][0]['trades'][0]['held_seconds'], 5)
         self.assertFalse(self.state()['bots']['instant-step']['positions'])
         self.assertFalse(self.state()['bots']['instant-trim']['positions'])
-        self.assertEqual(len(report['coins'][0]['trades']), 2)
+        self.assertEqual(len(report['coins'][0]['trades']), 5)
         self.assertFalse(jarvis.history(True)['coins'])
         self.assertFalse(database.DATABASE_PATH.exists())
 
@@ -311,8 +311,8 @@ class JarvisTests(unittest.TestCase):
                     jarvis.step(conn, state, self.market, quote, clock[0])
             self.assertTrue(all(b - a >= 1.049 for a, b in zip(starts, starts[1:])))
             self.assertEqual(state['quote_activity']['deferrals'], 0)
-            # One exact-size quote funds all four eligible virtual variants.
-            self.assertEqual(state['quote_activity']['paper_entries'], 4 * state['quote_activity']['entry_quotes'])
+            # One exact-size quote funds all seven eligible legacy/lab variants.
+            self.assertEqual(state['quote_activity']['paper_entries'], 7 * state['quote_activity']['entry_quotes'])
             self.assertGreater(state['quote_activity']['exit_quotes'], 0)
             return state['quote_activity']['entry_quotes']
 
@@ -451,7 +451,7 @@ class JarvisTests(unittest.TestCase):
             self.assertEqual(state['strategy']['version'], 1500)
             self.assertIn('kept its current strategy', state['review']['result'])
             self.assertEqual(state['bots']['jarvis']['cash'], jarvis.JARVIS_BUDGET)
-            self.assertEqual([jarvis.BOTS[bot][1] for bot in jarvis.FIXED],
+            self.assertEqual([jarvis.BOTS[bot][1] for bot in jarvis.FIXED[:4]],
                              ['instant', 'instant', 'pullback', 'pullback'])
 
             conn.execute('UPDATE run SET state=? WHERE id=1', (json.dumps(state),))

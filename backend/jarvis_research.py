@@ -68,9 +68,37 @@ def chart_signal(candles, now):
         pattern = 'pullback_recovery'
     else:
         pattern = 'none'
+    # Indicator variants use only completed contiguous candles. Keep the
+    # existing pattern calculation unchanged for current strategies.
+    def vwap(window):
+        # The USD OHLCV feed reports quote-currency volume. Estimate base
+        # units from each candle's typical price, rather than weighting
+        # expensive candles twice. This is a candle-based VWAP estimate.
+        total = sum(bar[4] for bar in window)
+        units = sum(bar[4] / ((bar[1] + bar[2] + bar[3]) / 3) for bar in window)
+        return total / units if units else None
+
+    def ema(window, period):
+        value = sum(bar[3] for bar in window[:period]) / period
+        for bar in window[period:]:
+            value += 2 / (period + 1) * (bar[3] - value)
+        return value
+
+    fast, slow = ema(history, 5), ema(history, 13)
+    previous_fast, previous_slow = ema(history[:-1], 5), ema(history[:-1], 13)
+    reclaim = False
+    starts = range(latest - 21 * 60, latest + 1, 60)
+    if all(at in bars for at in starts):
+        expanded = [bars[at] for at in starts]
+        levels = [vwap(expanded[i:i + 20]) for i in range(3)]
+        reclaim = all(level is not None for level in levels) and (
+            expanded[-3][3] <= levels[0] and expanded[-2][3] > levels[1] and expanded[-1][3] > levels[2])
     return {'pattern': pattern, 'closed_at': latest + 60,
             'volume_ratio': round(volume / normal_volume, 2) if normal_volume else None,
-            'uptrend_5m': trending}
+            'uptrend_5m': trending, 'vwap': vwap(history), 'vwap_reclaim': reclaim,
+            'ema_fast': fast, 'ema_slow': slow,
+            'ema_cross_up': previous_fast <= previous_slow and fast > slow,
+            'volume_rising': volume > history[-2][4]}
 
 
 def chart(row, now, fetch=payload):

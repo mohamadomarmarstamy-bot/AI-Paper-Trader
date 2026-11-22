@@ -124,11 +124,80 @@
       el('small', 'Same $50 size and 15-minute time exit. The 20% trail starts after a 20% gain and compares with Instant Ladder. Unpriced positions at the deadline are scored at zero proceeds. Stats cover up to 250 settled coins.'));
   }
 
+  const labHistory = new Map();
+
+  async function loadLabHistory(id, append = false) {
+    const cached = labHistory.get(id);
+    if (cached?.loading) return;
+    labHistory.set(id, {...cached, loading: true, error: null});
+    render();
+    try {
+      const data = await call(`history?bot=${encodeURIComponent(id)}${append ? '&before=' + cached.next : ''}`);
+      labHistory.set(id, {coins: [...(append ? cached.coins : []), ...data.coins], next: data.next,
+        closed: state.bots.find(bot => bot.id === id).closed});
+    } catch (error) {
+      labHistory.set(id, {...cached, error: error.message, loading: false});
+    }
+    render();
+  }
+
+  function renderLab() {
+    const bots = state.bots.filter(bot => bot.lab);
+    const open = new Set([...$('jarvis-lab-rows').querySelectorAll('details[open]')].map(row => row.dataset.bot));
+    const sum = key => bots.reduce((total, bot) => total + bot[key], 0);
+    $('jarvis-lab-summary').textContent = `${bots.length} strategies · ${sum('closed')} completed paper positions · ${sum('open')} open · ${money(sum('realized'))} realized P/L`;
+    const run = $('jarvis-lab-run');
+    run.textContent = state.enabled ? 'Pause all paper entries' : 'Start all paper tests';
+    run.disabled = runBusy;
+    const rows = bots.map(bot => {
+      const detail = el('details', '', 'lab-row');
+      detail.dataset.bot = bot.id;
+      detail.open = open.has(bot.id);
+      const summary = el('summary', '', 'lab-summary');
+      const name = el('span');
+      name.append(el('strong', bot.name), el('small', botState(bot)));
+      const total = el('span', '', sign(bot.estimated_pnl));
+      total.append(el('strong', money(bot.pnl ?? bot.estimated_pnl)), el('small', bot.unpriced ? 'Estimated total P/L' : 'Total P/L'));
+      const today = el('span', '', sign(bot.today.realized));
+      today.append(el('strong', money(bot.today.realized)), el('small', 'Today realized'));
+      const stats = el('span');
+      stats.append(el('strong', `${bot.closed} closed · ${bot.open} open`),
+        el('small', `${bot.wins} wins / ${bot.losses} losses${bot.closed ? ' · ' + Math.round(100 * bot.wins / bot.closed) + '% wins' : ''}`));
+      summary.append(name, total, today, stats);
+      const body = el('div', '', 'lab-details');
+      body.append(el('p', bot.description), el('small', `Realized P/L ${money(bot.realized)} · Virtual funding ${money(bot.funding)} · Cash ${money(bot.cash)} · Entry misses ${bot.entry_misses} · Exit misses ${bot.quote_misses}`));
+      const holdings = el('div', '', 'meme-scroll');
+      for (const holding of bot.holdings) {
+        const item = el('p', `${holding.symbol} · ${money(holding.mark ?? holding.estimated_value)}${holding.mark == null ? ' estimated' : ''} · ${displayTime(holding.opened)} ET`);
+        if (holding.route_failure) item.append(el('small', ` · ${holding.route_failure.reason} Next check ${displayTime(holding.next_quote_at)} ET.`));
+        holdings.append(item);
+      }
+      if (!bot.holdings.length) holdings.append(el('p', 'No open holdings. Entries wait for the strategy signal and available quotes.', 'meme-muted'));
+      body.append(el('h3', 'Holdings'), holdings, el('h3', 'Trade history'));
+      const cached = labHistory.get(bot.id);
+      const history = el('div', '', 'meme-scroll');
+      if (cached?.coins) history.append(...cached.coins.map(coinCard));
+      if (cached?.coins?.length === 0) history.append(el('p', 'No completed positions yet.', 'meme-muted'));
+      if (cached?.error) history.append(el('p', cached.error));
+      const button = el('button', cached?.loading ? 'Loading…' : !cached ? 'View history' : cached.closed !== bot.closed ? 'Refresh history' : cached?.next ? 'Load older trades' : 'View history');
+      button.type = 'button';
+      button.disabled = !!cached?.loading;
+      button.hidden = cached?.closed === bot.closed && cached.next == null && !cached.error;
+      button.onclick = () => loadLabHistory(bot.id, !!cached?.next && cached.closed === bot.closed);
+      body.append(history, button);
+      detail.append(summary, body);
+      return detail;
+    });
+    $('jarvis-lab-rows').replaceChildren(...rows);
+  }
+
   function render() {
     if (!state) return;
     const selected = state.bots.find(bot => bot.id === active);
     const jarvis = active === 'jarvis';
     $('jarvis-bot').hidden = !selected;
+    $('jarvis-lab').hidden = active !== 'lab';
+    if (active === 'lab') renderLab();
     $('jarvis-health').hidden = active !== 'health';
     $('jarvis-history').hidden = active !== 'history' && !jarvis;
     $('jarvis-note').textContent = state.error || '';
@@ -215,7 +284,7 @@
     if (active === 'history' || jarvis) {
       const group = state.bots.filter(bot => (bot.id === 'jarvis') === jarvis);
       const sum = key => group.reduce((n, bot) => n + bot[key], 0);
-      $('jarvis-history-title').textContent = jarvis ? 'Jarvis Trader history' : 'Completed trades · four fixed bots';
+      $('jarvis-history-title').textContent = jarvis ? 'Jarvis Trader history' : 'Completed trades · baseline paper bots';
       $('jarvis-history-summary').replaceChildren(
         el('span', `${sum('closed')} completed`), el('span', `${sum('wins')} wins`), el('span', `${sum('losses')} losses`),
         el('span', `${money(sum('realized'))} realized`, sign(sum('realized'))),
@@ -311,7 +380,7 @@
     try {
       const next = await call('status');
       if (runBusy) return;
-      const historyChanged = state && next.bots.some((bot, index) => bot.closed !== state.bots[index].closed);
+      const historyChanged = state && next.bots.some((bot, index) => bot.closed !== state.bots.find(previous => previous.id === bot.id)?.closed);
       state = next;
       render();
       if (historyChanged || !historyLoaded) loadHistory();
@@ -319,7 +388,7 @@
     finally { statusBusy = false; }
   }
 
-  $('jarvis-run').onclick = async () => {
+  const toggleRun = async () => {
     if (!state || runBusy) return;
     const button = $('jarvis-run');
     runBusy = button.disabled = true;
@@ -328,8 +397,10 @@
         body: JSON.stringify({enabled: !state.enabled})});
       render();
     } catch (error) { $('jarvis-note').textContent = error.message; }
-    finally { runBusy = button.disabled = false; }
+    finally { runBusy = button.disabled = false; render(); }
   };
+  $('jarvis-run').onclick = toggleRun;
+  $('jarvis-lab-run').onclick = toggleRun;
   $('jarvis-more').onclick = () => loadHistory(true);
   window.addEventListener('hashchange', selectTab);
   selectTab();

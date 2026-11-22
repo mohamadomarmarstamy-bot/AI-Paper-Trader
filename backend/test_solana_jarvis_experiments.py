@@ -115,6 +115,6 @@ class ExperimentTests(unittest.TestCase):
                                  (bot, f'matched-{i}', NOW, NOW + 1, 'test-day', pnl, jarvis.BUY_COST, data))
             jarvis.guard_entries(conn, state)
             self.assertIn('entry_guard', state)
-            self.assertEqual(jarvis.entry_jobs(conn, state, NOW)[MINT], ['instant-step', 'instant-trim'])
+            self.assertEqual(jarvis.entry_jobs(conn, state, NOW)[MINT], ['instant-step', 'instant-trim', 'lab-five-minute', 'lab-breakeven', 'lab-tp5-sl10'])
         jarvis.open_trade(state, 'jarvis', row, 100, NOW)
         self.assertIn('jarvis', [bot for bot, _ in jarvis.quote_jobs(state, NOW + 3)[MINT, 100]])
