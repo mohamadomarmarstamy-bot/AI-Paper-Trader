@@ -683,6 +683,36 @@ def entry_quote_budget(exits, now):
     return 1
 
 
+def catchup_requested(state):
+    request = os.getenv('JARVIS_ENTRY_CATCHUP_REQUEST', '').strip()
+    pause = state.get('entry_catchup_pause') or {}
+    return bool((request and request != pause.get('request')) or pause.get('active'))
+
+
+def update_catchup_pause(state, exits, now):
+    request = os.getenv('JARVIS_ENTRY_CATCHUP_REQUEST', '').strip()
+    pause = state.get('entry_catchup_pause') or {}
+    if request and request != pause.get('request'):
+        pause = {'request': request, 'active': True, 'requested_at': now, 'healthy_since': None}
+        state['entry_catchup_pause'] = pause
+    if not pause.get('active'):
+        return False
+    queue = exit_queue(exits, now)
+    urgent = any(p.get('exit_priority') == 0 for group in exits.values()
+                 if not retry_group(group) for _, p in group)
+    # Unroutable holdings retain their own backoff; they cannot block resumption forever.
+    healthy = queue['due'] - queue['retry_due'] <= 2 and queue['oldest_wait'] <= 5 and not urgent
+    if healthy:
+        if pause.get('healthy_since') is None:
+            pause['healthy_since'] = now
+        if now - pause['healthy_since'] >= 30:
+            pause.update(active=False, resumed_at=now)
+            LOG.info('Jarvis paper buys resumed after temporary exit catch-up pause.')
+    else:
+        pause['healthy_since'] = None
+    return pause['active']
+
+
 def record_quote_failure(state, side, error, now, mint=None, amount=None):
     failure = str(error) if isinstance(error, QuoteUnavailable) else type(error).__name__
     key = 'last_' + side + '_quote_failure'
@@ -708,7 +738,8 @@ def step(conn, state, providers, get_quote, now):
                 state['error'] = 'Discovery data unavailable.'
     schedule_market_exits(state, now)
     exits = quote_jobs(state, now)
-    entries = entry_jobs(conn, state, now) if state['enabled'] else {}
+    catchup_paused = update_catchup_pause(state, exits, now)
+    entries = entry_jobs(conn, state, now) if state['enabled'] and not catchup_paused else {}
     # Keep new entries moving at a reduced rate during sustained exit pressure.
     # Provider deferrals do not spend an attempt in either queue.
     exit_attempts = state.get('exit_attempts_since_entry', 0)
@@ -990,6 +1021,7 @@ def status():
     return {'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
             'research': {'recent_coins': coverage, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
                          'latest_proposal': dict(latest_mail) if latest_mail else None},
+            'entry_catchup_pause': state.get('entry_catchup_pause'),
             'exit_comparison': comparison_exits,
             'exit_queue': {**exit_queue(quote_jobs(state, now), now), 'retry_positions': route_retries},
             'last_quote_failures': {side: state.get(f'last_{side}_quote_failure') for side in ('entry', 'exit')},
@@ -1163,7 +1195,7 @@ def experiment_tick(get_quote=quote, clock=time.time):
         if not claimed.rowcount:
             return
         last = conn.execute('SELECT opened FROM experiment_coins ORDER BY id DESC LIMIT 1').fetchone()
-        if state['enabled'] and len(active) < experiments.MAX_OPEN and (not last or now - last['opened'] >= experiments.START_INTERVAL):
+        if state['enabled'] and not catchup_requested(state) and len(active) < experiments.MAX_OPEN and (not last or now - last['opened'] >= experiments.START_INTERVAL):
             for row in sorted(state['watch'].values(), key=lambda item: item['first'], reverse=True):
                 if not 0 <= now - row['first'] <= 90:
                     break
@@ -1184,7 +1216,7 @@ def experiment_tick(get_quote=quote, clock=time.time):
             updated[item['id']] = coin
             jobs = experiments.advance(coin, row, evidence, now, TRADE, BUY_COST)
             for (side, size), arms in jobs.items():
-                if state['enabled'] or side == 'sell':
+                if (state['enabled'] and not catchup_requested(state)) or side == 'sell':
                     plans.append((side, size, mint, arms))
     outcome = None
     if plans:
