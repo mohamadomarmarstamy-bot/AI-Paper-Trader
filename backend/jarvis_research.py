@@ -110,7 +110,7 @@ def chart_signal(candles, now):
     squeeze_level = max(bar[1] for bar in squeeze)
     squeeze_low = min(bar[2] for bar in squeeze)
     squeeze_volume = statistics.median(bar[4] for bar in squeeze)
-    squeeze_breakout = (squeeze_level / squeeze_low - 1 <= .03 and close > squeeze_level
+    squeeze_breakout = (squeeze_level <= squeeze_low * 1.03 and close > squeeze_level
                         and squeeze_volume > 0 and volume >= squeeze_volume * 1.5)
     return {'pattern': pattern, 'closed_at': latest + 60,
             'volume_ratio': round(volume / normal_volume, 2) if normal_volume else None,
