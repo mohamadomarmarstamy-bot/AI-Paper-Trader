@@ -744,7 +744,7 @@ def step(conn, state, providers, get_quote, now):
     schedule_market_exits(state, now)
     exits = quote_jobs(state, now)
     catchup_paused = update_catchup_pause(state, exits, now)
-    entries = entry_jobs(conn, state, now) if state['enabled'] and not catchup_paused and not backlog.timer_active(state, now) else {}
+    entries = entry_jobs(conn, state, now) if state['enabled'] and not catchup_paused and not backlog.paused(state, now) else {}
     # Keep new entries moving at a reduced rate during sustained exit pressure.
     # Provider deferrals do not spend an attempt in either queue.
     exit_attempts = state.get('exit_attempts_since_entry', 0)
@@ -1027,7 +1027,7 @@ def status():
                             for bot in state['bots'].values() for p in bot['positions'].values())
         legacy_summary = conn.execute('SELECT data FROM legacy_outcome_summary WHERE id=1').fetchone()
         latest_backlog_mail = conn.execute("SELECT created,sent,attempts,expires FROM backlog_mail WHERE id NOT LIKE 'resume/%' ORDER BY created DESC LIMIT 1").fetchone()
-        timer_report = conn.execute("SELECT started,ends,(id LIKE 'partial/%') AS partial FROM backlog_pause_report WHERE ends=? AND cancelled IS NULL ORDER BY started DESC LIMIT 1", (state.get('entry_pause_until', 0),)).fetchone()
+        timer_report = conn.execute("SELECT started,ends,(id LIKE 'partial/%') AS partial FROM backlog_pause_report WHERE ends=? AND cancelled IS NULL ORDER BY started DESC LIMIT 1", (backlog.pause_key(state),)).fetchone()
     return {'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
             'research': {'recent_coins': coverage, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
                          'latest_proposal': dict(latest_mail) if latest_mail else None},
@@ -1208,7 +1208,7 @@ def experiment_tick(get_quote=quote, clock=time.time):
         if not claimed.rowcount:
             return
         last = conn.execute('SELECT opened FROM experiment_coins ORDER BY id DESC LIMIT 1').fetchone()
-        if state['enabled'] and not catchup_requested(state) and not backlog.timer_active(state, now) and len(active) < experiments.MAX_OPEN and (not last or now - last['opened'] >= experiments.START_INTERVAL):
+        if state['enabled'] and not catchup_requested(state) and not backlog.paused(state, now) and len(active) < experiments.MAX_OPEN and (not last or now - last['opened'] >= experiments.START_INTERVAL):
             for row in sorted(state['watch'].values(), key=lambda item: item['first'], reverse=True):
                 if not 0 <= now - row['first'] <= 90:
                     break
@@ -1229,7 +1229,7 @@ def experiment_tick(get_quote=quote, clock=time.time):
             updated[item['id']] = coin
             jobs = experiments.advance(coin, row, evidence, now, TRADE, BUY_COST)
             for (side, size), arms in jobs.items():
-                if (state['enabled'] and not catchup_requested(state) and not backlog.timer_active(state, now)) or side == 'sell':
+                if (state['enabled'] and not catchup_requested(state) and not backlog.paused(state, now)) or side == 'sell':
                     plans.append((side, size, mint, arms))
     outcome = None
     if plans:

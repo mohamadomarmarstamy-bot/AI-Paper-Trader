@@ -101,7 +101,7 @@
     <div class="page-title"><h1>Paper buy safeguards</h1></div>
     <section class="panel">
       <h2>Exit backlog email</h2>
-      <p>Get one alert when waiting paper positions reach your threshold. The email offers 10-minute, 30-minute and one-hour buy pauses. Sells keep running.</p>
+      <p>Get one alert when waiting paper positions reach your threshold. The email offers 10-minute, 30-minute, one-hour and until-all-positions-close buy pauses. Sells keep running.</p>
       <form id="jarvis-backlog-form">
         <p><label><input id="jarvis-backlog-enabled" type="checkbox"> Enable backlog email</label></p>
         <p><label>Waiting positions threshold <input id="jarvis-backlog-threshold" type="number" min="1" max="10000" step="1" value="100" required></label></p>
@@ -116,9 +116,10 @@
         <button type="button" data-buy-pause="10">Pause buys · 10 min</button>
         <button type="button" data-buy-pause="30">Pause buys · 30 min</button>
         <button type="button" data-buy-pause="60">Pause buys · 1 hour</button>
+        <button type="button" data-buy-pause="-1">Pause until all positions close</button>
         <button type="button" data-buy-pause="0">Resume buys now</button>
       </div>
-      <p>Sells remain active during every buy pause. Resume buys clears the timer and catch-up pause; it respects the overall paper-run switch. Timers end automatically, but an active catch-up pause can keep buys off longer. If all Jarvis paper positions close before the timer ends, buys resume early and you receive a summary email. Route retries still count as open positions. Otherwise, when the timer ends, an email reports whether buys resumed, how many positions closed during the pause, and how many are still waiting.</p>
+      <p>The until-all-close option has no timer: buys stay paused until every Jarvis paper holding is closed, then resume automatically with an email. Sells remain active during every buy pause. Resume buys clears the timer and catch-up pause; it respects the overall paper-run switch. Timers end automatically, but an active catch-up pause can keep buys off longer. If all Jarvis paper positions close before the timer ends, buys resume early and you receive a summary email. Route retries still count as open positions. Otherwise, when the timer ends, an email reports whether buys resumed, how many positions closed during the pause, and how many are still waiting.</p>
       <p id="jarvis-settings-result" role="status"></p>
     </section>
   </section>
