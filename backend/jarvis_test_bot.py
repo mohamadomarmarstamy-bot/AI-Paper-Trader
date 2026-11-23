@@ -337,6 +337,19 @@ def sell(completed, portfolio, bot, position, quantity, amount, now, reason):
     del portfolio['positions'][position['mint']]
 
 
+def write_off_no_routes(completed, state, now):
+    """Owner-selected paper accounting policy; this does not execute a sale."""
+    for bot, portfolio in state['bots'].items():
+        for p in list(portfolio['positions'].values()):
+            if (p.get('route_failure') or {}).get('category') != 'no_route':
+                continue
+            p['paper_writeoff'] = {'category': 'no_route', 'remaining_cost': p['cost'],
+                                   'quantity': p['quantity'], 'proceeds': 0,
+                                   'loss_percent': 100, 'at': now}
+            sell(completed, portfolio, bot, p, p['quantity'], 0, now,
+                 'Rug Pull · no-route paper write-off · remaining position −100% (no sale executed)')
+
+
 def apply_exit(completed, portfolio, bot, p, quote_size, amount, now, evidence=None, market=None):
     if quote_size != p['quantity']:
         if p['trims'] >= FINAL_PROFIT_SELL - 1:
@@ -730,6 +743,7 @@ def record_quote_failure(state, side, error, now, mint=None, amount=None):
 
 def step(conn, state, providers, get_quote, now):
     completed = []
+    write_off_no_routes(completed, state, now)
     activity = state.setdefault('quote_activity', {'since': now, 'entry_quotes': 0, 'paper_entries': 0,
                                                   'exit_quotes': 0, 'deferrals': 0})
     if state['enabled'] or any(p['positions'] for p in state['bots'].values()):
@@ -801,7 +815,9 @@ def step(conn, state, providers, get_quote, now):
                                       'reason': str(error) if isinstance(error, QuoteUnavailable) else type(error).__name__}
                 p.update(due=now + delay, mark_stale=True, pending=None, route_failures=failures)
                 state['bots'][bot]['quote_misses'] += 1
-            state['error'] = 'An exit route is unavailable; holding remains open.'
+            state['error'] = ('No-route position recorded as a Rug Pull paper write-off.'
+                              if getattr(error, 'category', None) == 'no_route' else
+                              'An exit quote is unavailable; holding remains open for retry.')
         else:
             state['exit_quote_attempts'] = attempts + 1
             state['exit_attempts_since_entry'] = min(exit_attempts + 1, BACKLOG_EXIT_QUOTES_PER_ENTRY)
@@ -825,6 +841,7 @@ def step(conn, state, providers, get_quote, now):
                 interval = ROUTINE_EXIT_INTERVAL if fresh and p.get('market_anchor') and priority == 3 else 15
                 p['due'] = now + (POLL if was_pending or p['pending'] else interval)
     state['last_cycle'] = now
+    write_off_no_routes(completed, state, now)
     return completed
 
 
@@ -1027,6 +1044,7 @@ def status():
                             for bot in state['bots'].values() for p in bot['positions'].values())
         legacy_summary = conn.execute('SELECT data FROM legacy_outcome_summary WHERE id=1').fetchone()
         latest_backlog_mail = conn.execute("SELECT created,sent,attempts,expires FROM backlog_mail WHERE id NOT LIKE 'resume/%' ORDER BY created DESC LIMIT 1").fetchone()
+        rug_pulls = dict(conn.execute("SELECT count(*) AS positions, count(DISTINCT mint) AS coins, COALESCE(sum(pnl),0)/1000000.0 AS pnl FROM trades WHERE json_extract(data,'$.paper_writeoff.category')='no_route'").fetchone())
         timer_report = conn.execute("SELECT started,ends,(id LIKE 'partial/%') AS partial FROM backlog_pause_report WHERE ends=? AND cancelled IS NULL ORDER BY started DESC LIMIT 1", (backlog.pause_key(state),)).fetchone()
     return {'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
             'research': {'recent_coins': coverage, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
@@ -1034,6 +1052,7 @@ def status():
             'backlog_guard': {**backlog.summary(state, now),
                               'latest_alert': dict(latest_backlog_mail) if latest_backlog_mail else None,
                               'timer_report': dict(timer_report) if timer_report else None},
+            'rug_pulls': rug_pulls,
             'entry_catchup_pause': state.get('entry_catchup_pause'),
             'exit_comparison': comparison_exits,
             'exit_queue': {**exit_queue(quote_jobs(state, now), now), 'retry_positions': route_retries},
@@ -1056,7 +1075,7 @@ def status():
                           'coverage': 'Discoverable active Solana pairs; not the entire meme-coin market.'}}
 
 
-def history(jarvis, before=None, bot=None):
+def history(jarvis, before=None, bot=None, rugs_only=False):
     limit = 25
     condition = "bot='jarvis'" if jarvis else "bot!='jarvis'"
     parameters = ()
@@ -1064,6 +1083,9 @@ def history(jarvis, before=None, bot=None):
         if bot not in BOTS:
             raise ValueError('Unknown paper bot.')
         condition, parameters = 'bot=?', (bot,)
+    if rugs_only:
+        condition = "json_extract(data,'$.paper_writeoff.category')='no_route'"
+        parameters = ()
     with connection() as conn:
         groups = conn.execute(
             f"""SELECT mint, MAX(id) AS last_id FROM trades WHERE {condition}
@@ -1078,6 +1100,7 @@ def history(jarvis, before=None, bot=None):
                 {'bot': BOTS[t['bot']][0], 'pnl': t['pnl'] / DOLLAR, 'cost': t['entry_cost'] / DOLLAR,
                  'proceeds': t['banked'] / DOLLAR, 'reason': t['reason'], 'closed': t['closed'],
                  'held_seconds': max(0, int(t['closed'] - t['opened'])),
+                 'paper_writeoff': t.get('paper_writeoff'),
                  'entry_pattern': (t.get('entry_evidence', {}).get('chart') or {}).get('pattern'),
                  'social_match': research.allows('social_confirmed', t.get('entry_evidence', {}))}
                 for t in trades

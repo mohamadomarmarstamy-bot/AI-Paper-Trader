@@ -222,7 +222,7 @@
         : `Backlog email pending (${guard.latest_alert.attempts} delivery attempts).`);
       $('jarvis-pause-status').textContent = labels.join(' ');
     }
-    $('jarvis-history').hidden = active !== 'history' && !jarvis;
+    $('jarvis-history').hidden = !['history', 'rug-pulls'].includes(active) && !jarvis;
     $('jarvis-note').textContent = state.error || '';
     if (selected) {
       $('jarvis-title').textContent = selected.name;
@@ -325,7 +325,7 @@
         return card;
       }));
     }
-    if (active === 'history' || jarvis) {
+    if (['history', 'rug-pulls'].includes(active) || jarvis) {
       const group = state.bots.filter(bot => (bot.id === 'jarvis') === jarvis);
       const sum = key => group.reduce((n, bot) => n + bot[key], 0);
       $('jarvis-history-title').textContent = jarvis ? 'Jarvis Trader history' : 'Completed trades · baseline paper bots';
@@ -333,6 +333,16 @@
         el('span', `${sum('closed')} completed`), el('span', `${sum('wins')} wins`), el('span', `${sum('losses')} losses`),
         el('span', `${money(sum('realized'))} realized`, sign(sum('realized'))),
       );
+      if (active === 'rug-pulls') {
+        const rugs = state.rug_pulls || {};
+        $('jarvis-history-title').textContent = 'Rug Pull · paper write-offs';
+        $('jarvis-history-summary').replaceChildren(
+          el('span', `${rugs.positions || 0} closed positions across ${rugs.coins || 0} coins`),
+          el('span', `${money(rugs.pnl || 0)} recorded P/L`, 'negative'),
+          el('p', 'No-route positions are closed at zero remaining value: a 100% loss on the remaining holding. This is a paper write-off, not an executed sale or proof of a rug pull. Earlier partial-sale proceeds stay recorded.')
+        );
+      }
+
     }
   }
 
@@ -380,12 +390,12 @@
   async function loadHistory(append = false) {
     if (historyBusy) return;
     const requested = active;
-    if (!['history', 'jarvis'].includes(requested)) return;
+    if (!['history', 'jarvis', 'rug-pulls'].includes(requested)) return;
     const more = $('jarvis-more');
     historyBusy = true;
     more.disabled = true;
     try {
-      const data = await call(`history?jarvis_only=${requested === 'jarvis'}${append ? '&before=' + cursor : ''}`);
+      const data = await call(`history?rugs_only=${requested === 'rug-pulls'}&jarvis_only=${requested === 'jarvis'}${append ? '&before=' + cursor : ''}`);
       if (active !== requested) return;
       const rows = $('jarvis-history-rows');
       if (!append) rows.replaceChildren();
