@@ -260,6 +260,9 @@
       $('jarvis-exit-queue').textContent = (regular
         ? `${regular} regular exit quotes due · Oldest waiting ${displayDuration(queue.oldest_wait)}${queue.backed_up ? ' · Entries slowed while exits catch up' : ''}`
         : 'No regular exit quotes due') + retry + (failure ? ` · Last exit quote failure: ${failure.reason}` : '');
+      const pause = state.entry_catchup_pause;
+      if (pause?.active) $('jarvis-exit-queue').textContent += ' · PAPER BUYS TEMPORARILY PAUSED: exits continue; buys resume automatically after at most 2 regular checks are due, oldest ≤5s, and no urgent checks, sustained for 30s. Failed routes keep retrying separately.';
+      else if (pause?.resumed_at) $('jarvis-exit-queue').textContent += ` · Paper catch-up pause completed: buys permitted again ${displayTime(pause.resumed_at)} ET.`;
       const comparison = state.exit_comparison;
       const comparisonPanel = $('jarvis-exit-comparison');
       comparisonPanel.replaceChildren();

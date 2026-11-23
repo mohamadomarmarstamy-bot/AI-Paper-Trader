@@ -186,6 +186,58 @@ class JarvisTests(unittest.TestCase):
         self.assertEqual(state['last_exit_quote_failure']['mint'], MINT)
         self.assertEqual(state['last_exit_quote_failure']['amount'], 10)
 
+    def test_temporary_pause_drains_exits_and_resumes_only_after_sustained_health(self):
+        state = jarvis.initial()
+        state.update(enabled=True, next_discovery=self.now + 1000)
+        p = self.monitored_position(state)
+        p['due'] = self.now - 200
+        with patch.dict('os.environ', {'JARVIS_ENTRY_CATCHUP_REQUEST': 'test-request'}):
+            jobs = jarvis.quote_jobs(state, self.now)
+            self.assertTrue(jarvis.update_catchup_pause(state, jobs, self.now))
+            self.assertTrue(jarvis.catchup_requested(state))
+            # Backlog does not count toward the healthy interval.
+            self.assertIsNone(state['entry_catchup_pause']['healthy_since'])
+            self.assertTrue(jarvis.update_catchup_pause(state, {}, self.now + 10))
+            self.assertTrue(jarvis.update_catchup_pause(state, {}, self.now + 39))
+            self.assertFalse(jarvis.update_catchup_pause(state, {}, self.now + 40))
+            self.assertEqual(state['entry_catchup_pause']['resumed_at'], self.now + 40)
+            # Restarts with the same request do not arm the one-time pause again.
+            restored = json.loads(json.dumps(state))
+            self.assertFalse(jarvis.update_catchup_pause(restored, jobs, self.now + 50))
+            self.assertFalse(jarvis.catchup_requested(restored))
+        self.assertTrue(state['enabled'])
+
+    def test_pause_keeps_sells_running_and_blocks_buys(self):
+        with patch.dict('os.environ', {'JARVIS_ENTRY_CATCHUP_REQUEST': 'pause'}), jarvis.connection() as conn:
+            state = jarvis.initial()
+            state.update(enabled=True, next_discovery=self.now + 1000, exit_attempts_since_entry=6)
+            p = self.monitored_position(state)
+            p['due'] = self.now - 20
+            state['watch']['candidate'] = dict(state['watch'][MINT], mint='candidate')
+            calls = []
+            def quote(*args):
+                calls.append(args)
+                return 50000000
+            jarvis.step(conn, state, None, quote, self.now)
+            self.assertEqual(calls, [(MINT, jarvis.USDC, 100)])
+            jarvis.step(conn, state, None, quote, self.now + 1)
+            self.assertEqual(len(calls), 1)
+            self.assertNotIn('candidate', state['bots']['instant-step']['positions'])
+            self.assertTrue(state['entry_catchup_pause']['active'])
+
+    def test_pause_health_resets_and_retry_only_does_not_prevent_recovery(self):
+        state = jarvis.initial()
+        p = self.monitored_position(state)
+        p.update(due=self.now - 100, quote_due_since=self.now - 100, mark_stale=True)
+        with patch.dict('os.environ', {'JARVIS_ENTRY_CATCHUP_REQUEST': 'pause'}):
+            retries = jarvis.quote_jobs(state, self.now)
+            self.assertTrue(jarvis.update_catchup_pause(state, retries, self.now))
+            p['mark_stale'] = False
+            self.assertTrue(jarvis.update_catchup_pause(state, jarvis.quote_jobs(state, self.now + 20), self.now + 20))
+            self.assertIsNone(state['entry_catchup_pause']['healthy_since'])
+            self.assertTrue(jarvis.update_catchup_pause(state, {}, self.now + 21))
+            self.assertFalse(jarvis.update_catchup_pause(state, {}, self.now + 51))
+
     def test_exit_comparison_separates_closed_and_open_cohorts_without_missing_metrics_as_zero(self):
         cutoff = jarvis.EXIT_SCHEDULER_STARTED
         with jarvis.connection() as conn, conn:
