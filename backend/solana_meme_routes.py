@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 import json
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from starlette.concurrency import run_in_threadpool
 from pro_ticker_http_security import require_same_origin
 from solana_meme_bot import public, configure, tick, manual_close, Conflict
@@ -15,11 +15,12 @@ def build_router(*,require_session):
     import solana_real_copy as real_copy
     import solana_paper_trials as trials
     import jarvis_test_bot as jarvis
+    import jarvis_backlog as backlog
 
     @asynccontextmanager
     async def jarvis_lifespan(_app):
         tasks = [asyncio.create_task(worker()) for worker in
-                 (jarvis.worker, jarvis.research_worker, jarvis.experiment_worker)]
+                 (jarvis.worker, jarvis.research_worker, jarvis.experiment_worker, backlog.worker)]
         try:
             yield
         finally:
@@ -60,6 +61,61 @@ def build_router(*,require_session):
             raise HTTPException(422, 'Expected a paper-run toggle.')
         return JSONResponse(await run_in_threadpool(jarvis.set_enabled, payload['enabled']),
                             headers={'Cache-Control': 'no-store'})
+
+    @router.post('/jarvis-test-bot/backlog-settings')
+    async def backlog_settings(request: Request):
+        payload = await body(request)
+        try:
+            return JSONResponse(await run_in_threadpool(backlog.configure, payload), headers={'Cache-Control': 'no-store'})
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+
+    @router.post('/jarvis-test-bot/buy-pause')
+    async def buy_pause(request: Request):
+        payload = await body(request)
+        if not isinstance(payload, dict) or set(payload) != {'minutes'}:
+            raise HTTPException(422, 'Expected a pause duration.')
+        try:
+            return JSONResponse(await run_in_threadpool(backlog.control, payload['minutes']), headers={'Cache-Control': 'no-store'})
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+
+    @router.get('/jarvis-test-bot/email-pause')
+    def email_pause_page(request: Request):
+        # A GET never consumes a link. Only browser navigation with explicit user
+        # activation can auto-submit the subsequent same-origin POST. Previewers
+        # and clients without that browser signal get an ordinary confirmation.
+        activated = (request.headers.get('sec-fetch-user') == '?1'
+                     and request.headers.get('sec-fetch-mode') == 'navigate'
+                     and request.headers.get('sec-fetch-dest') == 'document')
+        auto = 'yes' if activated else 'no'
+        page = ('<!doctype html><html lang="en"><meta charset="utf-8">'
+                '<meta name="viewport" content="width=device-width, initial-scale=1">'
+                '<title>Pause Jarvis paper buys</title><link rel="stylesheet" href="/style.css">'
+                f'<body data-auto="{auto}"><main><h1>Pause Jarvis paper buys</h1>'
+                '<p id="message" role="status">This email link pauses paper buys only. Sells keep running.</p>'
+                '<button id="apply" type="button" class="primary-button">Apply the pause selected in your email</button>'
+                '<p><a href="/jarvis-test-bot#settings">Open settings / Resume buys</a></p></main>'
+                '<script src="/js/jarvis-email-pause.js"></script></body></html>')
+        return HTMLResponse(page, headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
+                            'X-Robots-Tag': 'noindex, nofollow',
+                            'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"})
+
+    @router.post('/jarvis-test-bot/email-pause')
+    async def email_pause(request: Request):
+        # This capability cannot resume entries, change settings, or touch real funds.
+        require_same_origin(request)
+        raw = await request.body()
+        if len(raw) > 256:
+            raise HTTPException(422, 'Invalid pause link.')
+        try:
+            payload = json.loads(raw)
+            if not isinstance(payload, dict) or set(payload) != {'token'}:
+                raise ValueError('Invalid pause link.')
+            result = await run_in_threadpool(backlog.email_control, payload['token'])
+        except (ValueError, TypeError):
+            raise HTTPException(422, 'Pause link invalid or expired. Open app settings.') from None
+        return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
     @router.get('/meme-coins/token-labels')
     def token_labels(request:Request, mints:str=''):
