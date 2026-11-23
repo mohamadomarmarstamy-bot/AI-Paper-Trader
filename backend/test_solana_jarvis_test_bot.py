@@ -207,6 +207,25 @@ class JarvisTests(unittest.TestCase):
             self.assertFalse(jarvis.catchup_requested(restored))
         self.assertTrue(state['enabled'])
 
+    def test_timed_buy_pause_blocks_entries_without_stopping_exits(self):
+        import jarvis_backlog as guard
+        with jarvis.connection() as conn:
+            state = jarvis.initial()
+            state.update(enabled=True, next_discovery=self.now + 1000, exit_attempts_since_entry=6)
+            p = self.monitored_position(state)
+            p['due'] = self.now - 20
+            state['watch']['candidate'] = dict(state['watch'][MINT], mint='candidate')
+            guard.apply_control(state, 10, self.now)
+            calls = []
+            def quote(*args):
+                calls.append(args)
+                return 50000000
+            jarvis.step(conn, state, None, quote, self.now)
+            self.assertEqual(calls, [(MINT, jarvis.USDC, 100)])
+            jarvis.step(conn, state, None, quote, self.now + 1)
+            self.assertEqual(len(calls), 1)
+            self.assertTrue(state['enabled'])
+
     def test_pause_keeps_sells_running_and_blocks_buys(self):
         with patch.dict('os.environ', {'JARVIS_ENTRY_CATCHUP_REQUEST': 'pause'}), jarvis.connection() as conn:
             state = jarvis.initial()

@@ -43,6 +43,7 @@
     <a href="#jarvis">Jarvis Trader</a>
     <a href="#history">History</a>
     <a href="#health">Health</a>
+    <a href="#settings">Settings</a>
   </nav>
   <p id="jarvis-note" class="status-strip" role="status"></p>
   <section id="jarvis-bot">
@@ -96,6 +97,31 @@
     <section id="jarvis-exit-comparison" class="panel"></section>
     <div id="jarvis-health-bots" class="meme-grid jarvis-health"></div>
   </section>
+  <section id="jarvis-settings" hidden>
+    <div class="page-title"><h1>Paper buy safeguards</h1></div>
+    <section class="panel">
+      <h2>Exit backlog email</h2>
+      <p>Get one alert when waiting paper positions reach your threshold. The email offers 10-minute, 30-minute and one-hour buy pauses. Sells keep running.</p>
+      <form id="jarvis-backlog-form">
+        <p><label><input id="jarvis-backlog-enabled" type="checkbox"> Enable backlog email</label></p>
+        <p><label>Waiting positions threshold <input id="jarvis-backlog-threshold" type="number" min="1" max="10000" step="1" value="100" required></label></p>
+        <button type="submit">Save safeguard</button>
+      </form>
+      <small>Counts positions due for an exit quote check or awaiting a route retry. A coin held by multiple bots counts once per position. These are not all confirmed sell orders. Alerts re-arm after the count stays below 80% of the threshold for a minute.</small>
+    </section>
+    <section class="panel">
+      <h2>Temporary buy pause</h2>
+      <p id="jarvis-pause-status" role="status"></p>
+      <div class="toolbar">
+        <button type="button" data-buy-pause="10">Pause buys · 10 min</button>
+        <button type="button" data-buy-pause="30">Pause buys · 30 min</button>
+        <button type="button" data-buy-pause="60">Pause buys · 1 hour</button>
+        <button type="button" data-buy-pause="0">Resume buys now</button>
+      </div>
+      <p>Sells remain active during every buy pause. Resume buys clears the timer and catch-up pause; it respects the overall paper-run switch. Timers end automatically, but an active catch-up pause can keep buys off longer.</p>
+      <p id="jarvis-settings-result" role="status"></p>
+    </section>
+  </section>
   <section id="jarvis-history" hidden>
     <section class="panel">
       <h2 id="jarvis-history-title">History</h2>
@@ -105,6 +131,6 @@
     </section>
   </section>
 </main>
-<script src="/js/jarvis-test-bot.js?v=strategy-lab-v2"></script>
+<script src="/js/jarvis-test-bot.js?v=backlog-guard-v1"></script>
 </body>
 </html>

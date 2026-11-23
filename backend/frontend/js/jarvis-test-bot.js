@@ -45,6 +45,7 @@
   function botState(bot) {
     if (bot.id === 'jarvis' && !state.strategy) return bot.open ? 'Waiting for strategy · exits monitored' : 'Waiting for strategy';
     if (bot.id === 'jarvis' && state.entry_guard) return 'Entries paused · exits monitored';
+    if (state.backlog_guard?.timer_active || state.entry_catchup_pause?.active) return 'Buys paused · exits monitored';
     if (!state.enabled) return bot.open ? 'Paused · exits monitored' : 'Paused';
     if (!state.last_cycle || Date.now() / 1000 - state.last_cycle > 30) return 'Waiting for scan';
     return 'Running';
@@ -199,6 +200,24 @@
     $('jarvis-lab').hidden = active !== 'lab';
     if (active === 'lab') renderLab();
     $('jarvis-health').hidden = active !== 'health';
+    $('jarvis-settings').hidden = active !== 'settings';
+    if (active === 'settings') {
+      const guard = state.backlog_guard || {};
+      const form = $('jarvis-backlog-form');
+      if (!form.contains(document.activeElement)) {
+        $('jarvis-backlog-enabled').checked = guard.enabled !== false;
+        $('jarvis-backlog-threshold').value = guard.threshold || 100;
+      }
+      const labels = [`${guard.positions || 0} waiting positions across ${guard.coins || 0} distinct coins.`];
+      if (guard.timer_active) labels.push(`Buys paused until ${displayTime(guard.pause_until)} ET.`);
+      if (state.entry_catchup_pause?.active) labels.push('Catch-up pause active: buys resume when exits catch up.');
+      if (!state.enabled) labels.push('Overall paper-run switch is off.');
+      if (state.enabled && !guard.timer_active && !state.entry_catchup_pause?.active) labels.push('Buys permitted.');
+      if (guard.latest_alert) labels.push(guard.latest_alert.sent
+        ? `Last backlog email accepted ${displayTime(guard.latest_alert.sent)} ET.`
+        : `Backlog email pending (${guard.latest_alert.attempts} delivery attempts).`);
+      $('jarvis-pause-status').textContent = labels.join(' ');
+    }
     $('jarvis-history').hidden = active !== 'history' && !jarvis;
     $('jarvis-note').textContent = state.error || '';
     if (selected) {
@@ -262,7 +281,8 @@
         : 'No regular exit quotes due') + retry + (failure ? ` · Last exit quote failure: ${failure.reason}` : '');
       const pause = state.entry_catchup_pause;
       if (pause?.active) $('jarvis-exit-queue').textContent += ' · PAPER BUYS TEMPORARILY PAUSED: exits continue; buys resume automatically after at most 2 regular checks are due, oldest ≤5s, and no urgent checks, sustained for 30s. Failed routes keep retrying separately.';
-      else if (pause?.resumed_at) $('jarvis-exit-queue').textContent += ` · Paper catch-up pause completed: buys permitted again ${displayTime(pause.resumed_at)} ET.`;
+      else if (pause?.resumed_at && !state.backlog_guard?.timer_active && state.enabled) $('jarvis-exit-queue').textContent += ` · Paper catch-up pause completed: buys permitted again ${displayTime(pause.resumed_at)} ET.`;
+      if (state.backlog_guard?.timer_active) $('jarvis-exit-queue').textContent += ` · Timed buy pause until ${displayTime(state.backlog_guard.pause_until)} ET; sells continue.`;
       const comparison = state.exit_comparison;
       const comparisonPanel = $('jarvis-exit-comparison');
       comparisonPanel.replaceChildren();
@@ -418,6 +438,26 @@
     } catch (error) { $('jarvis-note').textContent = error.message; }
     finally { runBusy = button.disabled = false; render(); }
   };
+  async function saveControl(path, payload) {
+    if (runBusy) return;
+    runBusy = true;
+    const buttons = [...$('jarvis-settings').querySelectorAll('button')];
+    buttons.forEach(button => { button.disabled = true; });
+    try {
+      state = await call(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+      render();
+      $('jarvis-settings-result').textContent = 'Saved. Sell monitoring continues.';
+    } catch (error) { $('jarvis-settings-result').textContent = error.message; }
+    finally { runBusy = false; buttons.forEach(button => { button.disabled = false; }); }
+  }
+  $('jarvis-backlog-form').onsubmit = event => {
+    event.preventDefault();
+    saveControl('backlog-settings', {enabled: $('jarvis-backlog-enabled').checked,
+      threshold: Number($('jarvis-backlog-threshold').value)});
+  };
+  for (const button of document.querySelectorAll('[data-buy-pause]')) {
+    button.onclick = () => saveControl('buy-pause', {minutes: Number(button.dataset.buyPause)});
+  }
   $('jarvis-run').onclick = toggleRun;
   $('jarvis-lab-run').onclick = toggleRun;
   $('jarvis-more').onclick = () => loadHistory(true);

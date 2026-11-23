@@ -15,6 +15,7 @@ import requests
 
 import database
 import jarvis_experiments as experiments
+import jarvis_backlog as backlog
 import jarvis_strategies as lab
 import jarvis_outcomes as outcomes
 import jarvis_research as research
@@ -100,7 +101,7 @@ def connection():
     path = database.DATABASE_PATH.with_name('jarvis_paper.sqlite3')
     with closing(sqlite3.connect(path, timeout=5)) as conn:
         conn.row_factory = sqlite3.Row
-        conn.executescript(SCHEMA + research.SCHEMA + experiments.SCHEMA + outcomes.SCHEMA)
+        conn.executescript(SCHEMA + research.SCHEMA + experiments.SCHEMA + outcomes.SCHEMA + backlog.SCHEMA)
         conn.execute('INSERT OR IGNORE INTO run(id,state) VALUES (1,?)', (json.dumps(initial()),))
         conn.commit()
         yield conn
@@ -739,7 +740,7 @@ def step(conn, state, providers, get_quote, now):
     schedule_market_exits(state, now)
     exits = quote_jobs(state, now)
     catchup_paused = update_catchup_pause(state, exits, now)
-    entries = entry_jobs(conn, state, now) if state['enabled'] and not catchup_paused else {}
+    entries = entry_jobs(conn, state, now) if state['enabled'] and not catchup_paused and not backlog.timer_active(state, now) else {}
     # Keep new entries moving at a reduced rate during sustained exit pressure.
     # Provider deferrals do not spend an attempt in either queue.
     exit_attempts = state.get('exit_attempts_since_entry', 0)
@@ -1018,9 +1019,12 @@ def status():
         route_retries = sum(bool(p.get('mark_stale') and 'quote_due_since' in p)
                             for bot in state['bots'].values() for p in bot['positions'].values())
         legacy_summary = conn.execute('SELECT data FROM legacy_outcome_summary WHERE id=1').fetchone()
+        latest_backlog_mail = conn.execute('SELECT created,sent,attempts,expires FROM backlog_mail ORDER BY created DESC LIMIT 1').fetchone()
     return {'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
             'research': {'recent_coins': coverage, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
                          'latest_proposal': dict(latest_mail) if latest_mail else None},
+            'backlog_guard': {**backlog.summary(state, now),
+                              'latest_alert': dict(latest_backlog_mail) if latest_backlog_mail else None},
             'entry_catchup_pause': state.get('entry_catchup_pause'),
             'exit_comparison': comparison_exits,
             'exit_queue': {**exit_queue(quote_jobs(state, now), now), 'retry_positions': route_retries},
@@ -1195,7 +1199,7 @@ def experiment_tick(get_quote=quote, clock=time.time):
         if not claimed.rowcount:
             return
         last = conn.execute('SELECT opened FROM experiment_coins ORDER BY id DESC LIMIT 1').fetchone()
-        if state['enabled'] and not catchup_requested(state) and len(active) < experiments.MAX_OPEN and (not last or now - last['opened'] >= experiments.START_INTERVAL):
+        if state['enabled'] and not catchup_requested(state) and not backlog.timer_active(state, now) and len(active) < experiments.MAX_OPEN and (not last or now - last['opened'] >= experiments.START_INTERVAL):
             for row in sorted(state['watch'].values(), key=lambda item: item['first'], reverse=True):
                 if not 0 <= now - row['first'] <= 90:
                     break
@@ -1216,7 +1220,7 @@ def experiment_tick(get_quote=quote, clock=time.time):
             updated[item['id']] = coin
             jobs = experiments.advance(coin, row, evidence, now, TRADE, BUY_COST)
             for (side, size), arms in jobs.items():
-                if (state['enabled'] and not catchup_requested(state)) or side == 'sell':
+                if (state['enabled'] and not catchup_requested(state) and not backlog.timer_active(state, now)) or side == 'sell':
                     plans.append((side, size, mint, arms))
     outcome = None
     if plans:
