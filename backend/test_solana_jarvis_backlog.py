@@ -115,6 +115,62 @@ class BacklogTests(unittest.TestCase):
         guard.mail_tick(lambda: self.now, post)
         post.assert_not_called()
 
+    def add_trade(self, conn, mint, closed):
+        conn.execute('INSERT INTO trades(bot,mint,opened,closed,day,pnl,entry_cost,data) VALUES(?,?,?,?,?,?,?,?)',
+                     ('instant-step', mint, self.now - 10, closed, 'test', 0, jarvis.BUY_COST, '{}'))
+
+    def start_timer(self, minutes=10):
+        guard.apply_control(self.state, minutes, self.now)
+        with jarvis.connection() as conn, conn:
+            guard.record_pause(conn, self.state, minutes, self.now)
+        self.store()
+
+    def test_expiry_email_counts_only_closes_during_timer_and_sends_once_even_alert_disabled(self):
+        self.state['backlog_settings'] = {'enabled': False, 'threshold': 100}
+        with jarvis.connection() as conn, conn:
+            self.add_trade(conn, 'old', self.now - 1)
+        self.start_timer()
+        with jarvis.connection() as conn, conn:
+            self.add_trade(conn, 'during', self.now + 300)
+            self.add_trade(conn, 'after', self.now + 601)
+        post = Mock(return_value=Mock(status_code=202))
+        guard.mail_tick(lambda: self.now + 599, post)
+        post.assert_not_called()
+        guard.mail_tick(lambda: self.now + 610, post)
+        payload = post.call_args.kwargs['json']
+        self.assertEqual(payload['subject'], 'Jarvis paper: buys back up and running')
+        self.assertIn('1 Jarvis paper positions closed during this timer.', payload['text'])
+        self.assertIn('100 positions across 100 distinct coins', payload['text'])
+        guard.mail_tick(lambda: self.now + 650, post)
+        self.assertEqual(post.call_count, 1)
+
+    def test_expiry_email_does_not_claim_resumption_while_catchup_or_master_stop_is_active(self):
+        for master, catchup in ((True, True), (False, False)):
+            with self.subTest(master=master, catchup=catchup), jarvis.connection() as conn, conn:
+                conn.execute('DELETE FROM backlog_pause_report')
+                conn.execute('DELETE FROM backlog_mail')
+                state = jarvis.initial()
+                state.update(enabled=master, entry_catchup_pause={'active': catchup})
+                guard.apply_control(state, 10, self.now)
+                guard.record_pause(conn, state, 10, self.now)
+                guard.enqueue_expired(conn, state, self.now + 600, 'https://test')
+                payload = json.loads(conn.execute('SELECT payload FROM backlog_mail').fetchone()[0])
+                self.assertIn('buys still paused', payload['subject'])
+                self.assertIn('paper buys remain paused', payload['text'])
+
+    def test_replacement_and_manual_resume_cancel_unexpired_timer_reports(self):
+        self.start_timer()
+        with jarvis.connection() as conn, conn:
+            guard.apply_control(self.state, 30, self.now + 10)
+            guard.record_pause(conn, self.state, 30, self.now + 10)
+            guard.enqueue_expired(conn, self.state, self.now + 600, 'https://test')
+            self.assertEqual(conn.execute('SELECT count(*) FROM backlog_mail').fetchone()[0], 0)
+            guard.apply_control(self.state, 0, self.now + 700)
+            guard.record_pause(conn, self.state, 0, self.now + 700)
+            guard.enqueue_expired(conn, self.state, self.now + 2000, 'https://test')
+            self.assertEqual(conn.execute('SELECT count(*) FROM backlog_mail').fetchone()[0], 0)
+            self.assertEqual(conn.execute('SELECT count(*) FROM backlog_pause_report WHERE cancelled IS NOT NULL').fetchone()[0], 2)
+
     def test_http_auth_origin_and_preview_contract(self):
         app = FastAPI()
         def auth(request):

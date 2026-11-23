@@ -1019,7 +1019,7 @@ def status():
         route_retries = sum(bool(p.get('mark_stale') and 'quote_due_since' in p)
                             for bot in state['bots'].values() for p in bot['positions'].values())
         legacy_summary = conn.execute('SELECT data FROM legacy_outcome_summary WHERE id=1').fetchone()
-        latest_backlog_mail = conn.execute('SELECT created,sent,attempts,expires FROM backlog_mail ORDER BY created DESC LIMIT 1').fetchone()
+        latest_backlog_mail = conn.execute("SELECT created,sent,attempts,expires FROM backlog_mail WHERE id NOT LIKE 'resume/%' ORDER BY created DESC LIMIT 1").fetchone()
     return {'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
             'research': {'recent_coins': coverage, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
                          'latest_proposal': dict(latest_mail) if latest_mail else None},
