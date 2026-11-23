@@ -1020,11 +1020,13 @@ def status():
                             for bot in state['bots'].values() for p in bot['positions'].values())
         legacy_summary = conn.execute('SELECT data FROM legacy_outcome_summary WHERE id=1').fetchone()
         latest_backlog_mail = conn.execute("SELECT created,sent,attempts,expires FROM backlog_mail WHERE id NOT LIKE 'resume/%' ORDER BY created DESC LIMIT 1").fetchone()
+        timer_report = conn.execute("SELECT started,ends,(id LIKE 'partial/%') AS partial FROM backlog_pause_report WHERE ends=? AND cancelled IS NULL ORDER BY started DESC LIMIT 1", (state.get('entry_pause_until', 0),)).fetchone()
     return {'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
             'research': {'recent_coins': coverage, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
                          'latest_proposal': dict(latest_mail) if latest_mail else None},
             'backlog_guard': {**backlog.summary(state, now),
-                              'latest_alert': dict(latest_backlog_mail) if latest_backlog_mail else None},
+                              'latest_alert': dict(latest_backlog_mail) if latest_backlog_mail else None,
+                              'timer_report': dict(timer_report) if timer_report else None},
             'entry_catchup_pause': state.get('entry_catchup_pause'),
             'exit_comparison': comparison_exits,
             'exit_queue': {**exit_queue(quote_jobs(state, now), now), 'retry_positions': route_retries},

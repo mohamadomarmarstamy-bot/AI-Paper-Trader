@@ -213,6 +213,9 @@
       if (state.entry_catchup_pause?.active) labels.push('Catch-up pause active: buys resume when exits catch up.');
       if (!state.enabled) labels.push('Overall paper-run switch is off.');
       if (state.enabled && !guard.timer_active && !state.entry_catchup_pause?.active) labels.push('Buys permitted.');
+      if (guard.timer_active && guard.timer_report) labels.push(guard.timer_report.partial
+        ? `Expiry email ready; closed-position counts start from ${displayTime(guard.timer_report.started)} ET because this older timer had no recorded start.`
+        : 'Expiry email ready; counts cover the full timer.');
       if (guard.latest_alert) labels.push(guard.latest_alert.sent
         ? `Last backlog email accepted ${displayTime(guard.latest_alert.sent)} ET.`
         : `Backlog email pending (${guard.latest_alert.attempts} delivery attempts).`);
