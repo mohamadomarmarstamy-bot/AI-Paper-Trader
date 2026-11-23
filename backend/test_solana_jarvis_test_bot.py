@@ -207,6 +207,27 @@ class JarvisTests(unittest.TestCase):
             self.assertFalse(jarvis.catchup_requested(restored))
         self.assertTrue(state['enabled'])
 
+    def test_final_close_commits_early_resume_and_email_with_all_closed_positions(self):
+        import jarvis_backlog as guard
+        jarvis.set_enabled(True)
+        self.advance()
+        with jarvis.connection() as conn, conn:
+            state, revision = jarvis.read(conn)
+            count = sum(len(b['positions']) for b in state['bots'].values())
+            self.assertGreater(count, 0)
+            guard.apply_control(state, 30, self.now)
+            guard.record_pause(conn, state, 30, self.now)
+            guard.save_state(conn, state, revision)
+        self.advance()
+        state = self.state()
+        self.assertTrue(state['enabled'])
+        self.assertFalse(any(b['positions'] for b in state['bots'].values()))
+        self.assertEqual(state['entry_pause_until'], 0)
+        self.assertTrue(state['entry_catchup_pause']['early_all_closed'])
+        with jarvis.connection() as conn:
+            payload = json.loads(conn.execute("SELECT payload FROM backlog_mail WHERE id LIKE 'resume/%'").fetchone()[0])
+            self.assertIn(f'{count} Jarvis paper positions closed during this timer.', payload['text'])
+
     def test_timed_buy_pause_blocks_entries_without_stopping_exits(self):
         import jarvis_backlog as guard
         with jarvis.connection() as conn:

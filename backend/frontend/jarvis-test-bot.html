@@ -118,7 +118,7 @@
         <button type="button" data-buy-pause="60">Pause buys · 1 hour</button>
         <button type="button" data-buy-pause="0">Resume buys now</button>
       </div>
-      <p>Sells remain active during every buy pause. Resume buys clears the timer and catch-up pause; it respects the overall paper-run switch. Timers end automatically, but an active catch-up pause can keep buys off longer. When a timer ends, an email reports whether buys resumed, how many positions closed during the pause, and how many are still waiting.</p>
+      <p>Sells remain active during every buy pause. Resume buys clears the timer and catch-up pause; it respects the overall paper-run switch. Timers end automatically, but an active catch-up pause can keep buys off longer. If all Jarvis paper positions close before the timer ends, buys resume early and you receive a summary email. Route retries still count as open positions. Otherwise, when the timer ends, an email reports whether buys resumed, how many positions closed during the pause, and how many are still waiting.</p>
       <p id="jarvis-settings-result" role="status"></p>
     </section>
   </section>

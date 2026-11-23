@@ -862,6 +862,7 @@ def tick(*, providers=None, get_quote=quote, clock=time.time):
                 if state['strategy'] and state['strategy']['version'] != old_version:
                     state['strategy']['activated_at'] = clock()
                     state.pop('entry_guard', None)
+                backlog.resume_when_empty(conn, state, now)
                 conn.execute('UPDATE run SET state=?,revision=revision+1 WHERE id=1', (json.dumps(state),))
         finally:
             with conn:
