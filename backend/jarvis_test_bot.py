@@ -46,6 +46,7 @@ NEAR_STOP_POINTS = 5
 OLDEST_EXIT_INTERVAL = 3
 EXIT_RETRY_INTERVAL = 6
 EXIT_RETRY_LIMIT = 900
+NO_ROUTE_RETRY_SECONDS = 15
 FINAL_PROFIT_SELL = 5
 EXIT_COHORT = 'priority-stop-v1'
 DISCOVERY_BATCH = 5 * MAX_SCAN_TOKENS
@@ -644,6 +645,9 @@ def schedule_market_exits(state, now):
         for p in portfolio['positions'].values():
             # Never bypass failed-route cooldowns because an indicative price moved.
             if p.get('mark_stale') and 'quote_due_since' in p:
+                if (p.get('route_failure') or {}).get('category') == 'no_route':
+                    # Also shorten pre-upgrade backoffs; do not postpone already due retries.
+                    p['due'] = min(p['due'], now + NO_ROUTE_RETRY_SECONDS)
                 continue
             market = fresh_market(p, state, now)
             priority = exit_priority(p, now, market, state.get('benchmark'))
@@ -788,9 +792,11 @@ def step(conn, state, providers, get_quote, now):
                 p.setdefault('quote_due_since', p['due'])
                 # Existing failed routes start at the second interval after upgrade.
                 failures = min(6, p.get('route_failures', int(p.get('mark_stale', False))) + 1)
-                temporary = getattr(error, 'category', None) == 'temporary'
-                delay = min(30 if temporary else EXIT_RETRY_LIMIT,
-                            (6 if temporary else 45) * 2 ** (failures - 1))
+                category = getattr(error, 'category', None)
+                temporary = category == 'temporary'
+                delay = (NO_ROUTE_RETRY_SECONDS if category == 'no_route' else
+                         min(30 if temporary else EXIT_RETRY_LIMIT,
+                             (6 if temporary else 45) * 2 ** (failures - 1)))
                 p['route_failure'] = {'category': getattr(error, 'category', 'unknown'),
                                       'reason': str(error) if isinstance(error, QuoteUnavailable) else type(error).__name__}
                 p.update(due=now + delay, mark_stale=True, pending=None, route_failures=failures)
