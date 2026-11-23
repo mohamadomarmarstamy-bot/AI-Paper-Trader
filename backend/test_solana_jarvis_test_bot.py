@@ -93,7 +93,7 @@ class JarvisTests(unittest.TestCase):
         def missing_quote(*_args):
             raise ValueError('No sell route')
 
-        self.now += 16
+        self.now += jarvis.ROUTINE_EXIT_INTERVAL + 1
         jarvis.tick(providers=self.market, get_quote=missing_quote, clock=lambda: self.now)
         self.now += jarvis.POLL
         jarvis.tick(providers=self.market, get_quote=missing_quote, clock=lambda: self.now)
@@ -185,6 +185,106 @@ class JarvisTests(unittest.TestCase):
         self.assertFalse(position['mark_stale'])
         self.assertEqual(state['last_exit_quote_failure']['mint'], MINT)
         self.assertEqual(state['last_exit_quote_failure']['amount'], 10)
+
+    def monitored_position(self, state, bot='instant-step', mint=MINT):
+        row = {'mint': mint, 'pair': PAIR, 'symbol': mint, 'liquidity_usd': 100000,
+               'age_minutes': 120, 'price_usd': 1, 'last': self.now, 'first': self.now,
+               'pullback': None, 'dip': None, 'high': 1, 'buys_m5': 50, 'sells_m5': 30, 'volume_m5_usd': 20000}
+        state['watch'][mint] = row
+        jarvis.open_trade(state, bot, row, 100, self.now - 10)
+        p = state['bots'][bot]['positions'][mint]
+        p.update(mark=49900000, mark_at=self.now - 5, due=self.now + 55,
+                 market_anchor={'price': 1, 'amount': 50000000, 'quantity': 100, 'pair': PAIR})
+        return p
+
+    def test_batch_monitor_rotates_held_coins_without_profiles_or_trading_activity(self):
+        state = jarvis.initial()
+        for i in range(205):
+            self.monitored_position(state, mint=f'held-{i:03}')
+        batches = []
+        class HeldProvider:
+            def profiles(self):
+                return []
+            def pairs(inner, addresses):
+                batches.extend(addresses)
+                result = []
+                for mint in addresses:
+                    if mint == jarvis.lab.SOL:
+                        continue
+                    pair = self.market.pairs([MINT])[0]
+                    pair['baseToken']['address'] = mint
+                    pair['txns']['m5'] = {'buys': 0, 'sells': 0}
+                    pair['volume']['m5'] = 0
+                    result.append(pair)
+                return result
+        for offset in (0, 10, 20):
+            jarvis.observe(state, HeldProvider(), self.now + offset)
+        self.assertTrue(set(state['bots']['instant-step']['positions']) <= set(batches))
+        self.assertEqual(state['watch']['held-204']['last'], self.now + 20)
+        self.assertEqual(len(batches), 303)
+
+    def test_indicative_stop_and_profit_advance_quotes_without_marking_or_selling(self):
+        state = jarvis.initial()
+        stop = self.monitored_position(state)
+        profit = self.monitored_position(state, 'lab-tp5-sl10', 'profit')
+        state['watch'][MINT]['price_usd'] = .85
+        state['watch']['profit']['price_usd'] = 1.06
+        jarvis.schedule_market_exits(state, self.now)
+        for p in (stop, profit):
+            self.assertEqual(p['exit_priority'], 0)
+            self.assertEqual(p['due'], self.now)
+            self.assertEqual(p['quantity'], 100)
+            self.assertEqual(p['mark'], 49900000)
+        # Indicative prices cannot invent a profit: only the exact quote decides.
+        with jarvis.connection() as conn:
+            self.assertEqual(jarvis.step(conn, state, None, lambda *_: 50000000, self.now), [])
+        self.assertIn('profit', state['bots']['lab-tp5-sl10']['positions'])
+
+    def test_monitor_ignores_stale_other_pool_and_quantity_mismatch(self):
+        for change in ('stale', 'pool', 'quantity'):
+            state = jarvis.initial()
+            p = self.monitored_position(state)
+            row = state['watch'][MINT]
+            row['price_usd'] = .5
+            if change == 'stale':
+                row['last'] = self.now - 91
+            elif change == 'pool':
+                row['pair'] = 'other'
+            else:
+                p['market_anchor']['quantity'] = 50
+            jarvis.schedule_market_exits(state, self.now)
+            self.assertEqual(p['exit_priority'], 3)
+            self.assertGreater(p['due'], self.now)
+
+    def test_monitor_preserves_route_retry_cooldown_and_prioritizes_time_exit(self):
+        state = jarvis.initial()
+        retry = self.monitored_position(state)
+        retry.update(mark_stale=True, quote_due_since=self.now - 60)
+        state['watch'][MINT]['price_usd'] = .5
+        timed = self.monitored_position(state, 'lab-five-minute', 'timed')
+        timed['opened'] = self.now - 301
+        jarvis.schedule_market_exits(state, self.now)
+        self.assertEqual(retry['due'], self.now + 55)
+        self.assertEqual(timed['due'], self.now)
+        self.assertEqual(timed['exit_priority'], 0)
+
+    def test_urgent_exit_preempts_buy_and_safe_positions_poll_less_often(self):
+        with jarvis.connection() as conn:
+            state = jarvis.initial()
+            p = self.monitored_position(state, 'lab-tp5-sl10')
+            state.update(enabled=True, next_discovery=self.now + 60, exit_attempts_since_entry=6,
+                         exit_quote_attempts=1)
+            state['watch'][MINT]['price_usd'] = 1.06
+            candidate = dict(state['watch'][MINT], mint='candidate', pullback=None)
+            state['watch']['candidate'] = candidate
+            calls = []
+            def quote(*args):
+                calls.append(args)
+                return 49500000
+            jarvis.step(conn, state, None, quote, self.now)
+            self.assertEqual(calls, [(MINT, jarvis.USDC, 100)])
+            self.assertEqual(p['due'], self.now + jarvis.ROUTINE_EXIT_INTERVAL)
+            self.assertEqual(p['mark'], 49400000)
 
     def test_exit_priority_reserves_every_third_attempt_for_oldest(self):
         state = jarvis.initial()
