@@ -186,6 +186,48 @@ class JarvisTests(unittest.TestCase):
         self.assertEqual(state['last_exit_quote_failure']['mint'], MINT)
         self.assertEqual(state['last_exit_quote_failure']['amount'], 10)
 
+    def test_exit_comparison_separates_closed_and_open_cohorts_without_missing_metrics_as_zero(self):
+        cutoff = jarvis.EXIT_SCHEDULER_STARTED
+        with jarvis.connection() as conn, conn:
+            def trade(mint, opened, closed, wait=None, gap=None):
+                data = {'exit_quote_wait': wait, 'stop_gap_points': gap}
+                conn.execute('INSERT INTO trades(bot,mint,opened,closed,day,pnl,entry_cost,data) VALUES(?,?,?,?,?,?,?,?)',
+                             ('instant-step', mint, opened, closed, 'test', 0, jarvis.BUY_COST, json.dumps(data)))
+            trade('excluded', cutoff - 4000, cutoff - 1801, 999, 99)
+            trade('before', cutoff - 2000, cutoff - 1, 120, 14)
+            trade('carried', cutoff - 100, cutoff + 5, 90, 8)
+            trade('new', cutoff, cutoff + 10, 2, 1)
+            trade('missing', cutoff + 1, cutoff + 20)
+            trade('future', cutoff + 1, cutoff + 100, 999, 99)
+            state = jarvis.initial()
+            old = self.monitored_position(state)
+            old.update(opened=cutoff - 1, mark_stale=True, quote_due_since=cutoff - 30)
+            new = self.monitored_position(state, mint='open-new')
+            new['opened'] = cutoff
+            result = jarvis.exit_comparison(conn, state, cutoff + 30)
+            before, carried, fresh = result['cohorts']
+            self.assertEqual(before['closed'], 1)
+            self.assertEqual(before['late_stop_gap'], 14)
+            self.assertEqual(carried['late_stops'], 1)
+            self.assertEqual(carried['open'], 1)
+            self.assertEqual(carried['route_retries'], 1)
+            self.assertEqual(fresh['closed'], 2)
+            self.assertEqual(fresh['quote_samples'], 1)
+            self.assertEqual(fresh['mean_wait'], 2)
+            self.assertEqual(fresh['p95_wait'], 2)
+            self.assertEqual(fresh['mean_stop_gap'], 1)
+            self.assertEqual(fresh['late_stops'], 0)
+            self.assertEqual(fresh['open'], 1)
+
+    def test_empty_exit_comparison_has_unknown_averages(self):
+        with jarvis.connection() as conn:
+            result = jarvis.exit_comparison(conn, jarvis.initial(), jarvis.EXIT_SCHEDULER_STARTED + 10)
+        for cohort in result['cohorts']:
+            self.assertEqual(cohort['closed'], 0)
+            self.assertIsNone(cohort['mean_wait'])
+            self.assertIsNone(cohort['mean_stop_gap'])
+            self.assertIsNone(cohort['p95_wait'])
+
     def monitored_position(self, state, bot='instant-step', mint=MINT):
         row = {'mint': mint, 'pair': PAIR, 'symbol': mint, 'liquidity_usd': 100000,
                'age_minutes': 120, 'price_usd': 1, 'last': self.now, 'first': self.now,
