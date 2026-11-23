@@ -45,7 +45,7 @@
   function botState(bot) {
     if (bot.id === 'jarvis' && !state.strategy) return bot.open ? 'Waiting for strategy · exits monitored' : 'Waiting for strategy';
     if (bot.id === 'jarvis' && state.entry_guard) return 'Entries paused · exits monitored';
-    if (state.backlog_guard?.timer_active || state.entry_catchup_pause?.active) return 'Buys paused · exits monitored';
+    if (state.backlog_guard?.timer_active || state.backlog_guard?.until_all_closed || state.entry_catchup_pause?.active) return 'Buys paused · exits monitored';
     if (!state.enabled) return bot.open ? 'Paused · exits monitored' : 'Paused';
     if (!state.last_cycle || Date.now() / 1000 - state.last_cycle > 30) return 'Waiting for scan';
     return 'Running';
@@ -209,11 +209,12 @@
         $('jarvis-backlog-threshold').value = guard.threshold || 100;
       }
       const labels = [`${guard.positions || 0} waiting positions across ${guard.coins || 0} distinct coins.`];
+      if (guard.until_all_closed) labels.push('Buys paused until all positions close; automatic resumption and email when empty.');
       if (guard.timer_active) labels.push(`Buys paused until ${displayTime(guard.pause_until)} ET.`);
       if (state.entry_catchup_pause?.active) labels.push('Catch-up pause active: buys resume when exits catch up.');
       if (!state.enabled) labels.push('Overall paper-run switch is off.');
-      if (state.enabled && !guard.timer_active && !state.entry_catchup_pause?.active) labels.push('Buys permitted.');
-      if (guard.timer_active && guard.timer_report) labels.push(guard.timer_report.partial
+      if (state.enabled && !guard.timer_active && !guard.until_all_closed && !state.entry_catchup_pause?.active) labels.push('Buys permitted.');
+      if ((guard.timer_active || guard.until_all_closed) && guard.timer_report) labels.push(guard.timer_report.partial
         ? `Expiry email ready; closed-position counts start from ${displayTime(guard.timer_report.started)} ET because this older timer had no recorded start.`
         : 'Expiry email ready; counts cover the full timer.');
       if (guard.latest_alert) labels.push(guard.latest_alert.sent
@@ -284,7 +285,8 @@
         : 'No regular exit quotes due') + retry + (failure ? ` · Last exit quote failure: ${failure.reason}` : '');
       const pause = state.entry_catchup_pause;
       if (pause?.active) $('jarvis-exit-queue').textContent += ' · PAPER BUYS TEMPORARILY PAUSED: exits continue; buys resume automatically after at most 2 regular checks are due, oldest ≤5s, and no urgent checks, sustained for 30s. Failed routes keep retrying separately.';
-      else if (pause?.resumed_at && !state.backlog_guard?.timer_active && state.enabled) $('jarvis-exit-queue').textContent += ` · Paper catch-up pause completed: buys permitted again ${displayTime(pause.resumed_at)} ET.`;
+      else if (pause?.resumed_at && !state.backlog_guard?.timer_active && !state.backlog_guard?.until_all_closed && state.enabled) $('jarvis-exit-queue').textContent += ` · Paper catch-up pause completed: buys permitted again ${displayTime(pause.resumed_at)} ET.`;
+      if (state.backlog_guard?.until_all_closed) $('jarvis-exit-queue').textContent += ' · Buys paused until every position closes; sells continue.';
       if (state.backlog_guard?.timer_active) $('jarvis-exit-queue').textContent += ` · Timed buy pause until ${displayTime(state.backlog_guard.pause_until)} ET; sells continue.`;
       const comparison = state.exit_comparison;
       const comparisonPanel = $('jarvis-exit-comparison');

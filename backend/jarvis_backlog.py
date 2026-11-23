@@ -15,6 +15,8 @@ import solana_http
 
 DEFAULTS = {'enabled': True, 'threshold': 100}
 DURATIONS = (10, 30, 60)
+UNTIL_ALL = -1
+ALL_CLOSES_DEADLINE = 1e15
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS backlog_guard(id INTEGER PRIMARY KEY CHECK(id=1), episode TEXT, low_since REAL);
 INSERT OR IGNORE INTO backlog_guard(id) VALUES(1);
@@ -44,11 +46,56 @@ def waiting(state, now):
 def summary(state, now):
     settings = dict(DEFAULTS, **state.get('backlog_settings', {}))
     return {**settings, **waiting(state, now), 'pause_until': state.get('entry_pause_until', 0),
-            'timer_active': state.get('entry_pause_until', 0) > now}
+            'timer_active': state.get('entry_pause_until', 0) > now,
+            'until_all_closed': bool(state.get('entry_pause_until_all'))}
 
 
 def timer_active(state, now):
     return state.get('entry_pause_until', 0) > now
+
+
+def paused(state, now):
+    return timer_active(state, now) or bool(state.get('entry_pause_until_all'))
+
+
+def pause_key(state):
+    return ALL_CLOSES_DEADLINE if state.get('entry_pause_until_all') else state.get('entry_pause_until', 0)
+
+
+def action_label(minutes):
+    return 'Pause buys until all positions close' if minutes == UNTIL_ALL else f'Pause buys for {minutes} minutes'
+
+
+def action_links(conn, ident, base):
+    links = []
+    for minutes in (*DURATIONS, UNTIL_ALL):
+        token = secrets.token_urlsafe(32)
+        conn.execute('INSERT INTO backlog_action VALUES(?,?,?)',
+                     (hashlib.sha256(token.encode()).hexdigest(), ident, minutes))
+        links.append((minutes, base + '/jarvis-test-bot/email-pause#' + token))
+    return links
+
+
+def action_buttons(links):
+    return ''.join(f'<p><a style="display:inline-block;padding:14px;background:#275bdd;color:white;border-radius:8px" href="{html.escape(url, quote=True)}">{action_label(minutes)}</a></p>' for minutes, url in links)
+
+
+def action_text(links):
+    return '\n'.join((f'Pause {minutes} minutes: ' if minutes != UNTIL_ALL else 'Pause until all positions close: ') + url for minutes, url in links)
+
+
+def pause_reasons(state, now):
+    reasons = []
+    if not state['enabled']:
+        reasons.append('the overall paper-run switch is off')
+    if state.get('entry_pause_until_all'):
+        reasons.append('you selected pause until every position closes')
+    if timer_active(state, now):
+        at = datetime.fromtimestamp(state['entry_pause_until'], ZoneInfo('America/New_York')).strftime('%I:%M %p ET')
+        reasons.append('a newer buy-pause timer runs until ' + at)
+    if api().catchup_requested(state):
+        reasons.append('exit quote checks are still catching up')
+    return reasons
 
 
 def save_state(conn, state, revision):
@@ -70,9 +117,12 @@ def configure(changes):
 
 
 def apply_control(state, minutes, now):
-    if type(minutes) is not int or minutes not in (0, *DURATIONS):
-        raise ValueError('Choose 10, 30 or 60 minutes, or resume.')
-    if minutes:
+    if type(minutes) is not int or minutes not in (0, UNTIL_ALL, *DURATIONS):
+        raise ValueError('Choose 10, 30 or 60 minutes, until all positions close, or resume.')
+    state['entry_pause_until_all'] = minutes == UNTIL_ALL
+    if minutes == UNTIL_ALL:
+        state['entry_pause_until'] = 0
+    elif minutes:
         state['entry_pause_until'] = now + minutes * 60
     else:
         state['entry_pause_until'] = 0
@@ -88,7 +138,7 @@ def record_pause(conn, state, minutes, now):
     if minutes:
         baseline = conn.execute('SELECT COALESCE(max(id),0) FROM trades').fetchone()[0]
         conn.execute('INSERT INTO backlog_pause_report(id,started,ends,baseline_id) VALUES(?,?,?,?)',
-                     (secrets.token_hex(16), now, state['entry_pause_until'], baseline))
+                     (secrets.token_hex(16), now, pause_key(state), baseline))
 
 
 def track_existing_timer(conn, state, now):
@@ -109,19 +159,25 @@ def queue_completion(conn, state, report, now, base, *, early=False):
     closed = conn.execute('SELECT count(*) FROM trades WHERE id>? AND closed>=? AND closed<=?',
                           (report['baseline_id'], report['started'], min(now, report['ends']))).fetchone()[0]
     pending = waiting(state, now)
-    running = state['enabled'] and not timer_active(state, now) and not api().catchup_requested(state)
-    status = ('All Jarvis paper positions closed before the timer ended. Paper buys are back up and running.' if early else
+    reasons = pause_reasons(state, now)
+    running = not reasons
+    status = ('All Jarvis paper positions are closed. Paper buys are back up and running.' if early else
               'Paper buys are back up and running.' if running else
-              'Your buy-pause timer has ended, but paper buys remain paused by another control (catch-up pause, newer timer, or overall stop switch).')
+              'Your buy-pause timer has ended, but paper buys remain paused because ' + '; '.join(reasons) + '.')
     checked = datetime.fromtimestamp(now, ZoneInfo('America/New_York')).strftime('%b %d, %Y %I:%M:%S %p ET')
-    interval = 'since expiry-report tracking started (this timer began before the reporting update)' if report['id'].startswith('partial/') else 'during this timer'
+    total_open = sum(len(b['positions']) for b in state['bots'].values())
+    interval = 'since expiry-report tracking started (this timer began before the reporting update)' if report['id'].startswith('partial/') else 'during this pause' if report['ends'] == ALL_CLOSES_DEADLINE else 'during this timer'
     text = (f"{status} Status checked {checked}.\n{closed} Jarvis paper positions closed {interval}.\n"
-            f"{pending['positions']} positions across {pending['coins']} distinct coins are still waiting for an exit quote check or route retry as of this report.\n"
+            f"{total_open} total positions remain open.\n{pending['positions']} positions across {pending['coins']} distinct coins are still waiting for an exit quote check or route retry as of this report.\n"
             'Sells continue running.\nSettings: ' + base + '/jarvis-test-bot#settings')
-    subject = ('Jarvis paper: all positions closed — buys resumed early' if early else
+    subject = (('Jarvis paper: all positions closed — buys resumed' if report['ends'] == ALL_CLOSES_DEADLINE else 'Jarvis paper: all positions closed — buys resumed early') if early else
                'Jarvis paper: buys back up and running' if running else 'Jarvis paper: timer ended — buys still paused')
     payload = {'subject': subject, 'text': text,
-               'html': '<h2>Paper buy-pause complete</h2><p>' + html.escape(text).replace('\n', '<br>') + '</p>'}
+               'html': '<h2>' + ('All positions closed — buys resumed' if early else 'Paper buys resumed' if running else 'Timer ended — buys still paused') + '</h2><p>' + html.escape(text).replace('\n', '<br>') + '</p>'}
+    if total_open:
+        links = action_links(conn, 'resume/' + report['id'], base)
+        payload['text'] += '\nChoose another pause: \n' + action_text(links)
+        payload['html'] += '<h3>Change your buy pause</h3>' + action_buttons(links) + '<p>Links expire in six hours. One choice per email. Sells continue.</p>'
     conn.execute('INSERT OR IGNORE INTO backlog_mail(id,created,expires,payload) VALUES(?,?,?,?)',
                  ('resume/' + report['id'], now, now + 21600, json.dumps(payload)))
     conn.execute('UPDATE backlog_pause_report SET queued=? WHERE id=?', (now, report['id']))
@@ -134,13 +190,13 @@ def enqueue_expired(conn, state, now, base):
 
 def resume_when_empty(conn, state, now):
     """Called within the main worker's revision-checked state/trade transaction."""
-    if not state['enabled'] or not timer_active(state, now):
+    if not state['enabled'] or not paused(state, now):
         return False
     if any(b['positions'] for b in state['bots'].values()):
         return False
     track_existing_timer(conn, state, now)
     report = conn.execute('SELECT * FROM backlog_pause_report WHERE ends=? AND queued IS NULL AND cancelled IS NULL ORDER BY started DESC LIMIT 1',
-                          (state['entry_pause_until'],)).fetchone()
+                          (pause_key(state),)).fetchone()
     if report is None:
         return False
     apply_control(state, 0, now)
@@ -188,20 +244,14 @@ def enqueue(conn, state, now, base):
     if config['positions'] < config['threshold'] or guard['episode']:
         return
     ident = secrets.token_hex(16)
-    links = []
-    for minutes in DURATIONS:
-        token = secrets.token_urlsafe(32)
-        conn.execute('INSERT INTO backlog_action VALUES(?,?,?)',
-                     (hashlib.sha256(token.encode()).hexdigest(), ident, minutes))
-        # Fragments never reach proxy/access logs or referrer headers.
-        links.append((minutes, base + '/jarvis-test-bot/email-pause#' + token))
+    links = action_links(conn, ident, base)
     text = (f"{config['positions']} paper positions across {config['coins']} distinct coins are waiting for an exit quote check or route retry. "
             'This is not a count of confirmed sell orders. Sells keep running during buy pauses.\n'
-            'Choose a temporary buy pause (links expire in six hours; one choice per alert):\n')
-    text += '\n'.join(f'Pause {minutes} minutes: {url}' for minutes, url in links)
+            'Choose a buy pause (links expire in six hours; one choice per alert):\n')
+    text += action_text(links)
     text += '\nA longer catch-up pause or the overall stop switch can keep buys off after the timer expires.\n'
     text += 'Settings and Resume buys: ' + base + '/jarvis-test-bot#settings'
-    buttons = ''.join(f'<p><a style="display:inline-block;padding:14px;background:#275bdd;color:white;border-radius:8px" href="{html.escape(url, quote=True)}">Pause buys for {minutes} minutes</a></p>' for minutes, url in links)
+    buttons = action_buttons(links)
     body = f'<h2>Jarvis paper exit backlog</h2><p>{html.escape(text.split(chr(10))[0])}</p>{buttons}<p>Sells continue. Links expire in six hours. One choice per alert.</p><p>A longer catch-up pause or the overall stop switch can keep buys off after the timer expires.</p><a href="{base}/jarvis-test-bot#settings">Open settings / Resume buys</a>'
     payload = {'subject': f"Jarvis paper: {config['positions']} positions waiting for exit checks", 'text': text, 'html': body}
     conn.execute('INSERT INTO backlog_mail(id,created,expires,payload) VALUES(?,?,?,?)',
@@ -228,7 +278,7 @@ def email_control(token, clock=time.time):
         save_state(conn, state, revision)
         conn.execute('UPDATE backlog_mail SET consumed=?,duration=? WHERE id=?', (now, action['minutes'], action['id']))
         return {'applied': True, 'minutes': action['minutes'], 'pause_until': state['entry_pause_until'],
-                'message': f"Paper buys paused for {action['minutes']} minutes. Sells keep running."}
+                'message': ('Paper buys paused until all positions close. Sells keep running.' if action['minutes'] == UNTIL_ALL else f"Paper buys paused for {action['minutes']} minutes. Sells keep running.")}
 
 
 def mail_tick(clock=time.time, post=solana_http.post):

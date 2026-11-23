@@ -251,6 +251,19 @@ class JarvisTests(unittest.TestCase):
             payload = json.loads(conn.execute("SELECT payload FROM backlog_mail WHERE id LIKE 'resume/%'").fetchone()[0])
             self.assertIn(f'{count} Jarvis paper positions closed during this timer.', payload['text'])
 
+    def test_until_all_pause_blocks_main_entries_even_with_a_healthy_exit_queue(self):
+        import jarvis_backlog as guard
+        with jarvis.connection() as conn:
+            state = jarvis.initial()
+            state.update(enabled=True, next_discovery=self.now + 1000)
+            self.monitored_position(state)
+            state['watch']['candidate'] = dict(state['watch'][MINT], mint='candidate')
+            guard.apply_control(state, -1, self.now)
+            calls = []
+            jarvis.step(conn, state, None, lambda *args: calls.append(args), self.now)
+            self.assertEqual(calls, [])
+            self.assertTrue(state['entry_pause_until_all'])
+
     def test_timed_buy_pause_blocks_entries_without_stopping_exits(self):
         import jarvis_backlog as guard
         with jarvis.connection() as conn:

@@ -90,7 +90,7 @@ class BacklogTests(unittest.TestCase):
         guard.apply_control(state, 0, self.now)
         self.assertFalse(state['entry_catchup_pause']['active'])
         self.assertFalse(state['enabled'])
-        for value in (True, 11, -1, '10', 10.0):
+        for value in (True, 11, -2, '10', 10.0):
             with self.assertRaises(ValueError): guard.apply_control(state, value, self.now)
 
     def test_email_outbox_retries_idempotently_and_does_not_repeat_success(self):
@@ -230,6 +230,57 @@ class BacklogTests(unittest.TestCase):
             self.state['entry_pause_until'] = 0
             self.assertFalse(guard.resume_when_empty(conn, self.state, self.now + 2))
             self.assertEqual(conn.execute('SELECT count(*) FROM backlog_mail').fetchone()[0], 0)
+
+    def test_initial_email_until_all_option_blocks_until_every_holding_closes(self):
+        row = self.enqueue()
+        payload = json.loads(row['payload'])
+        self.assertIn('Pause buys until all positions close', payload['html'])
+        token = next(line.split('#')[1] for line in payload['text'].splitlines() if line.startswith('Pause until all positions close:'))
+        guard.email_control(token, lambda: self.now)
+        state = self.read()
+        self.assertEqual(state['entry_pause_until'], 0)
+        self.assertTrue(state['entry_pause_until_all'])
+        self.assertTrue(guard.paused(state, self.now + 100000))
+        with jarvis.connection() as conn, conn:
+            self.assertFalse(guard.resume_when_empty(conn, state, self.now + 100))
+            state['bots']['instant-step']['positions'].clear()
+            self.add_trade(conn, 'last', self.now + 100)
+            self.assertTrue(guard.resume_when_empty(conn, state, self.now + 100))
+            self.assertFalse(guard.paused(state, self.now + 100))
+            report = json.loads(conn.execute("SELECT payload FROM backlog_mail WHERE id LIKE 'resume/%'").fetchone()[0])
+            self.assertIn('buys resumed', report['subject'])
+            self.assertIn('0 total positions remain open.', report['text'])
+            self.assertIn('1 Jarvis paper positions closed during this pause.', report['text'])
+
+    def test_expiry_email_offers_four_actions_and_names_actual_pause_reason(self):
+        self.start_timer(10)
+        self.state['entry_catchup_pause'] = {'active': True}
+        with jarvis.connection() as conn, conn:
+            guard.enqueue_expired(conn, self.state, self.now + 600, 'https://test')
+            payload = json.loads(conn.execute("SELECT payload FROM backlog_mail WHERE id LIKE 'resume/%'").fetchone()[0])
+            self.assertIn('because exit quote checks are still catching up', payload['text'])
+            self.assertNotIn('another control', payload['text'])
+            self.assertIn('<h2>Timer ended — buys still paused</h2>', payload['html'])
+            self.assertEqual(conn.execute('SELECT count(*) FROM backlog_action').fetchone()[0], 4)
+            for label in ('Pause 10 minutes:', 'Pause 30 minutes:', 'Pause 60 minutes:', 'Pause until all positions close:'):
+                self.assertIn(label, payload['text'])
+            token = next(line.split('#')[1] for line in payload['text'].splitlines() if line.startswith('Pause until all positions close:'))
+        # A completion email has the same bounded, one-choice capability contract.
+        result = guard.email_control(token, lambda: self.now + 601)
+        self.assertIn('until all positions close', result['message'])
+        self.assertTrue(self.read()['entry_pause_until_all'])
+        self.assertFalse(guard.email_control(token, lambda: self.now + 602)['applied'])
+
+    def test_new_timer_or_manual_resume_replaces_until_all_mode(self):
+        state = jarvis.initial()
+        guard.apply_control(state, -1, self.now)
+        self.assertTrue(guard.paused(state, self.now + 100000))
+        guard.apply_control(state, 10, self.now)
+        self.assertFalse(state['entry_pause_until_all'])
+        self.assertFalse(guard.paused(state, self.now + 600))
+        guard.apply_control(state, -1, self.now)
+        guard.apply_control(state, 0, self.now)
+        self.assertFalse(guard.paused(state, self.now))
 
     def test_http_auth_origin_and_preview_contract(self):
         app = FastAPI()
