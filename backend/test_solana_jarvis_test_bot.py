@@ -72,7 +72,7 @@ class JarvisTests(unittest.TestCase):
         self.assertEqual(report['coins'][0]['trades'][0]['held_seconds'], 5)
         self.assertFalse(self.state()['bots']['instant-step']['positions'])
         self.assertFalse(self.state()['bots']['instant-trim']['positions'])
-        self.assertEqual(len(report['coins'][0]['trades']), 5)
+        self.assertEqual(len(report['coins'][0]['trades']), 6)
         self.assertFalse(jarvis.history(True)['coins'])
         self.assertFalse(database.DATABASE_PATH.exists())
 
@@ -248,7 +248,7 @@ class JarvisTests(unittest.TestCase):
         self.assertEqual(sample['stop_exits'], 1)
         self.assertAlmostEqual(sample['stop_gap'], 100 * (1 - 44_900_000 / jarvis.BUY_COST) - 10)
 
-    def test_discovery_checks_five_provider_batches_and_rotates_without_skipping(self):
+    def test_discovery_rotates_full_coin_batches_and_keeps_sol_separate(self):
         mints = [f'mint-{i}' for i in range(240)]
         batches = []
 
@@ -263,7 +263,9 @@ class JarvisTests(unittest.TestCase):
         state = jarvis.initial()
         jarvis.observe(state, BatchProvider(), self.now)
         jarvis.observe(state, BatchProvider(), self.now + 20)
-        self.assertEqual([len(batch) for batch in batches], [20] * 10)
+        self.assertEqual(sorted(map(len, batches)), [1, 1] + [20] * 10)
+        self.assertEqual(sum(jarvis.lab.SOL in batch for batch in batches), 2)
+        batches = [batch for batch in batches if jarvis.lab.SOL not in batch]
         ordered = sorted(batches, key=lambda batch: int(batch[0].split('-')[1]))
         self.assertEqual([mint for batch in ordered for mint in batch], mints[:200])
 
@@ -276,6 +278,8 @@ class JarvisTests(unittest.TestCase):
                 return [MINT] + [f'mint-{i}' for i in range(99)]
 
             def pairs(self, addresses):
+                if addresses == [jarvis.lab.SOL]:
+                    return []
                 barrier.wait(timeout=5)
                 if MINT in addresses:
                     return market.pairs([MINT])
@@ -311,8 +315,8 @@ class JarvisTests(unittest.TestCase):
                     jarvis.step(conn, state, self.market, quote, clock[0])
             self.assertTrue(all(b - a >= 1.049 for a, b in zip(starts, starts[1:])))
             self.assertEqual(state['quote_activity']['deferrals'], 0)
-            # One exact-size quote funds all seven eligible legacy/lab variants.
-            self.assertEqual(state['quote_activity']['paper_entries'], 7 * state['quote_activity']['entry_quotes'])
+            # One exact-size quote funds all eight eligible legacy/lab variants.
+            self.assertEqual(state['quote_activity']['paper_entries'], 8 * state['quote_activity']['entry_quotes'])
             self.assertGreater(state['quote_activity']['exit_quotes'], 0)
             return state['quote_activity']['entry_quotes']
 

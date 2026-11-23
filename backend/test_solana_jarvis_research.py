@@ -168,9 +168,9 @@ class JarvisResearchTests(unittest.TestCase):
         state['strategy'] = {'entry': 'instant', 'activated_at': NOW - 1,
                              'min_liquidity': 0, 'min_age': 0, 'avoid_pattern': 'young_thin_pool'}
         with jarvis.connection() as conn:
-            self.assertEqual(jarvis.entry_jobs(conn, state, NOW)[MINT], ['instant-step', 'instant-trim', 'lab-five-minute', 'lab-breakeven', 'lab-tp5-sl10'])
+            self.assertEqual(jarvis.entry_jobs(conn, state, NOW)[MINT], ['instant-step', 'instant-trim', 'lab-five-minute', 'lab-breakeven', 'lab-tp5-sl10', 'lab-tp20-sl10'])
             row['age_minutes'] = 120
-            self.assertEqual(jarvis.entry_jobs(conn, state, NOW)[MINT], ['instant-step', 'instant-trim', 'lab-five-minute', 'lab-breakeven', 'lab-tp5-sl10', 'jarvis'])
+            self.assertEqual(jarvis.entry_jobs(conn, state, NOW)[MINT], ['instant-step', 'instant-trim', 'lab-five-minute', 'lab-breakeven', 'lab-tp5-sl10', 'lab-tp20-sl10', 'jarvis'])
 
     def test_validated_filter_controls_only_jarvis_entries(self):
         state = jarvis.initial()
@@ -180,8 +180,8 @@ class JarvisResearchTests(unittest.TestCase):
         state['strategy'] = {'entry': 'instant', 'activated_at': NOW - 1,
                              'min_liquidity': 0, 'min_age': 0, 'entry_filter': 'social_confirmed'}
         with jarvis.connection() as conn, conn:
-            self.assertEqual(jarvis.entry_jobs(conn, state, NOW)[MINT], ['instant-step', 'instant-trim', 'lab-five-minute', 'lab-breakeven', 'lab-tp5-sl10'])
+            self.assertEqual(jarvis.entry_jobs(conn, state, NOW)[MINT], ['instant-step', 'instant-trim', 'lab-five-minute', 'lab-breakeven', 'lab-tp5-sl10', 'lab-tp20-sl10'])
             data = {'x': {'at': NOW, 'value': {'mint_authors': 2}}}
             conn.execute('INSERT INTO research(mint,pair,checked,evidence) VALUES (?,?,?,?)',
                          (MINT, PAIR, NOW, json.dumps(data)))
-            self.assertEqual(jarvis.entry_jobs(conn, state, NOW)[MINT], ['instant-step', 'instant-trim', 'lab-five-minute', 'lab-breakeven', 'lab-tp5-sl10', 'jarvis'])
+            self.assertEqual(jarvis.entry_jobs(conn, state, NOW)[MINT], ['instant-step', 'instant-trim', 'lab-five-minute', 'lab-breakeven', 'lab-tp5-sl10', 'lab-tp20-sl10', 'jarvis'])

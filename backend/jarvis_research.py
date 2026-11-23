@@ -93,12 +93,33 @@ def chart_signal(candles, now):
         levels = [vwap(expanded[i:i + 20]) for i in range(3)]
         reclaim = all(level is not None for level in levels) and (
             expanded[-3][3] <= levels[0] and expanded[-2][3] > levels[1] and expanded[-1][3] > levels[2])
+    # Wilder RSI uses a 14-change seed, then smoothing, on completed candles.
+    changes = [b[3] - a[3] for a, b in zip(history, history[1:])]
+    average_gain = sum(max(0, change) for change in changes[:14]) / 14
+    average_loss = sum(max(0, -change) for change in changes[:14]) / 14
+    def rsi_value():
+        if average_loss == 0:
+            return 100.0 if average_gain else 50.0
+        return 100 - 100 / (1 + average_gain / average_loss)
+    rsi_values = [rsi_value()]
+    for change in changes[14:]:
+        average_gain = (average_gain * 13 + max(0, change)) / 14
+        average_loss = (average_loss * 13 + max(0, -change)) / 14
+        rsi_values.append(rsi_value())
+    squeeze = history[-11:-1]
+    squeeze_level = max(bar[1] for bar in squeeze)
+    squeeze_low = min(bar[2] for bar in squeeze)
+    squeeze_volume = statistics.median(bar[4] for bar in squeeze)
+    squeeze_breakout = (squeeze_level <= squeeze_low * 1.03 and close > squeeze_level
+                        and squeeze_volume > 0 and volume >= squeeze_volume * 1.5)
     return {'pattern': pattern, 'closed_at': latest + 60,
             'volume_ratio': round(volume / normal_volume, 2) if normal_volume else None,
             'uptrend_5m': trending, 'vwap': vwap(history), 'vwap_reclaim': reclaim,
             'ema_fast': fast, 'ema_slow': slow,
             'ema_cross_up': previous_fast <= previous_slow and fast > slow,
-            'volume_rising': volume > history[-2][4]}
+            'volume_rising': volume > history[-2][4], 'squeeze_breakout': squeeze_breakout,
+            'squeeze_level': squeeze_level, 'rsi': rsi_values[-1],
+            'rsi_recovery': rsi_values[-1] > 35 >= rsi_values[-2] and min(rsi_values[:-1]) < 30}
 
 
 def chart(row, now, fetch=payload):

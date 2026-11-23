@@ -207,7 +207,7 @@ def quote(input_mint, output_mint, amount):
 
 def observe(state, providers, now):
     # Reuse the scanner discovery cache. Rotate fresh candidates and active pullbacks.
-    mints = [mint for mint in providers.profiles() if mint != USDC]
+    mints = [mint for mint in providers.profiles() if mint not in (USDC, lab.SOL)]
     if not mints:
         return
     tracked = [mint for mint, row in sorted(state['watch'].items(), key=lambda item: item[1]['last'])
@@ -216,7 +216,7 @@ def observe(state, providers, now):
     rotated = mints[offset:] + mints[:offset]
     fresh = rotated[:DISCOVERY_BATCH - len(tracked)]
     state['offset'] = (offset + len(fresh)) % len(mints)
-    addresses = list(dict.fromkeys(tracked + fresh))
+    addresses = list(dict.fromkeys(tracked + fresh + [lab.SOL]))
     requested = set(addresses)
     pairs = []
     failed_batches = 0
@@ -224,7 +224,7 @@ def observe(state, providers, now):
                for start in range(0, len(addresses), MAX_SCAN_TOKENS)]
     # Independent read-only batches overlap, keeping discovery from serially
     # blocking the next exit/entry quote. Consume results in discovery order.
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    with ThreadPoolExecutor(max_workers=6) as pool:
         pending = [pool.submit(providers.pairs, batch) for batch in batches]
         for future in pending:
             try:
@@ -247,6 +247,15 @@ def observe(state, providers, now):
                 best[mint] = row
         except (ValueError, KeyError, TypeError, AttributeError):
             continue
+    benchmark_row = best.pop(lab.SOL, None)
+    state['watch'].pop(lab.SOL, None)
+    if benchmark_row:
+        benchmark = state.get('benchmark') or {}
+        samples = benchmark.get('samples', []) if benchmark.get('pair') == benchmark_row['pair'] else []
+        samples = [sample for sample in samples if 0 <= now - sample['at'] <= 900]
+        if not samples or samples[-1]['at'] < now:
+            samples.append({'at': now, 'price': benchmark_row['price_usd']})
+        state['benchmark'] = {'pair': benchmark_row['pair'], 'samples': samples[-100:]}
     for mint, row in best.items():
         old = state['watch'].get(mint)
         if old is None or old['pair'] != row['pair']:
@@ -280,11 +289,12 @@ def open_trade(state, bot, row, quantity, now, evidence=None):
     if portfolio['cash'] < BUY_COST:
         return
     portfolio['cash'] -= BUY_COST
+    source = bot if bot != 'jarvis' else (state.get('strategy') or {}).get('source')
     portfolio['positions'][row['mint']] = {
         'mint': row['mint'], 'pair': row.get('pair'), 'symbol': row['symbol'], 'opened': now, 'quantity': quantity,
         'entry_cost': BUY_COST, 'cost': BUY_COST, 'banked': 0, 'peak': 0,
         'exit_cohort': EXIT_COHORT, 'entry_evidence': evidence or {},
-        'strategy_version': lab.VERSION if bot in lab.BOTS or (state.get('strategy') or {}).get('source') in lab.BOTS else None,
+        'strategy_version': lab.version(source) if source in lab.BOTS else None,
         'target': 20, 'trims': 0, 'mark': None, 'mark_at': None, 'due': now + POLL,
         'pending': None, 'liquidity': row['liquidity_usd'], 'age': row['age_minutes'],
         'policy': dict(state['strategy']) if bot == 'jarvis' else {'entry': BOTS[bot][1], 'exit': BOTS[bot][2]},
@@ -332,11 +342,11 @@ def apply_exit(completed, portfolio, bot, p, quote_size, amount, now, evidence=N
         p['last_high_at'] = now
     p['peak'] = max(p['peak'], gain)
     chart = (evidence or {}).get('chart') or {}
-    special = lab.exit_reason(p, gain, amount, now, chart, market or {}, TRADE)
+    special = lab.exit_reason(p, gain, amount, now, chart, market or {}, TRADE, (evidence or {}).get('benchmark'))
     floor = lab.floor(p['policy']['exit'], p['peak'], exit_floor)
     if special:
         reason = special
-    elif p['policy']['exit'] == 'tp5':
+    elif p['policy']['exit'] in lab.BRACKETS:
         reason = None
     elif gain <= floor:
         reason = 'Step stop' if floor <= 0 else 'Step profit protection'
@@ -494,9 +504,12 @@ def entry_evidence(conn, row, now):
     return evidence
 
 
-def opportunity_evidence(conn, row, now):
+def opportunity_evidence(conn, row, now, benchmark=None):
     evidence = entry_evidence(conn, row, now)
-    evidence['lab_signal'] = {key: lab.entry_signal(key, row, evidence, now) for key in ('pressure', 'volume', 'liquidity', 'vwap', 'trend')}
+    evidence['benchmark'] = benchmark
+    evidence['lab_signal'] = {key: lab.entry_signal(key, row, evidence, now) for key in ('pressure', 'volume', 'liquidity', 'vwap', 'trend', 'squeeze', 'rsi', 'relative')}
+    evidence['relative_strength'] = lab.relative_metrics(row, benchmark, now)
+    evidence.pop('benchmark')
     evidence['market'] = {key: row.get(key) for key in ('volume_m5_usd', 'buys_m5', 'sells_m5', 'liquidity_usd')}
     return evidence
 
@@ -507,6 +520,7 @@ def entry_jobs(conn, state, now):
         if now - row['last'] > 90 or now < row.get('retry', 0):
             continue
         market_evidence = entry_evidence(conn, row, now)
+        market_evidence['benchmark'] = state.get('benchmark')
         closed = {r['bot'] for r in conn.execute('SELECT bot FROM trades WHERE mint=?', (mint,))}
         for bot, portfolio in state['bots'].items():
             if bot in closed or mint in portfolio['positions']:
@@ -519,7 +533,7 @@ def entry_jobs(conn, state, now):
                 rule = strategy.get('entry_filter', 'baseline')
                 avoid = strategy.get('avoid_pattern')
                 if rule != 'baseline' or avoid:
-                    evidence = opportunity_evidence(conn, row, now)
+                    evidence = opportunity_evidence(conn, row, now, state.get('benchmark'))
                     if not research.allows(rule, evidence) or outcomes.warning(
                             avoid, evidence, row['liquidity_usd'], row['age_minutes']):
                         continue
@@ -584,6 +598,19 @@ def next_exit(jobs, attempts):
     return min(jobs, key=oldest)
 
 
+def entry_quote_budget(exits, now):
+    queue = exit_queue(exits, now)
+    if queue['backed_up']:
+        return BACKLOG_EXIT_QUOTES_PER_ENTRY
+    urgent = any(p['pending'] or stop_distance(p) <= NEAR_STOP_POINTS
+                 for group in exits.values() for _, p in group if not retry_group(group))
+    if urgent or queue['oldest_wait'] > 15:
+        return EXIT_QUOTES_PER_ENTRY
+    # Healthy exits can alternate with buys. Keep the existing 2:1/6:1
+    # exit preference as soon as stops are close or monitoring falls behind.
+    return 1
+
+
 def record_quote_failure(state, side, error, now, mint=None, amount=None):
     failure = str(error) if isinstance(error, QuoteUnavailable) else type(error).__name__
     key = 'last_' + side + '_quote_failure'
@@ -611,8 +638,7 @@ def step(conn, state, providers, get_quote, now):
     # Keep new entries moving at a reduced rate during sustained exit pressure.
     # Provider deferrals do not spend an attempt in either queue.
     exit_attempts = state.get('exit_attempts_since_entry', 0)
-    queued = exit_queue(exits, now)
-    exit_budget = BACKLOG_EXIT_QUOTES_PER_ENTRY if queued['backed_up'] else EXIT_QUOTES_PER_ENTRY
+    exit_budget = entry_quote_budget(exits, now)
     buy = entries and (not exits or exit_attempts >= exit_budget)
     if buy:
         mint = min(entries, key=lambda mint: state['watch'][mint]['first'])
@@ -631,7 +657,7 @@ def step(conn, state, providers, get_quote, now):
             state['error'] = 'Entry route unavailable for a candidate.'
         else:
             state['exit_attempts_since_entry'] = 0
-            evidence = opportunity_evidence(conn, row, now)
+            evidence = opportunity_evidence(conn, row, now, state.get('benchmark'))
             activity['entry_quotes'] += 1
             for bot in entries[mint]:
                 open_trade(state, bot, row, quantity, now, evidence)
@@ -671,6 +697,7 @@ def step(conn, state, providers, get_quote, now):
                 current = state['watch'].get(mint) or {}
                 fresh = current and 0 <= now - current['last'] <= 90 and (not p.get('pair') or p['pair'] == current['pair'])
                 evidence = entry_evidence(conn, current, now) if fresh else {}
+                evidence['benchmark'] = state.get('benchmark')
                 apply_exit(completed, state['bots'][bot], bot, p, size, amount, now, evidence, current if fresh else {})
                 p.pop('quote_due_since', None)
                 p.pop('route_failures', None)
