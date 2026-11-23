@@ -260,6 +260,22 @@
       $('jarvis-exit-queue').textContent = (regular
         ? `${regular} regular exit quotes due · Oldest waiting ${displayDuration(queue.oldest_wait)}${queue.backed_up ? ' · Entries slowed while exits catch up' : ''}`
         : 'No regular exit quotes due') + retry + (failure ? ` · Last exit quote failure: ${failure.reason}` : '');
+      const comparison = state.exit_comparison;
+      const comparisonPanel = $('jarvis-exit-comparison');
+      comparisonPanel.replaceChildren();
+      if (comparison) {
+        comparisonPanel.append(el('h2', 'Exit scheduler comparison'),
+          el('p', `Update started ${displayTime(comparison.started_at)} ET. Before: last 30 minutes. After: ${displayDuration(comparison.after_seconds)} observed.`));
+        const labels = {before: 'Before update', carried: 'After · older holdings', new: 'After · new holdings'};
+        for (const cohort of comparison.cohorts) {
+          const wait = cohort.mean_wait == null ? 'no quote samples' : `${displayDuration(cohort.mean_wait)} average overdue check · ${displayDuration(cohort.p95_wait)} at 95th percentile`;
+          const gap = cohort.mean_stop_gap == null ? 'no measured stop gaps' : `${cohort.mean_stop_gap.toFixed(1)} points average below stop`;
+          comparisonPanel.append(el('p', `${labels[cohort.id]}: ${cohort.closed} closed · ${cohort.quote_samples} measured quote waits · ${wait} · ${cohort.late_stops}/${cohort.stop_wait_samples} measured stop exits ≥90s overdue · ${gap} · ${cohort.open} still open (${cohort.route_retries} route retries)`));
+        }
+        const monitor = state.exit_monitor;
+        if (monitor) comparisonPanel.append(el('p', `Batch monitor: ${monitor.fresh_market_positions} holdings have fresh same-pool prices · ${monitor.urgent_positions} urgent holdings.`));
+        comparisonPanel.append(el('small', comparison.note));
+      }
       $('jarvis-health-bots').replaceChildren(...state.bots.map(bot => {
         const pnl = bot.pnl ?? bot.estimated_pnl;
         const estimate = estimateNote(bot);

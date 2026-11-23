@@ -52,6 +52,8 @@ ENTRY_WINDOW = 900
 MARK_MAX_AGE = 90
 ROUTINE_EXIT_INTERVAL = 60
 HELD_BATCH = 100
+# Production startup for the batched-monitor / urgent-exit scheduler (PR #127).
+EXIT_SCHEDULER_STARTED = datetime.fromisoformat("2026-11-23T01:01:51+00:00").timestamp()
 BOTS = {
     'instant-step': ('Instant Ladder', 'instant', 'step'),
     'instant-trim': ('Instant Trim', 'instant', 'trim'),
@@ -873,6 +875,51 @@ def holding_value(position, now):
     return amount, 'current_quote'
 
 
+def exit_comparison(conn, state, now):
+    """Descriptive cohorts, not a controlled estimate of scheduler performance."""
+    cutoff = EXIT_SCHEDULER_STARTED
+    groups = {key: {'closed': 0, 'waits': [], 'gaps': [], 'delayed_gaps': [],
+                    'stop_waits': [], 'open': 0, 'route_retries': 0}
+              for key in ('before', 'carried', 'new')}
+    for row in conn.execute(
+            "SELECT opened,closed,json_extract(data,'$.exit_quote_wait') AS wait, "
+            "json_extract(data,'$.stop_gap_points') AS gap FROM trades WHERE closed>=? AND closed<=?",
+            (cutoff - 1800, now)):
+        key = 'before' if row['closed'] < cutoff else ('carried' if row['opened'] < cutoff else 'new')
+        group = groups[key]
+        group['closed'] += 1
+        if lab.finite(row['wait']) and row['wait'] >= 0:
+            group['waits'].append(row['wait'])
+        if lab.finite(row['gap']) and row['gap'] >= 0:
+            group['gaps'].append(row['gap'])
+            if lab.finite(row['wait']) and row['wait'] >= 0:
+                group['stop_waits'].append(row['wait'])
+                if row['wait'] >= 90:
+                    group['delayed_gaps'].append(row['gap'])
+    for portfolio in state['bots'].values():
+        for p in portfolio['positions'].values():
+            group = groups['carried' if p['opened'] < cutoff else 'new']
+            group['open'] += 1
+            group['route_retries'] += int(bool(p.get('mark_stale') and 'quote_due_since' in p))
+    def mean(values):
+        return sum(values) / len(values) if values else None
+    rows = []
+    for key, group in groups.items():
+        waits = sorted(group['waits'])
+        rows.append({'id': key, 'closed': group['closed'], 'open': group['open'],
+                     'route_retries': group['route_retries'], 'quote_samples': len(waits),
+                     'mean_wait': mean(waits),
+                     'p95_wait': waits[math.ceil(.95 * len(waits)) - 1] if waits else None,
+                     'stop_samples': len(group['gaps']), 'stop_wait_samples': len(group['stop_waits']),
+                     'late_stops': len(group['delayed_gaps']), 'mean_stop_gap': mean(group['gaps']),
+                     'late_stop_gap': mean(group['delayed_gaps'])})
+    return {'started_at': cutoff, 'before_window_seconds': 1800,
+            'after_seconds': max(0, now - cutoff), 'cohorts': rows,
+            'note': 'Quote wait measures overdue scheduled checks, not trigger-to-fill latency. '
+                    'Stop gaps cover instrumented ladder stops; bracket exits are not included. '
+                    'Different coins and market conditions prevent a causal comparison; open holdings are excluded from exit averages.'}
+
+
 def status():
     now = time.time()
     day = datetime.fromtimestamp(now, ET).date().isoformat()
@@ -882,6 +929,7 @@ def status():
     with connection() as conn:
         conn.execute('BEGIN')
         state, _ = read(conn)
+        comparison_exits = exit_comparison(conn, state, now)
         reviewed = {row['bot']: dict(row) for row in conn.execute(
             'SELECT bot, count(*) AS closed, sum(pnl) AS pnl, '
             "avg(json_extract(data,'$.exit_quote_wait')) AS quote_wait, "
@@ -942,6 +990,7 @@ def status():
     return {'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
             'research': {'recent_coins': coverage, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
                          'latest_proposal': dict(latest_mail) if latest_mail else None},
+            'exit_comparison': comparison_exits,
             'exit_queue': {**exit_queue(quote_jobs(state, now), now), 'retry_positions': route_retries},
             'last_quote_failures': {side: state.get(f'last_{side}_quote_failure') for side in ('entry', 'exit')},
             'comparison': comparison, 'entry_guard': state.get('entry_guard'),
