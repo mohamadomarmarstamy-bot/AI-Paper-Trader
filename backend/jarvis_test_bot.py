@@ -50,6 +50,8 @@ EXIT_COHORT = 'priority-stop-v1'
 DISCOVERY_BATCH = 5 * MAX_SCAN_TOKENS
 ENTRY_WINDOW = 900
 MARK_MAX_AGE = 90
+ROUTINE_EXIT_INTERVAL = 60
+HELD_BATCH = 100
 BOTS = {
     'instant-step': ('Instant Ladder', 'instant', 'step'),
     'instant-trim': ('Instant Trim', 'instant', 'trim'),
@@ -207,16 +209,22 @@ def quote(input_mint, output_mint, amount):
 
 def observe(state, providers, now):
     # Reuse the scanner discovery cache. Rotate fresh candidates and active pullbacks.
-    mints = [mint for mint in providers.profiles() if mint not in (USDC, lab.SOL)]
-    if not mints:
-        return
+    held = sorted({mint for portfolio in state['bots'].values() for mint in portfolio['positions']})
+    try:
+        mints = [mint for mint in providers.profiles() if mint not in (USDC, lab.SOL)]
+    except (ValueError, OSError, RuntimeError):
+        mints = []
+        state['error'] = 'Discovery profiles unavailable.'
     tracked = [mint for mint, row in sorted(state['watch'].items(), key=lambda item: item[1]['last'])
-               if not row['pullback']][:12]
-    offset = state['offset'] % len(mints)
+               if mint not in held and not row['pullback']][:12]
+    offset = state['offset'] % max(1, len(mints))
     rotated = mints[offset:] + mints[:offset]
     fresh = rotated[:DISCOVERY_BATCH - len(tracked)]
-    state['offset'] = (offset + len(fresh)) % len(mints)
-    addresses = list(dict.fromkeys(tracked + fresh + [lab.SOL]))
+    state['offset'] = (offset + len(fresh)) % max(1, len(mints))
+    held_offset = state.get('held_offset', 0) % max(1, len(held))
+    held_batch = (held[held_offset:] + held[:held_offset])[:HELD_BATCH]
+    state['held_offset'] = (held_offset + len(held_batch)) % max(1, len(held))
+    addresses = list(dict.fromkeys(held_batch + tracked + fresh + [lab.SOL]))
     requested = set(addresses)
     pairs = []
     failed_batches = 0
@@ -240,7 +248,8 @@ def observe(state, providers, now):
             if mint not in requested:
                 continue
             row = normalize_pair(pair, mint, now)
-            if row['volume_m5_usd'] <= 0 or row['buys_m5'] + row['sells_m5'] == 0:
+            row['monitor_only'] = row['volume_m5_usd'] <= 0 or row['buys_m5'] + row['sells_m5'] == 0
+            if mint not in held and row['monitor_only']:
                 continue
             if mint not in best or row['liquidity_usd'] > best[mint]['liquidity_usd']:
                 row['symbol'] = str(pair['baseToken'].get('name') or row['symbol'])[:80]
@@ -264,7 +273,8 @@ def observe(state, providers, now):
             lab.observe(state['watch'][mint], now)
             continue
         price = row['price_usd']
-        old.update(last=now, price_usd=price, buys_m5=row['buys_m5'], sells_m5=row['sells_m5'],
+        old.update(last=now, price_usd=price, monitor_only=row['monitor_only'],
+                   buys_m5=row['buys_m5'], sells_m5=row['sells_m5'],
                    liquidity_usd=row['liquidity_usd'], volume_m5_usd=row['volume_m5_usd'], age_minutes=row['age_minutes'])
         lab.observe(old, now)
         if price > old['high'] or price < .85 * old['high']:
@@ -517,7 +527,7 @@ def opportunity_evidence(conn, row, now, benchmark=None):
 def entry_jobs(conn, state, now):
     possible = {}
     for mint, row in state['watch'].items():
-        if now - row['last'] > 90 or now < row.get('retry', 0):
+        if row.get('monitor_only') or now - row['last'] > 90 or now < row.get('retry', 0):
             continue
         market_evidence = entry_evidence(conn, row, now)
         market_evidence['benchmark'] = state.get('benchmark')
@@ -581,6 +591,65 @@ def stop_distance(position):
     return gain - lab.floor(position['policy']['exit'], position['peak'], exit_floor)
 
 
+def fresh_market(position, state, now):
+    row = state['watch'].get(position['mint']) or {}
+    if (row and 0 <= now - row['last'] <= MARK_MAX_AGE and position.get('pair')
+            and row.get('pair') == position['pair'] and lab.finite(row.get('price_usd'))
+            and row['price_usd'] > 0):
+        return row
+    return {}
+
+
+def exit_priority(position, now, market=None, benchmark=None):
+    """Indicative prices only schedule quotes; they never mark or fill positions."""
+    p = position
+    rule = p['policy']['exit']
+    if p.get('pending'):
+        return 0
+    gain = None
+    gross = None
+    anchor = p.get('market_anchor') or {}
+    if (market and anchor.get('quantity') == p['quantity']
+            and anchor.get('pair') == market.get('pair')
+            and lab.finite(anchor.get('price')) and anchor['price'] > 0):
+        gross = anchor['amount'] * market['price_usd'] / anchor['price']
+        gain = 100 * (max(0, gross - SELL_FEE) - p['cost']) / p['cost']
+    elif p.get('mark') is not None:
+        gain = 100 * (p['mark'] - p['cost']) / p['cost']
+        gross = p['mark'] + SELL_FEE
+    if lab.exit_reason(p, gain if gain is not None else 0, gross if gross is not None else TRADE,
+                       now, {}, market or {}, TRADE, benchmark):
+        return 0
+    if gain is None:
+        return 3
+    # Bracket stops are gross token value; other stops protect net costs.
+    if rule in lab.BRACKETS:
+        stop = 100 * (gross / TRADE - 1) + 10
+        profit = lab.BRACKETS[rule] - 100 * (gross / TRADE - 1)
+    else:
+        stop = gain - lab.floor(rule, p['peak'], exit_floor)
+        profit = p['target'] - gain if rule == 'trim' else math.inf
+    if min(stop, profit) <= 0:
+        return 0
+    if min(stop, profit) <= NEAR_STOP_POINTS:
+        return 1
+    return 3
+
+
+def schedule_market_exits(state, now):
+    for portfolio in state['bots'].values():
+        for p in portfolio['positions'].values():
+            # Never bypass failed-route cooldowns because an indicative price moved.
+            if p.get('mark_stale') and 'quote_due_since' in p:
+                continue
+            market = fresh_market(p, state, now)
+            priority = exit_priority(p, now, market, state.get('benchmark'))
+            p['exit_priority'] = priority
+            if priority <= 1:
+                earliest = max(now, (p.get('mark_at') or p['opened']) + POLL)
+                p['due'] = min(p['due'], earliest)
+
+
 def next_exit(jobs, attempts):
     regular = {job: group for job, group in jobs.items() if not retry_group(group)}
     retries = {job: group for job, group in jobs.items() if job not in regular}
@@ -592,9 +661,10 @@ def next_exit(jobs, attempts):
 
     if attempts % OLDEST_EXIT_INTERVAL:
         urgent = [job for job, group in jobs.items()
-                  if not retry_group(group) and any(stop_distance(p) <= NEAR_STOP_POINTS for _, p in group)]
+                  if not retry_group(group) and any(p.get('exit_priority', 3) <= 1 or stop_distance(p) <= NEAR_STOP_POINTS for _, p in group)]
         if urgent:
-            return min(urgent, key=lambda job: (min(stop_distance(p) for _, p in jobs[job]), oldest(job)))
+            return min(urgent, key=lambda job: (min(p.get('exit_priority', 3) for _, p in jobs[job]),
+                                              min(stop_distance(p) for _, p in jobs[job]), oldest(job)))
     return min(jobs, key=oldest)
 
 
@@ -602,7 +672,7 @@ def entry_quote_budget(exits, now):
     queue = exit_queue(exits, now)
     if queue['backed_up']:
         return BACKLOG_EXIT_QUOTES_PER_ENTRY
-    urgent = any(p['pending'] or stop_distance(p) <= NEAR_STOP_POINTS
+    urgent = any(p['pending'] or p.get('exit_priority', 3) <= 1 or stop_distance(p) <= NEAR_STOP_POINTS
                  for group in exits.values() for _, p in group if not retry_group(group))
     if urgent or queue['oldest_wait'] > 15:
         return EXIT_QUOTES_PER_ENTRY
@@ -625,21 +695,25 @@ def step(conn, state, providers, get_quote, now):
     completed = []
     activity = state.setdefault('quote_activity', {'since': now, 'entry_quotes': 0, 'paper_entries': 0,
                                                   'exit_quotes': 0, 'deferrals': 0})
-    if state['enabled']:
-        state['watch'] = {mint: row for mint, row in state['watch'].items() if now - row['first'] <= 900}
-        if now >= state.get('next_discovery', 0):
+    if state['enabled'] or any(p['positions'] for p in state['bots'].values()):
+        held = {mint for portfolio in state['bots'].values() for mint in portfolio['positions']}
+        state['watch'] = {mint: row for mint, row in state['watch'].items() if mint in held or now - row['first'] <= 900}
+        if providers is not None and now >= state.get('next_discovery', 0):
             state['next_discovery'] = now + DISCOVERY_INTERVAL
             try:
                 observe(state, providers, now)
             except (ValueError, OSError, RuntimeError):
                 state['error'] = 'Discovery data unavailable.'
+    schedule_market_exits(state, now)
     exits = quote_jobs(state, now)
     entries = entry_jobs(conn, state, now) if state['enabled'] else {}
     # Keep new entries moving at a reduced rate during sustained exit pressure.
     # Provider deferrals do not spend an attempt in either queue.
     exit_attempts = state.get('exit_attempts_since_entry', 0)
     exit_budget = entry_quote_budget(exits, now)
-    buy = entries and (not exits or exit_attempts >= exit_budget)
+    urgent_exit = any(p.get('exit_priority') == 0 for group in exits.values()
+                      if not retry_group(group) for _, p in group)
+    buy = entries and not urgent_exit and (not exits or exit_attempts >= exit_budget)
     if buy:
         mint = min(entries, key=lambda mint: state['watch'][mint]['first'])
         row = state['watch'][mint]
@@ -694,15 +768,22 @@ def step(conn, state, providers, get_quote, now):
             activity['exit_quotes'] += 1
             for bot, p in group:
                 was_pending = p['pending']
-                current = state['watch'].get(mint) or {}
-                fresh = current and 0 <= now - current['last'] <= 90 and (not p.get('pair') or p['pair'] == current['pair'])
+                current = fresh_market(p, state, now)
+                fresh = bool(current)
+                if fresh and size == p['quantity']:
+                    p['market_anchor'] = {'price': current['price_usd'], 'pair': current['pair'],
+                                          'quantity': size, 'amount': amount, 'at': now}
                 evidence = entry_evidence(conn, current, now) if fresh else {}
                 evidence['benchmark'] = state.get('benchmark')
                 apply_exit(completed, state['bots'][bot], bot, p, size, amount, now, evidence, current if fresh else {})
                 p.pop('quote_due_since', None)
                 p.pop('route_failures', None)
                 p.pop('route_failure', None)
-                p['due'] = now + (POLL if was_pending or p['pending'] else 15)
+                if mint not in state['bots'][bot]['positions']:
+                    continue
+                priority = exit_priority(p, now, current, state.get('benchmark'))
+                interval = ROUTINE_EXIT_INTERVAL if fresh and p.get('market_anchor') and priority == 3 else 15
+                p['due'] = now + (POLL if was_pending or p['pending'] else interval)
     state['last_cycle'] = now
     return completed
 
@@ -871,6 +952,11 @@ def status():
             'review_every': review_size(state['reviewed']), 'watching': len(state['watch']),
             'quote_activity': state.get('quote_activity'),
             'worker_interval_seconds': WORKER_INTERVAL,
+            'exit_monitor': {'held_batch_size': HELD_BATCH, 'routine_quote_seconds': ROUTINE_EXIT_INTERVAL,
+                             'urgent_positions': sum(p.get('exit_priority') == 0 for b in state['bots'].values()
+                                                     for p in b['positions'].values()),
+                             'fresh_market_positions': sum(bool(fresh_market(p, state, now)) for b in state['bots'].values()
+                                                           for p in b['positions'].values())},
             'discovery': {'batch_size': DISCOVERY_BATCH, 'interval_seconds': DISCOVERY_INTERVAL,
                           'instant_entry_window_seconds': ENTRY_WINDOW,
                           'coverage': 'Discoverable active Solana pairs; not the entire meme-coin market.'}}
