@@ -7,6 +7,8 @@ import logging
 import os
 import secrets
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit
 
 import solana_http
@@ -22,6 +24,9 @@ CREATE TABLE IF NOT EXISTS backlog_mail(
  lease REAL NOT NULL DEFAULT 0, consumed REAL, duration INTEGER);
 CREATE TABLE IF NOT EXISTS backlog_action(
  digest TEXT PRIMARY KEY, mail_id TEXT NOT NULL, minutes INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS backlog_pause_report(
+ id TEXT PRIMARY KEY, started REAL NOT NULL, ends REAL NOT NULL, baseline_id INTEGER NOT NULL,
+ cancelled REAL, queued REAL);
 '''
 
 
@@ -77,12 +82,42 @@ def apply_control(state, minutes, now):
         # Resume entry permissions, but honor the owner's overall run toggle.
 
 
+def record_pause(conn, state, minutes, now):
+    # Replacing or manually ending a live timer cancels that timer's expiry report.
+    conn.execute('UPDATE backlog_pause_report SET cancelled=? WHERE queued IS NULL AND cancelled IS NULL AND ends>?', (now, now))
+    if minutes:
+        baseline = conn.execute('SELECT COALESCE(max(id),0) FROM trades').fetchone()[0]
+        conn.execute('INSERT INTO backlog_pause_report(id,started,ends,baseline_id) VALUES(?,?,?,?)',
+                     (secrets.token_hex(16), now, state['entry_pause_until'], baseline))
+
+
+def enqueue_expired(conn, state, now, base):
+    for report in conn.execute('SELECT * FROM backlog_pause_report WHERE queued IS NULL AND cancelled IS NULL AND ends<=? ORDER BY ends LIMIT 10', (now,)).fetchall():
+        closed = conn.execute('SELECT count(*) FROM trades WHERE id>? AND closed>=? AND closed<=?',
+                              (report['baseline_id'], report['started'], report['ends'])).fetchone()[0]
+        pending = waiting(state, now)
+        running = state['enabled'] and not timer_active(state, now) and not api().catchup_requested(state)
+        status = ('Paper buys are back up and running.' if running else
+                  'Your buy-pause timer has ended, but paper buys remain paused by another control (catch-up pause, newer timer, or overall stop switch).')
+        checked = datetime.fromtimestamp(now, ZoneInfo('America/New_York')).strftime('%b %d, %Y %I:%M:%S %p ET')
+        text = (f"{status} Status checked {checked}.\n{closed} Jarvis paper positions closed during this timer.\n"
+                f"{pending['positions']} positions across {pending['coins']} distinct coins are still waiting for an exit quote check or route retry as of this report.\n"
+                'Sells continue running.\nSettings: ' + base + '/jarvis-test-bot#settings')
+        payload = {'subject': 'Jarvis paper: buys back up and running' if running else 'Jarvis paper: timer ended — buys still paused',
+                   'text': text, 'html': '<h2>Paper buy-pause timer ended</h2><p>' + html.escape(text).replace('\n', '<br>') + '</p>'}
+        conn.execute('INSERT OR IGNORE INTO backlog_mail(id,created,expires,payload) VALUES(?,?,?,?)',
+                     ('resume/' + report['id'], now, now + 21600, json.dumps(payload)))
+        conn.execute('UPDATE backlog_pause_report SET queued=? WHERE id=?', (now, report['id']))
+
+
 def control(minutes, clock=time.time):
     jarvis = api()
     with jarvis.connection() as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
         state, revision = jarvis.read(conn)
-        apply_control(state, minutes, clock())
+        now = clock()
+        apply_control(state, minutes, now)
+        record_pause(conn, state, minutes, now)
         save_state(conn, state, revision)
     return jarvis.status()
 
@@ -150,6 +185,7 @@ def email_control(token, clock=time.time):
             return {'applied': False, 'minutes': action['duration'], 'message': 'This alert was already used. The pause was not extended.'}
         state, revision = jarvis.read(conn)
         apply_control(state, action['minutes'], now)
+        record_pause(conn, state, action['minutes'], now)
         save_state(conn, state, revision)
         conn.execute('UPDATE backlog_mail SET consumed=?,duration=? WHERE id=?', (now, action['minutes'], action['id']))
         return {'applied': True, 'minutes': action['minutes'], 'pause_until': state['entry_pause_until'],
@@ -165,10 +201,9 @@ def mail_tick(clock=time.time, post=solana_http.post):
     with jarvis.connection() as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
         state, _ = jarvis.read(conn)
-        if not summary(state, now)['enabled']:
-            return
+        enqueue_expired(conn, state, now, base)
         enqueue(conn, state, now, base)
-        row = conn.execute('SELECT * FROM backlog_mail WHERE sent IS NULL AND expires>? AND next_attempt<=? AND lease<=? ORDER BY created LIMIT 1', (now, now, now)).fetchone()
+        row = conn.execute("SELECT * FROM backlog_mail WHERE sent IS NULL AND expires>? AND next_attempt<=? AND lease<=? AND (id LIKE 'resume/%' OR ?) ORDER BY created LIMIT 1", (now, now, now, int(summary(state, now)['enabled']))).fetchone()
         if row is None:
             return
         conn.execute('UPDATE backlog_mail SET lease=?,attempts=attempts+1 WHERE id=?', (now + 45, row['id']))
