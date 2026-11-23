@@ -105,24 +105,48 @@ def track_existing_timer(conn, state, now):
                  (ident, started, ends, baseline))
 
 
+def queue_completion(conn, state, report, now, base, *, early=False):
+    closed = conn.execute('SELECT count(*) FROM trades WHERE id>? AND closed>=? AND closed<=?',
+                          (report['baseline_id'], report['started'], min(now, report['ends']))).fetchone()[0]
+    pending = waiting(state, now)
+    running = state['enabled'] and not timer_active(state, now) and not api().catchup_requested(state)
+    status = ('All Jarvis paper positions closed before the timer ended. Paper buys are back up and running.' if early else
+              'Paper buys are back up and running.' if running else
+              'Your buy-pause timer has ended, but paper buys remain paused by another control (catch-up pause, newer timer, or overall stop switch).')
+    checked = datetime.fromtimestamp(now, ZoneInfo('America/New_York')).strftime('%b %d, %Y %I:%M:%S %p ET')
+    interval = 'since expiry-report tracking started (this timer began before the reporting update)' if report['id'].startswith('partial/') else 'during this timer'
+    text = (f"{status} Status checked {checked}.\n{closed} Jarvis paper positions closed {interval}.\n"
+            f"{pending['positions']} positions across {pending['coins']} distinct coins are still waiting for an exit quote check or route retry as of this report.\n"
+            'Sells continue running.\nSettings: ' + base + '/jarvis-test-bot#settings')
+    subject = ('Jarvis paper: all positions closed — buys resumed early' if early else
+               'Jarvis paper: buys back up and running' if running else 'Jarvis paper: timer ended — buys still paused')
+    payload = {'subject': subject, 'text': text,
+               'html': '<h2>Paper buy-pause complete</h2><p>' + html.escape(text).replace('\n', '<br>') + '</p>'}
+    conn.execute('INSERT OR IGNORE INTO backlog_mail(id,created,expires,payload) VALUES(?,?,?,?)',
+                 ('resume/' + report['id'], now, now + 21600, json.dumps(payload)))
+    conn.execute('UPDATE backlog_pause_report SET queued=? WHERE id=?', (now, report['id']))
+
+
 def enqueue_expired(conn, state, now, base):
     for report in conn.execute('SELECT * FROM backlog_pause_report WHERE queued IS NULL AND cancelled IS NULL AND ends<=? ORDER BY ends LIMIT 10', (now,)).fetchall():
-        closed = conn.execute('SELECT count(*) FROM trades WHERE id>? AND closed>=? AND closed<=?',
-                              (report['baseline_id'], report['started'], report['ends'])).fetchone()[0]
-        pending = waiting(state, now)
-        running = state['enabled'] and not timer_active(state, now) and not api().catchup_requested(state)
-        status = ('Paper buys are back up and running.' if running else
-                  'Your buy-pause timer has ended, but paper buys remain paused by another control (catch-up pause, newer timer, or overall stop switch).')
-        checked = datetime.fromtimestamp(now, ZoneInfo('America/New_York')).strftime('%b %d, %Y %I:%M:%S %p ET')
-        interval = 'since expiry-report tracking started (this timer began before the reporting update)' if report['id'].startswith('partial/') else 'during this timer'
-        text = (f"{status} Status checked {checked}.\n{closed} Jarvis paper positions closed {interval}.\n"
-                f"{pending['positions']} positions across {pending['coins']} distinct coins are still waiting for an exit quote check or route retry as of this report.\n"
-                'Sells continue running.\nSettings: ' + base + '/jarvis-test-bot#settings')
-        payload = {'subject': 'Jarvis paper: buys back up and running' if running else 'Jarvis paper: timer ended — buys still paused',
-                   'text': text, 'html': '<h2>Paper buy-pause timer ended</h2><p>' + html.escape(text).replace('\n', '<br>') + '</p>'}
-        conn.execute('INSERT OR IGNORE INTO backlog_mail(id,created,expires,payload) VALUES(?,?,?,?)',
-                     ('resume/' + report['id'], now, now + 21600, json.dumps(payload)))
-        conn.execute('UPDATE backlog_pause_report SET queued=? WHERE id=?', (now, report['id']))
+        queue_completion(conn, state, report, now, base)
+
+
+def resume_when_empty(conn, state, now):
+    """Called within the main worker's revision-checked state/trade transaction."""
+    if not state['enabled'] or not timer_active(state, now):
+        return False
+    if any(b['positions'] for b in state['bots'].values()):
+        return False
+    track_existing_timer(conn, state, now)
+    report = conn.execute('SELECT * FROM backlog_pause_report WHERE ends=? AND queued IS NULL AND cancelled IS NULL ORDER BY started DESC LIMIT 1',
+                          (state['entry_pause_until'],)).fetchone()
+    if report is None:
+        return False
+    apply_control(state, 0, now)
+    state['entry_catchup_pause']['early_all_closed'] = True
+    queue_completion(conn, state, report, now, origin() or '', early=True)
+    return True
 
 
 def control(minutes, clock=time.time):

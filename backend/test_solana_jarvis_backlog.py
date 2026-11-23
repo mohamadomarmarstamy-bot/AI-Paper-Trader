@@ -199,6 +199,38 @@ class BacklogTests(unittest.TestCase):
             payload = json.loads(conn.execute('SELECT payload FROM backlog_mail').fetchone()[0])
             self.assertIn('1 Jarvis paper positions closed since expiry-report tracking started', payload['text'])
 
+    def test_all_positions_closed_resumes_early_and_sends_one_summary(self):
+        self.start_timer(30)
+        self.state['entry_catchup_pause'] = {'active': True}
+        with jarvis.connection() as conn, conn:
+            self.add_trade(conn, 'last-close', self.now + 100)
+            # Even an unavailable route keeps the timer active until the holding closes.
+            self.state['bots']['instant-step']['positions'] = {'retry': {'mint': 'retry', 'due': self.now + 1000, 'mark_stale': True}}
+            self.assertFalse(guard.resume_when_empty(conn, self.state, self.now + 100))
+            self.state['bots']['instant-step']['positions'].clear()
+            self.assertTrue(guard.resume_when_empty(conn, self.state, self.now + 100))
+            self.assertFalse(self.state['entry_catchup_pause']['active'])
+            self.assertEqual(self.state['entry_pause_until'], 0)
+            self.assertTrue(self.state['enabled'])
+            payload = json.loads(conn.execute('SELECT payload FROM backlog_mail').fetchone()[0])
+            self.assertIn('buys resumed early', payload['subject'])
+            self.assertIn('1 Jarvis paper positions closed during this timer.', payload['text'])
+            self.assertIn('0 positions across 0 distinct coins', payload['text'])
+            self.assertFalse(guard.resume_when_empty(conn, self.state, self.now + 110))
+            guard.enqueue_expired(conn, self.state, self.now + 1800, 'https://test')
+            self.assertEqual(conn.execute('SELECT count(*) FROM backlog_mail').fetchone()[0], 1)
+
+    def test_early_resume_does_not_override_master_stop_or_no_active_timer(self):
+        self.state['bots']['instant-step']['positions'].clear()
+        self.start_timer()
+        self.state['enabled'] = False
+        with jarvis.connection() as conn, conn:
+            self.assertFalse(guard.resume_when_empty(conn, self.state, self.now + 1))
+            self.state['enabled'] = True
+            self.state['entry_pause_until'] = 0
+            self.assertFalse(guard.resume_when_empty(conn, self.state, self.now + 2))
+            self.assertEqual(conn.execute('SELECT count(*) FROM backlog_mail').fetchone()[0], 0)
+
     def test_http_auth_origin_and_preview_contract(self):
         app = FastAPI()
         def auth(request):
