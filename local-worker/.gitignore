@@ -1,0 +1,6 @@
+.venv/
+config.json
+worker-state.json
+worker-state.tmp
+__pycache__/
+worker.lock

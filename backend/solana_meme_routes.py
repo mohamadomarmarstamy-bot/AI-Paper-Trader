@@ -45,6 +45,31 @@ def build_router(*,require_session):
         require_session(request)
         return JSONResponse(jarvis.status(), headers={'Cache-Control': 'no-store'})
 
+    @router.get('/jarvis-test-bot/local-worker/context')
+    def local_worker_context(request: Request):
+        import jarvis_local_lab as local
+        if not local.authorized(request.headers.get('authorization')):
+            raise HTTPException(401, 'Local worker token missing or invalid.')
+        local.heartbeat(jarvis)
+        return JSONResponse(local.context(jarvis), headers={'Cache-Control': 'no-store'})
+
+    @router.post('/jarvis-test-bot/local-worker/strategy')
+    async def local_worker_strategy(request: Request):
+        import jarvis_local_lab as local
+        if not local.authorized(request.headers.get('authorization')):
+            raise HTTPException(401, 'Local worker token missing or invalid.')
+        raw = bytearray()
+        async for chunk in request.stream():
+            raw.extend(chunk)
+            if len(raw) > 20000:
+                raise HTTPException(413, 'Strategy payload too large.')
+        try:
+            payload = json.loads(raw)
+            result = await run_in_threadpool(local.submit, jarvis, payload)
+        except (ValueError, TypeError, KeyError, RecursionError):
+            raise HTTPException(422, 'Invalid paper strategy or paper engine unavailable.') from None
+        return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
     @router.get('/jarvis-test-bot/history')
     def jarvis_history(request: Request, jarvis_only: bool = False, before: int | None = None, bot: str | None = None, rugs_only: bool = False):
         require_session(request)
