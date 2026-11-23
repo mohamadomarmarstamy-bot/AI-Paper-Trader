@@ -91,6 +91,20 @@ def record_pause(conn, state, minutes, now):
                      (secrets.token_hex(16), now, state['entry_pause_until'], baseline))
 
 
+def track_existing_timer(conn, state, now):
+    ends = state.get('entry_pause_until', 0)
+    if ends <= now or conn.execute('SELECT 1 FROM backlog_pause_report WHERE ends=?', (ends,)).fetchone():
+        return
+    source = conn.execute('SELECT id,consumed FROM backlog_mail WHERE consumed IS NOT NULL AND duration IS NOT NULL AND abs(consumed+duration*60-?)<0.01 ORDER BY consumed DESC LIMIT 1', (ends,)).fetchone()
+    # Existing email actions have an exact start. Older app timers did not store
+    # one: report the measured remainder explicitly instead of inventing a start.
+    started = source['consumed'] if source else now
+    baseline = conn.execute('SELECT COALESCE(max(id),0) FROM trades WHERE closed<=?', (started,)).fetchone()[0]
+    ident = 'existing/' + source['id'] if source else 'partial/' + secrets.token_hex(16)
+    conn.execute('INSERT OR IGNORE INTO backlog_pause_report(id,started,ends,baseline_id) VALUES(?,?,?,?)',
+                 (ident, started, ends, baseline))
+
+
 def enqueue_expired(conn, state, now, base):
     for report in conn.execute('SELECT * FROM backlog_pause_report WHERE queued IS NULL AND cancelled IS NULL AND ends<=? ORDER BY ends LIMIT 10', (now,)).fetchall():
         closed = conn.execute('SELECT count(*) FROM trades WHERE id>? AND closed>=? AND closed<=?',
@@ -100,7 +114,8 @@ def enqueue_expired(conn, state, now, base):
         status = ('Paper buys are back up and running.' if running else
                   'Your buy-pause timer has ended, but paper buys remain paused by another control (catch-up pause, newer timer, or overall stop switch).')
         checked = datetime.fromtimestamp(now, ZoneInfo('America/New_York')).strftime('%b %d, %Y %I:%M:%S %p ET')
-        text = (f"{status} Status checked {checked}.\n{closed} Jarvis paper positions closed during this timer.\n"
+        interval = 'since expiry-report tracking started (this timer began before the reporting update)' if report['id'].startswith('partial/') else 'during this timer'
+        text = (f"{status} Status checked {checked}.\n{closed} Jarvis paper positions closed {interval}.\n"
                 f"{pending['positions']} positions across {pending['coins']} distinct coins are still waiting for an exit quote check or route retry as of this report.\n"
                 'Sells continue running.\nSettings: ' + base + '/jarvis-test-bot#settings')
         payload = {'subject': 'Jarvis paper: buys back up and running' if running else 'Jarvis paper: timer ended — buys still paused',
@@ -201,6 +216,7 @@ def mail_tick(clock=time.time, post=solana_http.post):
     with jarvis.connection() as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
         state, _ = jarvis.read(conn)
+        track_existing_timer(conn, state, now)
         enqueue_expired(conn, state, now, base)
         enqueue(conn, state, now, base)
         row = conn.execute("SELECT * FROM backlog_mail WHERE sent IS NULL AND expires>? AND next_attempt<=? AND lease<=? AND (id LIKE 'resume/%' OR ?) ORDER BY created LIMIT 1", (now, now, now, int(summary(state, now)['enabled']))).fetchone()

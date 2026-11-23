@@ -171,6 +171,34 @@ class BacklogTests(unittest.TestCase):
             self.assertEqual(conn.execute('SELECT count(*) FROM backlog_mail').fetchone()[0], 0)
             self.assertEqual(conn.execute('SELECT count(*) FROM backlog_pause_report WHERE cancelled IS NOT NULL').fetchone()[0], 2)
 
+    def test_existing_email_timer_recovers_exact_start_and_only_tracks_once(self):
+        token = self.token(30)
+        guard.email_control(token, lambda: self.now)
+        with jarvis.connection() as conn, conn:
+            conn.execute('DELETE FROM backlog_pause_report')
+            state, _ = jarvis.read(conn)
+            self.add_trade(conn, 'during-existing', self.now + 60)
+            guard.track_existing_timer(conn, state, self.now + 120)
+            guard.track_existing_timer(conn, state, self.now + 130)
+            reports = conn.execute('SELECT * FROM backlog_pause_report').fetchall()
+            self.assertEqual(len(reports), 1)
+            self.assertEqual(reports[0]['started'], self.now)
+            guard.enqueue_expired(conn, state, self.now + 1800, 'https://test')
+            payload = json.loads(conn.execute("SELECT payload FROM backlog_mail WHERE id LIKE 'resume/%'").fetchone()[0])
+            self.assertIn('1 Jarvis paper positions closed during this timer.', payload['text'])
+
+    def test_older_app_timer_does_not_invent_unknown_start(self):
+        state = jarvis.initial()
+        state.update(enabled=True, entry_pause_until=self.now + 600)
+        with jarvis.connection() as conn, conn:
+            guard.track_existing_timer(conn, state, self.now)
+            report = conn.execute('SELECT * FROM backlog_pause_report').fetchone()
+            self.assertTrue(report['id'].startswith('partial/'))
+            self.add_trade(conn, 'tracked', self.now + 100)
+            guard.enqueue_expired(conn, state, self.now + 600, 'https://test')
+            payload = json.loads(conn.execute('SELECT payload FROM backlog_mail').fetchone()[0])
+            self.assertIn('1 Jarvis paper positions closed since expiry-report tracking started', payload['text'])
+
     def test_http_auth_origin_and_preview_contract(self):
         app = FastAPI()
         def auth(request):
