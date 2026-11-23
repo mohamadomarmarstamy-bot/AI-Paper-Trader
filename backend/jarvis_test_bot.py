@@ -330,9 +330,12 @@ def sell(completed, portfolio, bot, position, quantity, amount, now, reason):
         position['trims'] += 1
         position['target'] *= 2
         position.update(mark=None, mark_at=None, mark_stale=False)
+        position.pop('exit_signal', None)
         return
     pnl = position['banked'] - position['entry_cost']
     event = {**position, 'bot': bot, 'closed': now, 'pnl': pnl, 'reason': reason}
+    if position.get('exit_signal') and not position.get('paper_writeoff'):
+        event['signal_to_close_seconds'] = max(0, now - position['exit_signal']['at'])
     completed.append(event)
     del portfolio['positions'][position['mint']]
 
@@ -384,7 +387,10 @@ def apply_exit(completed, portfolio, bot, p, quote_size, amount, now, evidence=N
             p['pending'] = 'trim'
     else:
         reason = None
+    if p.get('pending'):
+        p.setdefault('exit_signal', {'at': now})['basis'] = 'confirmed_quote'
     if reason:
+        p.setdefault('exit_signal', {'at': now, 'basis': 'confirmed_quote'})
         p['exit_quote_wait'] = max(0, now - quote_due_since(p))
         sell(completed, portfolio, bot, p, quote_size, amount, now, reason)
 
@@ -653,24 +659,67 @@ def exit_priority(position, now, market=None, benchmark=None):
     return 3
 
 
+def observe_exit_signal(p, state, now):
+    market = fresh_market(p, state, now)
+    priority = exit_priority(p, now, market, state.get('benchmark'))
+    p['exit_priority'] = priority
+    if priority == 0:
+        basis = ('confirmed_quote' if p.get('pending') else
+                 'strategy_timer' if ((p['policy']['exit'] == 'time5' and now - p['opened'] >= 300) or
+                                      (p['policy']['exit'] == 'stalled' and now - p.get('last_high_at', p['opened']) >= 180)) else
+                 'indicative_price_or_market')
+        p.setdefault('exit_signal', {'at': now, 'basis': basis})
+    else:
+        p.pop('exit_signal', None)
+    return priority
+
+
+def position_exit_state(p, now):
+    if p.get('exit_signal') or p.get('pending'):
+        return 'exit_triggered'
+    if p.get('mark_stale') or p['due'] <= now:
+        return 'quote_delayed'
+    return 'holding'
+
+
+def exit_work_summary(conn, state, now):
+    groups = {key: [] for key in ('holding', 'exit_triggered', 'quote_delayed')}
+    for portfolio in state['bots'].values():
+        for p in portfolio['positions'].values():
+            groups[position_exit_state(p, now)].append(p)
+    waits = [max(0, now - p['exit_signal']['at']) for p in groups['exit_triggered'] if p.get('exit_signal')]
+    latencies = sorted(row[0] for row in conn.execute(
+        "SELECT json_extract(data,'$.signal_to_close_seconds') FROM trades "
+        "WHERE json_extract(data,'$.signal_to_close_seconds') IS NOT NULL "
+        "AND json_extract(data,'$.paper_writeoff') IS NULL ORDER BY id DESC LIMIT 200"))
+    return {**{key: {'positions': len(ps), 'coins': len({p['mint'] for p in ps})} for key, ps in groups.items()},
+            'trigger_bases': {basis: sum((p.get('exit_signal') or {}).get('basis') == basis for p in groups['exit_triggered'])
+                             for basis in ('confirmed_quote', 'strategy_timer', 'indicative_price_or_market')},
+            'oldest_signal_seconds': max(waits, default=0),
+            'close_latency': {'samples': len(latencies), 'average_seconds': sum(latencies)/len(latencies) if latencies else None,
+                              'p95_seconds': latencies[max(0, math.ceil(len(latencies)*.95)-1)] if latencies else None}}
+
+
 def schedule_market_exits(state, now):
     for portfolio in state['bots'].values():
         for p in portfolio['positions'].values():
-            # Never bypass failed-route cooldowns because an indicative price moved.
+            priority = observe_exit_signal(p, state, now)
+            # Keep retry cooldowns even when an exit signal is present.
             if p.get('mark_stale') and 'quote_due_since' in p:
-                if (p.get('route_failure') or {}).get('category') == 'no_route':
-                    # Also shorten pre-upgrade backoffs; do not postpone already due retries.
-                    p['due'] = min(p['due'], now + NO_ROUTE_RETRY_SECONDS)
                 continue
-            market = fresh_market(p, state, now)
-            priority = exit_priority(p, now, market, state.get('benchmark'))
-            p['exit_priority'] = priority
             if priority <= 1:
                 earliest = max(now, (p.get('mark_at') or p['opened']) + POLL)
                 p['due'] = min(p['due'], earliest)
 
 
 def next_exit(jobs, attempts):
+    # Give observed exits the next eligible quote, reserving every third
+    # attempt for the existing oldest-check fairness path.
+    triggered = {job: group for job, group in jobs.items()
+                 if any(p.get('exit_signal') or p.get('pending') for _, p in group)}
+    if triggered and attempts % OLDEST_EXIT_INTERVAL:
+        return min(triggered, key=lambda job: min((p.get('exit_signal') or {}).get('at', p['due'])
+                                                 for _, p in triggered[job]))
     regular = {job: group for job, group in jobs.items() if not retry_group(group)}
     retries = {job: group for job, group in jobs.items() if job not in regular}
     if regular and retries:
@@ -763,8 +812,8 @@ def step(conn, state, providers, get_quote, now):
     # Provider deferrals do not spend an attempt in either queue.
     exit_attempts = state.get('exit_attempts_since_entry', 0)
     exit_budget = entry_quote_budget(exits, now)
-    urgent_exit = any(p.get('exit_priority') == 0 for group in exits.values()
-                      if not retry_group(group) for _, p in group)
+    urgent_exit = any(p.get('exit_priority') == 0 or p.get('exit_signal')
+                      for group in exits.values() for _, p in group)
     buy = entries and not urgent_exit and (not exits or exit_attempts >= exit_budget)
     if buy:
         mint = min(entries, key=lambda mint: state['watch'][mint]['first'])
@@ -813,7 +862,7 @@ def step(conn, state, providers, get_quote, now):
                              (6 if temporary else 45) * 2 ** (failures - 1)))
                 p['route_failure'] = {'category': getattr(error, 'category', 'unknown'),
                                       'reason': str(error) if isinstance(error, QuoteUnavailable) else type(error).__name__}
-                p.update(due=now + delay, mark_stale=True, pending=None, route_failures=failures)
+                p.update(due=now + delay, mark_stale=True, route_failures=failures)
                 state['bots'][bot]['quote_misses'] += 1
             state['error'] = ('No-route position recorded as a Rug Pull paper write-off.'
                               if getattr(error, 'category', None) == 'no_route' else
@@ -837,7 +886,7 @@ def step(conn, state, providers, get_quote, now):
                 p.pop('route_failure', None)
                 if mint not in state['bots'][bot]['positions']:
                     continue
-                priority = exit_priority(p, now, current, state.get('benchmark'))
+                priority = observe_exit_signal(p, state, now)
                 interval = ROUTINE_EXIT_INTERVAL if fresh and p.get('market_anchor') and priority == 3 else 15
                 p['due'] = now + (POLL if was_pending or p['pending'] else interval)
     state['last_cycle'] = now
@@ -1044,6 +1093,7 @@ def status():
                             for bot in state['bots'].values() for p in bot['positions'].values())
         legacy_summary = conn.execute('SELECT data FROM legacy_outcome_summary WHERE id=1').fetchone()
         latest_backlog_mail = conn.execute("SELECT created,sent,attempts,expires FROM backlog_mail WHERE id NOT LIKE 'resume/%' ORDER BY created DESC LIMIT 1").fetchone()
+        exit_work = exit_work_summary(conn, state, now)
         rug_pulls = dict(conn.execute("SELECT count(*) AS positions, count(DISTINCT mint) AS coins, COALESCE(sum(pnl),0)/1000000.0 AS pnl FROM trades WHERE json_extract(data,'$.paper_writeoff.category')='no_route'").fetchone())
         timer_report = conn.execute("SELECT started,ends,(id LIKE 'partial/%') AS partial FROM backlog_pause_report WHERE ends=? AND cancelled IS NULL ORDER BY started DESC LIMIT 1", (backlog.pause_key(state),)).fetchone()
     return {'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
@@ -1052,6 +1102,7 @@ def status():
             'backlog_guard': {**backlog.summary(state, now),
                               'latest_alert': dict(latest_backlog_mail) if latest_backlog_mail else None,
                               'timer_report': dict(timer_report) if timer_report else None},
+            'exit_work': exit_work,
             'rug_pulls': rug_pulls,
             'entry_catchup_pause': state.get('entry_catchup_pause'),
             'exit_comparison': comparison_exits,
