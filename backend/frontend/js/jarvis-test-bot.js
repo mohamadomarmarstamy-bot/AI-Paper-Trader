@@ -276,13 +276,34 @@
       const activity = state.quote_activity;
       if (state.discovery) $('jarvis-cycle').textContent += ` · Up to ${state.discovery.batch_size} candidates per ${state.discovery.interval_seconds}s`;
       if (activity) $('jarvis-cycle').textContent += ` · Since ${displayTime(activity.since)} ET: ${activity.paper_entries} paper entries from ${activity.entry_quotes} buy quotes · ${activity.exit_quotes} sell quotes · ${activity.deferrals} capacity deferrals`;
+      const work = state.exit_work;
+      const workPanel = $('jarvis-exit-work');
+      workPanel.replaceChildren();
+      if (work) {
+        workPanel.append(el('h2', 'Open position status'));
+        for (const [key, label, explanation] of [
+          ['holding', 'Holding', 'No observed exit signal; next quote check is scheduled.'],
+          ['exit_triggered', 'Exit triggered', 'Observed exit signal awaiting a quote or recheck.'],
+          ['quote_delayed', 'Quote delayed', 'Quote check overdue or failed; no observed exit signal.']
+        ]) {
+          const group = work[key];
+          workPanel.append(el('p', `${label}: ${group.positions} positions across ${group.coins} coins. ${explanation}`));
+        }
+        const bases = work.trigger_bases;
+        workPanel.append(el('p', `Exit signals: ${bases.confirmed_quote} confirmed by a prior quote · ${bases.strategy_timer} strategy timers · ${bases.indicative_price_or_market} indicative market signals needing quote confirmation. Oldest signal: ${displayDuration(work.oldest_signal_seconds)}.`));
+        const latency = work.close_latency;
+        workPanel.append(el('p', latency.samples
+          ? `Observed signal to paper close: ${displayDuration(latency.average_seconds)} average · ${displayDuration(latency.p95_seconds)} at 95th percentile · last ${latency.samples} measured closes.`
+          : 'Observed signal-to-close timing: waiting for measured closes.'));
+        workPanel.append(el('p', 'Counts are positions, not submitted sell orders. Coin counts can overlap between groups. Signals are first observed times, not the exact market crossing time. Same-quote closes can take 0s; write-offs are excluded.'));
+      }
       const queue = state.exit_queue;
       const regular = (queue?.due || 0) - (queue?.retry_due || 0);
       const retry = queue?.retry_positions ? ` · ${queue.retry_positions} holdings awaiting a retry` : '';
       const failure = state.last_quote_failures?.exit;
       $('jarvis-exit-queue').textContent = (regular
-        ? `${regular} regular exit quotes due · Oldest waiting ${displayDuration(queue.oldest_wait)}${queue.backed_up ? ' · Entries slowed while exits catch up' : ''}`
-        : 'No regular exit quotes due') + retry + (failure ? ` · Last exit quote failure: ${failure.reason}` : '');
+        ? `${regular} quote checks due · Oldest waiting ${displayDuration(queue.oldest_wait)}${queue.backed_up ? ' · Entries slowed while exits catch up' : ''}`
+        : 'No quote checks due') + retry + (failure ? ` · Last exit quote failure: ${failure.reason}` : '');
       const pause = state.entry_catchup_pause;
       if (pause?.active) $('jarvis-exit-queue').textContent += ' · PAPER BUYS TEMPORARILY PAUSED: exits continue; buys resume automatically after at most 2 regular checks are due, oldest ≤5s, and no urgent checks, sustained for 30s. Failed routes keep retrying separately.';
       else if (pause?.resumed_at && !state.backlog_guard?.timer_active && !state.backlog_guard?.until_all_closed && state.enabled) $('jarvis-exit-queue').textContent += ` · Paper catch-up pause completed: buys permitted again ${displayTime(pause.resumed_at)} ET.`;

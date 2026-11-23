@@ -380,6 +380,68 @@ class JarvisTests(unittest.TestCase):
                  market_anchor={'price': 1, 'amount': 50000000, 'quantity': 100, 'pair': PAIR})
         return p
 
+    def test_exit_work_states_count_positions_and_distinct_coins(self):
+        state = jarvis.initial()
+        holding = self.monitored_position(state)
+        delayed = self.monitored_position(state, bot='instant-trim')
+        delayed['due'] = self.now - 1
+        triggered = self.monitored_position(state, bot='lab-five-minute', mint='timer')
+        triggered['opened'] = self.now - 400
+        jarvis.schedule_market_exits(state, self.now)
+        self.assertEqual(triggered['exit_signal']['basis'], 'strategy_timer')
+        with jarvis.connection() as conn:
+            summary = jarvis.exit_work_summary(conn, state, self.now)
+        self.assertEqual([summary[k]['positions'] for k in ('holding', 'quote_delayed', 'exit_triggered')], [1, 1, 1])
+        self.assertEqual(summary['holding']['coins'], 1)
+        self.assertEqual(summary['quote_delayed']['coins'], 1)
+        self.assertEqual(summary['close_latency']['samples'], 0)
+        self.assertEqual(jarvis.position_exit_state(holding, self.now), 'holding')
+
+    def test_trigger_priority_preserves_cooldown_and_oldest_fairness(self):
+        state = jarvis.initial()
+        old = self.monitored_position(state, mint='old')
+        old['due'] = self.now - 1000
+        triggered = self.monitored_position(state, bot='lab-five-minute', mint='timer')
+        triggered.update(opened=self.now - 400, due=self.now + 10, mark_stale=True,
+                         quote_due_since=self.now - 20, route_failure={'category': 'temporary'})
+        jarvis.schedule_market_exits(state, self.now)
+        self.assertEqual(triggered['due'], self.now + 10)
+        self.assertEqual(jarvis.next_exit(jarvis.quote_jobs(state, self.now), 1), ('old', 100))
+        jobs = jarvis.quote_jobs(state, self.now + 10)
+        self.assertEqual(jarvis.next_exit(jobs, 1), ('timer', 100))
+        self.assertEqual(jarvis.next_exit(jobs, 3), ('old', 100))
+
+    def test_confirmed_trim_signal_survives_temporary_quote_failure(self):
+        state = jarvis.initial()
+        p = self.monitored_position(state, bot='instant-trim')
+        p.update(pending='trim', due=self.now)
+        def unavailable(*args):
+            raise jarvis.QuoteUnavailable('Temporary', 'temporary')
+        with jarvis.connection() as conn:
+            jarvis.step(conn, state, None, unavailable, self.now)
+        self.assertEqual(p['pending'], 'trim')
+        self.assertEqual(p['exit_signal']['basis'], 'confirmed_quote')
+        self.assertEqual(jarvis.position_exit_state(p, self.now), 'exit_triggered')
+        self.assertEqual(p['quantity'], 100)
+
+    def test_observed_exit_latency_and_recovered_signal(self):
+        state = jarvis.initial()
+        p = self.monitored_position(state, bot='lab-five-minute')
+        p['opened'] = self.now - 400
+        jarvis.schedule_market_exits(state, self.now)
+        completed = []
+        jarvis.apply_exit(completed, state['bots']['lab-five-minute'], 'lab-five-minute',
+                          p, p['quantity'], 50000000, self.now + 12)
+        self.assertEqual(completed[0]['signal_to_close_seconds'], 12)
+        p = self.monitored_position(state, mint='recover')
+        p['mark'] = 40000000
+        p.pop('market_anchor')
+        jarvis.schedule_market_exits(state, self.now)
+        self.assertIn('exit_signal', p)
+        p['mark'] = 49900000
+        jarvis.schedule_market_exits(state, self.now + 1)
+        self.assertNotIn('exit_signal', p)
+
     def test_batch_monitor_rotates_held_coins_without_profiles_or_trading_activity(self):
         state = jarvis.initial()
         for i in range(205):
