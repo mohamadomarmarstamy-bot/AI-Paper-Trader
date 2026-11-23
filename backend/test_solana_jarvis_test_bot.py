@@ -148,12 +148,12 @@ class JarvisTests(unittest.TestCase):
         self.assertEqual(jarvis.next_exit(jobs, 5), ('retry', 10))
 
         def unavailable(*args):
-            raise jarvis.QuoteUnavailable('Jupiter returned no route', 'no_route')
+            raise jarvis.QuoteUnavailable('Provider unavailable', 'unknown')
 
         state['exit_quote_attempts'] = 5
         with jarvis.connection() as conn:
             jarvis.step(conn, state, self.market, unavailable, self.now)
-            self.assertEqual(retry['due'], self.now + 15)
+            self.assertEqual(retry['due'], self.now + 360)
             self.assertEqual(retry['route_failures'], 4)
             self.assertEqual(retry['quote_due_since'], self.now - 3600)
             state['exit_quote_attempts'] = 11
@@ -162,28 +162,41 @@ class JarvisTests(unittest.TestCase):
         self.assertNotIn('quote_due_since', retry)
         self.assertFalse(retry['mark_stale'])
 
-    def test_no_route_retries_stay_at_fifteen_seconds_and_old_backoffs_shorten(self):
+    def test_no_route_writeoff_persists_once_and_history_filters(self):
+        jarvis.set_enabled(True)
+        self.advance()
+        jarvis.set_enabled(False)
+        def unavailable(*args):
+            raise jarvis.QuoteUnavailable('No route', 'no_route')
+        self.now += 5
+        jarvis.tick(providers=self.market, get_quote=unavailable, clock=lambda: self.now)
+        report = jarvis.history(False, rugs_only=True)
+        self.assertEqual(len(report['coins']), 1)
+        for trade in report['coins'][0]['trades']:
+            self.assertEqual(trade['proceeds'], 0)
+            self.assertEqual(trade['pnl'], -trade['cost'])
+            self.assertEqual(trade['paper_writeoff']['loss_percent'], 100)
+        self.assertEqual(jarvis.status()['rug_pulls']['positions'], 6)
+        jarvis.tick(providers=self.market, get_quote=unavailable, clock=lambda: self.now)
+        self.assertEqual(jarvis.status()['rug_pulls']['positions'], 6)
+        self.assertFalse(any(b['positions'] for b in self.state()['bots'].values()))
+
+    def test_existing_no_route_writeoff_preserves_banked_partial_proceeds(self):
         state = jarvis.initial()
         p = self.monitored_position(state)
-        p.update(mark_stale=True, quote_due_since=self.now - 100, route_failures=6,
-                 due=self.now + 900, route_failure={'category': 'no_route'})
-        jarvis.schedule_market_exits(state, self.now)
-        self.assertEqual(p['due'], self.now + 15)
-        jarvis.schedule_market_exits(state, self.now + 10)
-        self.assertEqual(p['due'], self.now + 15)
-        cash = state['bots']['instant-step']['cash']
-        def unavailable(*args):
-            raise jarvis.QuoteUnavailable('Jupiter returned no route', 'no_route')
-        with jarvis.connection() as conn:
-            for offset in (15, 30, 45):
-                jarvis.step(conn, state, None, unavailable, self.now + offset)
-                self.assertEqual(p['due'], self.now + offset + 15)
-                self.assertEqual(p['quantity'], 100)
-                self.assertEqual(state['bots']['instant-step']['cash'], cash)
-        p['route_failure']['category'] = 'access'
-        p['due'] = self.now + 900
-        jarvis.schedule_market_exits(state, self.now)
-        self.assertEqual(p['due'], self.now + 900)
+        portfolio = state['bots']['instant-step']
+        completed = []
+        jarvis.sell(completed, portfolio, 'instant-step', p, 50, 30_100_000, self.now, 'Partial')
+        cash = portfolio['cash']
+        remaining = p['cost']
+        p['route_failure'] = {'category': 'no_route', 'reason': 'Old no route'}
+        jarvis.write_off_no_routes(completed, state, self.now)
+        self.assertEqual(portfolio['cash'], cash)
+        self.assertEqual(completed[0]['pnl'], 30_000_000 - p['entry_cost'])
+        self.assertEqual(completed[0]['paper_writeoff']['remaining_cost'], remaining)
+        self.assertEqual(completed[0]['route_failure']['reason'], 'Old no route')
+        jarvis.write_off_no_routes(completed, state, self.now)
+        self.assertEqual(len(completed), 1)
 
     def test_temporary_exit_failure_retries_quickly_without_changing_accounting(self):
         state = jarvis.initial()

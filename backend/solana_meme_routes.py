@@ -46,13 +46,13 @@ def build_router(*,require_session):
         return JSONResponse(jarvis.status(), headers={'Cache-Control': 'no-store'})
 
     @router.get('/jarvis-test-bot/history')
-    def jarvis_history(request: Request, jarvis_only: bool = False, before: int | None = None, bot: str | None = None):
+    def jarvis_history(request: Request, jarvis_only: bool = False, before: int | None = None, bot: str | None = None, rugs_only: bool = False):
         require_session(request)
         if before is not None and not 0 < before < 2**63:
             raise HTTPException(422, 'Invalid history cursor.')
         if bot is not None and bot not in jarvis.BOTS:
             raise HTTPException(422, 'Unknown paper bot.')
-        return JSONResponse(jarvis.history(jarvis_only, before, bot), headers={'Cache-Control': 'no-store'})
+        return JSONResponse(jarvis.history(jarvis_only, before, bot, rugs_only), headers={'Cache-Control': 'no-store'})
 
     @router.post('/jarvis-test-bot/run')
     async def jarvis_run(request: Request):
