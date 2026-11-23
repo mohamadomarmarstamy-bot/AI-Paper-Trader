@@ -148,12 +148,12 @@ class JarvisTests(unittest.TestCase):
         self.assertEqual(jarvis.next_exit(jobs, 5), ('retry', 10))
 
         def unavailable(*args):
-            raise jarvis.QuoteUnavailable('Jupiter returned no route')
+            raise jarvis.QuoteUnavailable('Jupiter returned no route', 'no_route')
 
         state['exit_quote_attempts'] = 5
         with jarvis.connection() as conn:
             jarvis.step(conn, state, self.market, unavailable, self.now)
-            self.assertEqual(retry['due'], self.now + 360)
+            self.assertEqual(retry['due'], self.now + 15)
             self.assertEqual(retry['route_failures'], 4)
             self.assertEqual(retry['quote_due_since'], self.now - 3600)
             state['exit_quote_attempts'] = 11
@@ -161,6 +161,29 @@ class JarvisTests(unittest.TestCase):
         self.assertNotIn('route_failures', retry)
         self.assertNotIn('quote_due_since', retry)
         self.assertFalse(retry['mark_stale'])
+
+    def test_no_route_retries_stay_at_fifteen_seconds_and_old_backoffs_shorten(self):
+        state = jarvis.initial()
+        p = self.monitored_position(state)
+        p.update(mark_stale=True, quote_due_since=self.now - 100, route_failures=6,
+                 due=self.now + 900, route_failure={'category': 'no_route'})
+        jarvis.schedule_market_exits(state, self.now)
+        self.assertEqual(p['due'], self.now + 15)
+        jarvis.schedule_market_exits(state, self.now + 10)
+        self.assertEqual(p['due'], self.now + 15)
+        cash = state['bots']['instant-step']['cash']
+        def unavailable(*args):
+            raise jarvis.QuoteUnavailable('Jupiter returned no route', 'no_route')
+        with jarvis.connection() as conn:
+            for offset in (15, 30, 45):
+                jarvis.step(conn, state, None, unavailable, self.now + offset)
+                self.assertEqual(p['due'], self.now + offset + 15)
+                self.assertEqual(p['quantity'], 100)
+                self.assertEqual(state['bots']['instant-step']['cash'], cash)
+        p['route_failure']['category'] = 'access'
+        p['due'] = self.now + 900
+        jarvis.schedule_market_exits(state, self.now)
+        self.assertEqual(p['due'], self.now + 900)
 
     def test_temporary_exit_failure_retries_quickly_without_changing_accounting(self):
         state = jarvis.initial()
