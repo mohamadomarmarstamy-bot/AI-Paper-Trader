@@ -45,7 +45,7 @@ class StrategyTests(unittest.TestCase):
             migrated, _ = jarvis.read(conn)
         self.assertEqual(migrated['reviewed'], 1500)
         self.assertEqual(migrated['bots']['instant-step'], state['bots']['instant-step'])
-        self.assertEqual(len(lab.BOTS), 9)
+        self.assertEqual(len(lab.BOTS), 14)
         self.assertTrue(all(bot in jarvis.FIXED for bot in lab.BOTS))
         self.assertTrue(all(not migrated['bots'][bot]['positions'] for bot in lab.BOTS))
 

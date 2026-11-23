@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory() as temp:
       await page.clock.install();
       await page.goto(`http://127.0.0.1:${server.address().port}/jarvis-test-bot#lab`);
       await page.locator('#jarvis-lab-rows details').last().waitFor();
-      assert.equal(await page.locator('#jarvis-lab-rows details').count(),9);
+      assert.equal(await page.locator('#jarvis-lab-rows details').count(),14);
       assert.equal(await page.locator('nav a[href="#lab"]').count(),1);
       assert.equal(await page.locator('nav a').count(),8);
       assert.equal(await page.locator('#jarvis-lab-rows details[open]').count(),0);
