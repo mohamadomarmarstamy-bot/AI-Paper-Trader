@@ -160,6 +160,29 @@ def apply_preset_pause():
     print('Jarvis focus: preset strategy entries paused; research and Jarvis remain enabled; existing exits monitored.',flush=True)
 
 
+def apply_pbh_closeout():
+    if not __import__('jarvis_focus').enabled():
+        return
+    now=time.time()
+    with connection() as conn,conn:
+        conn.execute('BEGIN IMMEDIATE')
+        state,_=read(conn)
+        if state.get('pbh_closeout_v1'):
+            return
+        retired={row['id'] for row in conn.execute("SELECT id FROM local_strategies WHERE status IN ('failed','inactive')")}
+        count=0
+        for bot,portfolio in state['bots'].items():
+            for p in portfolio['positions'].values():
+                ident=p.get('policy',{}).get('local_rule',{}).get('id')
+                if bot in FIXED or (bot in local_lab.SLOTS and ident in retired):
+                    p.update(owner_closeout=True,pending='pbh_closeout',due=now)
+                    p['exit_signal']={'at':now,'basis':'owner_closeout'}
+                    count+=1
+        state.update(pbh_closeout_v1={'requested':now,'positions':count},preset_entries_paused=True)
+        conn.execute('UPDATE run SET state=?,revision=revision+1 WHERE id=1',(json.dumps(state),))
+    print(f'PBH paper closeout queued: {count} positions; active research holdings excluded.',flush=True)
+
+
 class QuoteUnavailable(ValueError):
     def __init__(self, message, category='invalid_quote'):
         super().__init__(message)
@@ -170,7 +193,8 @@ def quote_error(response, data):
     # Only fixed diagnostic labels are persisted; never echo arbitrary provider
     # bodies, credentials, HTML or transaction data into logs/the dashboard.
     status = response.status_code
-    message = str(data.get('error', '')).lower().replace('_', ' ') if isinstance(data, dict) else ''
+    message = ' '.join(data.get(key,'') for key in ('error','errorMessage','message','errorCode','code')
+                       if isinstance(data.get(key),str)).lower().replace('_',' ') if isinstance(data,dict) else ''
     if status in (401, 403):
         return QuoteUnavailable('Jupiter API access denied; check key or plan.', 'access')
     if status >= 500 or status in (408, 425):
@@ -178,6 +202,10 @@ def quote_error(response, data):
     if status == 400 and any(text in message for text in (
             'failed to get quotes', 'could not find any route', 'no route', 'not tradable')):
         return QuoteUnavailable('Jupiter has no quote for this token and exact amount.', 'no_route')
+    if status==400 and 'route plan does not consume all' in message:
+        return QuoteUnavailable('Jupiter cannot quote the full input amount.', 'partial_route')
+    if status==400 and any(text in message for text in ('invalid amount','invalid input amount','invalid mint','invalid input mint','invalid output mint','invalid slippage','invalid digit','deserialize query','query parameter')):
+        return QuoteUnavailable('Jupiter rejected an input parameter; the holding remains tracked.', 'invalid_parameter')
     return QuoteUnavailable(f'Jupiter rejected the quote request (HTTP {status}).', 'request')
 
 
@@ -195,6 +223,9 @@ def quote_uint(value, *, allow_zero=False):
 
 def quote(input_mint, output_mint, amount):
     """Use a minimum Jupiter output without requesting a transaction or supplying a wallet."""
+    amount=quote_uint(amount)
+    if not all(isinstance(mint,str) and research.ADDRESS.fullmatch(mint) for mint in (input_mint,output_mint)):
+        raise QuoteUnavailable('Invalid quote mint; no request sent.','invalid_parameter')
     key = os.getenv('JUPITER_API_KEY')
     headers = {'x-api-key': key} if key else {}
     params = {'inputMint': input_mint, 'outputMint': output_mint, 'amount': str(amount), 'slippageBps': 100}
@@ -388,6 +419,10 @@ def write_off_no_routes(completed, state, now):
 
 
 def apply_exit(completed, portfolio, bot, p, quote_size, amount, now, evidence=None, market=None):
+    if p.get('owner_closeout'):
+        if quote_size==p['quantity']:
+            sell(completed,portfolio,bot,p,quote_size,amount,now,'PBH owner-requested paper closeout')
+        return
     if quote_size != p['quantity']:
         if p['trims'] >= FINAL_PROFIT_SELL - 1:
             return
@@ -639,7 +674,7 @@ def local_entry_status(conn, state, now):
     """Explain current research eligibility without placing or scheduling trades."""
     import ast
     matches = entry_jobs(conn,state,now)
-    urgent = any(p.get('due',math.inf)<=now and (p.get('exit_priority')==0 or p.get('exit_signal'))
+    urgent = any(not p.get('owner_closeout') and p.get('due',math.inf)<=now and (p.get('exit_priority')==0 or p.get('exit_signal'))
                  for portfolio in state['bots'].values() for p in portfolio['positions'].values())
     labels = {}
     for slot in local_lab.SLOTS:
@@ -769,6 +804,10 @@ def exit_priority(position, now, market=None, benchmark=None):
 
 
 def observe_exit_signal(p, state, now):
+    if p.get('owner_closeout'):
+        p['exit_priority']=1
+        p.setdefault('exit_signal',{'at':now,'basis':'owner_closeout'})
+        return 1
     market = fresh_market(p, state, now)
     priority = exit_priority(p, now, market, state.get('benchmark'))
     p['exit_priority'] = priority
@@ -803,7 +842,7 @@ def exit_work_summary(conn, state, now):
         "AND json_extract(data,'$.paper_writeoff') IS NULL ORDER BY id DESC LIMIT 200"))
     return {**{key: {'positions': len(ps), 'coins': len({p['mint'] for p in ps})} for key, ps in groups.items()},
             'trigger_bases': {basis: sum((p.get('exit_signal') or {}).get('basis') == basis for p in groups['exit_triggered'])
-                             for basis in ('confirmed_quote', 'strategy_timer', 'indicative_price_or_market')},
+                             for basis in ('confirmed_quote', 'strategy_timer', 'indicative_price_or_market','owner_closeout')},
             'oldest_signal_seconds': max(waits, default=0),
             'close_latency': {'samples': len(latencies), 'average_seconds': sum(latencies)/len(latencies) if latencies else None,
                               'p95_seconds': latencies[max(0, math.ceil(len(latencies)*.95)-1)] if latencies else None}}
@@ -825,10 +864,14 @@ def next_exit(jobs, attempts):
     # Give observed exits the next eligible quote, reserving every third
     # attempt for the existing oldest-check fairness path.
     triggered = {job: group for job, group in jobs.items()
-                 if any(p.get('exit_signal') or p.get('pending') for _, p in group)}
+                 if any(not p.get('owner_closeout') and (p.get('exit_signal') or p.get('pending')) for _, p in group)}
     if triggered and attempts % OLDEST_EXIT_INTERVAL:
         return min(triggered, key=lambda job: min((p.get('exit_signal') or {}).get('at', p['due'])
                                                  for _, p in triggered[job]))
+    active={job:group for job,group in jobs.items() if any(
+        (bot=='jarvis' or bot in local_lab.SLOTS) and not p.get('owner_closeout') for bot,p in group)}
+    if active and len(active)<len(jobs) and attempts%3==0:
+        return min(active,key=lambda job:min(quote_due_since(p) for _,p in active[job]))
     regular = {job: group for job, group in jobs.items() if not retry_group(group)}
     retries = {job: group for job, group in jobs.items() if job not in regular}
     if regular and retries:
@@ -921,7 +964,7 @@ def step(conn, state, providers, get_quote, now):
     # Provider deferrals do not spend an attempt in either queue.
     exit_attempts = state.get('exit_attempts_since_entry', 0)
     exit_budget = entry_quote_budget(exits, now)
-    urgent_exit = any(p.get('exit_priority') == 0 or p.get('exit_signal')
+    urgent_exit = any(not p.get('owner_closeout') and (p.get('exit_priority') == 0 or p.get('exit_signal'))
                       for group in exits.values() for _, p in group)
     buy = entries and not urgent_exit and (not exits or exit_attempts >= exit_budget)
     if buy:
@@ -966,7 +1009,7 @@ def step(conn, state, providers, get_quote, now):
                 failures = min(6, p.get('route_failures', int(p.get('mark_stale', False))) + 1)
                 category = getattr(error, 'category', None)
                 temporary = category == 'temporary'
-                delay = (NO_ROUTE_RETRY_SECONDS if category == 'no_route' else
+                delay = (EXIT_RETRY_LIMIT if category=='invalid_parameter' else NO_ROUTE_RETRY_SECONDS if category == 'no_route' else
                          min(30 if temporary else EXIT_RETRY_LIMIT,
                              (6 if temporary else 45) * 2 ** (failures - 1)))
                 p['route_failure'] = {'category': getattr(error, 'category', 'unknown'),
@@ -1213,8 +1256,12 @@ def status():
         exit_work = exit_work_summary(conn, state, now)
         rug_pulls = dict(conn.execute("SELECT count(*) AS positions, count(DISTINCT mint) AS coins, COALESCE(sum(pnl),0)/1000000.0 AS pnl FROM trades WHERE json_extract(data,'$.paper_writeoff.category')='no_route'").fetchone())
         timer_report = conn.execute("SELECT started,ends,(id LIKE 'partial/%') AS partial FROM backlog_pause_report WHERE ends=? AND cancelled IS NULL ORDER BY started DESC LIMIT 1", (backlog.pause_key(state),)).fetchone()
+        closeout={**(state.get('pbh_closeout_v1') or {}),
+                  'pending':sum(bool(p.get('owner_closeout')) for b in state['bots'].values() for p in b['positions'].values()),
+                  'quoted_closes':conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.reason')='PBH owner-requested paper closeout'").fetchone()[0],
+                  'writeoffs':conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.owner_closeout')=1 AND json_extract(data,'$.paper_writeoff') IS NOT NULL").fetchone()[0]}
     local = local_lab.context(__import__(__name__))
-    return {'preset_entries_paused':bool(state.get('preset_entries_paused')), 'notification_focus': __import__('jarvis_focus').enabled(), 'hourly_email': hourly, 'local_lab': local, 'autonomy': autonomous, 'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
+    return {'pbh_closeout':closeout,'preset_entries_paused':bool(state.get('preset_entries_paused')), 'notification_focus': __import__('jarvis_focus').enabled(), 'hourly_email': hourly, 'local_lab': local, 'autonomy': autonomous, 'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
             'research': {'recent_coins': coverage, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
                          'latest_proposal': dict(latest_mail) if latest_mail else None},
             'backlog_guard': {**backlog.summary(state, now),
@@ -1442,7 +1489,17 @@ def research_diagnostic():
             "SELECT json_extract(evidence,'$.chart.status') AS status,count(*) AS count FROM research WHERE checked>=? GROUP BY status",(now-900,))}
     # Fixed labels and aggregate counts only: no tokens, wallet/coin IDs,
     # provider bodies, generated source content or rule expressions.
+    pending_pbh=sum(bool(p.get('owner_closeout')) for b in state['bots'].values() for p in b['positions'].values())
+    failures={}
+    for b in state['bots'].values():
+        for p in b['positions'].values():
+            category=(p.get('route_failure') or {}).get('category')
+            if category:failures[category]=failures.get(category,0)+1
+    with connection() as conn:
+        sold=conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.reason')='PBH owner-requested paper closeout'").fetchone()[0]
+        written=conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.owner_closeout')=1 AND json_extract(data,'$.paper_writeoff') IS NOT NULL").fetchone()[0]
     return {'enabled':state['enabled'],'presets_paused':bool(state.get('preset_entries_paused')),
+            'pbh_closeout':{'requested':(state.get('pbh_closeout_v1') or {}).get('positions',0),'quoted_closes':sold,'writeoffs':written,'pending':pending_pbh},'quote_failure_categories':failures,
             'cycle_age':round(now-state['last_cycle']) if state['last_cycle'] else None,
             'oldest_quote_wait':round(queue['oldest_wait']),'chart_status':chart_status, 'slots':slots}
 
@@ -1451,13 +1508,14 @@ async def diagnostic_worker():
     await asyncio.sleep(15)
     startup_checks=0
     while True:
+        report={}
         try:
             report=await asyncio.to_thread(research_diagnostic)
             print('Jarvis research diagnostic '+json.dumps(report,separators=(',',':')),flush=True)
         except Exception:
             LOG.warning('Jarvis research diagnostic unavailable')
         startup_checks+=1
-        await asyncio.sleep(30 if startup_checks<3 else 300)
+        await asyncio.sleep(30 if startup_checks<3 or (startup_checks<10 and report.get('pbh_closeout',{}).get('pending')) else 300)
 
 
 async def research_worker():

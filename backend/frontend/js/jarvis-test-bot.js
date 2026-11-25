@@ -172,6 +172,7 @@
     const bots = state.bots.filter(bot => archived ? bot.id !== 'jarvis' && !bot.research_slot : bot.research_slot);
     $('jarvis-lab-title').textContent = archived ? 'PBH' : 'Strategy Lab';
     $('jarvis-lab-description').textContent = archived ? 'Poopy Butt Hole · Older presets and retired AI strategies. History preserved.' : 'AI strategy tests and validated candidates. Winners stay here until Jarvis can adopt them.';
+    if (archived && state.pbh_closeout?.requested) $('jarvis-lab-description').textContent += ` Closeout: ${state.pbh_closeout.quoted_closes} closed at quotes · ${state.pbh_closeout.pending} pending · ${state.pbh_closeout.writeoffs} paper write-offs (not sales).`;
     $('jarvis-archive-panel').hidden = !archived;
     const open = new Set([...$('jarvis-lab-rows').querySelectorAll('details[open]')].map(row => row.dataset.bot));
     const sum = key => bots.reduce((total, bot) => total + bot[key], 0);
@@ -384,7 +385,7 @@
       if (failure) diagnostics.push(el('p', `Last exit quote error${failure.at ? ' · ' + displayTime(failure.at) + ' ET' : ''}: ${failure.reason}`, 'health-notes'));
       if (work) {
         const bases = work.trigger_bases;
-        diagnostics.push(el('p', `Exit signals: ${bases.confirmed_quote} quote-confirmed · ${bases.strategy_timer} timer · ${bases.indicative_price_or_market} indicative · oldest ${displayDuration(work.oldest_signal_seconds)}`, 'health-notes'));
+        diagnostics.push(el('p', `Exit signals: ${bases.confirmed_quote} quote-confirmed · ${bases.strategy_timer} timer · ${bases.indicative_price_or_market} indicative · ${bases.owner_closeout || 0} owner closeouts · oldest ${displayDuration(work.oldest_signal_seconds)}`, 'health-notes'));
         const latency = work.close_latency;
         diagnostics.push(el('p', latency.samples ? `Observed signal → close: ${displayDuration(latency.average_seconds)} average · ${displayDuration(latency.p95_seconds)} p95 · ${latency.samples} measured closes` : 'Signal → close: no measured closes yet', 'health-notes'));
       }
