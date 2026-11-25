@@ -23,6 +23,12 @@ policy=importlib.util.module_from_spec(spec);spec.loader.exec_module(policy)
 BASE='https://ai-paper-trader-production-7465.up.railway.app'
 IMAGE='jarvis-paper-tests:isolated'
 DEBUG=False
+
+
+class TestFailure(RuntimeError):
+    """A completed isolated check failed; infrastructure errors are separate."""
+
+
 TEST_DRIVER='''import importlib,io,json,sys,unittest
 stream=io.StringIO()
 suite=unittest.defaultTestLoader.loadTestsFromName('test_jarvis_generated_regression')
@@ -91,14 +97,15 @@ def prove(patch,baseline_source=None,evidence=None):
         # tempfile's 0700 parent prevents the unprivileged sandbox from reading
         # it on some Docker hosts; bind-mount contents need read/search access.
         for folder in (root,baseline,candidate):folder.chmod(0o755)
-        if regression(baseline)<1:raise RuntimeError('No demonstrated baseline failure')
+        if regression(baseline)<1:raise TestFailure('No demonstrated baseline failure')
         evidence['baseline_failed']=True
-        if regression(candidate)!=0:raise RuntimeError('Repair did not fix regression')
+        if regression(candidate)!=0:raise TestFailure('Repair did not fix regression')
         evidence['regression_passed']=True
         full=command([*container_args(candidate),'python','-m','unittest','discover','-s','.','-p','test_solana*.py','-q'],timeout=240)
+        if full.returncode in (125,126,127):raise RuntimeError('Suite sandbox unavailable')
         if full.returncode:
             if DEBUG:print(full.stderr[-10000:],flush=True)
-            raise RuntimeError('Existing paper tests failed')
+            raise TestFailure('Existing paper tests failed')
         evidence['suite_passed']=True
         print('Baseline regression failed; candidate regression and existing Solana suite passed.',flush=True)
     return changed
@@ -130,18 +137,27 @@ def api(path,payload=None):
 
 
 def canary(sha,baseline,limit=480,kind=None):
-    deadline=time.monotonic()+limit;healthy=0
+    deadline=time.monotonic()+limit;healthy=0;last_observed=None;first_healthy=None
     while time.monotonic()<deadline:
         try:
             value=api('health')
-            healthy=(value['cycle_age'] is not None and value['cycle_age']<=45 and value['oldest_quote_wait']<=120)
+            healthy_sample=(value['cycle_age'] is not None and value['cycle_age']<=45 and value['oldest_quote_wait']<=120)
             # An intentional owner pause is compatible with verified code rollback,
             # but can never count as recovery of the incident that motivated a fix.
-            ok=value['source_sha']==sha and ((not value['paper_enabled'] or healthy) if kind is None
+            ok=value['source_sha']==sha and ((not value['paper_enabled'] or healthy_sample) if kind is None
                 else policy.goal_met(kind,baseline,value))
-            healthy=healthy+1 if ok else 0
-            if healthy>=5:return True
-        except Exception:healthy=0
+            observed=value.get('observed_at')
+            fresh=(type(observed) in (int,float) and time.time()-45<=observed<=time.time()+5
+                and (last_observed is None or observed>last_observed))
+            if ok and fresh:
+                healthy+=1
+                if first_healthy is None:first_healthy=observed
+                last_observed=observed
+                if healthy>=5 and observed-first_healthy>=120:return True
+            else:
+                healthy=0;first_healthy=None
+        except Exception:
+            healthy=0;first_healthy=None
         time.sleep(30)
     return False
 
@@ -205,7 +221,7 @@ def run():
             checks['canary_passed']=True;report('deployed',new_sha)
             print('Paper repair deployed and passed independent live checks.',flush=True);return
         raise RuntimeError('Live checks did not verify recovery')
-    except Exception:
+    except Exception as exc:
         if pushed:
             try:
                 if git('ls-remote','origin','refs/heads/main').split()[0]!=new_sha:
@@ -222,7 +238,7 @@ def run():
                 except Exception:pass
                 raise RuntimeError('Rollback needs owner attention') from None
         else:
-            report('tests_failed' if not checks['suite_passed'] else 'runner_error')
+            report('tests_failed' if isinstance(exc,TestFailure) else 'runner_error')
             print('Paper repair not deployed; proposal retained for review.',flush=True)
 
 

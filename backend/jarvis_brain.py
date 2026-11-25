@@ -29,6 +29,7 @@ DAILY_CENTS=200
 RESERVATION_CENTS=50
 CONFIRM_SECONDS=120
 HEALTHY_SECONDS=120
+MAX_INVESTIGATIONS=3
 SCHEMA='''
 CREATE TABLE IF NOT EXISTS brain_incidents(
  id TEXT PRIMARY KEY,kind TEXT NOT NULL,opened REAL NOT NULL,last_seen REAL NOT NULL,
@@ -52,8 +53,8 @@ CREATE TABLE IF NOT EXISTS brain_mail(
 SCHEMA += insight.SCHEMA
 # Source excerpts only; no environment values, database contents or arbitrary files.
 CODE_SCOPE={
- 'jarvis_test_bot.py':{'exit_queue','entry_quote_budget','next_exit','claim_research'},
- 'jarvis_research.py':{'chart_fresh_for','rate_limit_delay','record_chart_result','pool_warming'},
+ 'jarvis_test_bot.py':{'exit_queue','entry_quote_budget','next_exit','claim_research','quote_due_since','retry_group','stop_distance'},
+ 'jarvis_research.py':{'chart_fresh_for','rate_limit_delay','record_chart_result','pool_warming','chart_is_fresh'},
 }
 TITLES={'exit_backlog':'Exit checks delayed','worker_stalled':'Paper worker heartbeat delayed',
         'chart_data_gap':'Strategy chart data unavailable','engine_error':'Persistent paper engine error'}
@@ -211,7 +212,7 @@ def build_job(api,now):
         if not state['enabled']:return None
         lease=conn.execute("SELECT due FROM research_tasks WHERE name='brain-cloud'").fetchone()
         if lease and lease['due']>now:return None
-        incident=conn.execute("SELECT * FROM brain_incidents WHERE resolved IS NULL AND attempts<2 AND next_attempt<=? ORDER BY CASE kind WHEN 'exit_backlog' THEN 0 WHEN 'worker_stalled' THEN 1 ELSE 2 END,opened LIMIT 1",(now,)).fetchone()
+        incident=conn.execute("SELECT * FROM brain_incidents WHERE resolved IS NULL AND attempts<? AND next_attempt<=? ORDER BY CASE kind WHEN 'exit_backlog' THEN 0 WHEN 'worker_stalled' THEN 1 ELSE 2 END,opened LIMIT 1",(MAX_INVESTIGATIONS,now)).fetchone()
         report=audit.latest(conn) or {}
         if incident:
             conn.execute('UPDATE brain_incidents SET attempts=attempts+1,next_attempt=? WHERE id=?',(now+3600,incident['id']))
@@ -244,8 +245,14 @@ def build_job(api,now):
         repairs=[{'status':r['status'],'function':json.loads(r['data']).get('function'),'report':json.loads(r['report'])}
                  for r in conn.execute("SELECT status,data,report FROM brain_proposals WHERE kind='code' ORDER BY created DESC LIMIT 5")]
         scouts=insight.scouting(conn,now)
+        import jarvis_repair_learning as repair_learning
         return {'id':ident,'kind':kind,'snapshot':snapshot,'retrospective_examples':examples,'repair_history':repairs,'queued_scouting':scouts,'scouting_summary':{'queued':len(scouts),'candidate_observations':sum(s['distinct_coin_pools'] for s in scouts),'data_ready':sum(s['data_ready'] for s in scouts)},'audit':{'strategies':report.get('strategies',[])[-15:],
                 'limitations':report.get('limitations',[])},'rules':rules,'memory':memory,'learning_checkpoint':__import__('jarvis_learning').status(conn,state,now),
+                'repair_learning':repair_learning.lessons(conn,kind) if kind!='strategy' else [],
+                'observed_repair_inputs':repair_learning.chart_cases(api,conn,state,now) if kind!='strategy' else {},
+                'helper_constants':{file:{name:getattr(__import__(file.removesuffix('.py')),name) for name in names} for file,names in {
+                    'jarvis_research.py':('FRESH_SECONDS','MIN_POOL_AGE_MINUTES'),
+                    'jarvis_test_bot.py':('BACKLOG_EXIT_QUOTES_PER_ENTRY','EXIT_QUOTES_PER_ENTRY','NEAR_STOP_POINTS','OLDEST_EXIT_INTERVAL','EXIT_RETRY_INTERVAL')}.items()} if kind!='strategy' else {},
                 'code':code_context() if kind!='strategy' else {}}
 
 
@@ -255,7 +262,7 @@ Research official provider documentation and primary research with web search. D
 You have no authority to execute code, access secrets, change accounting, trading limits, validation thresholds, budgets, authentication, real-money permissions or deployment. Never request these actions. Do not repeat failed strategies by renaming them. Do not optimize for the same historical data then claim prospective success. Missing data/exit delays must be diagnosed separately from strategy performance.
 Return ONLY JSON with keys summary (max 1000 chars), hypothesis (max 2000), action (monitor|pause_entries|cooldown_chart), checks (list of up to 8 short measurable checks), strategy (null or {name,hypothesis,entry,exit}), patch (null or {file,function,replacement,regression_test}).
 Scouting measures prospective data availability and signal overlap only, NEVER profit or execution. Unknown indicators are unknown, not evidence of novelty. Prefer genuinely different hypotheses that can use available data; do not generate another RSI/volume clone when fresh RSI or volume is unavailable. For strategy jobs propose one distinct hypothesis grounded in winners AND losers and data availability. Fields: liquidity (USD), age (minutes), volume_m5_usd, buys_m5, sells_m5, volume_ratio, rsi. Expressions allow comparisons, numeric arithmetic and AND/OR using Python lowercase and/or, max 500 chars; no functions, attributes, imports or assignment. Compare like units; never divide volume dollars by volume_ratio. Exit may also use gain,peak (percent),held_seconds. Fixed -10% safety stop and 3600-second maximum hold always apply. Profit target must exceed trailing arm threshold. Candidates need at least 100 distinct prospective coins, positive net after recorded fees and write-offs, and robustness without best winners across both halves before promotion. Never change those criteria. A strategy is a forward PAPER test proposal, not a profitable discovery.
-For operations, choose pause_entries only for observed queue/heartbeat delays, cooldown_chart only for observed primary rate limiting. Propose unfamiliar fixes as a single replacement function ONLY from the supplied code scope; Code proposals begin with syntax checks. Automatic paper repairs additionally require a plain unittest regression_test that fails on the current code and passes after repair, plus the entire existing suite in an isolated runner. Automatic scope is ONLY jarvis_test_bot.py entry_quote_budget/next_exit and jarvis_research.py chart_fresh_for/pool_warming. Tests may import unittest and the target module, define plain unittest.TestCase test_ methods, and call that helper with literal input data and self.assertEqual/assertTrue-style assertions. No setup, mocking, source inspection, environment access or skipped tests. Helper replacements must be pure: no imports, I/O, mutation of inputs, dynamic calls, recursion, new globals or changed signatures. Other code proposals require review. Never claim these gates passed before the runner verifies them. Set patch null if evidence is insufficient. Give a specific next measurement rather than inventing certainty.'''
+For operations, choose pause_entries only for observed queue/heartbeat delays, cooldown_chart only for observed primary rate limiting. Propose unfamiliar fixes as a single replacement function ONLY from the supplied code scope; Code proposals begin with syntax checks. Automatic paper repairs additionally require a plain unittest regression_test that fails on the current code and passes after repair, plus the entire existing suite in an isolated runner. Automatic scope is ONLY jarvis_test_bot.py entry_quote_budget/next_exit and jarvis_research.py chart_fresh_for/pool_warming. Tests may import unittest and the target module, define plain unittest.TestCase test_ methods, and call that helper with literal input data and self.assertEqual/assertTrue-style assertions. No setup, mocking, source inspection, environment access or skipped tests. Helper replacements must be pure: no imports, I/O, mutation of inputs, dynamic calls, recursion, new globals or changed signatures. Other code proposals require review. Never claim these gates passed before the runner verifies them. Use repair_learning to learn from verified test stages and before/after metrics. Do not repeat a failed replacement by changing whitespace or test names. A baseline_not_reproduced result requires a better observed reproducer; existing_suite_failed requires a fix that preserves other behavior. Runner outages are not evidence of a code defect. Use observed_repair_inputs and unchanged helper_constants to build a literal reproducer. Missing history, zero-volume baselines, exhausted allowance and upstream outages cannot be fixed by declaring missing/stale indicators valid. Set patch null if evidence is insufficient. Give a specific next measurement rather than inventing certainty.'''
 
 
 def research_job(api,job,now,post=solana_http.post):
@@ -348,9 +355,13 @@ def apply_plan(api,job,plan,error,now):
         plan['applied_action']=action
         conn.execute('UPDATE brain_incidents SET plan=?,last_error=NULL WHERE id=?',(json.dumps(plan),job['id']))
         if plan.get('patch'):
-            ident=hashlib.sha256(json.dumps(plan['patch'],sort_keys=True).encode()).hexdigest()[:24]
-            conn.execute('INSERT OR IGNORE INTO brain_proposals(id,created,kind,status,data) VALUES (?,?,?,?,?)',
-                (ident,now,'code','needs_functional_tests',json.dumps({**plan['patch'],'incident_id':job['id']})))
+            ident=hashlib.sha256(json.dumps({'patch':plan['patch'],'incident':job['id']},sort_keys=True).encode()).hexdigest()[:24]
+            import jarvis_repair_learning as repair_learning
+            proposal_status='repeat_blocked' if repair_learning.blocked(conn,plan['patch'],now) else 'needs_functional_tests'
+            conn.execute("""INSERT INTO brain_proposals(id,created,kind,status,data) VALUES (?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET status=excluded.status,data=excluded.data
+                WHERE brain_proposals.status IN ('runner_error','repeat_blocked') AND excluded.status='needs_functional_tests'""",
+                (ident,now,'code',proposal_status,json.dumps({**plan['patch'],'incident_id':job['id']})))
         if state.get('brain_pause')!=original_pause:
             conn.execute('UPDATE run SET state=?,revision=? WHERE id=1',(json.dumps(state),revision+1))
 
@@ -418,7 +429,7 @@ def status(conn,now=None):
         'monthly_budget_usd':MONTHLY_CENTS/100,'reserved_this_month_usd':spent/100,
         'reservation_per_call_usd':RESERVATION_CENTS/100,'daily_budget_usd':DAILY_CENTS/100,
         'budget_basis':'Conservative reservations, not measured billing; failed calls remain reserved.',
-        'strategy_review_hours':24,'learning_interval_coins':100,'strategy_review_trigger':'daily_or_100_closed_coin_checkpoint','automatic_code_deploy':__import__('jarvis_repair').enabled(),
+        'max_investigations_per_incident':MAX_INVESTIGATIONS,'strategy_review_hours':24,'learning_interval_coins':100,'strategy_review_trigger':'daily_or_100_closed_coin_checkpoint','automatic_code_deploy':__import__('jarvis_repair').enabled(),
         'paper_repair':__import__('jarvis_repair').status(conn,now),
         'queued_scouting':scouts,'scouting_summary':{'queued':len(scouts),'candidate_observations':sum(s['distinct_coin_pools'] for s in scouts),'data_ready':sum(s['data_ready'] for s in scouts)},
         'incidents':[dict(r)|{'plan':json.loads(r['plan']),'evidence':insight.incident(conn,r['id'])} for r in conn.execute('SELECT * FROM brain_incidents ORDER BY opened DESC LIMIT 10')],
