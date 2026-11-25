@@ -12,6 +12,7 @@ import os
 import time
 from functools import lru_cache
 
+
 SLOTS = {f'research-{n:02}': (f'Research {n}', 'instant', 'research') for n in range(1, 11)}
 MIN_COINS = 100
 CAPITAL = 2000_000000
@@ -227,6 +228,12 @@ def authorized(header):
     return len(secret) >= 32 and hmac.compare_digest((header or '').encode(), ('Bearer ' + secret).encode())
 
 
+def record_event(conn, at, ident, kind, detail):
+    # Server-only import: the laptop also uses this module as a standalone validator.
+    import jarvis_hourly_mail
+    jarvis_hourly_mail.event(conn,at,ident,kind,detail)
+
+
 def submit(api, payload, now=None):
     now = time.time() if now is None else now
     if not isinstance(payload, dict) or set(payload) != {'rule','sources'}:
@@ -251,6 +258,7 @@ def submit(api, payload, now=None):
         if not state['enabled']:
             raise ValueError('Paper engine is paused')
         if conn.execute('SELECT 1 FROM local_strategies WHERE id=?',(ident,)).fetchone():
+            record_event(conn,now,ident,'duplicate',{'name':rule['name']})
             return {'id':ident,'status':'duplicate'}
         occupied = {r['slot'] for r in conn.execute("SELECT slot FROM local_strategies WHERE status IN ('testing','proven')")}
         slot = next((slot for slot in SLOTS if slot not in occupied and not state['bots'][slot]['positions']), None)
@@ -263,6 +271,7 @@ def submit(api, payload, now=None):
             return {'status':'capital_exhausted','slot':slot}
         conn.execute('INSERT INTO local_strategies(id,slot,created,rule,sources,status) VALUES (?,?,?,?,?,?)',
                      (ident,slot,now,json.dumps(rule),json.dumps(sources),'testing'))
+        record_event(conn,now,ident,'added',{'name':rule['name'],'slot':slot})
         state.setdefault('local_rules',{})[slot] = {'id':ident,'created':now,**rule}
         conn.execute('UPDATE run SET state=?,revision=revision+1 WHERE id=1',(json.dumps(state),))
         conn.execute("INSERT OR REPLACE INTO local_worker_state VALUES ('last_submit',?)",(str(now),))
@@ -321,12 +330,16 @@ def review(conn, state, now):
             # Inactive is explicitly not a profitability failure.
             status = 'inactive'
             del state['local_rules'][slot]
+        previous=conn.execute('SELECT status FROM local_strategies WHERE id=?',(rule['id'],)).fetchone()
+        if previous and previous['status'] != status:
+            record_event(conn,now,rule['id'],status,{'name':rule['name']})
         conn.execute('UPDATE local_strategies SET report=?,status=? WHERE id=?',
                      (json.dumps(report),status,rule['id']))
         if status == 'proven' and rule['id'] not in state.setdefault('local_proven',[]):
             state['local_proven'].append(rule['id'])
         if (status == 'proven' and (not state.get('strategy') or state.get('entry_guard'))
                 and (state.get('strategy') or {}).get('version') != 'local-'+rule['id']):
+            record_event(conn,now,rule['id'],'promoted',{'name':rule['name']})
             state['strategy'] = {'source':slot, 'entry':'instant', 'exit':'research',
                 'version':'local-'+rule['id'], 'activated_at':now, 'min_liquidity':0, 'min_age':0,
                 'entry_filter':'baseline', 'local_rule':dict(rule),

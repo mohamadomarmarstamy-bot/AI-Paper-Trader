@@ -16,11 +16,12 @@ def build_router(*,require_session):
     import solana_paper_trials as trials
     import jarvis_test_bot as jarvis
     import jarvis_backlog as backlog
+    import jarvis_hourly_mail as hourly_mail
 
     @asynccontextmanager
     async def jarvis_lifespan(_app):
         tasks = [asyncio.create_task(worker()) for worker in
-                 (jarvis.worker, jarvis.research_worker, jarvis.experiment_worker, backlog.worker)]
+                 (jarvis.worker, jarvis.research_worker, jarvis.experiment_worker, backlog.worker, hourly_mail.worker)]
         try:
             yield
         finally:
