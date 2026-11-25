@@ -1599,7 +1599,7 @@ def research_diagnostic():
     with connection() as conn:
         sold=conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.reason')='PBH owner-requested paper closeout'").fetchone()[0]
         written=conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.owner_closeout')=1 AND json_extract(data,'$.paper_writeoff') IS NOT NULL").fetchone()[0]
-    return {'brain':{k:brain_status[k] for k in ('enabled','cloud_configured','model','monthly_budget_usd','reserved_this_month_usd','last_call','proposal_counts','paper_repair')},'codex_feed':codex_status,'enabled':state['enabled'],'presets_paused':bool(state.get('preset_entries_paused')),
+    return {'brain':{k:brain_status[k] for k in ('enabled','cloud_configured','model','monthly_budget_usd','reserved_this_month_usd','last_call','proposal_counts','paper_repair','scouting_summary')},'codex_feed':codex_status,'enabled':state['enabled'],'presets_paused':bool(state.get('preset_entries_paused')),
             'pbh_closeout':{'requested':(state.get('pbh_closeout_v1') or {}).get('positions',0),'quoted_closes':sold,'writeoffs':written,'pending':pending_pbh},'quote_failure_categories':failures,
             'cycle_age':round(now-state['last_cycle']) if state['last_cycle'] else None,
             'oldest_quote_wait':round(queue['oldest_wait']),'chart_status':chart_status, 'chart_coverage':coverage_details, 'slots':slots}

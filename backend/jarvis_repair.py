@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import os
 from pathlib import Path
 import secrets
@@ -74,13 +75,26 @@ def health(api,now):
         positions=[p for b in state['bots'].values() for p in b['positions'].values()]
         regular=[p for p in positions if not (p.get('mark_stale') and 'quote_due_since' in p)]
         oldest=max([0,*[now-p['due'] for p in regular if p['due']<=now]])
-        return {'enabled':enabled(),'paper_enabled':state['enabled'],
+        starts=[r['created'] for r in state.get('local_rules',{}).values()]
+        rows=[r for r in state['watch'].values() if starts and not r.get('monitor_only') and 0<=now-r['last']<=90
+              and 0<=now-r['first']<=900 and r['first']>=min(starts) and now>=r.get('retry',0)]
+        complete=0
+        for candidate in rows:
+            found=conn.execute('SELECT evidence FROM research WHERE mint=? AND pair=?',(candidate['mint'],candidate['pair'])).fetchone()
+            record=(json.loads(found['evidence']).get('chart') or {}) if found else {}
+            value=record.get('value') or {}
+            observed,closed=record.get('at'),value.get('closed_at')
+            fresh=all(type(v) in (int,float) and math.isfinite(v) and 0<=now-v<=180 for v in (observed,closed))
+            if fresh and all(type(value.get(f)) in (int,float) and math.isfinite(value[f]) for f in ('rsi','volume_ratio')):complete+=1
+        return {'enabled':enabled(),'paper_enabled':state['enabled'],'engine_error_present':bool(state.get('error')),
+            'eligible_candidates':len(rows),'complete_candidates':complete,
             'source_sha':os.getenv('RAILWAY_GIT_COMMIT_SHA',''),
             'cycle_age':max(0,now-state['last_cycle']) if state.get('last_cycle') else None,
             'oldest_quote_wait':oldest,'observed_at':now}
 
 
 def claim(api,claims,now):
+    baseline=health(api,now)
     with api.connection() as conn,conn:
         conn.execute('BEGIN IMMEDIATE')
         conn.execute('INSERT OR REPLACE INTO repair_runner VALUES (1,?,?)',(now,claims['run_id']))
@@ -95,9 +109,10 @@ def claim(api,claims,now):
         if day_count>=2:return {'status':'daily_limit'}
         for row in conn.execute("SELECT * FROM brain_proposals WHERE kind='code' AND status='needs_functional_tests' ORDER BY created LIMIT 10").fetchall():
             patch=json.loads(row['data'])
-            incident=conn.execute('SELECT resolved FROM brain_incidents WHERE id=?',(patch.get('incident_id',''),)).fetchone()
+            incident=conn.execute('SELECT resolved,kind FROM brain_incidents WHERE id=?',(patch.get('incident_id',''),)).fetchone()
             if incident is None or incident['resolved'] is not None:
                 conn.execute("UPDATE brain_proposals SET status='obsolete' WHERE id=?",(row['id'],));continue
+            if not policy.symptom_present(incident['kind'],baseline):continue
             try:
                 if patch.get('file') not in policy.TARGETS:raise ValueError('Outside automatic scope')
                 source=(Path(__file__).parent/patch['file']).read_text()
@@ -106,10 +121,10 @@ def claim(api,claims,now):
             except (ValueError,TypeError,SyntaxError):
                 conn.execute("UPDATE brain_proposals SET status='needs_review' WHERE id=?",(row['id'],));continue
             ident=secrets.token_hex(16);token=secrets.token_urlsafe(32)
-            conn.execute('INSERT INTO repair_runs(id,proposal,run_id,token_hash,started,expires,status) VALUES (?,?,?,?,?,?,?)',
-                (ident,row['id'],claims['run_id'],hashlib.sha256(token.encode()).hexdigest(),now,now+1200,'testing'))
+            conn.execute('INSERT INTO repair_runs(id,proposal,run_id,token_hash,started,expires,status,report) VALUES (?,?,?,?,?,?,?,?)',
+                (ident,row['id'],claims['run_id'],hashlib.sha256(token.encode()).hexdigest(),now,now+1200,'testing',json.dumps({'baseline':baseline,'incident_kind':incident['kind']})))
             conn.execute("UPDATE brain_proposals SET status='isolated_testing' WHERE id=?",(row['id'],))
-            return {'status':'claimed','id':ident,'token':token,'proposal':row['id'],'patch':patch,'expires':now+1200}
+            return {'status':'claimed','id':ident,'token':token,'proposal':row['id'],'patch':patch,'expires':now+1200,'baseline':baseline,'incident_kind':incident['kind']}
         return {'status':'empty'}
 
 
@@ -130,10 +145,11 @@ def report(api,claims,payload,now):
     if not isinstance(commit,str) or (commit and (len(commit)!=40 or any(c not in '0123456789abcdef' for c in commit))):raise ValueError('Invalid commit')
     checks=payload['checks']
     if not isinstance(checks,dict) or set(checks)!={'baseline_failed','regression_passed','suite_passed','canary_passed'} or any(type(v) is not bool for v in checks.values()):raise ValueError('Invalid checks')
-    if outcome=='deployed':
+    if outcome in ('deployed','rolled_back'):
         actual=health(api,now)
-        if actual['source_sha']!=commit or actual['cycle_age'] is None or actual['cycle_age']>45 or actual['oldest_quote_wait']>120:
-            raise ValueError('Deployed source/health not verified')
+        if actual['source_sha']!=commit:raise ValueError('Deployed source not verified')
+        if outcome=='deployed' and (actual['cycle_age'] is None or actual['cycle_age']>45 or actual['oldest_quote_wait']>120):
+            raise ValueError('Deployed health not verified')
     with api.connection() as conn,conn:
         conn.execute('BEGIN IMMEDIATE')
         row=conn.execute('SELECT * FROM repair_runs WHERE id=?',(payload['id'],)).fetchone()
@@ -142,7 +158,11 @@ def report(api,claims,payload,now):
             raise ValueError('Invalid repair lease')
         if outcome in ('deploying','deployed') and (not commit or not all(checks[k] for k in ('baseline_failed','regression_passed','suite_passed'))):raise ValueError('Missing test evidence')
         if outcome=='deployed' and (row['status']!='deploying' or not checks['canary_passed']):raise ValueError('Missing deployment verification')
-        result={'outcome':outcome,'commit':commit,'checks':checks,'at':now,'run_id':claims['run_id']}
+        prior=json.loads(row['report'])
+        if outcome=='deployed' and not policy.goal_met(prior.get('incident_kind'),prior.get('baseline',{}),actual):
+            raise ValueError('Original incident metric has not improved')
+        result={**prior,'outcome':outcome,'commit':commit,'checks':checks,'at':now,'run_id':claims['run_id']}
+        if outcome=='deployed':result['after']=actual
         conn.execute('UPDATE repair_runs SET status=?,report=?,expires=? WHERE id=?',
             (outcome,json.dumps(result),max(row['expires'],now+900) if outcome=='deploying' else row['expires'],row['id']))
         conn.execute('UPDATE brain_proposals SET status=?,report=? WHERE id=?',(outcome,json.dumps(result),row['proposal']))

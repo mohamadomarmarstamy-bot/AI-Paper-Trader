@@ -36,4 +36,15 @@ Disable JARVIS_BRAIN_ENABLED to stop new investigations; brain-only entry holds 
 
 ## Validation
 
-875 Solana tests passed, including persistence/budgets, transient confirmation, multiple healthy checks, owner pause preservation, idempotent incident mail retries, bounded cloud investigation, source attribution, rejection of unsupported actions/paths, non-execution of generated code, prospective strategy admission and owner-session protection. UI JavaScript syntax also checked. Live cloud access and provider billing availability must be verified separately after enabling.
+899 Solana tests passed, including persistence/budgets, transient confirmation, multiple healthy checks, owner pause preservation, idempotent incident mail retries, bounded cloud investigation, source attribution, rejection of unsupported actions/paths, non-execution of generated code, prospective strategy admission and owner-session protection. UI JavaScript syntax also checked. Live cloud access and provider billing availability must be verified separately after enabling.
+
+
+## Evidence loop upgrade
+
+Local incident monitoring, mail and scouting now run separately from the bounded cloud investigator. A slow cloud request no longer delays local checks. Incident records retain original and latest aggregate evidence and distinguish provider-stale candles, rate limiting, undefined zero-baseline volume ratios, immature pools, and exhausted fallback allowance. These are observed constraints rather than causal diagnoses. Recovery mail includes measured exit-check delay; it never attributes recovery automatically to a model patch.
+
+Queued strategy hypotheses are scouted prospectively once per minute against newly discovered, fresh candidates. Store timestamps per distinct proposal/coin/pool for complete observations, matching observations and simultaneous overlap with active rules. Rolling 24-hour counts do not double-count repeated snapshots; old matches expire even if a coin reappears. Missing active indicators leave overlap unknown. Scouting is not a fill simulator, backtest, profit estimate or promotion criterion.
+
+Among queued proposals, an older candidate with at least ten complete coin/pool observations and two observed matches can be selected ahead of candidates lacking usable data. This feasibility gate does not maximize trade count; oldest-first ordering remains within the feasible set and is the fallback when none are ready. Actual admission still uses the existing transactional slot/cash checks, immutable risk limits and 100-coin prospective profitability gates. A persistent admission lease prevents the independent monitor and cloud workers from racing each other. If a process fails after local admission, a later attempt reconciles the existing strategy ID instead of falsely labeling its status.
+
+The cloud receives scouting summaries and measured incident evidence to avoid repeatedly proposing the same data-dependent strategy family while its required indicators are unavailable. The owner page shows observed constraints, scouting limitations, and before/after repair outcomes.
