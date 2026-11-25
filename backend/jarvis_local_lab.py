@@ -234,7 +234,7 @@ def record_event(conn, at, ident, kind, detail):
     jarvis_hourly_mail.event(conn,at,ident,kind,detail)
 
 
-def submit(api, payload, now=None):
+def submit(api, payload, now=None, *, allow_rotation=False):
     now = time.time() if now is None else now
     if not isinstance(payload, dict) or set(payload) != {'rule','sources'}:
         raise ValueError('Expected rule and sources')
@@ -260,8 +260,18 @@ def submit(api, payload, now=None):
         if conn.execute('SELECT 1 FROM local_strategies WHERE id=?',(ident,)).fetchone():
             record_event(conn,now,ident,'duplicate',{'name':rule['name']})
             return {'id':ident,'status':'duplicate'}
+        rotation_ends=None
         occupied = {r['slot'] for r in conn.execute("SELECT slot FROM local_strategies WHERE status IN ('testing','proven')")}
         slot = next((slot for slot in SLOTS if slot not in occupied and not state['bots'][slot]['positions']), None)
+        if slot is None and allow_rotation:
+            import jarvis_rotation
+            # Recovery and owner pauses retain precedence over experiments.
+            healthy=not api.backlog.paused(state,now) and not (state.get('entry_catchup_pause') or {}).get('active')
+            healthy=healthy and not api.exit_queue(api.quote_jobs(state,now),now)['backed_up']
+            choice=jarvis_rotation.select(conn,state,now,api.BUY_COST) if healthy else None
+            if choice and state['bots'][choice[1]]['cash']>=api.BUY_COST:
+                slot=jarvis_rotation.pause(conn,state,choice,ident,now)
+                rotation_ends=now+jarvis_rotation.WINDOW_SECONDS
         if slot is None:
             return {'status':'full'}
         portfolio = state['bots'][slot]
@@ -273,6 +283,7 @@ def submit(api, payload, now=None):
                      (ident,slot,now,json.dumps(rule),json.dumps(sources),'testing'))
         record_event(conn,now,ident,'added',{'name':rule['name'],'slot':slot})
         state.setdefault('local_rules',{})[slot] = {'id':ident,'created':now,**rule}
+        if rotation_ends is not None:state['local_rules'][slot]['challenger_ends']=rotation_ends
         conn.execute('UPDATE run SET state=?,revision=revision+1 WHERE id=1',(json.dumps(state),))
         conn.execute("INSERT OR REPLACE INTO local_worker_state VALUES ('last_submit',?)",(str(now),))
     return {'id':ident,'slot':slot,'status':'testing'}
@@ -281,7 +292,7 @@ def submit(api, payload, now=None):
 def entry_allowed(state, slot, row, evidence, now):
     rule = state.get('local_rules',{}).get(slot)
     portfolio = state['bots'][slot]
-    return (rule and row['first'] >= rule['created'] and 0 <= now-row['first'] <= 900
+    return (rule and not rule.get('entry_paused') and now<rule.get('challenger_ends',math.inf) and row['first'] >= rule.get('resumed_at',rule['created']) and 0 <= now-row['first'] <= 900
             and len(portfolio['positions']) < MAX_OPEN and portfolio['cash'] >= 50_250000
             and run(rule['entry'], observations(row,evidence)))
 
@@ -326,7 +337,7 @@ def review(conn, state, now):
                 report['note'] = 'Profitable but not robust across both halves without their biggest winners; keep testing.'
             if status == 'failed':
                 del state['local_rules'][slot]
-        elif now-rule['created'] >= 24*3600 and not rows and not state['bots'][slot]['positions']:
+        elif now-rule.get('resumed_at',rule['created']) >= 24*3600 and not rows and not state['bots'][slot]['positions']:
             # Inactive is explicitly not a profitability failure.
             status = 'inactive'
             del state['local_rules'][slot]

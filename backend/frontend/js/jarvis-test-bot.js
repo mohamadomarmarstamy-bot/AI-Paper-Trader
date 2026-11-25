@@ -174,9 +174,11 @@
     $('jarvis-lab-description').textContent = archived ? 'Poopy Butt Hole · Older presets and retired AI strategies. History preserved.' : 'AI strategy tests and validated candidates. Winners stay here until Jarvis can adopt them.';
     if (archived && state.pbh_closeout?.requested) $('jarvis-lab-description').textContent += ` Closeout: ${state.pbh_closeout.quoted_closes} closed at quotes · ${state.pbh_closeout.pending} pending · ${state.pbh_closeout.writeoffs} paper write-offs (not sales).`;
     $('jarvis-archive-panel').hidden = !archived;
+    const challenger=state.challenger_rotation?.runs.find(r=>['active','draining'].includes(r.status));
+    if (!archived && challenger) $('jarvis-lab-description').textContent += ` Challenger in ${challenger.slot}: ${challenger.status === 'draining' ? 'window ended; monitoring remaining exits' : 'test window ends ' + displayTime(challenger.ends) + ' ET'}. Original trial history is preserved.`;
     const open = new Set([...$('jarvis-lab-rows').querySelectorAll('details[open]')].map(row => row.dataset.bot));
     const sum = key => bots.reduce((total, bot) => total + bot[key], 0);
-    $('jarvis-lab-summary').textContent = `${bots.length} strategies · ${sum('closed')} completed paper positions · ${sum('open')} open · ${money(sum('realized'))} realized P/L`;
+    $('jarvis-lab-summary').textContent = `${bots.length} slots · ${sum('closed')} completed paper positions · ${sum('open')} open · ${money(sum('realized'))} realized P/L`;
     const run = $('jarvis-lab-run');
     run.hidden = archived;
     run.textContent = state.enabled ? 'Pause all paper entries' : 'Start all paper tests';
@@ -190,16 +192,16 @@
       const candidate = state.local_lab?.strategies.find(item => item.slot === bot.id && ['testing', 'proven'].includes(item.status));
       name.append(el('strong', candidate?.rule.name || bot.name), el('small', botState(bot)));
       const total = el('span', '', sign(bot.estimated_pnl));
-      total.append(el('strong', money(bot.pnl ?? bot.estimated_pnl)), el('small', bot.unpriced ? 'Estimated total P/L' : 'Total P/L'));
+      total.append(el('strong', money(bot.pnl ?? bot.estimated_pnl)), el('small', bot.research_slot ? 'Slot P/L · all trials' : bot.unpriced ? 'Estimated total P/L' : 'Total P/L'));
       const today = el('span', '', sign(bot.today.realized));
-      today.append(el('strong', money(bot.today.realized)), el('small', 'Today realized'));
+      today.append(el('strong', money(bot.today.realized)), el('small', bot.research_slot ? 'Slot today realized' : 'Today realized'));
       const stats = el('span');
-      stats.append(el('strong', `${bot.closed} closed · ${bot.open} open`),
+      stats.append(el('strong', `${bot.closed} ${bot.research_slot ? 'slot closes' : 'closed'} · ${bot.open} open`),
         el('small', `${bot.wins} wins / ${bot.losses} losses${bot.closed ? ' · ' + Math.round(100 * bot.wins / bot.closed) + '% wins' : ''}`));
       summary.append(name, total, today, stats);
       const body = el('div', '', 'lab-details');
       body.append(el('p', bot.description), el('small', `Realized P/L ${money(bot.realized)} · Virtual funding ${money(bot.funding)} · Cash ${money(bot.cash)} · Entry misses ${bot.entry_misses} · Exit misses ${bot.quote_misses}`));
-      if (candidate) body.append(el('p', candidate.rule.hypothesis), el('p', 'Entry: ' + candidate.rule.entry), el('p', 'Exit: ' + candidate.rule.exit), el('small', candidate.status === 'proven' ? (state.strategy?.local_rule?.id === candidate.id ? 'Validated · adopted by Jarvis Trader' : 'Validated · available for adoption') : 'Testing · 100 distinct closed coins required before profitability review'));
+      if (candidate) body.append(el('p', `Current trial: ${candidate.report?.closed || 0} closes · recent validation sample P/L ${money(candidate.report?.net || 0)}. Slot totals include earlier trials.`), el('p', candidate.rule.hypothesis), el('p', 'Entry: ' + candidate.rule.entry), el('p', 'Exit: ' + candidate.rule.exit), el('small', candidate.status === 'proven' ? (state.strategy?.local_rule?.id === candidate.id ? 'Validated · adopted by Jarvis Trader' : 'Validated · available for adoption') : 'Testing · 100 distinct closed coins required before profitability review'));
       const holdings = el('div', '', 'meme-scroll');
       for (const holding of bot.holdings) {
         const item = el('p', `${holding.symbol} · ${money(holding.mark ?? holding.estimated_value)}${holding.mark == null ? ' estimated' : ''} · ${displayTime(holding.opened)} ET`);
@@ -271,7 +273,7 @@
       const pnl = selected.pnl ?? selected.estimated_pnl;
       $('jarvis-portfolio').replaceChildren(
         portfolioCard(estimate ? 'Estimated total balance' : 'Total balance', money(balance), estimate || 'Cash + current sell quotes'),
-        portfolioCard('Available cash', money(selected.cash), jarvis ? '$20,000 starting budget' : selected.research_slot ? '$2,000 fixed paper funding; no automatic top-ups' : 'Automatic virtual top-ups'),
+        portfolioCard('Available cash', money(selected.cash), jarvis ? '$20,000 starting budget' : selected.research_slot ? '$2,000 shared slot funding across trials; no automatic top-ups' : 'Automatic virtual top-ups'),
         portfolioCard(estimate ? 'Estimated total P/L' : 'Total P/L', money(pnl), `Net of ${money(selected.funding)} virtual funding`, sign(pnl)),
         portfolioCard('Open holdings', String(selected.open), botState(selected)),
       );
@@ -329,7 +331,9 @@
             }
           }
         }
-        $('jarvis-review').textContent = `${summary} ${completed}/${next} completed baseline trades toward the next review. ${state.review?.result || ''} ${state.entry_guard?.reason || ''}`;
+        const learning=state.learning;
+        const progress=learning ? `Current learning: ${learning.pending_closed_coins}/${learning.interval_coins} distinct closed coins toward the next checkpoint · ${learning.reviewed_coins} already reviewed.` : '';
+        $('jarvis-review').textContent = `${summary} ${progress} Legacy baseline: ${completed}/${next} closes toward its next review. ${state.review?.result || ''} ${state.entry_guard?.reason || ''}`;
         if (state.outcome_review) renderOutcomes(state.outcome_review, state.legacy_outcomes, state.active_warning);
         if (state.early_review) renderEarlyReview(state.early_review);
         if (state.comparison) renderComparison(state.comparison);

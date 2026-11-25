@@ -107,3 +107,7 @@ def choose(conn,rows,now=None):
     if not ready:return rows[0] if rows else None
     # Feasibility is a gate; maximize neither trade frequency nor proxy profits.
     return min(ready,key=lambda row:row['created'])
+
+
+def scouting_status(api,now):
+    with api.connection() as conn:return scouting(conn,now)

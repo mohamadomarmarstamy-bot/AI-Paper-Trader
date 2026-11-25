@@ -762,15 +762,15 @@ class JarvisTests(unittest.TestCase):
         self.assertEqual(completed[0]['reason'], 'Step profit protection')
         self.assertEqual(completed[0]['pnl'], 7_286_250)
 
-    def test_reviews_start_at_1000_then_use_only_new_batches_of_500(self):
+    def test_reviews_start_at_1000_then_use_only_new_batches_of_100(self):
         self.assertEqual(jarvis.status()['review_every'], 1000)
         with jarvis.connection() as conn, conn:
             state = jarvis.initial()
 
             def close_batch(start, end, winner):
                 for index in range(start, end):
-                    bot = jarvis.FIXED[index % 4]
-                    mint = f'test-{index // 4}'
+                    bot = jarvis.FIXED[index % 4] if index<1000 else 'instant-trim'
+                    mint = f'test-{index // 4}' if index<1000 else f'new-{index}'
                     pnl = 1_000_000 if bot == winner else -1_000_000
                     row = {'bot': bot, 'mint': mint, 'liquidity': 150_000, 'age': 200, 'pnl': pnl}
                     conn.execute(
@@ -788,23 +788,23 @@ class JarvisTests(unittest.TestCase):
             self.assertEqual(state['strategy']['entry'], 'pullback')
             self.assertEqual(state['strategy']['exit'], 'step')
 
-            close_batch(1000, 1499, 'instant-trim')
+            close_batch(1000, 1099, 'instant-trim')
             self.assertEqual(state['strategy']['version'], 1000)
-            close_batch(1499, 1500, 'instant-trim')
-            self.assertEqual(state['strategy']['version'], 1500)
+            close_batch(1099, 1100, 'instant-trim')
+            self.assertEqual(state['strategy']['version'], 1100)
             self.assertEqual(state['strategy']['entry'], 'instant')
             self.assertEqual(state['strategy']['exit'], 'trim')
 
-            close_batch(1500, 2000, None)
-            self.assertEqual(state['reviewed'], 2000)
-            self.assertEqual(state['strategy']['version'], 1500)
+            close_batch(1100, 1200, None)
+            self.assertEqual(state['reviewed'], 1200)
+            self.assertEqual(state['strategy']['version'], 1100)
             self.assertIn('kept its current strategy', state['review']['result'])
             self.assertEqual(state['bots']['jarvis']['cash'], jarvis.JARVIS_BUDGET)
             self.assertEqual([jarvis.BOTS[bot][1] for bot in jarvis.FIXED[:4]],
                              ['instant', 'instant', 'pullback', 'pullback'])
 
             conn.execute('UPDATE run SET state=? WHERE id=1', (json.dumps(state),))
-        self.assertEqual(jarvis.status()['review_every'], 500)
+        self.assertEqual(jarvis.status()['review_every'], 100)
 
     def test_jarvis_cannot_auto_fund(self):
         state = jarvis.initial()

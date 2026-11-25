@@ -245,7 +245,7 @@ def build_job(api,now):
                  for r in conn.execute("SELECT status,data,report FROM brain_proposals WHERE kind='code' ORDER BY created DESC LIMIT 5")]
         scouts=insight.scouting(conn,now)
         return {'id':ident,'kind':kind,'snapshot':snapshot,'retrospective_examples':examples,'repair_history':repairs,'queued_scouting':scouts,'scouting_summary':{'queued':len(scouts),'candidate_observations':sum(s['distinct_coin_pools'] for s in scouts),'data_ready':sum(s['data_ready'] for s in scouts)},'audit':{'strategies':report.get('strategies',[])[-15:],
-                'limitations':report.get('limitations',[])},'rules':rules,'memory':memory,
+                'limitations':report.get('limitations',[])},'rules':rules,'memory':memory,'learning_checkpoint':__import__('jarvis_learning').status(conn,state,now),
                 'code':code_context() if kind!='strategy' else {}}
 
 
@@ -369,8 +369,9 @@ def admit_proposal(api,now):
         result={'status':'expired'}
     else:
         context=local.context(api,now)
-        if not context['enabled'] or not context['available_slots']:return
-        try:result=local.submit(api,json.loads(row['data']),now)
+        ready=next((s['data_ready'] for s in insight.scouting_status(api,now) if s['id']==row['id']),False)
+        if not context['enabled'] or (not context['available_slots'] and not ready):return
+        try:result=local.submit(api,json.loads(row['data']),now,allow_rotation=ready)
         except (ValueError,TypeError):result={'status':'rejected'}
     if result['status']=='duplicate':
         with api.connection() as conn:
@@ -417,7 +418,7 @@ def status(conn,now=None):
         'monthly_budget_usd':MONTHLY_CENTS/100,'reserved_this_month_usd':spent/100,
         'reservation_per_call_usd':RESERVATION_CENTS/100,'daily_budget_usd':DAILY_CENTS/100,
         'budget_basis':'Conservative reservations, not measured billing; failed calls remain reserved.',
-        'strategy_review_hours':24,'automatic_code_deploy':__import__('jarvis_repair').enabled(),
+        'strategy_review_hours':24,'learning_interval_coins':100,'strategy_review_trigger':'daily_or_100_closed_coin_checkpoint','automatic_code_deploy':__import__('jarvis_repair').enabled(),
         'paper_repair':__import__('jarvis_repair').status(conn,now),
         'queued_scouting':scouts,'scouting_summary':{'queued':len(scouts),'candidate_observations':sum(s['distinct_coin_pools'] for s in scouts),'data_ready':sum(s['data_ready'] for s in scouts)},
         'incidents':[dict(r)|{'plan':json.loads(r['plan']),'evidence':insight.incident(conn,r['id'])} for r in conn.execute('SELECT * FROM brain_incidents ORDER BY opened DESC LIMIT 10')],
