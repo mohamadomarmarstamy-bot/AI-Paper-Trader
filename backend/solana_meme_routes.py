@@ -21,6 +21,7 @@ def build_router(*,require_session):
     @asynccontextmanager
     async def jarvis_lifespan(_app):
         await run_in_threadpool(jarvis.apply_preset_pause)
+        await run_in_threadpool(jarvis.apply_pbh_closeout)
         tasks = [asyncio.create_task(worker()) for worker in
                  (jarvis.worker, jarvis.research_worker, jarvis.experiment_worker, jarvis.diagnostic_worker, backlog.worker, hourly_mail.worker)]
         try:
