@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 18084)
-Total output lines: 1382
-
 """Independent, quote-only Solana paper portfolios and strategy evaluation."""
 import asyncio
 from contextlib import closing, contextmanager
@@ -731,7 +728,14 @@ def exit_work_summary(conn, state, now):
                               'p95_seconds': latencies[max(0, math.ceil(len(latencies)*.95)-1)] if latencies else None}}
 
 
-def schedule_market_exits(state, n…84 tokens truncated…priority <= 1:
+def schedule_market_exits(state, now):
+    for portfolio in state['bots'].values():
+        for p in portfolio['positions'].values():
+            priority = observe_exit_signal(p, state, now)
+            # Keep retry cooldowns even when an exit signal is present.
+            if p.get('mark_stale') and 'quote_due_since' in p:
+                continue
+            if priority <= 1:
                 earliest = max(now, (p.get('mark_at') or p['opened']) + POLL)
                 p['due'] = min(p['due'], earliest)
 
