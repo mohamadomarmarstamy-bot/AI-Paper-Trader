@@ -17,13 +17,14 @@ def build_router(*,require_session):
     import jarvis_test_bot as jarvis
     import jarvis_backlog as backlog
     import jarvis_hourly_mail as hourly_mail
+    import jarvis_brain as brain
 
     @asynccontextmanager
     async def jarvis_lifespan(_app):
         await run_in_threadpool(jarvis.apply_preset_pause)
         await run_in_threadpool(jarvis.apply_pbh_closeout)
         tasks = [asyncio.create_task(worker()) for worker in
-                 (jarvis.worker, jarvis.research_worker, jarvis.experiment_worker, jarvis.diagnostic_worker, backlog.worker, hourly_mail.worker)]
+                 (jarvis.worker, jarvis.research_worker, jarvis.experiment_worker, jarvis.diagnostic_worker, backlog.worker, hourly_mail.worker, brain.worker)]
         try:
             yield
         finally:
@@ -47,6 +48,20 @@ def build_router(*,require_session):
     def jarvis_status(request: Request):
         require_session(request)
         return JSONResponse(jarvis.status(), headers={'Cache-Control': 'no-store'})
+
+    @router.get('/jarvis-test-bot/brain')
+    def brain_page(request: Request):
+        require_session(request)
+        return FileResponse(Path(__file__).parent/'frontend'/'jarvis-brain.html')
+
+    @router.get('/jarvis-test-bot/brain/status')
+    def brain_status(request: Request):
+        require_session(request)
+        with jarvis.connection() as conn:
+            value=brain.status(conn)
+            value['proposals']=[dict(row)|{'data':json.loads(row['data']),'report':json.loads(row['report'])}
+                for row in conn.execute('SELECT * FROM brain_proposals ORDER BY created DESC LIMIT 15')]
+        return JSONResponse(value,headers={'Cache-Control':'no-store'})
 
     @router.get('/jarvis-test-bot/local-worker/context')
     def local_worker_context(request: Request):
