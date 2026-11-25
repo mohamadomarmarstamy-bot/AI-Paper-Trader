@@ -177,6 +177,7 @@
     const challenger=state.challenger_rotation?.runs.find(r=>['active','draining'].includes(r.status));
     if (!archived && challenger) $('jarvis-lab-description').textContent += ` Challenger in ${challenger.slot}: ${challenger.status === 'draining' ? 'window ended; monitoring remaining exits' : 'test window ends ' + displayTime(challenger.ends) + ' ET'}. Original trial history is preserved.`;
     const open = new Set([...$('jarvis-lab-rows').querySelectorAll('details[open]')].map(row => row.dataset.bot));
+    const openRules = new Set([...$('jarvis-lab-rows').querySelectorAll('.lab-rules[open]')].map(row => row.parentElement.parentElement.dataset.bot));
     const sum = key => bots.reduce((total, bot) => total + bot[key], 0);
     const metric = (label, value, tone = '') => { const card = el('div', '', 'lab-metric'); card.append(el('small', label), el('strong', value, tone)); return card; };
     $('jarvis-lab-summary').replaceChildren(metric('Research slots', String(bots.length)), metric('Closed positions', String(sum('closed'))), metric('Open positions', String(sum('open'))), metric('Realized P/L', money(sum('realized')), sign(sum('realized'))));
@@ -202,7 +203,7 @@
       summary.append(name, total, today, stats);
       const body = el('div', '', 'lab-details');
       body.append(el('small', `Realized P/L ${money(bot.realized)} · Virtual funding ${money(bot.funding)} · Cash ${money(bot.cash)} · Entry misses ${bot.entry_misses} · Exit misses ${bot.quote_misses}`));
-      const rules = el('details', '', 'lab-rules'); rules.append(el('summary', 'Strategy rules & research'));
+      const rules = el('details', '', 'lab-rules'); rules.open = openRules.has(bot.id); rules.append(el('summary', 'Strategy rules & research'));
       if (candidate) rules.append(el('p', `Current trial: ${candidate.report?.closed || 0} closes · recent validation sample P/L ${money(candidate.report?.net || 0)}. Slot totals include earlier trials.`), el('p', candidate.rule.hypothesis), el('p', 'Entry: ' + candidate.rule.entry), el('p', 'Exit: ' + candidate.rule.exit), el('small', candidate.status === 'proven' ? (state.strategy?.local_rule?.id === candidate.id ? 'Validated · adopted by Jarvis Trader' : 'Validated · available for adoption') : 'Testing · 100 distinct closed coins required before profitability review'));
       if (candidate) body.append(rules);
       const holdings = el('div', '', 'meme-scroll');
