@@ -16,7 +16,7 @@ from functools import lru_cache
 SLOTS = {f'research-{n:02}': (f'Research {n}', 'instant', 'research') for n in range(1, 11)}
 MIN_COINS = 100
 CAPITAL = 2000_000000
-MAX_OPEN = 2
+MAX_OPEN = 4
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS local_strategies(
  id TEXT PRIMARY KEY, slot TEXT NOT NULL, created REAL NOT NULL, rule TEXT NOT NULL,
