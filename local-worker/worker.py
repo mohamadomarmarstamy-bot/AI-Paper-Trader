@@ -88,7 +88,7 @@ class Worker:
             used['calls'] = used.get('calls',0)+1
             self.save()
             data = read_json(self.http.get('https://api.search.brave.com/res/v1/web/search',
-                headers={**headers,'X-Subscription-Token':key},params={'q':topic+' trading research','count':5},
+                headers={**headers,'X-Subscription-Token':key},params={'q':'Solana DEX '+topic+' empirical research transaction costs','count':5},
                 timeout=20,allow_redirects=False))
             return [{'url':r['url'],'title':r.get('title','')[:200],'snippet':r.get('description','')[:1500]}
                     for r in data.get('web',{}).get('results',[]) if r.get('url','').startswith('https://')][:5]
@@ -118,6 +118,7 @@ class Worker:
             'BAD exit: gain >= 10 or (peak >= 10 and gain <= peak - 5). GOOD exit: peak >= 10 and gain <= peak - 5. '
             'A higher fixed target is optional. Do not use held_seconds <= 3600 as a maximum-hold exit; that guard is already enforced. '
             'Reference snippets are background, NOT evidence for numerical thresholds. State that thresholds are untested hypotheses. '
+            'Do not quote reference snippets, source titles or URLs in the generated strategy. '
             'No return guarantees. Explain the hypothesis without claiming sources validated it. '
             'Historical aggregate paper results: '+json.dumps(context.get('results',[])[:12],separators=(',',':'))[:1200]+
             '\nHistorical warning counts: '+json.dumps(context.get('outcome_warnings',[])[:5],separators=(',',':'))[:1000]+
@@ -161,7 +162,12 @@ class Worker:
         if not sources:
             raise ValueError('Search returned no sources; no strategy submitted')
         rule = self.generate(context,sources)
-        proposal = {'rule':rule,'sources':sources}
+        # Standard Brave search results are transient. Persist our own provider
+        # receipt, never returned titles, URLs or snippets, on disk or Railway.
+        receipts = ([{'url':'https://search.brave.com/',
+                      'title':'Brave Search research; result content not retained',
+                      'snippet':''}] if self.config.get('search_provider') == 'brave' else sources)
+        proposal = {'rule':rule,'sources':receipts}
         self.state['last_proposal'] = proposal
         if not benchmark:
             self.state['last_result'] = self.api('POST','strategy',proposal)
