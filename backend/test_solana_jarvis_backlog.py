@@ -59,8 +59,29 @@ class BacklogTests(unittest.TestCase):
             low = jarvis.initial()
             guard.enqueue(conn, low, self.now + 1, 'https://test')
             guard.enqueue(conn, low, self.now + 61, 'https://test')
-            guard.enqueue(conn, self.state, self.now + 62, 'https://test')
+            guard.enqueue(conn, self.state, self.now + 3662, 'https://test')
             self.assertEqual(conn.execute('SELECT count(*) FROM backlog_mail').fetchone()[0], 2)
+
+    def test_small_queue_alerts_only_when_sufficiently_overdue(self):
+        positions=self.state['bots']['instant-step']['positions']
+        positions.clear()
+        for i in range(5):
+            positions[str(i)]={'mint':str(i),'due':self.now-119}
+        self.assertIsNone(self.enqueue())
+        for p in positions.values():p['due']=self.now-120
+        self.assertIsNotNone(self.enqueue())
+
+    def test_single_stalled_check_and_hourly_cooldown(self):
+        positions=self.state['bots']['instant-step']['positions']
+        positions.clear()
+        positions['one']={'mint':'one','due':self.now-300}
+        self.assertIsNotNone(self.enqueue())
+        with jarvis.connection() as conn, conn:
+            low=jarvis.initial()
+            guard.enqueue(conn,low,self.now+1,'https://test')
+            guard.enqueue(conn,low,self.now+61,'https://test')
+            guard.enqueue(conn,self.state,self.now+62,'https://test')
+            self.assertEqual(conn.execute('SELECT count(*) FROM backlog_mail').fetchone()[0],1)
 
     def test_link_is_expiring_single_use_and_cannot_extend_or_resume(self):
         token = self.token(30)

@@ -12,7 +12,7 @@ def enabled():
 
 
 def email_allowed(category):
-    return not enabled() or category in ('jarvis_hourly', 'jarvis_health')
+    return not enabled() or category in ('jarvis_hourly', 'jarvis_health', 'jarvis_backlog')
 
 
 def apply_startup_pause():

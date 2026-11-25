@@ -234,18 +234,26 @@ def enqueue(conn, state, now, base):
     guard = conn.execute('SELECT * FROM backlog_guard WHERE id=1').fetchone()
     if not config['enabled']:
         return
-    if config['positions'] < max(1, config['threshold'] * .8):
+    delays = [now - p['due'] for b in state['bots'].values() for p in b['positions'].values() if p['due'] <= now]
+    overdue = sum(delay >= 120 for delay in delays)
+    oldest = max(delays, default=0)
+    backed_up = overdue >= 5 or oldest >= 300
+    if not backed_up and config['positions'] < max(1, config['threshold'] * .8):
         low = guard['low_since'] if guard['low_since'] is not None else now
         conn.execute('UPDATE backlog_guard SET low_since=? WHERE id=1', (low,))
         if now - low >= 60:
             conn.execute('UPDATE backlog_guard SET episode=NULL WHERE id=1')
         return
     conn.execute('UPDATE backlog_guard SET low_since=NULL WHERE id=1')
-    if config['positions'] < config['threshold'] or guard['episode']:
+    if (not backed_up and config['positions'] < config['threshold']) or guard['episode']:
+        return
+    recent = conn.execute("SELECT 1 FROM backlog_mail WHERE id NOT LIKE 'resume/%' AND created>? LIMIT 1", (now - 3600,)).fetchone()
+    if recent:
         return
     ident = secrets.token_hex(16)
     links = action_links(conn, ident, base)
-    text = (f"{config['positions']} paper positions across {config['coins']} distinct coins are waiting for an exit quote check or route retry. "
+    text = (f"{config['positions']} paper positions across {config['coins']} coins need exit checks. "
+            f"{overdue} checks are at least 2 minutes overdue; oldest check is {int(oldest // 60)}m {int(oldest % 60)}s overdue. "
             'This is not a count of confirmed sell orders. Sells keep running during buy pauses.\n'
             'Choose a buy pause (links expire in six hours; one choice per alert):\n')
     text += action_text(links)
@@ -253,7 +261,7 @@ def enqueue(conn, state, now, base):
     text += 'Settings and Resume buys: ' + base + '/jarvis-test-bot#settings'
     buttons = action_buttons(links)
     body = f'<h2>Jarvis paper exit backlog</h2><p>{html.escape(text.split(chr(10))[0])}</p>{buttons}<p>Sells continue. Links expire in six hours. One choice per alert.</p><p>A longer catch-up pause or the overall stop switch can keep buys off after the timer expires.</p><a href="{base}/jarvis-test-bot#settings">Open settings / Resume buys</a>'
-    payload = {'subject': f"Jarvis paper: {config['positions']} positions waiting for exit checks", 'text': text, 'html': body}
+    payload = {'subject': f"Jarvis alert: exit checks backed up — {int(oldest // 60)}m oldest delay", 'text': text, 'html': body}
     conn.execute('INSERT INTO backlog_mail(id,created,expires,payload) VALUES(?,?,?,?)',
                  (ident, now, now + 21600, json.dumps(payload)))
     conn.execute('UPDATE backlog_guard SET episode=? WHERE id=1', (ident,))
