@@ -160,6 +160,15 @@ class FreshnessRegression(unittest.TestCase):
 def run():
     # Checkout and controller come from trusted main, never from a model branch.
     if os.environ.get('GITHUB_REF')!='refs/heads/main':raise RuntimeError('Repairs require main')
+    # A merge can start this job while Railway is still replacing the server.
+    deadline=time.monotonic()+120
+    while True:
+        try:
+            api('health')
+            break
+        except Exception:
+            if time.monotonic()>=deadline:raise RuntimeError('Coordinator not ready') from None
+            time.sleep(15)
     job=api('claim',{})
     if job['status']!='claimed':
         print('Paper repair coordinator: '+job['status'],flush=True);return
