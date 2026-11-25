@@ -56,6 +56,7 @@
   </header>
   <nav aria-label="Jarvis test pages">
     <a href="#lab">Strategy Lab</a>
+    <a href="#pbh">PBH</a>
     <a href="#jarvis">Jarvis Trader</a>
     <a href="#history">History</a>
     <a href="#rug-pulls">Rug Pull</a>
@@ -106,12 +107,18 @@
   </section>
   <section id="jarvis-lab" hidden>
     <div class="page-title">
-      <div><h1>Strategy Lab</h1><p class="meme-muted">All paper strategies in one place. Tap a row for rules, holdings and history.</p></div>
+      <div><h1 id="jarvis-lab-title">Strategy Lab</h1><p id="jarvis-lab-description" class="meme-muted">AI strategy tests and validated candidates.</p></div>
       <button id="jarvis-lab-run" type="button" class="primary-button" disabled>Start all paper tests</button>
     </div>
     <p id="jarvis-lab-summary" class="meme-muted"></p>
     <p class="meme-muted">$50 per paper entry · Identical quotes are shared · Exits use available quotes and include modeled costs</p>
     <div id="jarvis-lab-rows"></div>
+    <section id="jarvis-archive-panel" class="panel" hidden>
+      <h2>Retired AI strategies</h2>
+      <p class="meme-muted">Failed = nonpositive test results. Inactive = no trades, not a proven loss. Existing exits remain monitored.</p>
+      <div id="jarvis-archive-rows"></div>
+      <button id="jarvis-archive-more" type="button" hidden>Load older strategies</button>
+    </section>
   </section>
   <section id="jarvis-health" hidden>
     <div class="page-title"><div><h1>Health</h1><p id="jarvis-cycle" class="meme-muted"></p></div></div>
@@ -163,6 +170,6 @@
     </section>
   </section>
 </main>
-<script src="/js/jarvis-test-bot.js?v=preset-pause-v1"></script>
+<script src="/js/jarvis-test-bot.js?v=pbh-v1"></script>
 </body>
 </html>

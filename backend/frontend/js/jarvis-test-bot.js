@@ -129,6 +129,27 @@
   }
 
   const labHistory = new Map();
+  let archiveItems = [], archiveNext = null, archiveBusy = false;
+  async function loadArchive(append = false) {
+    if (archiveBusy) return;
+    archiveBusy = true;
+    try {
+      const data = await call('archive' + (append && archiveNext ? '?before=' + archiveNext : ''));
+      archiveItems = [...(append ? archiveItems : []), ...data.strategies];
+      archiveNext = data.next;
+      const rows = archiveItems.map(item => {
+        const row = el('details', '', 'lab-row');
+        row.append(el('summary', `${item.rule.name} · ${item.status === 'failed' ? 'Failed test' : 'Inactive · no trades'} · ${money(item.net)} realized`));
+        const body = el('div', '', 'lab-details');
+        body.append(el('p', item.rule.hypothesis), el('p', 'Entry: ' + item.rule.entry), el('p', 'Exit: ' + item.rule.exit), el('small', `${item.closed} closed · ${item.open} open · ${item.slot} · created ${displayTime(item.created)} ET`));
+        row.append(body); return row;
+      });
+      $('jarvis-archive-rows').replaceChildren(...(rows.length ? rows : [el('p', 'No retired AI strategies yet.', 'meme-muted')]));
+      $('jarvis-archive-more').hidden = !archiveNext;
+    } catch (error) { $('jarvis-archive-rows').replaceChildren(el('p', error.message)); }
+    finally { archiveBusy = false; }
+  }
+  $('jarvis-archive-more').onclick = () => loadArchive(true);
   let pendingLabExpansion = null;
 
   async function loadLabHistory(id, append = false) {
@@ -147,11 +168,16 @@
   }
 
   function renderLab() {
-    const bots = state.bots.filter(bot => bot.id !== 'jarvis');
+    const archived = active === 'pbh';
+    const bots = state.bots.filter(bot => archived ? bot.id !== 'jarvis' && !bot.research_slot : bot.research_slot);
+    $('jarvis-lab-title').textContent = archived ? 'PBH' : 'Strategy Lab';
+    $('jarvis-lab-description').textContent = archived ? 'Poopy Butt Hole · Older presets and retired AI strategies. History preserved.' : 'AI strategy tests and validated candidates. Winners stay here until Jarvis can adopt them.';
+    $('jarvis-archive-panel').hidden = !archived;
     const open = new Set([...$('jarvis-lab-rows').querySelectorAll('details[open]')].map(row => row.dataset.bot));
     const sum = key => bots.reduce((total, bot) => total + bot[key], 0);
     $('jarvis-lab-summary').textContent = `${bots.length} strategies · ${sum('closed')} completed paper positions · ${sum('open')} open · ${money(sum('realized'))} realized P/L`;
     const run = $('jarvis-lab-run');
+    run.hidden = archived;
     run.textContent = state.enabled ? 'Pause all paper entries' : 'Start all paper tests';
     run.disabled = runBusy;
     const rows = bots.map(bot => {
@@ -160,7 +186,8 @@
       detail.open = open.has(bot.id) || pendingLabExpansion === bot.id;
       const summary = el('summary', '', 'lab-summary');
       const name = el('span');
-      name.append(el('strong', bot.name), el('small', botState(bot)));
+      const candidate = state.local_lab?.strategies.find(item => item.slot === bot.id && ['testing', 'proven'].includes(item.status));
+      name.append(el('strong', candidate?.rule.name || bot.name), el('small', botState(bot)));
       const total = el('span', '', sign(bot.estimated_pnl));
       total.append(el('strong', money(bot.pnl ?? bot.estimated_pnl)), el('small', bot.unpriced ? 'Estimated total P/L' : 'Total P/L'));
       const today = el('span', '', sign(bot.today.realized));
@@ -171,6 +198,7 @@
       summary.append(name, total, today, stats);
       const body = el('div', '', 'lab-details');
       body.append(el('p', bot.description), el('small', `Realized P/L ${money(bot.realized)} · Virtual funding ${money(bot.funding)} · Cash ${money(bot.cash)} · Entry misses ${bot.entry_misses} · Exit misses ${bot.quote_misses}`));
+      if (candidate) body.append(el('p', candidate.rule.hypothesis), el('p', 'Entry: ' + candidate.rule.entry), el('p', 'Exit: ' + candidate.rule.exit), el('small', candidate.status === 'proven' ? (state.strategy?.local_rule?.id === candidate.id ? 'Validated · adopted by Jarvis Trader' : 'Validated · available for adoption') : 'Testing · 100 distinct closed coins required before profitability review'));
       const holdings = el('div', '', 'meme-scroll');
       for (const holding of bot.holdings) {
         const item = el('p', `${holding.symbol} · ${money(holding.mark ?? holding.estimated_value)}${holding.mark == null ? ' estimated' : ''} · ${displayTime(holding.opened)} ET`);
@@ -202,8 +230,8 @@
     const selected = state.bots.find(bot => bot.id === active);
     const jarvis = active === 'jarvis';
     $('jarvis-bot').hidden = !selected;
-    $('jarvis-lab').hidden = active !== 'lab';
-    if (active === 'lab') renderLab();
+    $('jarvis-lab').hidden = !['lab','pbh'].includes(active);
+    if (['lab','pbh'].includes(active)) renderLab();
     $('jarvis-health').hidden = active !== 'health';
     $('jarvis-settings').hidden = active !== 'settings';
     if (active === 'settings') {
@@ -492,9 +520,9 @@
   function selectTab() {
     const hash = location.hash.slice(1);
     const moved = ['instant-step', 'instant-trim', 'patient-step', 'patient-trim'].includes(hash);
-    active = moved ? 'lab' : tabs.some(tab => tab.hash === '#' + hash) ? hash : 'jarvis';
+    active = moved ? 'pbh' : tabs.some(tab => tab.hash === '#' + hash) ? hash : 'jarvis';
     if (moved) {
-      history.replaceState(null, '', '#lab');
+      history.replaceState(null, '', '#pbh');
       pendingLabExpansion = hash;
     }
     for (const tab of tabs) {
@@ -506,6 +534,7 @@
     $('jarvis-more').hidden = true;
     $('jarvis-history-rows').replaceChildren();
     render();
+    if (active === 'pbh') loadArchive();
     loadHistory();
   }
 
@@ -516,8 +545,10 @@
       const next = await call('status');
       if (runBusy) return;
       const historyChanged = state && next.bots.some((bot, index) => bot.closed !== state.bots.find(previous => previous.id === bot.id)?.closed);
+      const archiveChanged = JSON.stringify(next.local_lab?.strategies.map(item => [item.id,item.status])) !== JSON.stringify(state?.local_lab?.strategies.map(item => [item.id,item.status]));
       state = next;
       render();
+      if (active === 'pbh' && archiveChanged) loadArchive();
       if (historyChanged || !historyLoaded) loadHistory();
     } catch (error) { $('jarvis-note').textContent = error.message; }
     finally { statusBusy = false; }

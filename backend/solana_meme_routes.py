@@ -81,6 +81,13 @@ def build_router(*,require_session):
             raise HTTPException(422, 'Unknown paper bot.')
         return JSONResponse(jarvis.history(jarvis_only, before, bot, rugs_only), headers={'Cache-Control': 'no-store'})
 
+    @router.get('/jarvis-test-bot/archive')
+    def jarvis_archive(request: Request, before: int | None = None):
+        require_session(request)
+        if before is not None and not 0<before<2**63:
+            raise HTTPException(422,'Invalid archive cursor.')
+        return JSONResponse(jarvis.archive(before),headers={'Cache-Control':'no-store'})
+
     @router.post('/jarvis-test-bot/run')
     async def jarvis_run(request: Request):
         payload = await body(request)
