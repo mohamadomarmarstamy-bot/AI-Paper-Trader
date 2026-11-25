@@ -55,7 +55,8 @@ def timer_active(state, now):
 
 
 def paused(state, now):
-    return timer_active(state, now) or bool(state.get('entry_pause_until_all'))
+    return timer_active(state, now) or bool(state.get('entry_pause_until_all')) or bool(
+        state.get('brain_pause') and os.getenv('JARVIS_BRAIN_ENABLED','').strip().lower() in ('1','true','yes','on'))
 
 
 def pause_key(state):

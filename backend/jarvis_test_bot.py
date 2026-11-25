@@ -18,6 +18,7 @@ import database
 import jarvis_hourly_mail as hourly_mail
 import jarvis_audit as audit
 import jarvis_codex_feed as codex_feed
+import jarvis_brain as brain
 import jarvis_local_lab as local_lab
 import jarvis_autonomy as autonomy
 import jarvis_experiments as experiments
@@ -109,7 +110,7 @@ def connection():
     path = database.DATABASE_PATH.with_name('jarvis_paper.sqlite3')
     with closing(sqlite3.connect(path, timeout=5)) as conn:
         conn.row_factory = sqlite3.Row
-        conn.executescript(SCHEMA + research.SCHEMA + experiments.SCHEMA + outcomes.SCHEMA + backlog.SCHEMA + autonomy.SCHEMA + local_lab.SCHEMA + hourly_mail.SCHEMA + audit.SCHEMA + codex_feed.SCHEMA)
+        conn.executescript(SCHEMA + research.SCHEMA + experiments.SCHEMA + outcomes.SCHEMA + backlog.SCHEMA + autonomy.SCHEMA + local_lab.SCHEMA + hourly_mail.SCHEMA + audit.SCHEMA + codex_feed.SCHEMA + brain.SCHEMA)
         conn.execute('INSERT OR IGNORE INTO run(id,state) VALUES (1,?)', (json.dumps(initial()),))
         conn.commit()
         yield conn
@@ -1289,6 +1290,7 @@ def status():
         hourly = hourly_mail.status(conn)
         audit_report = audit.latest(conn)
         codex_status = codex_feed.status(conn)
+        brain_status = brain.status(conn)
         route_retries = sum(bool(p.get('mark_stale') and 'quote_due_since' in p)
                             for bot in state['bots'].values() for p in bot['positions'].values())
         legacy_summary = conn.execute('SELECT data FROM legacy_outcome_summary WHERE id=1').fetchone()
@@ -1301,7 +1303,7 @@ def status():
                   'quoted_closes':conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.reason')='PBH owner-requested paper closeout'").fetchone()[0],
                   'writeoffs':conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.owner_closeout')=1 AND json_extract(data,'$.paper_writeoff') IS NOT NULL").fetchone()[0]}
     local = local_lab.context(__import__(__name__))
-    return {'codex_feed':codex_status,'automated_audit':audit_report,'pbh_closeout':closeout,'preset_entries_paused':bool(state.get('preset_entries_paused')), 'notification_focus': __import__('jarvis_focus').enabled(), 'hourly_email': hourly, 'local_lab': local, 'autonomy': autonomous, 'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
+    return {'brain':brain_status,'codex_feed':codex_status,'automated_audit':audit_report,'pbh_closeout':closeout,'preset_entries_paused':bool(state.get('preset_entries_paused')), 'notification_focus': __import__('jarvis_focus').enabled(), 'hourly_email': hourly, 'local_lab': local, 'autonomy': autonomous, 'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
             'research': {'recent_coins': coverage, 'chart_coverage': coverage_details, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
                          'latest_proposal': dict(latest_mail) if latest_mail else None},
             'backlog_guard': {**backlog.summary(state, now),
@@ -1580,6 +1582,7 @@ def research_diagnostic():
         queue=exit_queue(quote_jobs(state,now),now)
         coverage_details = chart_coverage(conn, state, now)
         codex_status = codex_feed.status(conn)
+        brain_status = brain.status(conn)
         chart_status={row['status'] or 'legacy':row['count'] for row in conn.execute(
             "SELECT json_extract(evidence,'$.chart.status') AS status,count(*) AS count FROM research WHERE checked>=? GROUP BY status",(now-900,))}
     # Fixed labels and aggregate counts only: no tokens, wallet/coin IDs,
@@ -1593,7 +1596,7 @@ def research_diagnostic():
     with connection() as conn:
         sold=conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.reason')='PBH owner-requested paper closeout'").fetchone()[0]
         written=conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.owner_closeout')=1 AND json_extract(data,'$.paper_writeoff') IS NOT NULL").fetchone()[0]
-    return {'codex_feed':codex_status,'enabled':state['enabled'],'presets_paused':bool(state.get('preset_entries_paused')),
+    return {'brain':{k:brain_status[k] for k in ('enabled','cloud_configured','model','monthly_budget_usd','reserved_this_month_usd','last_call','proposal_counts')},'codex_feed':codex_status,'enabled':state['enabled'],'presets_paused':bool(state.get('preset_entries_paused')),
             'pbh_closeout':{'requested':(state.get('pbh_closeout_v1') or {}).get('positions',0),'quoted_closes':sold,'writeoffs':written,'pending':pending_pbh},'quote_failure_categories':failures,
             'cycle_age':round(now-state['last_cycle']) if state['last_cycle'] else None,
             'oldest_quote_wait':round(queue['oldest_wait']),'chart_status':chart_status, 'chart_coverage':coverage_details, 'slots':slots}
