@@ -60,6 +60,7 @@ class Worker:
         self.http = session or requests.Session()
         self.http.trust_env = False  # Avoid forwarding local model traffic through a proxy.
         self.state = json.loads(self.state_path.read_text()) if self.state_path.exists() else {}
+        self.stage = 'worker'
 
     def save(self):
         self.state_path.parent.mkdir(parents=True,exist_ok=True)
@@ -68,11 +69,21 @@ class Worker:
         temporary.replace(self.state_path)
 
     def api(self, method, path, payload=None):
-        return read_json(self.http.request(method,self.config['app_url'].rstrip('/')+'/jarvis-test-bot/local-worker/'+path,
-            headers={'Authorization':'Bearer '+self.config['worker_token']},json=payload,
-            timeout=30,allow_redirects=False))
+        self.stage = 'app context' if method == 'GET' else 'app submission'
+        # Context polls are a minute apart. Do not keep idle app sockets alive
+        # across polls; a proxy may have closed them in the meantime.
+        for attempt in range(2 if method == 'GET' else 1):
+            try:
+                return read_json(self.http.request(method,self.config['app_url'].rstrip('/')+'/jarvis-test-bot/local-worker/'+path,
+                    headers={'Authorization':'Bearer '+self.config['worker_token'], 'Connection':'close'},json=payload,
+                    timeout=30,allow_redirects=False))
+            except (requests.ConnectionError, requests.Timeout):
+                self.http.close()
+                if method != 'GET' or attempt:
+                    raise
 
     def search(self, topic, month):
+        self.stage = 'Brave search' if self.config.get('search_provider') == 'brave' else 'Wikipedia search'
         headers = {'User-Agent':'JarvisPaperResearch/1.0 (local educational paper strategy experiments)'}
         if self.config.get('search_provider','wikipedia') == 'brave':
             key = self.config.get('brave_api_key','')
@@ -88,7 +99,7 @@ class Worker:
             used['calls'] = used.get('calls',0)+1
             self.save()
             data = read_json(self.http.get('https://api.search.brave.com/res/v1/web/search',
-                headers={**headers,'X-Subscription-Token':key},params={'q':topic+' trading research','count':5},
+                headers={**headers,'X-Subscription-Token':key},params={'q':'Solana DEX '+topic+' empirical research transaction costs','count':5},
                 timeout=20,allow_redirects=False))
             return [{'url':r['url'],'title':r.get('title','')[:200],'snippet':r.get('description','')[:1500]}
                     for r in data.get('web',{}).get('results',[]) if r.get('url','').startswith('https://')][:5]
@@ -100,6 +111,7 @@ class Worker:
                 for r in data.get('query',{}).get('search',[])]
 
     def generate(self, context, sources):
+        self.stage = 'local Ollama model'
         if 'cloud' in self.config.get('model','').lower():
             raise ValueError('Cloud models are disabled')
         recent = [{'rule':r['rule'],'status':r['status'],'report':r['report']} for r in context.get('strategies',[])[:6]]
@@ -118,6 +130,7 @@ class Worker:
             'BAD exit: gain >= 10 or (peak >= 10 and gain <= peak - 5). GOOD exit: peak >= 10 and gain <= peak - 5. '
             'A higher fixed target is optional. Do not use held_seconds <= 3600 as a maximum-hold exit; that guard is already enforced. '
             'Reference snippets are background, NOT evidence for numerical thresholds. State that thresholds are untested hypotheses. '
+            'Do not quote reference snippets, source titles or URLs in the generated strategy. '
             'No return guarantees. Explain the hypothesis without claiming sources validated it. '
             'Historical aggregate paper results: '+json.dumps(context.get('results',[])[:12],separators=(',',':'))[:1200]+
             '\nHistorical warning counts: '+json.dumps(context.get('outcome_warnings',[])[:5],separators=(',',':'))[:1000]+
@@ -142,17 +155,57 @@ class Worker:
             rules.run(rule['exit'],observations,True)
         return rule
 
+    def submit_pending(self, now):
+        proposal = self.state['pending_proposal']
+        self.state['pending_retry_at'] = now + 60
+        self.save()
+        try:
+            result = self.api('POST','strategy',proposal)
+        except requests.HTTPError as error:
+            if error.response is not None and error.response.status_code == 422:
+                # Invalid proposals cannot recover through network retries.
+                self.state.pop('pending_proposal',None)
+                self.save()
+            raise
+        self.state['last_result'] = result
+        if result['status'] in ('testing','duplicate'):
+            self.state.pop('pending_proposal',None)
+            self.state.pop('pending_retry_at',None)
+        else:
+            self.state['pending_retry_at'] = now + 300
+        self.save()
+        return result['status']
+
+    def error_message(self, error):
+        status = getattr(getattr(error,'response',None),'status_code',None)
+        reason = f'HTTP {status}' if status is not None else type(error).__name__
+        hint = ('check authentication' if status in (401,403) else
+                'rate limit; waiting before retry' if status == 429 else
+                'proposal rejected by server validation' if status == 422 and self.stage == 'app submission' else
+                'check Ollama is running' if self.stage == 'local Ollama model' else
+                'check service connectivity; automatic retry continues')
+        pending = '; saved proposal retained' if self.state.get('pending_proposal') else ''
+        return f'{self.stage}: {reason}; {hint}{pending}'
+
     def cycle(self, benchmark=False):
         now = time.time()
         day = datetime.now(timezone.utc).date().isoformat()
         if self.state.get('day') != day:
             self.state.update(day=day,sessions=0)
+        # Delivery retries do not consume another search/model session, and
+        # recover even after a restart or after reaching the daily quota.
+        if not benchmark and self.state.get('pending_proposal'):
+            if now < self.state.get('pending_retry_at',0):
+                return 'waiting_to_retry_submission'
+            return self.submit_pending(now)
         if not benchmark and (self.state.get('sessions',0) >= self.config.get('sessions_per_day',10)
                 or now < self.state.get('next_session',0)):
             return 'waiting'
         context = {'strategies':[],'available_slots':['benchmark'],'enabled':True} if benchmark else self.api('GET','context')
-        if not context['enabled'] or not context['available_slots']:
-            return 'paused_or_full'
+        if not context['enabled']:
+            return 'paper_engine_paused'
+        if not context['available_slots']:
+            return 'slots_full'
         # Reserve before requests: provider failures and restarts cannot create retry storms.
         count = self.state.get('total_sessions',0)
         self.state.update(sessions=self.state.get('sessions',0)+1,total_sessions=count+1,next_session=now+300)
@@ -161,11 +214,19 @@ class Worker:
         if not sources:
             raise ValueError('Search returned no sources; no strategy submitted')
         rule = self.generate(context,sources)
-        proposal = {'rule':rule,'sources':sources}
+        # Standard Brave search results are transient. Persist our own provider
+        # receipt, never returned titles, URLs or snippets, on disk or Railway.
+        receipts = ([{'url':'https://search.brave.com/',
+                      'title':'Brave Search research; result content not retained',
+                      'snippet':''}] if self.config.get('search_provider') == 'brave' else sources)
+        proposal = {'rule':rule,'sources':receipts}
         self.state['last_proposal'] = proposal
         if not benchmark:
-            self.state['last_result'] = self.api('POST','strategy',proposal)
-        self.save()
+            self.state['pending_proposal'] = proposal
+            self.save()
+            self.submit_pending(now)
+        else:
+            self.save()
         LOG.info('Strategy %s; benchmark %s', 'benchmarked' if benchmark else self.state['last_result']['status'],self.state['benchmark'])
         return 'benchmarked' if benchmark else self.state['last_result']['status']
 
@@ -204,7 +265,7 @@ def main():
             if type(error) is ValueError and str(error).startswith(('Comparison ', 'Arithmetic ', 'Divide ', 'Multiply ', 'Profit target', 'Unknown strategy', 'Unsupported expression', 'Strategy ', 'Expression ', 'Invalid constant', 'Boolean ', 'and/or ', 'not requires')):
                 LOG.error('Generated strategy rejected: %s', error)
             else:
-                LOG.error('Cycle failed (%s). Check setup, connectivity and local model.',type(error).__name__)
+                LOG.error('Cycle failed — %s',worker.error_message(error))
             if args.once or args.benchmark:
                 return 1
         if args.once or args.benchmark:
