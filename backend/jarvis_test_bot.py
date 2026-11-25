@@ -19,6 +19,7 @@ import jarvis_hourly_mail as hourly_mail
 import jarvis_audit as audit
 import jarvis_codex_feed as codex_feed
 import jarvis_brain as brain
+import jarvis_repair as repair
 import jarvis_local_lab as local_lab
 import jarvis_autonomy as autonomy
 import jarvis_experiments as experiments
@@ -110,7 +111,7 @@ def connection():
     path = database.DATABASE_PATH.with_name('jarvis_paper.sqlite3')
     with closing(sqlite3.connect(path, timeout=5)) as conn:
         conn.row_factory = sqlite3.Row
-        conn.executescript(SCHEMA + research.SCHEMA + experiments.SCHEMA + outcomes.SCHEMA + backlog.SCHEMA + autonomy.SCHEMA + local_lab.SCHEMA + hourly_mail.SCHEMA + audit.SCHEMA + codex_feed.SCHEMA + brain.SCHEMA)
+        conn.executescript(SCHEMA + research.SCHEMA + experiments.SCHEMA + outcomes.SCHEMA + backlog.SCHEMA + autonomy.SCHEMA + local_lab.SCHEMA + hourly_mail.SCHEMA + audit.SCHEMA + codex_feed.SCHEMA + brain.SCHEMA + repair.SCHEMA)
         conn.execute('INSERT OR IGNORE INTO run(id,state) VALUES (1,?)', (json.dumps(initial()),))
         conn.commit()
         yield conn
@@ -993,7 +994,7 @@ def step(conn, state, providers, get_quote, now):
     # Keep new entries moving at a reduced rate during sustained exit pressure.
     # Provider deferrals do not spend an attempt in either queue.
     exit_attempts = state.get('exit_attempts_since_entry', 0)
-    exit_budget = entry_quote_budget(exits, now)
+    exit_budget = min(BACKLOG_EXIT_QUOTES_PER_ENTRY,max(1,entry_quote_budget(exits, now)))
     urgent_exit = any(not p.get('owner_closeout') and (p.get('exit_priority') == 0 or p.get('exit_signal'))
                       for group in exits.values() for _, p in group)
     buy = entries and not urgent_exit and (not exits or exit_attempts >= exit_budget)
@@ -1022,6 +1023,8 @@ def step(conn, state, providers, get_quote, now):
     elif exits:
         attempts = state.get('exit_quote_attempts', 0)
         job = next_exit(exits, attempts)
+        if job not in exits:
+            job = min(exits,key=lambda key:min(p['due'] for _,p in exits[key]))
         mint, size = job
         group = exits[job]
         try:
@@ -1596,7 +1599,7 @@ def research_diagnostic():
     with connection() as conn:
         sold=conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.reason')='PBH owner-requested paper closeout'").fetchone()[0]
         written=conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.owner_closeout')=1 AND json_extract(data,'$.paper_writeoff') IS NOT NULL").fetchone()[0]
-    return {'brain':{k:brain_status[k] for k in ('enabled','cloud_configured','model','monthly_budget_usd','reserved_this_month_usd','last_call','proposal_counts')},'codex_feed':codex_status,'enabled':state['enabled'],'presets_paused':bool(state.get('preset_entries_paused')),
+    return {'brain':{k:brain_status[k] for k in ('enabled','cloud_configured','model','monthly_budget_usd','reserved_this_month_usd','last_call','proposal_counts','paper_repair')},'codex_feed':codex_status,'enabled':state['enabled'],'presets_paused':bool(state.get('preset_entries_paused')),
             'pbh_closeout':{'requested':(state.get('pbh_closeout_v1') or {}).get('positions',0),'quoted_closes':sold,'writeoffs':written,'pending':pending_pbh},'quote_failure_categories':failures,
             'cycle_age':round(now-state['last_cycle']) if state['last_cycle'] else None,
             'oldest_quote_wait':round(queue['oldest_wait']),'chart_status':chart_status, 'chart_coverage':coverage_details, 'slots':slots}

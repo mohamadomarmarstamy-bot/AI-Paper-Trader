@@ -63,6 +63,43 @@ def build_router(*,require_session):
                 for row in conn.execute('SELECT * FROM brain_proposals ORDER BY created DESC LIMIT 15')]
         return JSONResponse(value,headers={'Cache-Control':'no-store'})
 
+    async def repair_identity(request):
+        import jarvis_repair
+        try:
+            return await run_in_threadpool(jarvis_repair.authenticate,request.headers.get('authorization'))
+        except ValueError:
+            raise HTTPException(401,'Repair runner identity missing or invalid.') from None
+
+    async def repair_payload(request):
+        raw=bytearray()
+        async for chunk in request.stream():
+            raw.extend(chunk)
+            if len(raw)>20000:raise HTTPException(413,'Repair report too large.')
+        try:return json.loads(raw)
+        except ValueError:raise HTTPException(422,'Invalid repair report.') from None
+
+    @router.get('/jarvis-test-bot/repair-runner/health')
+    async def repair_health(request: Request):
+        import jarvis_repair,time
+        await repair_identity(request)
+        return JSONResponse(await run_in_threadpool(jarvis_repair.health,jarvis,time.time()),headers={'Cache-Control':'no-store'})
+
+    @router.post('/jarvis-test-bot/repair-runner/claim')
+    async def repair_claim(request: Request):
+        import jarvis_repair,time
+        claims=await repair_identity(request)
+        if await repair_payload(request)!={}:raise HTTPException(422,'Expected empty claim.')
+        return JSONResponse(await run_in_threadpool(jarvis_repair.claim,jarvis,claims,time.time()),headers={'Cache-Control':'no-store'})
+
+    @router.post('/jarvis-test-bot/repair-runner/report')
+    async def repair_report(request: Request):
+        import jarvis_repair,time
+        claims=await repair_identity(request)
+        payload=await repair_payload(request)
+        try:result=await run_in_threadpool(jarvis_repair.report,jarvis,claims,payload,time.time())
+        except (ValueError,TypeError):raise HTTPException(422,'Invalid repair report or lease.') from None
+        return JSONResponse(result,headers={'Cache-Control':'no-store'})
+
     @router.get('/jarvis-test-bot/local-worker/context')
     def local_worker_context(request: Request):
         import jarvis_local_lab as local

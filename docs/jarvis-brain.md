@@ -22,7 +22,7 @@ The existing local strategy validator admits a proposal only into an available o
 
 ## Code artifacts
 
-For unfamiliar bugs, the model may propose one replacement function from a small source allowlist. The host constructs a diff against current source, records its SHA-256, and checks Python syntax without importing or running generated code. The proposal is stored with needs_functional_tests status. It is NOT deployed, marked fixed, or described as functionally tested. The system does not currently have an isolated functional-test/staging deployment runner. This is an explicit next gate before broader autonomous code repair.
+For unfamiliar bugs, the model may propose one replacement function from a small source allowlist. The host constructs a diff against current source, records its SHA-256, and checks Python syntax without importing or running generated code. The proposal is stored with needs_functional_tests status. It is not deployed or described as functionally tested until the independent runner completes its gates. Syntax alone never passes those gates. An OIDC-authenticated GitHub-hosted runner now tests eligible pure paper helper changes in an isolated Docker environment, proves a regression against the baseline, runs the entire existing Solana suite, and pushes a single-file commit only after passing. It verifies actual deployed source plus independent live health and automatically reverts its own commit if verification fails. Broader functions still require review. See jarvis-paper-repair.md.
 
 ## Budget and visibility
 
