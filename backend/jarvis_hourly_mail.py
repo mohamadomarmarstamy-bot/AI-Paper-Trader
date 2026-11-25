@@ -139,13 +139,13 @@ def stamp(value):
 def render(report):
     h = lambda text: escape(str(text),quote=True)
     period = stamp(report['start'])+' – '+stamp(report['end'])
-    changes = {'added':[],'failed':[],'inactive':[],'proven':[],'promoted':[],'duplicate':[]}
+    changes = {'learning':[],'paused':[],'resumed':[],'added':[],'failed':[],'inactive':[],'proven':[],'promoted':[],'duplicate':[]}
     names = {s['id']:s['name'] for s in report['strategies']}
     for item in report['events']:
         detail = json.loads(item['detail'])
         changes.setdefault(item['kind'],[]).append(detail.get('name') or names.get(item['strategy'],item['strategy'][:8]))
     activity = []
-    labels = {'added':'Added for paper testing','failed':'Retired after losses','inactive':'Retired for inactivity',
+    labels = {'learning':'Learning checkpoint completed','paused':'Paused for challenger rotation (history retained)','resumed':'Resumed after challenger test','added':'Added for paper testing','failed':'Retired after losses','inactive':'Retired for inactivity',
               'proven':'Passed the experiment checks','promoted':'Adopted by Jarvis','duplicate':'Duplicate proposals skipped'}
     for kind,label in labels.items():
         if changes[kind]:

@@ -2,8 +2,8 @@ name: Jarvis isolated paper repairs
 on:
   pull_request:
     paths:
-      - 'backend/jarvis_repair*.py'
-      - 'backend/test_solana_jarvis_repair*.py'
+      - 'backend/jarvis_*.py'
+      - 'backend/test_solana_jarvis_*.py'
       - 'scripts/jarvis_paper_runner.py'
       - '.github/workflows/jarvis-paper-repair.yml'
   push:
