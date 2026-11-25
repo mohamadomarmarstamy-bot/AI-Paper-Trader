@@ -393,8 +393,11 @@ def admit_proposal(api,now):
             if actual:result={**dict(actual),'recovered_after_submit':True}
     if result['status'] in ('full','capital_exhausted'):return
     with api.connection() as conn,conn:
+        conn.execute('BEGIN IMMEDIATE')
+        saved=conn.execute('SELECT report FROM brain_proposals WHERE id=?',(row['id'],)).fetchone()
+        report={**(json.loads(saved['report']) if saved else {}),**result}
         conn.execute('UPDATE brain_proposals SET status=?,report=? WHERE id=?',
-            (result['status'],json.dumps(result),row['id']))
+            (result['status'],json.dumps(report),row['id']))
 
 
 def mail_tick(api,now,post=solana_http.post):

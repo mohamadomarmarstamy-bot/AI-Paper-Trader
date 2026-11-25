@@ -50,6 +50,16 @@ class ResearchMemoryTests(unittest.TestCase):
             self.assertEqual(value['recent_trials'][0]['status'],'inactive')
             self.assertEqual(value['active_families'],{})
             self.assertEqual(memory.specification(conn,RULE,NOW)['admission'],'waiting_slot')
+    def test_admission_preserves_saved_experiment_and_research_rationale(self):
+        self.submit()
+        plan={'strategy':{**RULE,'exit':'gain >= 20'},'sources':SOURCES,'summary':'Refine exit only','checks':['Forward comparison']}
+        brain.apply_plan(api,{'kind':'strategy'},plan,None,NOW)
+        brain.admit_proposal(api,NOW+1)
+        with api.connection() as conn:
+            row=conn.execute('SELECT status,report FROM brain_proposals').fetchone();report=json.loads(row['report'])
+            self.assertEqual(row['status'],'testing')
+            self.assertEqual(report['summary'],'Refine exit only')
+            self.assertEqual(report['experiment']['changed_expressions'],['exit'])
     def test_queue_counts_toward_crowding(self):
         self.submit()
         with api.connection() as conn,conn:
