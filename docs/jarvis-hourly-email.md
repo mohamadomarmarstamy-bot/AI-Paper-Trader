@@ -1,11 +1,9 @@
-# Jarvis hourly research email
+# Jarvis scheduled research email
 
-The server sends an HTML email and plain-text alternative to the existing owner alert address. The first report covers the preceding hour; subsequent reports run every hour. Times are shown in America/New_York. No laptop update is required.
+Routine paper briefs send on the clock hour, Eastern time (America/New_York), checked every 20 seconds. The midnight brief covers the preceding period. No routine digests or retries send from 1 AM through 8:59 AM. At 9 AM, send one compact overnight summary with an hourly table of closes, separate research and Jarvis realized P/L, and strategy-event counts. Normal hourly briefs resume at 10 AM. Clock-hour scheduling prevents minute drift across restarts; timezone conversion handles daylight saving transitions.
 
-Each report includes accepted research proposals and their hypotheses and rules, strategies added or retired, duplicate submissions, promotions, progress toward 100 distinct closed coins, open holding counts, and realized paper P/L by strategy version. Main Jarvis results are separate from experiment totals. Open-position mark changes are excluded. Retired strategies retain their history. Research attempts that never submit to the server are not fully visible. Brave result text is not retained or reproduced; its provider receipt appears instead.
+Positive realized values are green, negative red, and zero gray, including period and lifetime cards and strategy scorecards. Plain-text fallback retains signed amounts.
 
-Delivery uses existing RESEND_API_KEY, HEALTH_ALERT_EMAIL_FROM and HEALTH_ALERT_EMAIL_TO. JARVIS_HOURLY_EMAIL_ENABLED defaults to true; false disables this feature independently of other alerts. A provider acceptance is not confirmation of inbox delivery.
+On migration, a minute-offset legacy schedule advances to the next permitted clock hour. The 9 AM report includes midnight onward even if old schedules had already sent part of that period. Unsent, unattempted older messages are superseded by the catch-up summary; attempted but uncertain older deliveries are retained for attention rather than replayed alongside the overnight report. Delivery success still requires a provider acceptance ID.
 
-Schedules and frozen email payloads live in the persistent Jarvis SQLite database. A restart preserves the next deadline. Downtime produces one catch-up report covering the gap. Failed deliveries retry with the same payload and provider idempotency key; after 23 hours of uncertain delivery the message is marked for attention rather than risking a resend after the provider deduplication window. Status exposes hourly_email with next_at, last_accepted, pending and attention counts, without credentials or message contents.
-
-Validation: tests cover cadence, restart persistence, retries and immutable payloads, provider acceptance, version-specific accounting, lifecycle events, HTML escaping, configuration switches, downtime, expired delivery attempts and standalone laptop validator compatibility.
+Urgent Jarvis health/inactivity and exit backlog alerts remain independent of routine digest quiet hours. No laptop worker changes are required.

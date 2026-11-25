@@ -100,6 +100,37 @@ def money(value):
     return ('+' if value>0 else '−' if value<0 else '')+'$'+f'{abs(value):,.2f}'
 
 
+def profit_color(value):
+    return '#047857' if value > 0 else '#b91c1c' if value < 0 else '#64748b'
+
+
+def next_delivery(now):
+    candidate=(int(now)//3600+1)*3600
+    while 0 < datetime.fromtimestamp(candidate,ET).hour < 9:
+        candidate+=3600
+    return candidate
+
+
+def overnight_rows(conn, start, end):
+    rows=[]
+    at=start
+    while at < end:
+        until=min(at+3600,end)
+        counts=conn.execute("SELECT count(*) AS n,COALESCE(sum(CASE WHEN bot LIKE 'research-%' THEN pnl ELSE 0 END),0) AS research,COALESCE(sum(CASE WHEN bot='jarvis' THEN pnl ELSE 0 END),0) AS main FROM trades WHERE closed>? AND closed<=? AND (bot LIKE 'research-%' OR bot='jarvis')",(at,until)).fetchone()
+        changes=conn.execute("SELECT kind,count(*) AS n FROM local_strategy_events WHERE at>? AND at<=? GROUP BY kind",(at,until)).fetchall()
+        rows.append({'label':datetime.fromtimestamp(at,ET).strftime('%I %p %Z')+'–'+datetime.fromtimestamp(until,ET).strftime('%I %p %Z'),'closed':counts['n'],'research':counts['research']/1e6,'main':counts['main']/1e6,'changes':', '.join(str(r['n'])+' '+r['kind'] for r in changes) or '—'})
+        at=until
+    return rows
+
+
+def render_overnight(report, rows):
+    table=''.join('<tr><td style="padding:10px">'+escape(r['label'])+'</td><td>'+str(r['closed'])+'</td><td style="color:'+profit_color(r['research'])+'">'+money(r['research'])+'</td><td style="color:'+profit_color(r['main'])+'">'+money(r['main'])+'</td><td>'+escape(r['changes'])+'</td></tr>' for r in rows)
+    text='Jarvis overnight summary\n'+stamp(report['start'])+' – '+stamp(report['end'])+'\nResearch realized: '+money(report['hour_net'])+' | Lifetime: '+money(report['net'])+'\n'
+    text+='\n'.join(r['label']+': '+str(r['closed'])+' closes | research '+money(r['research'])+' | Jarvis '+money(r['main'])+' | '+r['changes'] for r in rows)
+    body='<html><body style="font-family:Arial;background:#f1f5f9;color:#0f172a"><div style="max-width:700px;margin:auto;padding:24px;background:white"><h1>Jarvis overnight summary</h1><p>'+escape(stamp(report['start'])+' – '+stamp(report['end']))+'</p><p>Realized this period: <strong style="color:'+profit_color(report['hour_net'])+'">'+money(report['hour_net'])+'</strong> · Lifetime: <strong style="color:'+profit_color(report['net'])+'">'+money(report['net'])+'</strong></p><table width="100%" style="font-size:12px"><tr><th>Hour</th><th>Closes</th><th>Research P/L</th><th>Jarvis P/L</th><th>Changes</th></tr>'+table+'</table><p style="font-size:12px;color:#64748b">Paper simulation only. Realized results include recorded costs and write-offs; open-position P/L is excluded. Hour labels show each activity interval.</p></div></body></html>'
+    return {'subject':'Jarvis overnight summary · '+money(report['hour_net'])+' paper realized','html':body,'text':text}
+
+
 def stamp(value):
     return datetime.fromtimestamp(value,ET).strftime('%b %d, %I:%M %p %Z')
 
@@ -123,11 +154,11 @@ def render(report):
     table_rows = []
     plain_rows = []
     for s in report['strategies']:
-        color = '#047857' if s['hour_net']>=0 else '#b91c1c'
+        color = profit_color(s['hour_net'])
         table_rows.append(f'''<tr><td style="padding:14px 10px;border-bottom:1px solid #e2e8f0">
 <strong>{h(s['name'])}</strong><br><span style="font-size:12px;color:#64748b">{h(s['status'].title())} · {s['coins']}/100 coins · {s['open']} open</span></td>
 <td align="right" style="padding:14px 10px;border-bottom:1px solid #e2e8f0;color:{color};white-space:nowrap">{money(s['hour_net'])}</td>
-<td align="right" style="padding:14px 10px;border-bottom:1px solid #e2e8f0;white-space:nowrap">{money(s['net'])}</td></tr>''')
+<td align="right" style="padding:14px 10px;border-bottom:1px solid #e2e8f0;color:{profit_color(s['net'])};white-space:nowrap">{money(s['net'])}</td></tr>''')
         plain_rows.append(f"{s['name']} [{s['status']}]: period {money(s['hour_net'])}; lifetime {money(s['net'])}; {s['coins']}/100 coins; {s['open']} open")
     if not table_rows:
         table_rows=['<tr><td colspan="3" style="padding:16px;color:#64748b">No research strategies are active yet.</td></tr>']
@@ -158,8 +189,8 @@ def render(report):
 <tr><td style="padding:32px;background:#0f172a;color:#ffffff"><div style="font-size:12px;letter-spacing:3px;color:#6ee7b7">JARVIS / RESEARCH DESK</div>
 <h1 style="font-size:27px;margin:14px 0 8px">Your hourly paper trading brief</h1><div style="font-size:13px;color:#cbd5e1">{h(period)}</div></td></tr>
 <tr><td style="padding:28px 28px 8px"><table role="presentation" width="100%"><tr>
-<td width="50%" style="padding:16px;background:#ecfdf5;border-radius:8px"><div style="font-size:12px;color:#475569">REALIZED THIS PERIOD</div><div style="font-size:29px;font-weight:bold;margin-top:8px">{money(report['hour_net'])}</div></td>
-<td width="50%" style="padding:16px;background:#f8fafc;border-radius:8px"><div style="font-size:12px;color:#475569">EXPERIMENT LIFETIME</div><div style="font-size:29px;font-weight:bold;margin-top:8px">{money(report['net'])}</div></td></tr></table>
+<td width="50%" style="padding:16px;background:#ecfdf5;border-radius:8px"><div style="font-size:12px;color:#475569">REALIZED THIS PERIOD</div><div style="font-size:29px;font-weight:bold;margin-top:8px;color:{profit_color(report['hour_net'])}">{money(report['hour_net'])}</div></td>
+<td width="50%" style="padding:16px;background:#f8fafc;border-radius:8px"><div style="font-size:12px;color:#475569">EXPERIMENT LIFETIME</div><div style="font-size:29px;font-weight:bold;margin-top:8px;color:{profit_color(report['net'])}">{money(report['net'])}</div></td></tr></table>
 <p style="font-size:12px;color:#64748b">{report['closed']} positions closed this period · {report['open']} experiment holdings open · all amounts simulated USD</p>
 <h2 style="font-size:18px;margin-top:26px">What changed</h2>{''.join(activity)}
 <h2 style="font-size:18px;margin-top:26px">Strategy scorecard</h2>
@@ -190,15 +221,37 @@ def tick(api, clock=time.time, post=solana_http.post):
         schedule=conn.execute('SELECT * FROM jarvis_digest_schedule WHERE id=1').fetchone()
         state,_=api.read(conn)
         jarvis_health_mail.queue(conn,state,now)
-        if schedule is None or now>=schedule['next_at']:
-            start=schedule['last_end'] if schedule else now-3600
-            report=collect(conn,state,start,now)
+        local=datetime.fromtimestamp(now,ET)
+        boundary=int(now)//3600*3600
+        if schedule is None:
+            midnight=local.replace(hour=0,minute=0,second=0,microsecond=0).timestamp()
+            conn.execute('INSERT INTO jarvis_digest_schedule VALUES (1,?,?)',(next_delivery(now),midnight if local.hour<9 else boundary))
+            schedule=conn.execute('SELECT * FROM jarvis_digest_schedule WHERE id=1').fetchone()
+        elif schedule['next_at'] % 3600:
+            conn.execute('UPDATE jarvis_digest_schedule SET next_at=? WHERE id=1',(next_delivery(now),))
+            schedule=conn.execute('SELECT * FROM jarvis_digest_schedule WHERE id=1').fetchone()
+        # Quiet hours also defer delivery retries. Health alerts use their own transport.
+        if 0 < local.hour < 9:
+            return 'quiet_hours'
+        if now>=schedule['next_at']:
+            start=schedule['last_end']
+            if local.hour==9:
+                midnight=local.replace(hour=0,minute=0,second=0,microsecond=0).timestamp()
+                start=min(start,midnight)
+                start=int(start)//3600*3600
+            report=collect(conn,state,start,boundary)
+            overnight=local.hour==9 and boundary-start>3600
+            content=render_overnight(report,overnight_rows(conn,start,boundary)) if overnight else render(report)
             payload={'from':os.environ['HEALTH_ALERT_EMAIL_FROM'].strip(),
-                     'to':[os.environ['HEALTH_ALERT_EMAIL_TO'].strip()],**render(report)}
-            ident='jarvis-hourly/'+str(int(now))
+                     'to':[os.environ['HEALTH_ALERT_EMAIL_TO'].strip()],**content}
+            ident='jarvis-hourly/'+str(boundary)
+            # Fold unsent old summaries into the catch-up report instead of flooding at 9 AM.
+            if overnight:
+                conn.execute("UPDATE jarvis_digest_mail SET status='attention' WHERE status='pending' AND first_attempt IS NOT NULL AND end<=?",(boundary,))
+            conn.execute("UPDATE jarvis_digest_mail SET status='superseded' WHERE status='pending' AND first_attempt IS NULL AND end<=?",(boundary,))
             conn.execute('INSERT OR IGNORE INTO jarvis_digest_mail(id,start,end,payload,due) VALUES (?,?,?,?,?)',
-                         (ident,start,now,json.dumps(payload),now))
-            conn.execute('INSERT OR REPLACE INTO jarvis_digest_schedule VALUES (1,?,?)',(now+3600,now))
+                         (ident,start,boundary,json.dumps(payload),now))
+            conn.execute('INSERT OR REPLACE INTO jarvis_digest_schedule VALUES (1,?,?)',(next_delivery(now),boundary))
         row=conn.execute("SELECT * FROM jarvis_digest_mail WHERE status='pending' AND due<=? AND lease<=? ORDER BY end LIMIT 1",(now,now)).fetchone()
         if not row:return 'not_due'
         if row['first_attempt'] is not None and now-row['first_attempt']>=23*3600:

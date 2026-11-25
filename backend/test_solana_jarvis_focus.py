@@ -75,9 +75,11 @@ class JarvisHealthTests(unittest.TestCase):
         self.enterContext(patch.object(database,'DATABASE_PATH',Path(temp)/'trader.sqlite3'))
         self.enterContext(patch.dict(os.environ,{'JARVIS_FOCUS_MODE':'true','JARVIS_HOURLY_EMAIL_ENABLED':'true',
             'RESEND_API_KEY':'fake','HEALTH_ALERT_EMAIL_FROM':'bot@example.com','HEALTH_ALERT_EMAIL_TO':'owner@example.com'}))
-        self.now=10000
+        self.now=10800
         self.post=Mock(return_value=Mock(status_code=200,json=lambda:{'id':'accepted'}))
         self.update(enabled=True,last_cycle=self.now)
+        with api.connection() as conn,conn:
+            conn.execute('INSERT INTO jarvis_digest_schedule VALUES (1,?,?)',(self.now,self.now-3600))
         self.assertEqual(self.tick(),'accepted')
 
     def update(self,**changes):
