@@ -1609,7 +1609,8 @@ def research_diagnostic():
     with connection() as conn:
         sold=conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.reason')='PBH owner-requested paper closeout'").fetchone()[0]
         written=conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.owner_closeout')=1 AND json_extract(data,'$.paper_writeoff') IS NOT NULL").fetchone()[0]
-    return {'learning':{k:learning_status[k] for k in ('interval_coins','reviewed_coins','pending_closed_coins','next_checkpoint')},
+    return {'improvement_backlog':{'tasks':[{k:t[k] for k in ('kind','priority','status','recurrences')} for t in brain_status.get('improvement_backlog',{}).get('tasks',[])], 'rechecks':[{k:r[k] for k in ('checked','status')} for r in brain_status.get('improvement_backlog',{}).get('rechecks',[])]},
+            'learning':{k:learning_status[k] for k in ('interval_coins','reviewed_coins','pending_closed_coins','next_checkpoint')},
             'challenger_rotation':{'active':[{'slot':r['slot'],'started':r['started'],'ends':r['ends'],'status':r['status']} for r in rotation_status['runs'] if r['status'] in ('active','draining')]},
             'brain':{k:brain_status[k] for k in ('enabled','cloud_configured','model','monthly_budget_usd','reserved_this_month_usd','last_call','proposal_counts','paper_repair','scouting_summary')},'codex_feed':codex_status,'enabled':state['enabled'],'presets_paused':bool(state.get('preset_entries_paused')),
             'pbh_closeout':{'requested':(state.get('pbh_closeout_v1') or {}).get('positions',0),'quoted_closes':sold,'writeoffs':written,'pending':pending_pbh},'quote_failure_categories':failures,
