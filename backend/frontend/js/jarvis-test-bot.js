@@ -313,79 +313,90 @@
       $('jarvis-holdings').replaceChildren(...(holdings.length ? holdings : [el('p', 'No open holdings.', 'meme-muted')]));
     }
     if (active === 'health') {
-      $('jarvis-cycle').textContent = state.last_cycle ? `Last cycle ${displayTime(state.last_cycle)} ET · ${state.watching} coins on watch` : 'Waiting for the first cycle.';
-      const activity = state.quote_activity;
-      if (state.discovery) $('jarvis-cycle').textContent += ` · Up to ${state.discovery.batch_size} candidates per ${state.discovery.interval_seconds}s`;
-      if (activity) $('jarvis-cycle').textContent += ` · Since ${displayTime(activity.since)} ET: ${activity.paper_entries} paper entries from ${activity.entry_quotes} buy quotes · ${activity.exit_quotes} sell quotes · ${activity.deferrals} capacity deferrals`;
+      $('jarvis-cycle').textContent = `${state.last_cycle ? 'Updated ' + displayTime(state.last_cycle) + ' ET' : 'Awaiting first cycle'} · ${state.watching} coins watched`;
+      const queue = state.exit_queue || {};
       const work = state.exit_work;
-      const workPanel = $('jarvis-exit-work');
-      workPanel.replaceChildren();
-      if (work) {
-        workPanel.append(el('h2', 'Open position status'));
-        for (const [key, label, explanation] of [
-          ['holding', 'Holding', 'No observed exit signal; next quote check is scheduled.'],
-          ['exit_triggered', 'Exit triggered', 'Observed exit signal awaiting a quote or recheck.'],
-          ['quote_delayed', 'Quote delayed', 'Quote check overdue or failed; no observed exit signal.']
-        ]) {
-          const group = work[key];
-          workPanel.append(el('p', `${label}: ${group.positions} positions across ${group.coins} coins. ${explanation}`));
-        }
-        const bases = work.trigger_bases;
-        workPanel.append(el('p', `Exit signals: ${bases.confirmed_quote} confirmed by a prior quote · ${bases.strategy_timer} strategy timers · ${bases.indicative_price_or_market} indicative market signals needing quote confirmation. Oldest signal: ${displayDuration(work.oldest_signal_seconds)}.`));
-        const latency = work.close_latency;
-        workPanel.append(el('p', latency.samples
-          ? `Observed signal to paper close: ${displayDuration(latency.average_seconds)} average · ${displayDuration(latency.p95_seconds)} at 95th percentile · last ${latency.samples} measured closes.`
-          : 'Observed signal-to-close timing: waiting for measured closes.'));
-        workPanel.append(el('p', 'Counts are positions, not submitted sell orders. Coin counts can overlap between groups. Signals are first observed times, not the exact market crossing time. Same-quote closes can take 0s; write-offs are excluded.'));
-      }
-      const queue = state.exit_queue;
-      const regular = (queue?.due || 0) - (queue?.retry_due || 0);
-      const retry = queue?.retry_positions ? ` · ${queue.retry_positions} holdings awaiting a retry` : '';
-      const failure = state.last_quote_failures?.exit;
-      $('jarvis-exit-queue').textContent = (regular
-        ? `${regular} quote checks due · Oldest waiting ${displayDuration(queue.oldest_wait)}${queue.backed_up ? ' · Entries slowed while exits catch up' : ''}`
-        : 'No quote checks due') + retry + (failure ? ` · Last exit quote failure: ${failure.reason}` : '');
       const pause = state.entry_catchup_pause;
-      if (pause?.active) $('jarvis-exit-queue').textContent += ' · PAPER BUYS TEMPORARILY PAUSED: exits continue; buys resume automatically after at most 2 regular checks are due, oldest ≤5s, and no urgent checks, sustained for 30s. Failed routes keep retrying separately.';
-      else if (pause?.resumed_at && !state.backlog_guard?.timer_active && !state.backlog_guard?.until_all_closed && state.enabled) $('jarvis-exit-queue').textContent += ` · Paper catch-up pause completed: buys permitted again ${displayTime(pause.resumed_at)} ET.`;
-      if (state.backlog_guard?.until_all_closed) $('jarvis-exit-queue').textContent += ' · Buys paused until every position closes; sells continue.';
-      if (state.backlog_guard?.timer_active) $('jarvis-exit-queue').textContent += ` · Timed buy pause until ${displayTime(state.backlog_guard.pause_until)} ET; sells continue.`;
+      const guard = state.backlog_guard || {};
+      const urgent = state.exit_monitor?.urgent_positions || 0;
+      let banner = queue.backed_up ? 'Exit queue delayed · Entry capacity reduced' : urgent ? 'Urgent exits take priority' : 'Monitoring active';
+      if (!state.enabled) banner = 'Paper entries paused · Exits monitored';
+      else if (guard.until_all_closed) banner = 'Buys paused until holdings close · Exits monitored';
+      else if (guard.timer_active) banner = `Buys paused until ${displayTime(guard.pause_until)} ET`;
+      else if (pause?.active) banner = 'Buy pause active · Clearing exit backlog';
+      $('jarvis-exit-queue').textContent = banner;
+      $('jarvis-exit-queue').className = 'health-banner' + (queue.backed_up || urgent || pause?.active ? ' warning' : '');
+
+      const workPanel = $('jarvis-exit-work');
+      const cards = el('div', '', 'health-cards');
+      if (work) {
+        for (const [key, label, warning] of [['holding', 'Holding', false], ['exit_triggered', 'Exit triggered', true], ['quote_delayed', 'Quote delayed', true]]) {
+          const group = work[key];
+          const card = el('article', '', 'health-card' + (warning && group.positions ? ' warning' : ''));
+          card.append(el('span', label), el('strong', String(group.positions)), el('small', `${group.coins} coins`));
+          cards.append(card);
+        }
+      }
+      const metrics = el('div', '', 'health-metrics');
+      for (const [label, value] of [['Checks due', queue.due || 0], ['Oldest wait', displayDuration(queue.oldest_wait || 0)], ['Route retries', queue.retry_positions || 0]]) {
+        const metric = el('span', label);
+        metric.append(el('strong', String(value)));
+        metrics.append(metric);
+      }
+      workPanel.replaceChildren(cards, metrics);
+
+      const diagnostics = [];
+      const activity = state.quote_activity;
+      if (activity) diagnostics.push(el('p', `${activity.paper_entries.toLocaleString()} paper entries · ${activity.entry_quotes.toLocaleString()} buy quotes · ${activity.exit_quotes.toLocaleString()} sell quotes · ${activity.deferrals.toLocaleString()} capacity deferrals`, 'health-notes'), el('small', `Activity since ${displayTime(activity.since)} ET`, 'health-notes'));
+      if (state.discovery) diagnostics.push(el('p', `Scanner: up to ${state.discovery.batch_size} candidates every ${state.discovery.interval_seconds}s`, 'health-notes'));
+      const failure = state.last_quote_failures?.exit;
+      if (failure) diagnostics.push(el('p', `Last exit quote error${failure.at ? ' · ' + displayTime(failure.at) + ' ET' : ''}: ${failure.reason}`, 'health-notes'));
+      if (work) {
+        const bases = work.trigger_bases;
+        diagnostics.push(el('p', `Exit signals: ${bases.confirmed_quote} quote-confirmed · ${bases.strategy_timer} timer · ${bases.indicative_price_or_market} indicative · oldest ${displayDuration(work.oldest_signal_seconds)}`, 'health-notes'));
+        const latency = work.close_latency;
+        diagnostics.push(el('p', latency.samples ? `Observed signal → close: ${displayDuration(latency.average_seconds)} average · ${displayDuration(latency.p95_seconds)} p95 · ${latency.samples} measured closes` : 'Signal → close: no measured closes yet', 'health-notes'));
+      }
+      if (state.exit_monitor) diagnostics.push(el('p', `Fresh pool prices: ${state.exit_monitor.fresh_market_positions} holdings · ${urgent} urgent`, 'health-notes'));
+      if (pause?.active) diagnostics.push(el('p', 'Catch-up pause clears after ≤2 regular checks, oldest ≤5s and no urgent checks for 30 seconds. Failed routes retry separately.', 'health-notes'));
+      diagnostics.push(el('p', 'Counts refer to paper positions, not submitted sell orders. Coins can overlap. Quote delay measures overdue checks; signal-to-close timing starts at first observation and excludes write-offs.', 'health-notes'));
+      $('jarvis-health-details').replaceChildren(...diagnostics);
+
       const comparison = state.exit_comparison;
       const comparisonPanel = $('jarvis-exit-comparison');
-      comparisonPanel.replaceChildren();
+      comparisonPanel.hidden = !comparison;
       if (comparison) {
-        comparisonPanel.append(el('h2', 'Exit scheduler comparison'),
-          el('p', `Update started ${displayTime(comparison.started_at)} ET. Before: last 30 minutes. After: ${displayDuration(comparison.after_seconds)} observed.`));
-        const labels = {before: 'Before update', carried: 'After · older holdings', new: 'After · new holdings'};
-        for (const cohort of comparison.cohorts) {
-          const wait = cohort.mean_wait == null ? 'no quote samples' : `${displayDuration(cohort.mean_wait)} average overdue check · ${displayDuration(cohort.p95_wait)} at 95th percentile`;
-          const gap = cohort.mean_stop_gap == null ? 'no measured stop gaps' : `${cohort.mean_stop_gap.toFixed(1)} points average below stop`;
-          comparisonPanel.append(el('p', `${labels[cohort.id]}: ${cohort.closed} closed · ${cohort.quote_samples} measured quote waits · ${wait} · ${cohort.late_stops}/${cohort.stop_wait_samples} measured stop exits ≥90s overdue · ${gap} · ${cohort.open} still open (${cohort.route_retries} route retries)`));
+        const table = el('table', '', 'health-table');
+        const head = el('thead'); const header = el('tr');
+        for (const title of ['Period', 'Closed / open', 'Quote delay', 'Stops ≥90s late', 'Stop gap']) header.append(el('th', title));
+        head.append(header); table.append(head);
+        const body = el('tbody');
+        const labels = {before:'Before update', carried:'After · older holdings', new:'After · new holdings'};
+        for (const c of comparison.cohorts) {
+          const row = el('tr'); const period = el('td', labels[c.id]);
+          period.append(el('small', `${c.quote_samples} quote samples · ${c.route_retries} retries`));
+          const counts = el('td', `${c.closed} / ${c.open}`);
+          const wait = el('td', c.mean_wait == null ? '—' : displayDuration(c.mean_wait));
+          if (c.p95_wait != null) wait.append(el('small', `${displayDuration(c.p95_wait)} p95`));
+          row.append(period, counts, wait, el('td', `${c.late_stops}/${c.stop_wait_samples}`), el('td', c.mean_stop_gap == null ? '—' : `${c.mean_stop_gap.toFixed(1)} pp`));
+          body.append(row);
         }
-        const monitor = state.exit_monitor;
-        if (monitor) comparisonPanel.append(el('p', `Batch monitor: ${monitor.fresh_market_positions} holdings have fresh same-pool prices · ${monitor.urgent_positions} urgent holdings.`));
-        comparisonPanel.append(el('small', comparison.note));
+        table.append(body);
+        const wrap = el('div', '', 'health-table-wrap'); wrap.append(table);
+        comparisonPanel.replaceChildren(el('summary', 'Exit performance comparison'), el('p', `Updated ${displayTime(comparison.started_at)} ET · Before: 30 min · After: ${displayDuration(comparison.after_seconds)}`, 'health-notes'), wrap, el('p', 'Stop gap: average percentage points below the sampled stop. Different periods and coins are not a controlled comparison.', 'health-notes'), el('p', comparison.note, 'health-notes'));
       }
-      $('jarvis-health-bots').replaceChildren(...state.bots.map(bot => {
-        const pnl = bot.pnl ?? bot.estimated_pnl;
-        const estimate = estimateNote(bot);
-        const card = portfolioCard(bot.name, money(pnl), estimate ? 'Estimated total P/L' : 'Total P/L', sign(pnl));
-        if (estimate) card.append(el('small', estimate));
-        card.append(
-          el('p', `Closed trades P/L ${money(bot.realized)}`),
-          el('p', `Open positions P/L ${money(pnl == null ? null : pnl - bot.realized)}`),
-          el('small', `${bot.wins} wins · ${bot.losses} ${bot.losses === 1 ? 'loss' : 'losses'}`),
-          el('small', `${botState(bot)} · ${bot.quote_misses} exit quote misses`),
-        );
-        const sample = bot.exit_sample;
-        if (sample) {
-          card.append(el('p', 'Trades opened after the exit upgrade'),
-            el('small', `${sample.open} open · ${sample.closed} closed · ${money(sample.pnl)} closed P/L after fees`));
-          if (sample.quote_wait != null) card.append(el('small', `Avg. exit quote wait ${displayDuration(sample.quote_wait)}`));
-          if (sample.stop_gap != null) card.append(el('small', `Avg. fill below stop ${sample.stop_gap.toFixed(1)} percentage points across ${sample.stop_exits} exits`));
-        }
-        return card;
-      }));
+      const table = el('table', '', 'health-table');
+      const head = el('thead'); const header = el('tr');
+      for (const title of ['Strategy', 'Status', 'Open', 'Exit quote misses']) header.append(el('th', title));
+      head.append(header); table.append(head);
+      const body = el('tbody');
+      for (const bot of state.bots) {
+        const row = el('tr');
+        row.append(el('td', bot.name), el('td', botState(bot)), el('td', String(bot.open)), el('td', bot.quote_misses.toLocaleString()));
+        body.append(row);
+      }
+      table.append(body);
+      $('jarvis-health-bots').replaceChildren(table);
     }
     if (['history', 'rug-pulls'].includes(active) || jarvis) {
       const group = state.bots.filter(bot => (bot.id === 'jarvis') === jarvis);
