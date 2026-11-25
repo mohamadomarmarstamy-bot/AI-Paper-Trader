@@ -129,7 +129,7 @@ def symptom_present(kind,snapshot):
     if not snapshot.get('paper_enabled'):return False
     if kind=='exit_backlog':return snapshot.get('oldest_quote_wait',0)>=120
     if kind=='worker_stalled':return snapshot.get('cycle_age') is None or snapshot['cycle_age']>=180
-    if kind=='chart_data_gap':return snapshot.get('eligible_candidates',0)>=10 and snapshot.get('complete_candidates',0)==0
+    if kind=='chart_data_gap':return snapshot.get('eligible_candidates',0)>=10 and snapshot.get('complete_candidates',0)/max(1,snapshot.get('eligible_candidates',0))<.2
     if kind=='engine_error':return bool(snapshot.get('engine_error_present'))
     return False
 
@@ -140,6 +140,7 @@ def goal_met(kind,before,after):
         or after.get('oldest_quote_wait',0)>120):return False
     if kind=='exit_backlog':return after.get('oldest_quote_wait',0)<120 and after.get('oldest_quote_wait',0)<before.get('oldest_quote_wait',0)
     if kind=='worker_stalled':return after['cycle_age']<45
-    if kind=='chart_data_gap':return after.get('complete_candidates',0)>before.get('complete_candidates',0)
+    if kind=='chart_data_gap':return (after.get('complete_candidates',0)>before.get('complete_candidates',0)
+        and (after.get('eligible_candidates',0)<10 or after.get('complete_candidates',0)/after['eligible_candidates']>=.2))
     if kind=='engine_error':return not after.get('engine_error_present',True)
     return False
