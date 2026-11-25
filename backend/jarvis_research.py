@@ -4,12 +4,81 @@ import os
 import re
 import statistics
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 
 import solana_http
 
 FRESH_SECONDS = 180
 CHART_INTERVAL = 6  # Conservative shared pacing: at most ten chart calls/minute.
 CHART_REFRESH = 60  # Provider responses are cached for one minute.
+CHART_BARS = 20
+# The pool can start during its first candle. Before 19 minutes have passed,
+# even counting that first partial interval, 20 completed candles are impossible.
+MIN_POOL_AGE_MINUTES = CHART_BARS - 1
+
+
+class ChartUnavailable(ValueError):
+    """A chart response that cannot be used, with a fixed diagnostic label."""
+
+    def __init__(self, status):
+        super().__init__(status)
+        self.status = status
+
+
+def rate_limit_delay(headers, now):
+    """Honor Retry-After as seconds or an HTTP date, with the existing floor."""
+    value = (headers or {}).get('Retry-After')
+    try:
+        delay = int(value) if value.isascii() and value.isdecimal() else parsedate_to_datetime(value).timestamp() - now
+    except (AttributeError, TypeError, ValueError, OverflowError, OSError):
+        return CHART_REFRESH
+    # Bound a corrupt header to one day; do not shorten a normal cooldown.
+    return min(86400, max(CHART_REFRESH, delay))
+
+
+def pool_warming(row):
+    age = row.get('age_minutes')
+    return type(age) in (int, float) and 0 <= age < MIN_POOL_AGE_MINUTES
+
+
+def chart_is_fresh(record, now):
+    value = record.get('value')
+    if not isinstance(value, dict):
+        return False
+    seen, closed = record.get('at'), value.get('closed_at')
+    return (type(seen) in (int, float) and type(closed) in (int, float)
+            and 0 <= now - seen <= FRESH_SECONDS and 0 <= now - closed <= FRESH_SECONDS)
+
+
+def chart_coverage(rows, records, now):
+    """Count same-pool evidence against this cycle's research candidates."""
+    counts = dict.fromkeys(('complete', 'zero_volume_baseline', 'partial_indicators',
+                            'pool_warming', 'not_sampled', 'insufficient_history',
+                            'stale_candles', 'stale_evidence', 'invalid_chart',
+                            'provider_error', 'rate_limited'), 0)
+    for row in rows:
+        pair, evidence = records.get(row['mint'], (None, {}))
+        record = evidence.get('chart', {}) if pair == row['pair'] else {}
+        if chart_is_fresh(record, now):
+            value = record['value']
+            finite = lambda field: type(value.get(field)) in (int, float) and math.isfinite(value[field])
+            if finite('rsi') and finite('volume_ratio'):
+                reason = 'complete'
+            elif finite('rsi') and 'volume_ratio' in value and value['volume_ratio'] is None:
+                reason = 'zero_volume_baseline'
+            else:
+                reason = 'partial_indicators'
+        elif pool_warming(row):
+            reason = 'pool_warming'
+        elif record.get('status') in ('insufficient_history', 'stale_candles', 'invalid_chart', 'provider_error', 'rate_limited'):
+            reason = record['status']
+        elif record.get('value') is not None:
+            reason = 'stale_evidence'
+        else:
+            reason = 'not_sampled'
+        counts[reason] += 1
+    return {'eligible': len(rows), 'reasons': counts}
+
 POST_LOOKBACK = 3600
 X_INTERVAL = 1800
 ADDRESS = re.compile(r'[1-9A-HJ-NP-Za-km-z]{32,44}')
@@ -35,7 +104,16 @@ def payload(url, *, params, headers=None):
 
 
 def chart_signal(candles, now):
+    try:
+        return _chart_signal(candles, now)
+    except ChartUnavailable:
+        return None
+
+
+def _chart_signal(candles, now):
     """Tag patterns using completed, contiguous 1-minute candles."""
+    if not isinstance(candles, list):
+        raise ChartUnavailable('invalid_chart')
     bars = {}
     for bar in candles:
         try:
@@ -46,11 +124,14 @@ def chart_signal(candles, now):
         except (ValueError, TypeError):
             continue
     if not bars:
-        return None
+        raise ChartUnavailable('invalid_chart' if candles else 'insufficient_history')
     latest = max(bars)
-    times = range(latest - 19 * 60, latest + 1, 60)
-    if now - latest > 180 or any(at not in bars for at in times):
-        return None
+    if now - latest > FRESH_SECONDS:
+        # Preserve the stricter existing validation on candle start age.
+        raise ChartUnavailable('stale_candles')
+    times = range(latest - (CHART_BARS - 1) * 60, latest + 1, 60)
+    if any(at not in bars for at in times):
+        raise ChartUnavailable('insufficient_history')
     history = [bars[at] for at in times]
     op, high, low, close, volume = history[-1]
     level = max(bar[1] for bar in history[-12:-2])
@@ -129,7 +210,11 @@ def chart(row, now, fetch=payload):
                  + row['pair'] + '/ohlcv/minute',
                  params={'aggregate': 1, 'limit': 30, 'token': row['mint'], 'currency': 'usd',
                          'include_empty_intervals':'true'})
-    return chart_signal(data['data']['attributes']['ohlcv_list'], now)
+    try:
+        candles = data['data']['attributes']['ohlcv_list']
+    except (KeyError, TypeError):
+        raise ChartUnavailable('invalid_chart') from None
+    return _chart_signal(candles, now)
 
 
 def social_source(provider, row, now, fetch=payload):
