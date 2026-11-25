@@ -14,6 +14,8 @@ from zoneinfo import ZoneInfo
 import requests
 
 import database
+import jarvis_local_lab as local_lab
+import jarvis_autonomy as autonomy
 import jarvis_experiments as experiments
 import jarvis_backlog as backlog
 import jarvis_strategies as lab
@@ -62,9 +64,10 @@ BOTS = {
     'patient-step': ('Pullback Ladder', 'pullback', 'step'),
     'patient-trim': ('Pullback Trim', 'pullback', 'trim'),
     **lab.BOTS,
+    **local_lab.SLOTS,
     'jarvis': ('Jarvis Trader', None, None),
 }
-FIXED = tuple(BOTS)[:-1]
+FIXED = tuple(bot for bot in BOTS if bot != 'jarvis' and bot not in local_lab.SLOTS)
 DESCRIPTIONS = {
     'instant': 'Buys at the first available quote after discovery.',
     'pullback': 'Waits for a 3–15% dip from the observed high and a 2% rebound from the low.',
@@ -102,7 +105,7 @@ def connection():
     path = database.DATABASE_PATH.with_name('jarvis_paper.sqlite3')
     with closing(sqlite3.connect(path, timeout=5)) as conn:
         conn.row_factory = sqlite3.Row
-        conn.executescript(SCHEMA + research.SCHEMA + experiments.SCHEMA + outcomes.SCHEMA + backlog.SCHEMA)
+        conn.executescript(SCHEMA + research.SCHEMA + experiments.SCHEMA + outcomes.SCHEMA + backlog.SCHEMA + autonomy.SCHEMA + local_lab.SCHEMA)
         conn.execute('INSERT OR IGNORE INTO run(id,state) VALUES (1,?)', (json.dumps(initial()),))
         conn.commit()
         yield conn
@@ -296,7 +299,7 @@ def exit_floor(peak):
 
 def open_trade(state, bot, row, quantity, now, evidence=None):
     portfolio = state['bots'][bot]
-    if bot != 'jarvis' and portfolio['cash'] < BUY_COST:
+    if bot != 'jarvis' and bot not in local_lab.SLOTS and portfolio['cash'] < BUY_COST:
         funding = BUY_COST - portfolio['cash']
         portfolio['cash'] += funding
         portfolio['funding'] += funding
@@ -304,6 +307,9 @@ def open_trade(state, bot, row, quantity, now, evidence=None):
         return
     portfolio['cash'] -= BUY_COST
     source = bot if bot != 'jarvis' else (state.get('strategy') or {}).get('source')
+    policy = dict(state['strategy']) if bot == 'jarvis' else {'entry': BOTS[bot][1], 'exit': BOTS[bot][2]}
+    if bot in local_lab.SLOTS:
+        policy['local_rule'] = dict(state['local_rules'][bot])
     portfolio['positions'][row['mint']] = {
         'mint': row['mint'], 'pair': row.get('pair'), 'symbol': row['symbol'], 'opened': now, 'quantity': quantity,
         'entry_cost': BUY_COST, 'cost': BUY_COST, 'banked': 0, 'peak': 0,
@@ -311,7 +317,7 @@ def open_trade(state, bot, row, quantity, now, evidence=None):
         'strategy_version': lab.version(source) if source in lab.BOTS else None,
         'target': 20, 'trims': 0, 'mark': None, 'mark_at': None, 'due': now + POLL,
         'pending': None, 'liquidity': row['liquidity_usd'], 'age': row['age_minutes'],
-        'policy': dict(state['strategy']) if bot == 'jarvis' else {'entry': BOTS[bot][1], 'exit': BOTS[bot][2]},
+        'policy': policy,
     }
 
 
@@ -371,6 +377,12 @@ def apply_exit(completed, portfolio, bot, p, quote_size, amount, now, evidence=N
     if gain > p['peak']:
         p['last_high_at'] = now
     p['peak'] = max(p['peak'], gain)
+    if p['policy'].get('local_rule'):
+        reason = local_lab.exit_reason(p, gain, now, market or {}, evidence or {})
+        if reason:
+            p.setdefault('exit_signal', {'at': now, 'basis': 'confirmed_quote'})
+            sell(completed, portfolio, bot, p, quote_size, amount, now, reason)
+        return
     chart = (evidence or {}).get('chart') or {}
     special = lab.exit_reason(p, gain, amount, now, chart, market or {}, TRADE, (evidence or {}).get('benchmark'))
     floor = lab.floor(p['policy']['exit'], p['peak'], exit_floor)
@@ -400,13 +412,13 @@ def review_size(reviewed):
 
 
 def evaluate(conn, state):
-    total = conn.execute("SELECT count(*) FROM trades WHERE bot!='jarvis'").fetchone()[0]
+    total = conn.execute("SELECT count(*) FROM trades WHERE bot!='jarvis' AND bot NOT LIKE 'research-%'").fetchone()[0]
     while True:
         start = state['reviewed']
         batch_size = review_size(start)
         if total < start + batch_size:
             return
-        rows = conn.execute("SELECT data FROM trades WHERE bot!='jarvis' ORDER BY id LIMIT ? OFFSET ?",
+        rows = conn.execute("SELECT data FROM trades WHERE bot!='jarvis' AND bot NOT LIKE 'research-%' ORDER BY id LIMIT ? OFFSET ?",
                             (batch_size, start)).fetchall()
         trades = [json.loads(row['data']) for row in rows]
         best, mint_count = review_candidate(trades)
@@ -467,11 +479,11 @@ def refresh_early_review(conn, state):
     if state['reviewed']:
         return
     last = (state.get('early_review') or {}).get('closed', 0)
-    count = conn.execute("SELECT count(*) FROM trades WHERE bot!='jarvis'").fetchone()[0]
+    count = conn.execute("SELECT count(*) FROM trades WHERE bot!='jarvis' AND bot NOT LIKE 'research-%'").fetchone()[0]
     if count < EARLY_REVIEW_MIN or count >= FIRST_REVIEW or count < last + EARLY_REVIEW_INTERVAL:
         return
     trades = [json.loads(row['data']) for row in conn.execute(
-        "SELECT data FROM trades WHERE bot!='jarvis' ORDER BY id LIMIT ?", (count,))]
+        "SELECT data FROM trades WHERE bot!='jarvis' AND bot NOT LIKE 'research-%' ORDER BY id LIMIT ?", (count,))]
     best, mint_count = review_candidate(trades)
     bots = {}
     for bot in FIXED:
@@ -497,11 +509,11 @@ def refresh_early_review(conn, state):
 
 
 def refresh_outcome_review(conn, state):
-    count = conn.execute("SELECT COUNT(*) FROM trades WHERE bot!='jarvis'").fetchone()[0]
+    count = conn.execute("SELECT COUNT(*) FROM trades WHERE bot!='jarvis' AND bot NOT LIKE 'research-%'").fetchone()[0]
     previous = state.get('outcome_review')
     if previous and count < previous['closed'] + 25:
         return
-    recent = conn.execute("SELECT data FROM trades WHERE bot!='jarvis' ORDER BY id DESC LIMIT 1000").fetchall()
+    recent = conn.execute("SELECT data FROM trades WHERE bot!='jarvis' AND bot NOT LIKE 'research-%' ORDER BY id DESC LIMIT 1000").fetchall()
     trades = [json.loads(row['data']) for row in reversed(recent)]
     state['outcome_review'] = {'closed': count, **outcomes.collection(trades)}
 
@@ -549,6 +561,7 @@ def opportunity_evidence(conn, row, now, benchmark=None):
 
 def entry_jobs(conn, state, now):
     possible = {}
+    local_capacity = not exit_queue(quote_jobs(state, now), now)['backed_up']
     for mint, row in state['watch'].items():
         if row.get('monitor_only') or now - row['last'] > 90 or now < row.get('retry', 0):
             continue
@@ -558,10 +571,21 @@ def entry_jobs(conn, state, now):
         for bot, portfolio in state['bots'].items():
             if bot in closed or mint in portfolio['positions']:
                 continue
+            if bot in local_lab.SLOTS:
+                if local_capacity and local_lab.entry_allowed(state, bot, row, market_evidence, now):
+                    possible.setdefault(mint, []).append(bot)
+                continue
             if bot == 'jarvis':
                 strategy = state['strategy']
                 if (state.get('entry_guard') or not strategy or portfolio['cash'] < BUY_COST or row['first'] < strategy['activated_at']
                         or row['liquidity_usd'] < strategy['min_liquidity'] or row['age_minutes'] < strategy['min_age']):
+                    continue
+                if strategy.get('local_rule') and not local_lab.run(
+                        strategy['local_rule']['entry'], local_lab.observations(row, market_evidence)):
+                    continue
+                if strategy.get('autonomous_rule') and not autonomy.allows(
+                        strategy['autonomous_rule'], row['liquidity_usd'], row['age_minutes'],
+                        opportunity_evidence(conn, row, now, state.get('benchmark'))):
                     continue
                 rule = strategy.get('entry_filter', 'baseline')
                 avoid = strategy.get('avoid_pattern')
@@ -640,6 +664,9 @@ def exit_priority(position, now, market=None, benchmark=None):
     elif p.get('mark') is not None:
         gain = 100 * (p['mark'] - p['cost']) / p['cost']
         gross = p['mark'] + SELL_FEE
+    if p['policy'].get('local_rule'):
+        rule_gain = gain if gain is not None else 0
+        return 0 if local_lab.exit_reason(p, rule_gain, now, market or {}, {}) else 3
     if lab.exit_reason(p, gain if gain is not None else 0, gross if gross is not None else TRADE,
                        now, {}, market or {}, TRADE, benchmark):
         return 0
@@ -922,10 +949,13 @@ def tick(*, providers=None, get_quote=quote, clock=time.time):
                         (trade['bot'], trade['mint'], trade['opened'], trade['closed'], day,
                          trade['pnl'], trade['entry_cost'], json.dumps(trade)),
                     )
+                local_lab.review(conn, state, now)
                 old_version = (state['strategy'] or {}).get('version')
                 if completed:
                     evaluate(conn, state)
                     guard_entries(conn, state)
+                    autonomy.guard(conn, state)
+                    autonomy.review(conn, state, now)
                 if completed or 'outcome_review' not in state:
                     refresh_outcome_review(conn, state)
                 if completed or not state.get('early_review_initialized'):
@@ -948,6 +978,9 @@ def guard_entries(conn, state):
     if (state.get('entry_guard') or {}).get('version') != strategy['version']:
         state.pop('entry_guard', None)
     if state.get('entry_guard'):
+        return
+    if strategy.get('local_rule'):
+        local_lab.guard(conn, state)
         return
     matched = conn.execute("""
         SELECT main.pnl AS own, baseline.pnl AS baseline
@@ -1054,8 +1087,8 @@ def status():
             estimate = portfolio['cash'] + sum(value for value, _ in valuations)
             if bot == 'jarvis' and state['strategy']:
                 entry, exit_rule = (state['strategy'][key] for key in ('entry', 'exit'))
-            description = ((DESCRIPTIONS.get(entry) or lab.DESCRIPTIONS[entry]) + ' ' +
-                           (DESCRIPTIONS.get(exit_rule) or lab.DESCRIPTIONS.get(exit_rule + '_exit') or lab.DESCRIPTIONS[exit_rule])) if entry else (
+            description = ((DESCRIPTIONS.get(entry) or lab.DESCRIPTIONS.get(entry, 'Research entry expression.')) + ' ' +
+                           (DESCRIPTIONS.get(exit_rule) or lab.DESCRIPTIONS.get(exit_rule + '_exit') or lab.DESCRIPTIONS.get(exit_rule, 'Research exit expression; fixed safety limits apply.'))) if entry else (
                 'Waiting for a validated strategy learned from the paper bots.')
             sample = reviewed.get(bot)
             rows.append({
@@ -1067,7 +1100,7 @@ def status():
                     'stop_gap': sample['stop_gap'] if sample else None,
                     'stop_exits': sample['stop_exits'] if sample else 0,
                 },
-                'id': bot, 'name': name, 'description': description, 'lab': bot in lab.BOTS,
+                'id': bot, 'name': name, 'research_slot': bot in local_lab.SLOTS, 'description': description, 'lab': bot in lab.BOTS,
                 **stats(conn.execute(totals_sql, (bot,)).fetchone()),
                 'today': stats(conn.execute(totals_sql + ' AND day=?', (bot, day)).fetchone()),
                 'cash': portfolio['cash'] / DOLLAR, 'funding': portfolio['funding'] / DOLLAR,
@@ -1089,6 +1122,7 @@ def status():
             OR json_extract(evidence,'$.x.value') IS NOT NULL)""", (now - research.FRESH_SECONDS,)).fetchone()[0]
         latest_mail = conn.execute('SELECT version, sent FROM research_mail ORDER BY version DESC LIMIT 1').fetchone()
         comparison = experiments.read_board(conn)
+        autonomous = autonomy.status(conn)
         route_retries = sum(bool(p.get('mark_stale') and 'quote_due_since' in p)
                             for bot in state['bots'].values() for p in bot['positions'].values())
         legacy_summary = conn.execute('SELECT data FROM legacy_outcome_summary WHERE id=1').fetchone()
@@ -1096,7 +1130,8 @@ def status():
         exit_work = exit_work_summary(conn, state, now)
         rug_pulls = dict(conn.execute("SELECT count(*) AS positions, count(DISTINCT mint) AS coins, COALESCE(sum(pnl),0)/1000000.0 AS pnl FROM trades WHERE json_extract(data,'$.paper_writeoff.category')='no_route'").fetchone())
         timer_report = conn.execute("SELECT started,ends,(id LIKE 'partial/%') AS partial FROM backlog_pause_report WHERE ends=? AND cancelled IS NULL ORDER BY started DESC LIMIT 1", (backlog.pause_key(state),)).fetchone()
-    return {'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
+    local = local_lab.context(__import__(__name__))
+    return {'local_lab': local, 'autonomy': autonomous, 'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
             'research': {'recent_coins': coverage, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
                          'latest_proposal': dict(latest_mail) if latest_mail else None},
             'backlog_guard': {**backlog.summary(state, now),
@@ -1261,6 +1296,9 @@ async def research_worker():
         try:
             await asyncio.to_thread(research_tick)
             await asyncio.to_thread(refresh_legacy_outcomes, time.time())
+            import sys
+            if os.getenv('JARVIS_RESEARCH_PROVIDER') == 'openai':
+                await asyncio.to_thread(autonomy.tick, sys.modules[__name__])
         except Exception:
             LOG.exception('Jarvis research cycle failed')
         await asyncio.sleep(10)

@@ -43,6 +43,7 @@
   }
 
   function botState(bot) {
+    if (bot.research_slot && !state.local_lab?.strategies.some(rule => rule.slot === bot.id && ['testing', 'proven'].includes(rule.status))) return bot.open ? 'Retired strategy · exits monitored' : 'Waiting for local researcher';
     if (bot.id === 'jarvis' && !state.strategy) return bot.open ? 'Waiting for strategy · exits monitored' : 'Waiting for strategy';
     if (bot.id === 'jarvis' && state.entry_guard) return 'Entries paused · exits monitored';
     if (state.backlog_guard?.timer_active || state.backlog_guard?.until_all_closed || state.entry_catchup_pause?.active) return 'Buys paused · exits monitored';
@@ -143,7 +144,7 @@
   }
 
   function renderLab() {
-    const bots = state.bots.filter(bot => bot.lab);
+    const bots = state.bots.filter(bot => bot.lab || bot.research_slot);
     const open = new Set([...$('jarvis-lab-rows').querySelectorAll('details[open]')].map(row => row.dataset.bot));
     const sum = key => bots.reduce((total, bot) => total + bot[key], 0);
     $('jarvis-lab-summary').textContent = `${bots.length} strategies · ${sum('closed')} completed paper positions · ${sum('open')} open · ${money(sum('realized'))} realized P/L`;
@@ -234,7 +235,7 @@
       const pnl = selected.pnl ?? selected.estimated_pnl;
       $('jarvis-portfolio').replaceChildren(
         portfolioCard(estimate ? 'Estimated total balance' : 'Total balance', money(balance), estimate || 'Cash + current sell quotes'),
-        portfolioCard('Available cash', money(selected.cash), jarvis ? '$20,000 starting budget' : 'Automatic virtual top-ups'),
+        portfolioCard('Available cash', money(selected.cash), jarvis ? '$20,000 starting budget' : selected.research_slot ? '$2,000 fixed paper funding; no automatic top-ups' : 'Automatic virtual top-ups'),
         portfolioCard(estimate ? 'Estimated total P/L' : 'Total P/L', money(pnl), `Net of ${money(selected.funding)} virtual funding`, sign(pnl)),
         portfolioCard('Open holdings', String(selected.open), botState(selected)),
       );
@@ -242,11 +243,33 @@
       $('jarvis-today').className = 'meme-stat ' + sign(selected.today.realized);
       $('jarvis-today-details').textContent = `${selected.today.closed} closed · ${selected.today.wins} wins · ${selected.today.losses} losses · ${state.day} ET`;
       $('jarvis-strategy').hidden = !jarvis;
+      if ($('jarvis-local-lab')) {
+        const local = state.local_lab;
+        $('jarvis-local-lab').hidden = !jarvis || !local;
+        if (jarvis && local) {
+          const age = local.last_seen ? Math.max(0, Date.now() / 1000 - local.last_seen) : null;
+          $('jarvis-local-summary').textContent = `${age == null ? 'Laptop worker has not connected' : age < 180 ? 'Laptop worker connected' : 'Laptop worker last seen ' + displayDuration(age) + ' ago'} · ${local.available_slots.length} slots available · ${local.minimum_coins} distinct closed coins before judging profitability. Quotes and market opportunities determine testing speed.`;
+          $('jarvis-local-rules').replaceChildren(...local.strategies.map(candidate => {
+            const row = el('details', '', 'lab-row');
+            const report = candidate.report;
+            row.append(el('summary', `${candidate.rule.name} · ${candidate.status} · ${report.coins || 0}/${local.minimum_coins} coins · ${money(report.net ?? 0)} net`));
+            row.append(el('p', candidate.rule.hypothesis), el('p', 'Entry: ' + candidate.rule.entry), el('p', 'Exit: ' + candidate.rule.exit));
+            row.append(el('small', `Latest window excludes open positions. Net excluding biggest winner: ${money(report.net_without_best ?? 0)}. Fixed -10% sampled safety stop and one-hour maximum hold; fill prices are not guaranteed.`));
+            for (const source of candidate.sources || []) {
+              if (!source.url.startsWith('https://')) continue;
+              const link = el('a', source.title || source.url);
+              link.href = source.url; link.target = '_blank'; link.rel = 'noopener noreferrer';
+              row.append(el('p'), link);
+            }
+            return row;
+          }));
+        }
+      }
       $('jarvis-outcome-review').hidden = !jarvis || !state.outcome_review;
       $('jarvis-early-review').hidden = !jarvis || !state.early_review;
       $('jarvis-experiments').hidden = !jarvis || !state.comparison;
       if (jarvis) {
-        const completed = state.bots.filter(bot => bot.id !== 'jarvis').reduce((sum, bot) => sum + bot.closed, 0);
+        const completed = state.bots.filter(bot => bot.id !== 'jarvis' && !bot.research_slot).reduce((sum, bot) => sum + bot.closed, 0);
         const next = state.reviewed + state.review_every;
         const strategy = state.strategy;
         const filter = (strategy?.entry_filter || 'baseline').replaceAll('_', ' ');
@@ -256,6 +279,20 @@
         $('jarvis-research').textContent = sources
           ? `Recent chart or social research on ${sources.recent_coins} coins · X ${sources.x_configured ? 'configured' : 'awaiting API token'}${proposal ? ` · Code proposal from review ${proposal.version} ${proposal.sent ? 'emailed' : 'queued'}` : ''}`
           : '';
+        const autonomy = state.autonomy;
+        if (autonomy) {
+          $('jarvis-research').textContent += ` · Strategy researcher: ${autonomy.configured ? 'paid web research enabled' : 'paid web research off'} · Web research every ${autonomy.interval_hours} hours · ${autonomy.rules.length} recent hypotheses${autonomy.last_error_at ? ' · A research request failed; retry scheduled' : ''}`;
+          for (const candidate of autonomy.rules) {
+            const result = candidate.report.prospective;
+            const line = el('small', `${candidate.rule.name} · ${candidate.status} · ${result.coins} future coins · net ${money(result.net)} · excluding best ${money(result.net_without_best)}. ${candidate.rule.hypothesis}`);
+            $('jarvis-research').append(line);
+            for (const source of candidate.sources) {
+              const link = el('a', source.title || source.url);
+              link.href = source.url; link.target = '_blank'; link.rel = 'noopener noreferrer';
+              $('jarvis-research').append(link, document.createTextNode(' '));
+            }
+          }
+        }
         $('jarvis-review').textContent = `${summary} ${completed}/${next} completed baseline trades toward the next review. ${state.review?.result || ''} ${state.entry_guard?.reason || ''}`;
         if (state.outcome_review) renderOutcomes(state.outcome_review, state.legacy_outcomes, state.active_warning);
         if (state.early_review) renderEarlyReview(state.early_review);

@@ -1,0 +1,9 @@
+{
+  "app_url": "https://ai-paper-trader-production-7465.up.railway.app",
+  "worker_token": "REPLACE_WITH_DEDICATED_RANDOM_TOKEN",
+  "model": "qwen2.5-coder:3b",
+  "sessions_per_day": 10,
+  "search_provider": "wikipedia",
+  "brave_api_key": "",
+  "brave_monthly_limit": 900
+}

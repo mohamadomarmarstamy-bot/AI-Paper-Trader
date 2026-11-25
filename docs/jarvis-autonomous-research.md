@@ -1,0 +1,15 @@
+# Autonomous paper strategy research
+
+Jarvis's research worker now uses the Responses API web_search tool to research and author new entry-filter combinations. It uses the existing OPENAI_API_KEY and JARVIS_MODEL, or an optional JARVIS_RESEARCH_MODEL override. It is web search, not a connection to the owner's Google account. No Google credentials are needed.
+
+When explicitly selected with JARVIS_RESEARCH_PROVIDER=openai and the paper engine is enabled, at most one request starts every six hours. Requests have at most two tool calls and 2,500 output tokens. API usage is billable; these are request bounds, not a dollar budget. With no key or unsupported provider access, the status shows failure and schedules a retry without changing strategies. Search and generation run outside the trading transaction and never consume Jupiter quote capacity.
+
+The author receives aggregate bot performance and its ten recent hypotheses. It combines a known entry/exit strategy with 1–5 new bounded numeric entry conditions. Only declared market/chart fields and comparison operators are accepted. Generated Python is never executed. This is autonomous strategy-rule editing, not repository or deployment access. New indicators and arbitrary exit algorithms still require reviewed code changes.
+
+Rules, hypotheses, timestamps, source URLs, historical results, and prospective results persist in jarvis_paper.sqlite3. Up to 20 shadow hypotheses can be pending. Sources are visible on the Jarvis page. A source citation is attribution, not verification of its claims. Web content cannot change execution permissions or validation checks.
+
+Historical scoring is diagnostic. Promotion requires at least 100 distinct future coins, positive aggregate net P/L after removing the biggest winner, and positive results in both chronological halves after removing each half's biggest winner (at least ten closes per half). Coins with any closed trade entered before the proposal are excluded. Only trades from the rule's source bot are eligible; source entry/exit timing is preserved. Net trade P/L includes modeled costs, quote failures written off by the paper engine, and partial proceeds. Unclosed positions are not scored, so shadow results retain closed-trade selection bias; open exposures should be reviewed alongside them. These are observed source-bot outcomes, not executable promises for Jarvis.
+
+A passing rule can fill an empty strategy slot or replace a paused strategy. A healthy active strategy is retained. Existing baseline reviews can also adopt a validated strategy. Changing rules affects future entries only; existing positions keep their frozen policies. One hundred Jarvis closes with aggregate loss of at least $5 pause an autonomous strategy's new entries; existing exit monitoring continues. Rejected hypotheses expire after seven days or 100 qualifying coins when reviewed on a close.
+
+Paper sizing, balances, accounting, wallets, real-money execution, and deployment permissions remain controlled by existing application code. The researcher cannot edit those controls, send messages, install packages, or grant itself access.
