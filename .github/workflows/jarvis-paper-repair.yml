@@ -38,7 +38,7 @@ jobs:
     needs: sandbox-tests
     if: always() && !cancelled() && github.event_name != 'pull_request' && (needs.sandbox-tests.result == 'success' || needs.sandbox-tests.result == 'skipped')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     permissions:
       contents: write
       id-token: write

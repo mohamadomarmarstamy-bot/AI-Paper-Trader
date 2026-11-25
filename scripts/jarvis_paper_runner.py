@@ -22,6 +22,7 @@ spec=importlib.util.spec_from_file_location('repair_policy',ROOT/'backend/jarvis
 policy=importlib.util.module_from_spec(spec);spec.loader.exec_module(policy)
 BASE='https://ai-paper-trader-production-7465.up.railway.app'
 IMAGE='jarvis-paper-tests:isolated'
+DEBUG=False
 TEST_DRIVER='''import importlib,io,json,sys,unittest
 stream=io.StringIO()
 suite=unittest.defaultTestLoader.loadTestsFromName('test_jarvis_generated_regression')
@@ -53,12 +54,17 @@ def image():
     with tempfile.TemporaryDirectory() as tmp:
         path=Path(tmp)
         (path/'Dockerfile').write_text("FROM python:3.12-slim\nRUN python -m pip install --no-cache-dir 'fastapi>=0.115,<1' 'httpx>=0.27,<1' 'requests>=2.32,<3' 'cryptography>=46,<51' 'solders==0.29.0' 'websockets>=16,<17'\n")
-        if command(['docker','build','--tag',IMAGE,str(path)],timeout=300).returncode:raise RuntimeError('Isolated test image unavailable')
+        built=command(['docker','build','--tag',IMAGE,str(path)],timeout=300)
+        if built.returncode:
+            if DEBUG:print(built.stderr[-6000:],flush=True)
+            raise RuntimeError('Isolated test image unavailable')
 
 
 def regression(folder):
     r=command([*container_args(folder),'python','-c',TEST_DRIVER],timeout=60)
-    if r.returncode:raise RuntimeError('Regression sandbox failed')
+    if r.returncode:
+        if DEBUG:print(r.stderr[-6000:],flush=True)
+        raise RuntimeError('Regression sandbox failed')
     try:value=json.loads(r.stdout.strip().splitlines()[-1])
     except (ValueError,IndexError):raise RuntimeError('Invalid regression result') from None
     if value['run']<1 or any(value[k] for k in ('errors','skipped','expected','unexpected')):raise RuntimeError('Regression must run without errors, skips or expected failures')
@@ -86,7 +92,9 @@ def prove(patch,baseline_source=None):
         if regression(baseline)<1:raise RuntimeError('No demonstrated baseline failure')
         if regression(candidate)!=0:raise RuntimeError('Repair did not fix regression')
         full=command([*container_args(candidate),'python','-m','unittest','discover','-s','.','-p','test_solana*.py','-q'],timeout=240)
-        if full.returncode:raise RuntimeError('Existing paper tests failed')
+        if full.returncode:
+            if DEBUG:print(full.stderr[-10000:],flush=True)
+            raise RuntimeError('Existing paper tests failed')
         print('Baseline regression failed; candidate regression and existing Solana suite passed.',flush=True)
     return changed
 
@@ -202,7 +210,8 @@ def run():
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--self-test',action='store_true');args=parser.parse_args()
+    DEBUG=args.self_test
     try:selftest() if args.self_test else run()
-    except Exception:
-        print('Paper repair runner could not complete; no recovery is claimed.',file=sys.stderr,flush=True)
+    except Exception as exc:
+        print('Paper repair runner could not complete; no recovery is claimed.'+((' '+str(exc)) if DEBUG else ''),file=sys.stderr,flush=True)
         raise SystemExit(1) from None

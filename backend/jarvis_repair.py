@@ -143,7 +143,8 @@ def report(api,claims,payload,now):
         if outcome in ('deploying','deployed') and (not commit or not all(checks[k] for k in ('baseline_failed','regression_passed','suite_passed'))):raise ValueError('Missing test evidence')
         if outcome=='deployed' and (row['status']!='deploying' or not checks['canary_passed']):raise ValueError('Missing deployment verification')
         result={'outcome':outcome,'commit':commit,'checks':checks,'at':now,'run_id':claims['run_id']}
-        conn.execute('UPDATE repair_runs SET status=?,report=? WHERE id=?',(outcome,json.dumps(result),row['id']))
+        conn.execute('UPDATE repair_runs SET status=?,report=?,expires=? WHERE id=?',
+            (outcome,json.dumps(result),max(row['expires'],now+900) if outcome=='deploying' else row['expires'],row['id']))
         conn.execute('UPDATE brain_proposals SET status=?,report=? WHERE id=?',(outcome,json.dumps(result),row['proposal']))
         if outcome in ('runner_error','rollback_blocked','rolled_back'):
             escalate(api,conn,row['proposal'],now,'The proposed paper code repair was not kept. Outcome: '+outcome.replace('_',' ')+'. Existing incident monitoring continues; review is needed.')

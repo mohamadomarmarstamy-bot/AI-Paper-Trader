@@ -41,7 +41,7 @@ def check_function(source,file,name,original):
     allowed=CALLS|GLOBALS|local_names|set(functions)
     for node in nodes:
         if not isinstance(node,NODES):raise ValueError('Unsupported helper operation')
-        if isinstance(node,ast.FunctionDef) and (node.decorator_list or node.returns or node.type_params):
+        if isinstance(node,ast.FunctionDef) and (node.decorator_list or node.returns or getattr(node,'type_params',[])):
             raise ValueError('Function metadata is unsupported')
         if isinstance(node,ast.arg) and node.annotation:raise ValueError('Annotations unsupported')
         if isinstance(node,ast.Name) and ((node.id.startswith('_') and node.id!='_') or node.id not in allowed):
