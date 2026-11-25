@@ -224,3 +224,42 @@ class StrategyQualityTests(unittest.TestCase):
 
     def test_different_profit_time_gate_does_not_imply_shadow(self):
         lab.validate({**RULE,'exit':'(gain >= 10 and held_seconds > 1800) or (peak >= 10 and gain <= peak - 5)'})
+
+class BraveWorkerTests(unittest.TestCase):
+    def setUp(self):
+        spec=importlib.util.spec_from_file_location('brave_worker',Path(__file__).resolve().parents[1]/'local-worker'/'worker.py')
+        self.module=importlib.util.module_from_spec(spec);spec.loader.exec_module(self.module)
+        self.tmp=self.enterContext(tempfile.TemporaryDirectory())
+        self.config={'app_url':'https://example.com','worker_token':'x'*32,
+                     'search_provider':'brave','brave_api_key':'private-key',
+                     'sessions_per_day':30,'brave_monthly_limit':900}
+
+    def test_brave_results_used_temporarily_not_saved_or_submitted(self):
+        worker=self.module.Worker(self.config,Path(self.tmp)/'state.json',session=Mock())
+        worker.api=Mock(side_effect=[{'enabled':True,'available_slots':['slot'],'strategies':[]},{'status':'testing'}])
+        private_sources=[{'url':'https://example.com/temporary-result','title':'Temporary title','snippet':'Temporary snippet'}]
+        worker.search=Mock(return_value=private_sources)
+        worker.generate=Mock(return_value=RULE)
+        worker.state['benchmark']={'seconds':1,'tokens_per_second':1}
+        self.assertEqual(worker.cycle(),'testing')
+        worker.generate.assert_called_once()
+        self.assertEqual(worker.generate.call_args.args[1],private_sources)
+        stored=worker.state_path.read_text()
+        self.assertNotIn('Temporary snippet',stored)
+        self.assertNotIn('temporary-result',stored)
+        self.assertEqual(worker.api.call_args.args[2]['sources'][0]['url'],'https://search.brave.com/')
+        self.assertNotIn('private-key',stored)
+
+    def test_hard_monthly_cap_blocks_901st_search(self):
+        worker=self.module.Worker(self.config,Path(self.tmp)/'state.json',session=Mock())
+        worker.state['search_usage']={'month':'2026-11','calls':900}
+        with self.assertRaisesRegex(ValueError,'quota reached'):worker.search('liquidity','2026-11')
+        worker.http.get.assert_not_called()
+
+    def test_30_session_day_blocks_31st_attempt(self):
+        worker=self.module.Worker(self.config,Path(self.tmp)/'state.json',session=Mock())
+        day=self.module.datetime.now(self.module.timezone.utc).date().isoformat()
+        worker.state.update(day=day,sessions=30,next_session=0)
+        worker.api=Mock()
+        self.assertEqual(worker.cycle(),'waiting')
+        worker.api.assert_not_called()
