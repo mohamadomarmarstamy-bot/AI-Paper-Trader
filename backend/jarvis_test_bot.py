@@ -392,6 +392,10 @@ def open_trade(state, bot, row, quantity, now, evidence=None):
         'mint': row['mint'], 'pair': row.get('pair'), 'symbol': row['symbol'], 'opened': now, 'quantity': quantity,
         'entry_cost': BUY_COST, 'cost': BUY_COST, 'banked': 0, 'peak': 0,
         'exit_cohort': EXIT_COHORT, 'entry_evidence': evidence or {},
+        # Evidence dependency, not a claim that Codex caused a profitable trade.
+        'codex_required': bool(bot in local_lab.SLOTS and ((evidence or {}).get('chart') or {}).get('provider')=='codex'
+            and local_lab.run(state['local_rules'][bot]['entry'],local_lab.observations(row,evidence or {}))
+            and not local_lab.run(state['local_rules'][bot]['entry'],local_lab.observations(row,{}))),
         'strategy_version': lab.version(source) if source in lab.BOTS else None,
         'target': 20, 'trims': 0, 'mark': None, 'mark_at': None, 'due': now + POLL,
         'pending': None, 'liquidity': row['liquidity_usd'], 'age': row['age_minutes'],
@@ -1527,10 +1531,6 @@ def research_tick(clock=time.time, chart=research.chart, social=research.social_
                         f', HTTP {http_status}' if http_status is not None else '')
             value = None
         primary_status=result_status
-        if source=='chart' and value is None and chart is research.chart and 0<=clock()-row.get('first',0)<=ENTRY_WINDOW:
-            alternate=codex_feed.attempt(__import__(__name__),row,clock=clock)
-            if alternate is not None:
-                value=alternate;result_status='ready'
         at = clock()
         with connection() as conn, conn:
             conn.execute('BEGIN IMMEDIATE')
@@ -1559,6 +1559,9 @@ def research_tick(clock=time.time, chart=research.chart, social=research.social_
                     ON CONFLICT(name) DO UPDATE SET due=max(due,excluded.due)""", (at + retry,))
             conn.execute('INSERT OR REPLACE INTO research(mint,pair,checked,evidence) VALUES (?,?,?,?)',
                          (row['mint'], row['pair'], at, json.dumps(evidence)))
+
+    if chart is research.chart:
+        codex_feed.tick(__import__(__name__),clock=clock)
 
 
 def research_diagnostic():
