@@ -292,7 +292,36 @@ class WorkerTests(unittest.TestCase):
         worker=self.module.Worker(self.config,Path(self.tmp)/'state.json',session=Mock())
         worker.api=Mock(return_value={'enabled':True,'available_slots':[]})
         worker.search=Mock()
-        self.assertEqual(worker.cycle(),'paused_or_full')
+        self.assertEqual(worker.cycle(),'slots_full')
+        worker.search.assert_not_called()
+
+    def test_context_connection_failure_retries_once_with_closed_pool(self):
+        http=Mock()
+        response=Mock(status_code=200,content=b'{}')
+        response.json.return_value={'enabled':True,'available_slots':[]}
+        http.request.side_effect=[self.module.requests.ConnectionError('private'),response]
+        worker=self.module.Worker(self.config,Path(self.tmp)/'state.json',session=http)
+        self.assertEqual(worker.cycle(),'slots_full')
+        self.assertEqual(http.request.call_count,2)
+        http.close.assert_called_once()
+        self.assertEqual(http.request.call_args.kwargs['headers']['Connection'],'close')
+        self.assertEqual(worker.state['sessions'],0)
+
+    def test_context_retry_is_bounded_and_submission_is_not_replayed(self):
+        for method, attempts in [('GET',2),('POST',1)]:
+            http=Mock()
+            http.request.side_effect=self.module.requests.ConnectionError('private')
+            worker=self.module.Worker(self.config,Path(self.tmp)/'state.json',session=http)
+            with self.assertRaises(self.module.requests.ConnectionError):
+                worker.api(method,'context' if method=='GET' else 'strategy')
+            self.assertEqual(http.request.call_count,attempts)
+            self.assertNotIn('private',worker.error_message(self.module.requests.ConnectionError('private')))
+
+    def test_disabled_engine_has_separate_status(self):
+        worker=self.module.Worker(self.config,Path(self.tmp)/'state.json',session=Mock())
+        worker.api=Mock(return_value={'enabled':False,'available_slots':['slot']})
+        worker.search=Mock()
+        self.assertEqual(worker.cycle(),'paper_engine_paused')
         worker.search.assert_not_called()
 
     def test_cloud_model_rejected_even_in_benchmark(self):
