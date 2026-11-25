@@ -43,18 +43,50 @@ class PbhCloseoutTests(unittest.TestCase):
         self.assertTrue(state['enabled']);self.assertTrue(state['preset_entries_paused'])
         before=copy.deepcopy(state);api.apply_pbh_closeout();self.assertEqual(self.state(),before)
 
-    def test_closeout_uses_full_quote_without_trim_or_profit_requirements(self):
+    def test_closeout_accounts_for_valid_partial_quotes_without_profit_requirements(self):
         state=self.state();api.open_trade(state,'instant-trim',self.row,1000,101)
         portfolio=state['bots']['instant-trim'];p=portfolio['positions']['coin']
         p.update(owner_closeout=True,pending='pbh_closeout')
         completed=[]
         api.apply_exit(completed,portfolio,'instant-trim',p,500,30_000000,102)
-        self.assertFalse(completed);self.assertEqual(p['quantity'],1000)
-        api.apply_exit(completed,portfolio,'instant-trim',p,1000,49_000000,103)
+        self.assertFalse(completed);self.assertEqual(p['quantity'],500)
+        self.assertEqual(p['banked'],29_900000)
+        self.assertEqual(p['pending'],'pbh_closeout')
+        api.apply_exit(completed,portfolio,'instant-trim',p,500,19_000000,103)
         self.assertFalse(portfolio['positions'])
         self.assertEqual(completed[0]['reason'],'PBH owner-requested paper closeout')
-        self.assertEqual(completed[0]['pnl'],-1_350000)
+        self.assertEqual(completed[0]['pnl'],-1_450000)
         self.assertNotIn('paper_writeoff',completed[0])
+
+    def test_liquidity_closeout_requotes_smaller_sizes_and_accounts_for_fills(self):
+        state=self.state();api.open_trade(state,'instant-step',self.row,1000,101)
+        p=state['bots']['instant-step']['positions']['coin'];p.update(owner_closeout=True,pending='pbh_closeout')
+        sizes=[]
+        def quote(source,target,size):
+            sizes.append(size)
+            if len(sizes)==1:raise api.QuoteUnavailable('Insufficient liquidity','liquidity')
+            return 30_000000
+        with api.connection() as conn:
+            self.assertFalse(api.step(conn,state,None,quote,200))
+            self.assertEqual(p['pbh_quote_size'],500)
+            self.assertFalse(api.step(conn,state,None,quote,206))
+            completed=api.step(conn,state,None,quote,208)
+        self.assertEqual(sizes,[1000,500,500])
+        self.assertEqual(completed[0]['pnl'],9_550000)
+        self.assertFalse(state['bots']['instant-step']['positions'])
+
+    def test_liquidity_size_retries_are_bounded(self):
+        state=self.state();api.open_trade(state,'instant-step',self.row,1000,101)
+        p=state['bots']['instant-step']['positions']['coin'];p.update(owner_closeout=True,pending='pbh_closeout')
+        def quote(*_):raise api.QuoteUnavailable('Insufficient liquidity','liquidity')
+        now=200
+        with api.connection() as conn:
+            for _ in range(9):
+                self.assertFalse(api.step(conn,state,None,quote,now))
+                delay=p['due']-now;now=p['due']
+        self.assertEqual(delay,api.EXIT_RETRY_LIMIT)
+        self.assertEqual(p['quantity'],1000)
+        self.assertEqual(p['banked'],0)
 
     def test_active_checks_receive_reserved_share_and_actual_exits_stay_first(self):
         state=self.state();api.open_trade(state,'instant-step',self.row,1000,101)
@@ -72,6 +104,7 @@ class PbhCloseoutTests(unittest.TestCase):
 
     def test_400_diagnostics_read_multiple_fields_and_do_not_echo_body(self):
         cases=[({'errorCode':'COULD_NOT_FIND_ANY_ROUTE'},'no_route'),
+               ({'errorMessage':'Insufficient liquidity'},'liquidity'),
                ({'errorMessage':'Invalid amount SECRET'},'invalid_parameter'),
                ({'code':'ROUTE_PLAN_DOES_NOT_CONSUME_ALL_THE_AMOUNT'},'partial_route'),
                ({'error':{'private':'SECRET'}},'request')]
