@@ -78,6 +78,9 @@ class PbhCloseoutTests(unittest.TestCase):
         for data,category in cases:
             error=api.quote_error(Mock(status_code=400),data)
             self.assertEqual(error.category,category);self.assertNotIn('SECRET',str(error))
+        error=api.quote_error(Mock(status_code=400),{'errorMessage':'Input token does not exist: SECRET https://private.example/key123'})
+        self.assertIn('input token not exist',str(error))
+        self.assertNotIn('SECRET',str(error));self.assertNotIn('private',str(error));self.assertNotIn('key123',str(error))
         with patch.object(api.solana_http,'get') as get:
             with self.assertRaises(api.QuoteUnavailable):api.quote('invalid',api.USDC,100)
             with self.assertRaises(api.QuoteUnavailable):api.quote(api.USDC,api.USDC,0)
