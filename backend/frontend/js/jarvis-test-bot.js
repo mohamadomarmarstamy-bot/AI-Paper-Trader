@@ -48,6 +48,7 @@
     if (bot.id === 'jarvis' && state.entry_guard) return 'Entries paused · exits monitored';
     if (state.backlog_guard?.timer_active || state.backlog_guard?.until_all_closed || state.entry_catchup_pause?.active) return 'Buys paused · exits monitored';
     if (!state.enabled) return bot.open ? 'Paused · exits monitored' : 'Paused';
+    if (state.preset_entries_paused && !bot.research_slot && bot.id !== 'jarvis') return 'Preset entries paused · exits monitored';
     if (!state.last_cycle || Date.now() / 1000 - state.last_cycle > 30) return 'Waiting for scan';
     if (bot.research_slot && state.local_lab?.entry_status?.[bot.id]) return state.local_lab.entry_status[bot.id].label;
     return 'Running';
@@ -206,6 +207,8 @@
     $('jarvis-health').hidden = active !== 'health';
     $('jarvis-settings').hidden = active !== 'settings';
     if (active === 'settings') {
+      $('jarvis-preset-status').textContent = state.preset_entries_paused ? 'Preset entries paused. AI research continues.' : 'Preset entries enabled.';
+      $('jarvis-preset-toggle').textContent = state.preset_entries_paused ? 'Resume preset entries' : 'Pause preset entries';
       $('jarvis-email-focus').textContent = state.notification_focus ? 'Jarvis focus is on: only the hourly research report and Jarvis health / 30-minute inactivity alerts are emailed. All other emails, including backlog and timer notices, are paused.' : '';
       const guard = state.backlog_guard || {};
       const form = $('jarvis-backlog-form');
@@ -543,6 +546,7 @@
     } catch (error) { $('jarvis-settings-result').textContent = error.message; }
     finally { runBusy = false; buttons.forEach(button => { button.disabled = false; }); }
   }
+  $('jarvis-preset-toggle').onclick = () => saveControl('preset-pause', {paused: !state.preset_entries_paused});
   $('jarvis-backlog-form').onsubmit = event => {
     event.preventDefault();
     saveControl('backlog-settings', {enabled: $('jarvis-backlog-enabled').checked,

@@ -101,6 +101,24 @@ class ExperimentTests(unittest.TestCase):
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM trades').fetchone()[0], 0)
         self.assertEqual(calls, [(jarvis.USDC, MINT, jarvis.TRADE), (MINT, jarvis.USDC, 100)])
 
+    def test_preset_pause_blocks_pending_experiment_buys_but_not_sells(self):
+        with jarvis.connection() as conn,conn:
+            state,_=jarvis.read(conn);state['enabled']=True;state['watch'][MINT]=self.row
+            conn.execute('UPDATE run SET state=?',(json.dumps(state),))
+        calls=[]
+        def quote(source,target,size):
+            calls.append((source,target,size))
+            return 100 if source==jarvis.USDC else 40_000_000
+        jarvis.experiment_tick(get_quote=quote,clock=lambda:NOW)
+        jarvis.set_preset_pause(True)
+        jarvis.experiment_tick(get_quote=quote,clock=lambda:NOW+8)
+        self.assertFalse(calls)
+        jarvis.set_preset_pause(False)
+        jarvis.experiment_tick(get_quote=quote,clock=lambda:NOW+16)
+        jarvis.set_preset_pause(True)
+        jarvis.experiment_tick(get_quote=quote,clock=lambda:NOW+24)
+        self.assertEqual(calls,[(jarvis.USDC,MINT,jarvis.TRADE),(MINT,jarvis.USDC,100)])
+
     def test_guard_pauses_jarvis_after_matched_losses_and_keeps_exit_eligible(self):
         state = jarvis.initial()
         state['strategy'] = {'source': 'instant-step', 'version': 1000, 'activated_at': NOW - 10,

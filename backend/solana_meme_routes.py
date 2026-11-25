@@ -20,8 +20,9 @@ def build_router(*,require_session):
 
     @asynccontextmanager
     async def jarvis_lifespan(_app):
+        await run_in_threadpool(jarvis.apply_preset_pause)
         tasks = [asyncio.create_task(worker()) for worker in
-                 (jarvis.worker, jarvis.research_worker, jarvis.experiment_worker, backlog.worker, hourly_mail.worker)]
+                 (jarvis.worker, jarvis.research_worker, jarvis.experiment_worker, jarvis.diagnostic_worker, backlog.worker, hourly_mail.worker)]
         try:
             yield
         finally:
@@ -87,6 +88,13 @@ def build_router(*,require_session):
             raise HTTPException(422, 'Expected a paper-run toggle.')
         return JSONResponse(await run_in_threadpool(jarvis.set_enabled, payload['enabled']),
                             headers={'Cache-Control': 'no-store'})
+
+    @router.post('/jarvis-test-bot/preset-pause')
+    async def preset_pause(request: Request):
+        payload = await body(request)
+        if not isinstance(payload,dict) or set(payload)!={'paused'} or type(payload['paused']) is not bool:
+            raise HTTPException(422,'Expected a preset pause toggle.')
+        return JSONResponse(await run_in_threadpool(jarvis.set_preset_pause,payload['paused']),headers={'Cache-Control':'no-store'})
 
     @router.post('/jarvis-test-bot/backlog-settings')
     async def backlog_settings(request: Request):

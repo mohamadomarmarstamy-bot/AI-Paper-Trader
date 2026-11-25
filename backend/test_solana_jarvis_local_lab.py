@@ -117,6 +117,38 @@ class LocalLabTests(unittest.TestCase):
             state['bots']['instant-step']['positions']={'old':{'mint':'old','quantity':1000,'due':100,'mark_stale':False,'exit_priority':0}}
             self.assertIn('urgent exits',api.local_entry_status(conn,state,500)[result['slot']]['label'])
 
+    def test_preset_pause_keeps_research_entries_and_existing_exits(self):
+        result=self.submit()
+        with api.connection() as conn:
+            state,_=api.read(conn)
+            row={'mint':'new','pair':'pair','symbol':'New','first':499,'last':500,
+                 'liquidity_usd':100000,'age_minutes':120,'buys_m5':40,'sells_m5':10,
+                 'volume_m5_usd':20000,'price_usd':1,'monitor_only':False,'pullback':None}
+            held={**row,'mint':'held'}
+            api.open_trade(state,'instant-step',held,1000,101)
+            before=copy.deepcopy(state['bots']['instant-step'])
+            state['watch']={'new':row};state['preset_entries_paused']=True
+            jobs=api.entry_jobs(conn,state,500)
+            self.assertIn(result['slot'],jobs['new'])
+            self.assertFalse(set(jobs['new'])&set(api.FIXED))
+            self.assertTrue(api.quote_jobs(state,500))
+            self.assertEqual(state['bots']['instant-step'],before)
+            state['preset_entries_paused']=False
+            self.assertIn('instant-step',api.entry_jobs(conn,state,500)['new'])
+
+    def test_preset_startup_pause_is_durable_but_respects_explicit_resume(self):
+        self.submit()
+        with patch.dict(os.environ,{'JARVIS_FOCUS_MODE':'true'}):
+            api.apply_preset_pause()
+            self.assertTrue(api.status()['preset_entries_paused'])
+            api.set_preset_pause(False)
+            api.apply_preset_pause()
+            self.assertFalse(api.status()['preset_entries_paused'])
+        with self.assertRaises(ValueError):api.set_preset_pause('yes')
+        report=api.research_diagnostic()
+        self.assertEqual(len(report['slots']),10)
+        self.assertNotIn('sources',json.dumps(report))
+
     def insert(self, conn, slot, ident, count, pnl):
         for i in range(count):
             data={'policy':{'local_rule':{'id':ident}},'pnl':pnl}

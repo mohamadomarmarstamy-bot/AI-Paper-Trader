@@ -136,6 +136,30 @@ def set_enabled(enabled):
     return status()
 
 
+def set_preset_pause(paused):
+    if type(paused) is not bool:
+        raise ValueError('Expected a preset pause toggle.')
+    with connection() as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        state, _ = read(conn)
+        state['preset_entries_paused'] = paused
+        conn.execute('UPDATE run SET state=?,revision=revision+1 WHERE id=1',(json.dumps(state),))
+    return status()
+
+
+def apply_preset_pause():
+    if not __import__('jarvis_focus').enabled():
+        return
+    with connection() as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        state, _ = read(conn)
+        if state.get('preset_pause_v1'):
+            return
+        state.update(preset_entries_paused=True,preset_pause_v1=True)
+        conn.execute('UPDATE run SET state=?,revision=revision+1 WHERE id=1',(json.dumps(state),))
+    print('Jarvis focus: preset strategy entries paused; research and Jarvis remain enabled; existing exits monitored.',flush=True)
+
+
 class QuoteUnavailable(ValueError):
     def __init__(self, message, category='invalid_quote'):
         super().__init__(message)
@@ -572,6 +596,8 @@ def entry_jobs(conn, state, now):
         market_evidence['benchmark'] = state.get('benchmark')
         closed = {r['bot'] for r in conn.execute('SELECT bot FROM trades WHERE mint=?', (mint,))}
         for bot, portfolio in state['bots'].items():
+            if state.get('preset_entries_paused') and bot in FIXED:
+                continue
             if bot in closed or mint in portfolio['positions']:
                 continue
             if bot in local_lab.SLOTS:
@@ -1188,7 +1214,7 @@ def status():
         rug_pulls = dict(conn.execute("SELECT count(*) AS positions, count(DISTINCT mint) AS coins, COALESCE(sum(pnl),0)/1000000.0 AS pnl FROM trades WHERE json_extract(data,'$.paper_writeoff.category')='no_route'").fetchone())
         timer_report = conn.execute("SELECT started,ends,(id LIKE 'partial/%') AS partial FROM backlog_pause_report WHERE ends=? AND cancelled IS NULL ORDER BY started DESC LIMIT 1", (backlog.pause_key(state),)).fetchone()
     local = local_lab.context(__import__(__name__))
-    return {'notification_focus': __import__('jarvis_focus').enabled(), 'hourly_email': hourly, 'local_lab': local, 'autonomy': autonomous, 'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
+    return {'preset_entries_paused':bool(state.get('preset_entries_paused')), 'notification_focus': __import__('jarvis_focus').enabled(), 'hourly_email': hourly, 'local_lab': local, 'autonomy': autonomous, 'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
             'research': {'recent_coins': coverage, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
                          'latest_proposal': dict(latest_mail) if latest_mail else None},
             'backlog_guard': {**backlog.summary(state, now),
@@ -1348,6 +1374,36 @@ def research_tick(clock=time.time, chart=research.chart, social=research.social_
                          (row['mint'], row['pair'], at, json.dumps(evidence)))
 
 
+def research_diagnostic():
+    now=time.time()
+    with connection() as conn:
+        state,_=read(conn)
+        entries=local_entry_status(conn,state,now)
+        counts={row['bot']:dict(row) for row in conn.execute(
+            "SELECT bot,count(*) AS closed FROM trades WHERE bot LIKE 'research-%' GROUP BY bot")}
+        slots=[]
+        for slot in local_lab.SLOTS:
+            slots.append({'slot':slot,'closed':counts.get(slot,{}).get('closed',0),
+                          'open':len(state['bots'][slot]['positions']),**entries[slot]})
+        queue=exit_queue(quote_jobs(state,now),now)
+    # Fixed labels and aggregate counts only: no tokens, wallet/coin IDs,
+    # provider bodies, generated source content or rule expressions.
+    return {'enabled':state['enabled'],'presets_paused':bool(state.get('preset_entries_paused')),
+            'cycle_age':round(now-state['last_cycle']) if state['last_cycle'] else None,
+            'oldest_quote_wait':round(queue['oldest_wait']), 'slots':slots}
+
+
+async def diagnostic_worker():
+    await asyncio.sleep(15)
+    while True:
+        try:
+            report=await asyncio.to_thread(research_diagnostic)
+            print('Jarvis research diagnostic '+json.dumps(report,separators=(',',':')),flush=True)
+        except Exception:
+            LOG.warning('Jarvis research diagnostic unavailable')
+        await asyncio.sleep(300)
+
+
 async def research_worker():
     while True:
         try:
@@ -1377,7 +1433,7 @@ def experiment_tick(get_quote=quote, clock=time.time):
         if not claimed.rowcount:
             return
         last = conn.execute('SELECT opened FROM experiment_coins ORDER BY id DESC LIMIT 1').fetchone()
-        if state['enabled'] and not catchup_requested(state) and not backlog.paused(state, now) and len(active) < experiments.MAX_OPEN and (not last or now - last['opened'] >= experiments.START_INTERVAL):
+        if state['enabled'] and not state.get('preset_entries_paused') and not catchup_requested(state) and not backlog.paused(state, now) and len(active) < experiments.MAX_OPEN and (not last or now - last['opened'] >= experiments.START_INTERVAL):
             for row in sorted(state['watch'].values(), key=lambda item: item['first'], reverse=True):
                 if not 0 <= now - row['first'] <= 90:
                     break
@@ -1398,7 +1454,7 @@ def experiment_tick(get_quote=quote, clock=time.time):
             updated[item['id']] = coin
             jobs = experiments.advance(coin, row, evidence, now, TRADE, BUY_COST)
             for (side, size), arms in jobs.items():
-                if (state['enabled'] and not catchup_requested(state) and not backlog.paused(state, now)) or side == 'sell':
+                if (state['enabled'] and not state.get('preset_entries_paused') and not catchup_requested(state) and not backlog.paused(state, now)) or side == 'sell':
                     plans.append((side, size, mint, arms))
     outcome = None
     if plans:

@@ -125,6 +125,12 @@
     <div class="page-title"><h1>Paper buy safeguards</h1></div>
     <p id="jarvis-email-focus" class="status-strip" role="status"></p>
     <section class="panel">
+      <h2>Preset strategies</h2>
+      <p id="jarvis-preset-status" class="meme-muted"></p>
+      <button id="jarvis-preset-toggle" type="button">Pause preset entries</button>
+      <small>AI research and Jarvis use their existing controls. Open preset holdings continue exit monitoring.</small>
+    </section>
+    <section class="panel">
       <h2>Exit backlog email</h2>
       <p>Get one alert when waiting paper positions reach your threshold. The email offers 10-minute, 30-minute, one-hour and until-all-positions-close buy pauses. Sells keep running.</p>
       <form id="jarvis-backlog-form">
@@ -157,6 +163,6 @@
     </section>
   </section>
 </main>
-<script src="/js/jarvis-test-bot.js?v=health-clean-v1"></script>
+<script src="/js/jarvis-test-bot.js?v=preset-pause-v1"></script>
 </body>
 </html>
