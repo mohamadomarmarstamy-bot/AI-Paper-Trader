@@ -20,6 +20,26 @@
     .lab-details { border-top: 1px solid #ffffff15; padding: 14px; }
     .lab-details .meme-scroll { max-height: 300px; overflow: auto; }
     .lab-details h3 { margin: 12px 0 6px; }
+    .health-cards { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+    .health-card { padding:18px; border:1px solid #ffffff18; border-radius:12px; background:#ffffff04; }
+    .health-card strong { display:block; font-size:2rem; margin:8px 0; }
+    .health-card span,.health-card small { color:#a8b5ca; font-size:.82rem; }
+    .health-card.warning { border-color:#fbbf2440; }
+    .health-card.warning strong { color:#fbbf24; }
+    .health-metrics { display:flex; gap:24px; flex-wrap:wrap; padding-top:18px; }
+    .health-metrics span { color:#a8b5ca; font-size:.82rem; }
+    .health-metrics strong { color:#e2e8f0; margin-left:8px; }
+    .health-banner { padding:12px 16px; border:1px solid #ffffff20; border-radius:10px; font-size:.9rem; }
+    .health-banner.warning { border-color:#fbbf2440; color:#fcd34d; background:#fbbf2408; }
+    .health-fold > summary { cursor:pointer; font-weight:600; padding:4px 0; }
+    .health-fold[open] > summary { margin-bottom:18px; }
+    .health-table { width:100%; border-collapse:collapse; font-size:.85rem; }
+    .health-table th,.health-table td { padding:12px; border-bottom:1px solid #ffffff15; text-align:left; vertical-align:top; }
+    .health-table th { color:#a8b5ca; font-size:.75rem; font-weight:500; white-space:nowrap; }
+    .health-table small { display:block; color:#a8b5ca; margin-top:4px; }
+    .health-table-wrap { overflow-x:auto; }
+    .health-notes { font-size:.78rem; color:#a8b5ca; line-height:1.6; }
+    @media(max-width:500px) { .health-cards { gap:8px; } .health-card { padding:12px; } .health-card strong { font-size:1.6rem; } .health-metrics { gap:16px; } }
     @media (max-width: 650px) { .lab-summary { grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px; } }
     #jarvis-note:empty { display: none; }
   </style>
@@ -95,10 +115,11 @@
   </section>
   <section id="jarvis-health" hidden>
     <div class="page-title"><div><h1>Health</h1><p id="jarvis-cycle" class="meme-muted"></p></div></div>
-    <p id="jarvis-exit-queue" class="meme-muted"></p>
+    <p id="jarvis-exit-queue" class="health-banner" role="status"></p>
     <section id="jarvis-exit-work" class="panel"></section>
-    <section id="jarvis-exit-comparison" class="panel"></section>
-    <div id="jarvis-health-bots" class="meme-grid jarvis-health"></div>
+    <details class="panel health-fold"><summary>Diagnostics</summary><div id="jarvis-health-details"></div></details>
+    <details id="jarvis-exit-comparison" class="panel health-fold"></details>
+    <details class="panel health-fold"><summary>Strategy status</summary><div id="jarvis-health-bots" class="health-table-wrap"></div></details>
   </section>
   <section id="jarvis-settings" hidden>
     <div class="page-title"><h1>Paper buy safeguards</h1></div>
@@ -136,6 +157,6 @@
     </section>
   </section>
 </main>
-<script src="/js/jarvis-test-bot.js?v=research-entry-status-v1"></script>
+<script src="/js/jarvis-test-bot.js?v=health-clean-v1"></script>
 </body>
 </html>
