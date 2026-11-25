@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import re
 import sqlite3
 import time
 from datetime import datetime
@@ -168,6 +169,13 @@ def apply_pbh_closeout():
         conn.execute('BEGIN IMMEDIATE')
         state,_=read(conn)
         if state.get('pbh_closeout_v1'):
+            if not state.get('pbh_error_probe_v1'):
+                for b in state['bots'].values():
+                    for p in b['positions'].values():
+                        if p.get('owner_closeout') and (p.get('route_failure') or {}).get('category')=='request':
+                            p['due']=now
+                state['pbh_error_probe_v1']=True
+                conn.execute('UPDATE run SET state=?,revision=revision+1 WHERE id=1',(json.dumps(state),))
             return
         retired={row['id'] for row in conn.execute("SELECT id FROM local_strategies WHERE status IN ('failed','inactive')")}
         count=0
@@ -178,7 +186,7 @@ def apply_pbh_closeout():
                     p.update(owner_closeout=True,pending='pbh_closeout',due=now)
                     p['exit_signal']={'at':now,'basis':'owner_closeout'}
                     count+=1
-        state.update(pbh_closeout_v1={'requested':now,'positions':count},preset_entries_paused=True)
+        state.update(pbh_closeout_v1={'requested':now,'positions':count},preset_entries_paused=True,pbh_error_probe_v1=True)
         conn.execute('UPDATE run SET state=?,revision=revision+1 WHERE id=1',(json.dumps(state),))
     print(f'PBH paper closeout queued: {count} positions; active research holdings excluded.',flush=True)
 
@@ -206,7 +214,9 @@ def quote_error(response, data):
         return QuoteUnavailable('Jupiter cannot quote the full input amount.', 'partial_route')
     if status==400 and any(text in message for text in ('invalid amount','invalid input amount','invalid mint','invalid input mint','invalid output mint','invalid slippage','invalid digit','deserialize query','query parameter')):
         return QuoteUnavailable('Jupiter rejected an input parameter; the holding remains tracked.', 'invalid_parameter')
-    return QuoteUnavailable(f'Jupiter rejected the quote request (HTTP {status}).', 'request')
+    vocabulary={'amount','input','output','mint','token','not','found','unsupported','supported','invalid','too','small','large','insufficient','liquidity','route','balance','slippage','parameter','parameters','query','required','missing','deserialize','parse','fee','gas','minimum','maximum','limit','error','failed','could','find','quotes','price','impact','exceeds','same','different','disabled','requested','expired','request','size','zero','positive','negative','out','range','exist','exists','available','unavailable'}
+    hint=' '.join(word for word in re.findall('[a-z]+',message) if word in vocabulary)[:160]
+    return QuoteUnavailable(f'Jupiter rejected the quote request (HTTP {status}).'+(' Diagnostic: '+hint if hint else ''), 'request')
 
 
 def quote_uint(value, *, allow_zero=False):
