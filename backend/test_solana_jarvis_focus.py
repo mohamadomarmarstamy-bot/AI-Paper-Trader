@@ -56,13 +56,14 @@ class FocusTests(unittest.TestCase):
         import stock_learning_mail, solana_meme_mail, solana_exit_alerts, crypto_idle_alerts, jarvis_backlog, jarvis_research
         post=Mock()
         for sender in (stock_learning_mail.deliver_one,solana_meme_mail.deliver_one,
-                       solana_exit_alerts.deliver_one,crypto_idle_alerts.deliver_one,jarvis_backlog.mail_tick):
+                       solana_exit_alerts.deliver_one,crypto_idle_alerts.deliver_one):
             self.assertFalse(sender(post=post))
         with patch('solana_http.post',post):
             self.assertFalse(jarvis_research.deliver(1,'test'))
         post.assert_not_called()
         self.assertTrue(focus.email_allowed('jarvis_hourly'))
         self.assertTrue(focus.email_allowed('jarvis_health'))
+        self.assertTrue(focus.email_allowed('jarvis_backlog'))
         with patch.dict(os.environ,{'JARVIS_FOCUS_MODE':'false'}):
             self.assertTrue(focus.email_allowed('stock_learning'))
             focus.apply_startup_pause()
