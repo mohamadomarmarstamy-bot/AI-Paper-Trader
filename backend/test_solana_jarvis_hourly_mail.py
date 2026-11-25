@@ -26,7 +26,9 @@ class DigestTests(unittest.TestCase):
             'HEALTH_ALERT_EMAIL_TO':'owner@example.com','HEALTH_ALERT_EMAIL_FROM':'jarvis@example.com',
             'JARVIS_HOURLY_EMAIL_ENABLED':'true'}))
         api.set_enabled(True)
-        self.now=10000
+        self.now=10800
+        with api.connection() as conn,conn:
+            conn.execute("INSERT INTO jarvis_digest_schedule VALUES (1,?,?)",(self.now,self.now-3600))
         self.response=Mock(status_code=200)
         self.response.json.return_value={'id':'provider-accepted'}
         self.post=Mock(return_value=self.response)
@@ -87,6 +89,8 @@ class DigestTests(unittest.TestCase):
         payload=mail.render(report)
         self.assertIn('PAPER SIMULATION ONLY',payload['html'])
         self.assertIn('−$1.00',payload['text'])
+        self.assertIn('color:#b91c1c">−$1.00',payload['html'])
+        self.assertIn('color:#047857">+$2.00',payload['html'])
         self.assertIn('Main Jarvis separately',payload['text'])
         self.assertIn('Brave Search research',payload['html'])
 
@@ -119,13 +123,13 @@ class DigestTests(unittest.TestCase):
         self.post.assert_not_called()
 
     def test_downtime_sends_one_catchup_report_without_gaps(self):
-        self.tick();self.now+=4*3600
+        self.tick();self.now+=12*3600
         self.assertEqual(self.tick(),'accepted')
         self.assertEqual(self.tick(),'not_due')
         with api.connection() as conn:
             row=conn.execute('SELECT start,end FROM jarvis_digest_mail ORDER BY end DESC LIMIT 1').fetchone()
-            self.assertEqual(row['start'],10000)
-            self.assertEqual(row['end'],24400)
+            self.assertEqual(row['start'],10800)
+            self.assertEqual(row['end'],54000)
 
     def test_uncertain_delivery_stops_retrying_before_provider_key_expires(self):
         self.post.side_effect=TimeoutError('uncertain')
@@ -134,6 +138,66 @@ class DigestTests(unittest.TestCase):
         self.assertEqual(self.tick(),'delivery_uncertain')
         with api.connection() as conn:
             self.assertEqual(mail.status(conn)['attention'],1)
+
+    def test_clock_alignment_and_overnight_schedule(self):
+        from datetime import datetime
+        def at(hour,minute=0):
+            return datetime(2026,11,25,hour,minute,tzinfo=mail.ET).timestamp()
+        self.assertEqual(mail.next_delivery(at(15,41)),at(16))
+        self.assertEqual(mail.next_delivery(at(0)),at(9))
+        self.now=at(2)
+        self.assertEqual(self.tick(),'quiet_hours')
+        self.post.assert_not_called()
+
+    def test_fresh_schedule_waits_for_next_hour(self):
+        with api.connection() as conn,conn:
+            conn.execute('DELETE FROM jarvis_digest_schedule')
+        self.now+=60
+        self.assertEqual(self.tick(),'not_due')
+        self.post.assert_not_called()
+        with api.connection() as conn:
+            self.assertEqual(mail.status(conn)['next_at']%3600,0)
+
+    def test_nine_am_compact_summary_has_nine_hour_rows(self):
+        from datetime import datetime
+        start=datetime(2026,11,25,0,tzinfo=mail.ET).timestamp()
+        self.now=start+9*3600
+        with api.connection() as conn,conn:
+            conn.execute('UPDATE jarvis_digest_schedule SET next_at=?,last_end=?',(self.now,start))
+        self.assertEqual(self.tick(),'accepted')
+        payload=self.post.call_args.kwargs['json']
+        self.assertIn('overnight summary',payload['subject'])
+        self.assertEqual(payload['html'].count('<tr>'),10)
+        self.assertNotIn('Research behind new proposals',payload['html'])
+        self.assertEqual(self.tick(),'not_due')
+
+    def test_quiet_hours_defer_failed_delivery_without_sending(self):
+        from datetime import datetime
+        self.post.side_effect=TimeoutError('uncertain')
+        self.assertEqual(self.tick(),'retry')
+        calls=self.post.call_count
+        self.now=datetime(2026,11,25,3,tzinfo=mail.ET).timestamp()
+        self.assertEqual(self.tick(),'quiet_hours')
+        self.assertEqual(self.post.call_count,calls)
+
+    def test_midnight_report_then_nine_am_with_no_intermediate_mail(self):
+        from datetime import datetime
+        midnight=datetime(2026,11,25,0,tzinfo=mail.ET).timestamp()
+        with api.connection() as conn,conn:
+            conn.execute('UPDATE jarvis_digest_schedule SET next_at=?,last_end=?',(midnight,midnight-3600))
+        self.now=midnight
+        self.assertEqual(self.tick(),'accepted')
+        for hour in range(1,9):
+            self.now=midnight+hour*3600
+            self.assertEqual(self.tick(),'quiet_hours')
+        self.now=midnight+9*3600
+        self.assertEqual(self.tick(),'accepted')
+        self.assertEqual(self.post.call_count,2)
+
+    def test_signed_money_colors(self):
+        self.assertEqual(mail.profit_color(1),'#047857')
+        self.assertEqual(mail.profit_color(-1),'#b91c1c')
+        self.assertEqual(mail.profit_color(0),'#64748b')
 
     def test_laptop_validator_remains_standalone(self):
         import shutil
