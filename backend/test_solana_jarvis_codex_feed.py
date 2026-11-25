@@ -73,8 +73,21 @@ class CodexTests(unittest.TestCase):
         with patch.dict(os.environ,{'JARVIS_CODEX_MODE':'fallback'}):
             for i in range(4):feed.reserve(api,NOW,5)
             with self.assertRaises(feed.Unavailable):feed.reserve(api,NOW,5)
-            for i in range(16):feed.reserve(api,NOW+2+i,11)
-            with self.assertRaises(feed.Unavailable):feed.reserve(api,NOW+30,5)
+            for i in range(20):feed.reserve(api,NOW+2+i,11)
+            feed.reserve(api,NOW+30,10)
+            with self.assertRaises(feed.Unavailable):feed.reserve(api,NOW+32,1)
+    def test_monthly_cap_stays_8000_independent_of_daily_headroom(self):
+        from datetime import datetime,timezone
+        month=datetime.fromtimestamp(NOW,timezone.utc).strftime('%Y-%m')
+        with api.connection() as conn,conn:
+            conn.execute('INSERT INTO codex_calls(at,day,month,reserved) VALUES (?,?,?,?)',(NOW-86400,'earlier',month,7800))
+        with patch.dict(os.environ,{'JARVIS_CODEX_MODE':'fallback'}):
+            feed.reserve(api,NOW,200)
+            with self.assertRaises(feed.Unavailable):feed.reserve(api,NOW+2,1)
+        with api.connection() as conn:
+            status=feed.status(conn)
+            self.assertEqual(status['daily_reserved_cu_limit'],250)
+            self.assertEqual(status['monthly_reserved_cu_limit'],8000)
     def test_disabled_or_missing_key_does_not_request(self):
         with patch.dict(os.environ,{'JARVIS_CODEX_API_KEY':''}):
             post=Mock();self.assertIsNone(feed.attempt(api,ROW,clock=lambda:NOW,post=post));post.assert_not_called()
