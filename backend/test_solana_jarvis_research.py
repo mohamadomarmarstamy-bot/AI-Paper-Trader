@@ -32,6 +32,75 @@ class JarvisResearchTests(unittest.TestCase):
         self.assertEqual(evidence['closed_at'], NOW)
         self.assertIsNone(research.chart_signal(bars[:-1], NOW + 181))
 
+    def test_chart_requests_provider_empty_intervals_without_relaxing_validation(self):
+        bars=[[NOW-(20-i)*60,100,101,99,100+i*.01,100] for i in range(20)]
+        def fetch(url,*,params):
+            self.assertEqual(params['include_empty_intervals'],'true')
+            self.assertEqual(params['token'],MINT)
+            return {'data':{'attributes':{'ohlcv_list':bars}}}
+        value=research.chart({'mint':MINT,'pair':PAIR},NOW,fetch)
+        self.assertIsNotNone(value['rsi'])
+        self.assertIsNone(research.chart_signal(bars[:5]+bars[6:],NOW))
+
+    def prepare_chart_watch(self,count=3):
+        rows={}
+        for index in range(count):
+            mint=MINT+str(index+1)
+            rows[mint]={'mint':mint,'pair':PAIR,'symbol':'Coin','first':NOW-20+index,'last':NOW}
+        with jarvis.connection() as conn,conn:
+            state,_=jarvis.read(conn);state.update(enabled=True,watch=rows,local_rules={'research-01':{'created':NOW-30}})
+            conn.execute('UPDATE run SET state=?',(json.dumps(state),))
+        return rows
+
+    def test_chart_scheduler_prioritizes_research_and_rotates_within_budget(self):
+        rows=self.prepare_chart_watch(3)
+        with jarvis.connection() as conn,conn:
+            state,_=jarvis.read(conn)
+            state['watch'][MINT]={'mint':MINT,'pair':PAIR,'symbol':'Old','first':NOW-1000,'last':NOW,'monitor_only':True}
+            conn.execute('UPDATE run SET state=?',(json.dumps(state),))
+        called=[]
+        for offset in (0,6,12,18):
+            def chart(row,now):
+                called.append(row['mint'])
+                return {'closed_at':NOW,'rsi':50,'volume_ratio':1}
+            jarvis.research_tick(clock=lambda:NOW+offset,chart=chart,social=lambda *_:None)
+        self.assertEqual(set(called[:3]),set(rows))
+        self.assertEqual(len(called[:3]),len(set(called[:3])))
+        self.assertEqual(called[3],MINT)  # Old holdings only after fresh research coverage.
+        with jarvis.connection() as conn,conn:
+            tasks=jarvis.claim_research(conn,NOW+19)
+            self.assertFalse(any(source=='chart' for source,_ in tasks))
+
+    def test_empty_chart_backoff_does_not_starve_other_coins(self):
+        self.prepare_chart_watch(2);called=[]
+        def chart(row,now):called.append(row['mint']);return None
+        for offset in (0,6,12):
+            jarvis.research_tick(clock=lambda:NOW+offset,chart=chart,social=lambda *_:None)
+        self.assertEqual(len(called),2)
+        self.assertEqual(len(set(called)),2)
+        with jarvis.connection() as conn:
+            for row in conn.execute('SELECT evidence FROM research'):
+                chart=json.loads(row['evidence'])['chart']
+                self.assertEqual(chart['status'],'insufficient_history')
+                self.assertIsNone(chart['value'])
+
+    def test_failed_refresh_keeps_original_age_and_rate_limit_backs_off(self):
+        rows=self.prepare_chart_watch(1);mint=next(iter(rows));row=rows[mint]
+        old={'at':NOW-60,'value':{'closed_at':NOW-60,'rsi':25,'volume_ratio':2}}
+        with jarvis.connection() as conn,conn:
+            conn.execute('INSERT INTO research VALUES (?,?,?,?)',(mint,PAIR,NOW-60,json.dumps({'chart':old})))
+        import requests
+        response=requests.Response();response.status_code=429
+        def chart(*_):raise requests.HTTPError(response=response)
+        jarvis.research_tick(clock=lambda:NOW,chart=chart,social=lambda *_:None)
+        with jarvis.connection() as conn,conn:
+            stored=json.loads(conn.execute('SELECT evidence FROM research WHERE mint=?',(mint,)).fetchone()[0])['chart']
+            self.assertEqual(stored['at'],NOW-60)
+            self.assertEqual(stored['status'],'rate_limited')
+            self.assertTrue(jarvis.entry_evidence(conn,row,NOW)['chart'])
+            self.assertNotIn('chart',jarvis.entry_evidence(conn,row,NOW+121))
+            self.assertFalse(any(source=='chart' for source,_ in jarvis.claim_research(conn,NOW+6)))
+
     def test_x_deduplicates_and_does_not_treat_name_as_verified(self):
         ts = datetime.fromtimestamp(NOW - 60, timezone.utc).isoformat()
         rows = [

@@ -8,6 +8,8 @@ from datetime import datetime
 import solana_http
 
 FRESH_SECONDS = 180
+CHART_INTERVAL = 6  # Conservative shared pacing: at most ten chart calls/minute.
+CHART_REFRESH = 60  # Provider responses are cached for one minute.
 POST_LOOKBACK = 3600
 X_INTERVAL = 1800
 ADDRESS = re.compile(r'[1-9A-HJ-NP-Za-km-z]{32,44}')
@@ -25,7 +27,7 @@ CREATE TABLE IF NOT EXISTS research_mail(
 
 
 def payload(url, *, params, headers=None):
-    response = solana_http.get(url, params=params, headers=headers, timeout=3, allow_redirects=False)
+    response = solana_http.get(url, params=params, headers={'Accept':'application/json;version=20230203',**(headers or {})}, timeout=3, allow_redirects=False)
     response.raise_for_status()
     if response.status_code != 200 or len(response.content) > 400_000:
         raise ValueError('Unexpected research response.')
@@ -125,7 +127,8 @@ def chart_signal(candles, now):
 def chart(row, now, fetch=payload):
     data = fetch('https://api.geckoterminal.com/api/v2/networks/solana/pools/'
                  + row['pair'] + '/ohlcv/minute',
-                 params={'aggregate': 1, 'limit': 30, 'token': row['mint'], 'currency': 'usd'})
+                 params={'aggregate': 1, 'limit': 30, 'token': row['mint'], 'currency': 'usd',
+                         'include_empty_intervals':'true'})
     return chart_signal(data['data']['attributes']['ohlcv_list'], now)
 
 

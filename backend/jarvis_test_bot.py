@@ -1302,7 +1302,7 @@ def claim_research(conn, now):
     records = {r['mint']: (r['pair'], json.loads(r['evidence']))
                for r in conn.execute('SELECT mint,pair,evidence FROM research WHERE checked>=?', (now - 900,))}
     tasks = []
-    for source, interval in (('chart', 12), ('bluesky', 30), ('x', research.X_INTERVAL)):
+    for source, interval in (('chart', research.CHART_INTERVAL), ('bluesky', 30), ('x', research.X_INTERVAL)):
         if source == 'x' and not os.getenv('JARVIS_X_BEARER_TOKEN', '').strip():
             continue
         due = conn.execute('SELECT due FROM research_tasks WHERE name=?', (source,)).fetchone()
@@ -1312,13 +1312,35 @@ def claim_research(conn, now):
         def priority(row):
             pair, evidence = records.get(row['mint'], (None, {}))
             last = evidence.get(source, {}).get('at', 0) if pair == row['pair'] else 0
-            fresh = now - last < research.FRESH_SECONDS
+            record=evidence.get(source,{}) if pair==row['pair'] else {}
+            fresh = record.get('value') is not None and 0 <= now-last < research.FRESH_SECONDS
+            if source=='chart':
+                local_held=any(row['mint'] in state['bots'][slot]['positions'] for slot in local_lab.SLOTS)
+                eligible=(not row.get('monitor_only') and 0<=now-row['first']<=900
+                          and any(row['first']>=rule['created'] for rule in state.get('local_rules',{}).values()))
+                # Research opportunities precede old preset holdings; oldest
+                # attempt wins within each group so new discoveries cannot starve it.
+                tier=0 if local_held else 1 if eligible else 2 if row['mint'] in study_mints else 3
+                return (tier,fresh,record.get('attempt_at',last),-row['first'])
             return (fresh, row['mint'] not in study_mints, last if fresh else -row['first'])
+
+        candidates=rows
+        if source=='chart':
+            def due_for_chart(row):
+                pair,evidence=records.get(row['mint'],(None,{}))
+                record=evidence.get('chart',{}) if pair==row['pair'] else {}
+                due=record.get('next_attempt',0)
+                if record.get('value') is not None:
+                    due=max(due,record.get('at',0)+research.CHART_REFRESH)
+                return now>=due
+            candidates=[row for row in rows if due_for_chart(row)]
+            if not candidates:
+                continue
 
         if not tasks:
             # Keep recurring storage bounded and retain recent coverage for diagnosis.
             conn.execute('DELETE FROM research WHERE checked<?', (now - 900,))
-        chosen = min(rows, key=priority)
+        chosen = min(candidates, key=priority)
         conn.execute('INSERT OR REPLACE INTO research_tasks(name,due) VALUES (?,?)', (source, now + interval))
         tasks.append((source, chosen))
     return tasks
@@ -1357,10 +1379,15 @@ def research_tick(clock=time.time, chart=research.chart, social=research.social_
                 with connection() as conn, conn:
                     conn.execute('UPDATE research_mail SET sent=? WHERE version=?', (clock(), mail['version']))
     for source, row in tasks:
+        http_status=None
         try:
             value = chart(row, clock()) if source == 'chart' else social(source, row, clock())
-        except Exception:
-            LOG.warning('Jarvis %s research is unavailable', source)
+            result_status='ready' if value is not None else 'insufficient_history' if source=='chart' else 'unavailable'
+        except Exception as error:
+            http_status=getattr(getattr(error,'response',None),'status_code',None)
+            result_status='rate_limited' if http_status==429 else 'provider_error'
+            LOG.warning('Jarvis %s research is unavailable (%s%s)', source,result_status,
+                        f', HTTP {http_status}' if http_status is not None else '')
             value = None
         at = clock()
         with connection() as conn, conn:
@@ -1368,8 +1395,17 @@ def research_tick(clock=time.time, chart=research.chart, social=research.social_
             existing = conn.execute('SELECT evidence FROM research WHERE mint=? AND pair=?',
                                     (row['mint'], row['pair'])).fetchone()
             evidence = json.loads(existing['evidence']) if existing else {}
-            # Missing data never qualifies as positive research evidence.
-            evidence[source] = {'at': at, 'value': value}
+            previous=evidence.get(source,{})
+            # Preserve a previously valid observation on a failed refresh, but
+            # never extend its timestamp or the existing candle freshness limit.
+            record={'at':at,'value':value} if value is not None else {
+                'at':previous.get('at',at),'value':previous.get('value')}
+            retry=research.CHART_REFRESH if value is not None else 120 if result_status=='insufficient_history' else 30
+            record.update(attempt_at=at,status=result_status,next_attempt=at+retry)
+            if http_status is not None:record['http_status']=http_status
+            evidence[source] = record
+            if source=='chart' and http_status==429:
+                conn.execute("INSERT OR REPLACE INTO research_tasks(name,due) VALUES ('chart',?)",(at+60,))
             conn.execute('INSERT OR REPLACE INTO research(mint,pair,checked,evidence) VALUES (?,?,?,?)',
                          (row['mint'], row['pair'], at, json.dumps(evidence)))
 
@@ -1386,22 +1422,26 @@ def research_diagnostic():
             slots.append({'slot':slot,'closed':counts.get(slot,{}).get('closed',0),
                           'open':len(state['bots'][slot]['positions']),**entries[slot]})
         queue=exit_queue(quote_jobs(state,now),now)
+        chart_status={row['status'] or 'legacy':row['count'] for row in conn.execute(
+            "SELECT json_extract(evidence,'$.chart.status') AS status,count(*) AS count FROM research WHERE checked>=? GROUP BY status",(now-900,))}
     # Fixed labels and aggregate counts only: no tokens, wallet/coin IDs,
     # provider bodies, generated source content or rule expressions.
     return {'enabled':state['enabled'],'presets_paused':bool(state.get('preset_entries_paused')),
             'cycle_age':round(now-state['last_cycle']) if state['last_cycle'] else None,
-            'oldest_quote_wait':round(queue['oldest_wait']), 'slots':slots}
+            'oldest_quote_wait':round(queue['oldest_wait']),'chart_status':chart_status, 'slots':slots}
 
 
 async def diagnostic_worker():
     await asyncio.sleep(15)
+    startup_checks=0
     while True:
         try:
             report=await asyncio.to_thread(research_diagnostic)
             print('Jarvis research diagnostic '+json.dumps(report,separators=(',',':')),flush=True)
         except Exception:
             LOG.warning('Jarvis research diagnostic unavailable')
-        await asyncio.sleep(300)
+        startup_checks+=1
+        await asyncio.sleep(30 if startup_checks<3 else 300)
 
 
 async def research_worker():
@@ -1414,7 +1454,7 @@ async def research_worker():
                 await asyncio.to_thread(autonomy.tick, sys.modules[__name__])
         except Exception:
             LOG.exception('Jarvis research cycle failed')
-        await asyncio.sleep(10)
+        await asyncio.sleep(2)
 
 
 def experiment_tick(get_quote=quote, clock=time.time):
