@@ -169,6 +169,13 @@ def apply_pbh_closeout():
         conn.execute('BEGIN IMMEDIATE')
         state,_=read(conn)
         if state.get('pbh_closeout_v1'):
+            if not state.get('pbh_liquidity_probe_v1'):
+                for b in state['bots'].values():
+                    for p in b['positions'].values():
+                        if p.get('owner_closeout') and 'insufficient liquidity' in (p.get('route_failure') or {}).get('reason','').lower():
+                            p['due']=now
+                state['pbh_liquidity_probe_v1']=True
+                conn.execute('UPDATE run SET state=?,revision=revision+1 WHERE id=1',(json.dumps(state),))
             if not state.get('pbh_error_probe_v1'):
                 for b in state['bots'].values():
                     for p in b['positions'].values():
@@ -186,7 +193,7 @@ def apply_pbh_closeout():
                     p.update(owner_closeout=True,pending='pbh_closeout',due=now)
                     p['exit_signal']={'at':now,'basis':'owner_closeout'}
                     count+=1
-        state.update(pbh_closeout_v1={'requested':now,'positions':count},preset_entries_paused=True,pbh_error_probe_v1=True)
+        state.update(pbh_closeout_v1={'requested':now,'positions':count},preset_entries_paused=True,pbh_error_probe_v1=True,pbh_liquidity_probe_v1=True)
         conn.execute('UPDATE run SET state=?,revision=revision+1 WHERE id=1',(json.dumps(state),))
     print(f'PBH paper closeout queued: {count} positions; active research holdings excluded.',flush=True)
 
@@ -212,6 +219,8 @@ def quote_error(response, data):
         return QuoteUnavailable('Jupiter has no quote for this token and exact amount.', 'no_route')
     if status==400 and 'route plan does not consume all' in message:
         return QuoteUnavailable('Jupiter cannot quote the full input amount.', 'partial_route')
+    if status==400 and 'insufficient liquidity' in message:
+        return QuoteUnavailable('Jupiter reports insufficient liquidity for this amount.','liquidity')
     if status==400 and any(text in message for text in ('invalid amount','invalid input amount','invalid mint','invalid input mint','invalid output mint','invalid slippage','invalid digit','deserialize query','query parameter')):
         return QuoteUnavailable('Jupiter rejected an input parameter; the holding remains tracked.', 'invalid_parameter')
     vocabulary={'amount','input','output','mint','token','not','found','unsupported','supported','invalid','too','small','large','insufficient','liquidity','route','balance','slippage','parameter','parameters','query','required','missing','deserialize','parse','fee','gas','minimum','maximum','limit','error','failed','could','find','quotes','price','impact','exceeds','same','different','disabled','requested','expired','request','size','zero','positive','negative','out','range','exist','exists','available','unavailable'}
@@ -430,8 +439,10 @@ def write_off_no_routes(completed, state, now):
 
 def apply_exit(completed, portfolio, bot, p, quote_size, amount, now, evidence=None, market=None):
     if p.get('owner_closeout'):
-        if quote_size==p['quantity']:
+        if 0<quote_size<=p['quantity']:
             sell(completed,portfolio,bot,p,quote_size,amount,now,'PBH owner-requested paper closeout')
+            if p['quantity']:
+                p.update(pending='pbh_closeout',pbh_quote_size=min(quote_size,p['quantity']),pbh_chunk_attempts=0)
         return
     if quote_size != p['quantity']:
         if p['trims'] >= FINAL_PROFIT_SELL - 1:
@@ -738,6 +749,8 @@ def quote_jobs(state, now):
             if p['due'] <= now:
                 partial = p['pending'] == 'trim' and p['trims'] < FINAL_PROFIT_SELL - 1 and p['quantity'] >= 2
                 quantity = p['quantity'] // 2 if partial else p['quantity']
+                if p.get('owner_closeout'):
+                    quantity=min(quantity,p.get('pbh_quote_size',quantity))
                 jobs.setdefault((mint, quantity), []).append((bot, p))
     return jobs
 
@@ -1022,6 +1035,14 @@ def step(conn, state, providers, get_quote, now):
                 delay = (EXIT_RETRY_LIMIT if category=='invalid_parameter' else NO_ROUTE_RETRY_SECONDS if category == 'no_route' else
                          min(30 if temporary else EXIT_RETRY_LIMIT,
                              (6 if temporary else 45) * 2 ** (failures - 1)))
+                if p.get('owner_closeout') and category in ('liquidity','partial_route'):
+                    attempts=p.get('pbh_chunk_attempts',0)+1
+                    p['pbh_chunk_attempts']=attempts
+                    if size>1 and attempts<=8:
+                        p['pbh_quote_size']=max(1,size//2)
+                        delay=6
+                    else:
+                        delay=EXIT_RETRY_LIMIT
                 p['route_failure'] = {'category': getattr(error, 'category', 'unknown'),
                                       'reason': str(error) if isinstance(error, QuoteUnavailable) else type(error).__name__}
                 p.update(due=now + delay, mark_stale=True, route_failures=failures)
