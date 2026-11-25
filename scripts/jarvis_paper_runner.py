@@ -46,7 +46,7 @@ def container_args(folder):
         '--security-opt','no-new-privileges','--pids-limit','128','--memory','2g','--cpus','2',
         '--user','65534:65534','--tmpfs','/tmp:rw,noexec,nosuid,size=256m',
         '--mount','type=bind,source='+str(folder.resolve())+',target=/app,readonly',
-        '--workdir','/app','--env','PYTHONDONTWRITEBYTECODE=1',IMAGE]
+        '--workdir','/app/backend','--env','PYTHONDONTWRITEBYTECODE=1','--env','DATABASE_PATH=/tmp/jarvis-isolated.db',IMAGE]
 
 
 def image():
@@ -81,11 +81,12 @@ def prove(patch,baseline_source=None):
     with tempfile.TemporaryDirectory() as tmp:
         root=Path(tmp);baseline=root/'baseline';candidate=root/'candidate'
         # No .git, GitHub credentials, CI controller or host environment mounted.
-        shutil.copytree(ROOT/'backend',baseline,ignore=shutil.ignore_patterns('__pycache__','*.sqlite3','*.db','.env*','.venv'))
-        (baseline/file).write_text(original)
-        (baseline/'test_jarvis_generated_regression.py').write_text(patch['regression_test'])
+        shutil.copytree(ROOT/'backend',baseline/'backend',ignore=shutil.ignore_patterns('__pycache__','*.sqlite3','*.db','.env*','.venv'))
+        shutil.copytree(ROOT/'local-worker',baseline/'local-worker',ignore=shutil.ignore_patterns('__pycache__','.venv','.env*','config.json','worker-state.json','*.log'))
+        (baseline/'backend'/file).write_text(original)
+        (baseline/'backend'/'test_jarvis_generated_regression.py').write_text(patch['regression_test'])
         shutil.copytree(baseline,candidate)
-        (candidate/file).write_text(changed)
+        (candidate/'backend'/file).write_text(changed)
         # tempfile's 0700 parent prevents the unprivileged sandbox from reading
         # it on some Docker hosts; bind-mount contents need read/search access.
         for folder in (root,baseline,candidate):folder.chmod(0o755)
@@ -172,6 +173,7 @@ def run():
         if before['source_sha']!=base:raise RuntimeError('Main and deployed source differ; wait for deployment')
         changed=prove(patch)
         checks.update(baseline_failed=True,regression_passed=True,suite_passed=True)
+        if not api('health')['enabled']:raise RuntimeError('Owner disabled automatic repair')
         if git('ls-remote','origin','refs/heads/main').split()[0]!=base:raise RuntimeError('Main advanced during tests')
         path=ROOT/'backend'/patch['file'];path.write_text(changed)
         git('config','user.name','Jarvis paper repair')
