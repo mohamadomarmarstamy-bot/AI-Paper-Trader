@@ -11,6 +11,8 @@ import jarvis_local_lab as local_lab
 
 URL='https://graph.codex.io/graphql'
 NETWORK=1399811149
+DAILY_CU_LIMIT=250
+MONTHLY_CU_LIMIT=8000
 SCHEMA='''
 CREATE TABLE IF NOT EXISTS codex_calls(id INTEGER PRIMARY KEY,at REAL NOT NULL,day TEXT NOT NULL,month TEXT NOT NULL,reserved INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS codex_calls_period ON codex_calls(month,day);
@@ -43,7 +45,7 @@ def reserve(api,now,units):
             raise Unavailable('paced')
         daily=conn.execute('SELECT COALESCE(sum(reserved),0) FROM codex_calls WHERE day=?',(day,)).fetchone()[0]
         monthly=conn.execute('SELECT COALESCE(sum(reserved),0) FROM codex_calls WHERE month=?',(month,)).fetchone()[0]
-        if daily+units>200 or monthly+units>8000:raise Unavailable('quota_reached')
+        if daily+units>DAILY_CU_LIMIT or monthly+units>MONTHLY_CU_LIMIT:raise Unavailable('quota_reached')
         if mode()=='trial' and conn.execute('SELECT count(*) FROM codex_calls').fetchone()[0]>=6:
             raise Unavailable('trial_complete')
         conn.execute('INSERT INTO codex_calls(at,day,month,reserved) VALUES (?,?,?,?)',(now,day,month,units))
@@ -199,7 +201,7 @@ def tick(api,*,clock):
         monthly=conn.execute('SELECT COALESCE(sum(reserved),0) FROM codex_calls WHERE month=?',(dt.strftime('%Y-%m'),)).fetchone()[0]
         # Leave enough allowance for BOTH requests before starting metadata.
         # reserve() still enforces the hard limits immediately before each call.
-        if daily+16>200 or monthly+16>8000:return
+        if daily+16>DAILY_CU_LIMIT or monthly+16>MONTHLY_CU_LIMIT:return
         due=conn.execute("SELECT due FROM research_tasks WHERE name='codex-priority'").fetchone()
         if due and due['due']>now:return
         candidates=[]
@@ -248,4 +250,4 @@ def status(conn):
         'samples':counts,'calls':conn.execute('SELECT count(*) FROM codex_calls').fetchone()[0],
         'reserved_cu_today':conn.execute('SELECT COALESCE(sum(reserved),0) FROM codex_calls WHERE day=?',(day,)).fetchone()[0],
         'reserved_cu_month':conn.execute('SELECT COALESCE(sum(reserved),0) FROM codex_calls WHERE month=?',(month,)).fetchone()[0],
-        'daily_reserved_cu_limit':200,'monthly_reserved_cu_limit':8000,'trial_request_limit':6}
+        'daily_reserved_cu_limit':DAILY_CU_LIMIT,'monthly_reserved_cu_limit':MONTHLY_CU_LIMIT,'trial_request_limit':6}
