@@ -1392,7 +1392,12 @@ def chart_coverage(conn, state, now):
             and now >= row.get('retry', 0)]
     records = {r['mint']: (r['pair'], json.loads(r['evidence']))
                for r in conn.execute('SELECT mint,pair,evidence FROM research WHERE checked>=?', (now - 900,))}
-    return research.chart_coverage(rows, records, now)
+    result=research.chart_coverage(rows, records, now)
+    lags=[e.get('chart',{}).get('returned_lag_seconds') for pair,e in records.values()]
+    lags=[v for v in lags if isinstance(v,(int,float)) and math.isfinite(v)]
+    result['provider']={'request_interval_seconds':research.chart_interval(conn),'stale_responses_measured':len(lags),
+        'median_returned_lag_seconds':round(sorted(lags)[len(lags)//2]) if lags else None}
+    return result
 
 
 def claim_research(conn, now):
@@ -1410,7 +1415,7 @@ def claim_research(conn, now):
     records = {r['mint']: (r['pair'], json.loads(r['evidence']))
                for r in conn.execute('SELECT mint,pair,evidence FROM research WHERE checked>=?', (now - 900,))}
     tasks = []
-    for source, interval in (('chart', research.CHART_INTERVAL), ('bluesky', 30), ('x', research.X_INTERVAL)):
+    for source, interval in (('chart', research.chart_interval(conn)), ('bluesky', 30), ('x', research.X_INTERVAL)):
         if source == 'x' and not os.getenv('JARVIS_X_BEARER_TOKEN', '').strip():
             continue
         due = conn.execute('SELECT due FROM research_tasks WHERE name=?', (source,)).fetchone()
@@ -1424,13 +1429,24 @@ def claim_research(conn, now):
             fresh = record.get('value') is not None and 0 <= now-last < research.FRESH_SECONDS
             if source=='chart':
                 local_held=any(row['mint'] in state['bots'][slot]['positions'] for slot in local_lab.SLOTS)
-                eligible=(not row.get('monitor_only') and 0<=now-row['first']<=900
-                          and any(row['first']>=rule['created'] for rule in state.get('local_rules',{}).values()))
-                # Research opportunities precede old preset holdings; oldest
-                # attempt wins within each group so new discoveries cannot starve it.
-                tier=0 if local_held else 1 if eligible else 2 if row['mint'] in study_mints else 3
-                return (tier, research.chart_is_fresh(record, now),
-                        record.get('attempt_at', last), -row['first'])
+                eligible = (not row.get('monitor_only') and 0 <= now-row['first'] <= ENTRY_WINDOW
+                            and now >= row.get('retry', 0)
+                            and any(row['first'] >= rule['created'] for rule in state.get('local_rules', {}).values()))
+                remaining = research.chart_fresh_for(record, now)
+                # Keep holdings above entries when their chart is missing or
+                # approaching expiry, but do not spend scarce slots refreshing
+                # healthy holdings ahead of uncovered research opportunities.
+                if local_held and remaining <= 30:
+                    tier = 0
+                elif eligible and not remaining:
+                    tier = 1
+                elif local_held:
+                    tier = 2
+                elif eligible:
+                    tier = 3
+                else:
+                    tier = 4 if row['mint'] in study_mints else 5
+                return (tier, bool(remaining), record.get('attempt_at', last), -row['first'])
             return (fresh, row['mint'] not in study_mints, last if fresh else -row['first'])
 
         candidates=rows
@@ -1492,11 +1508,13 @@ def research_tick(clock=time.time, chart=research.chart, social=research.social_
     for source, row in tasks:
         http_status=None
         retry_after=None
+        latest_candle=None
         try:
             value = chart(row, clock()) if source == 'chart' else social(source, row, clock())
             result_status='ready' if value is not None else 'insufficient_history' if source=='chart' else 'unavailable'
         except research.ChartUnavailable as error:
             result_status, value = error.status, None
+            latest_candle=error.latest_candle
         except Exception as error:
             response = getattr(error, 'response', None)
             http_status = getattr(response, 'status_code', None)
@@ -1522,6 +1540,12 @@ def research_tick(clock=time.time, chart=research.chart, social=research.social_
                      else 120 if result_status in ('insufficient_history', 'stale_candles') else 30)
             record.update(attempt_at=at,status=result_status,next_attempt=at+retry)
             if http_status is not None:record['http_status']=http_status
+            if source=='chart':
+                if latest_candle is not None:
+                    record['latest_returned_close']=latest_candle
+                    record['returned_lag_seconds']=max(0,at-latest_candle)
+                interval=research.record_chart_result(conn,result_status)
+                conn.execute("INSERT INTO research_tasks(name,due) VALUES ('chart',?) ON CONFLICT(name) DO UPDATE SET due=max(due,excluded.due)",(at+interval,))
             evidence[source] = record
             if source=='chart' and http_status==429:
                 conn.execute("""INSERT INTO research_tasks(name,due) VALUES ('chart',?)

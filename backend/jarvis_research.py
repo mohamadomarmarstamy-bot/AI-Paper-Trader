@@ -20,9 +20,10 @@ MIN_POOL_AGE_MINUTES = CHART_BARS - 1
 class ChartUnavailable(ValueError):
     """A chart response that cannot be used, with a fixed diagnostic label."""
 
-    def __init__(self, status):
+    def __init__(self, status, latest_candle=None):
         super().__init__(status)
         self.status = status
+        self.latest_candle = latest_candle
 
 
 def rate_limit_delay(headers, now):
@@ -34,6 +35,27 @@ def rate_limit_delay(headers, now):
         return CHART_REFRESH
     # Bound a corrupt header to one day; do not shorten a normal cooldown.
     return min(86400, max(CHART_REFRESH, delay))
+
+
+def chart_interval(conn):
+    row=conn.execute('SELECT interval FROM chart_provider_budget WHERE id=1').fetchone()
+    return max(CHART_INTERVAL, min(60, row['interval'])) if row else CHART_INTERVAL
+
+
+def record_chart_result(conn, status):
+    row=conn.execute('SELECT interval,successes FROM chart_provider_budget WHERE id=1').fetchone()
+    interval=chart_interval(conn)
+    successes=row['successes'] if row else 0
+    if status=='rate_limited':
+        interval=min(60,interval*2);successes=0
+    elif status=='ready':
+        successes+=1
+        if successes>=5:
+            interval=max(CHART_INTERVAL,interval-1);successes=0
+    else:
+        successes=0
+    conn.execute('INSERT OR REPLACE INTO chart_provider_budget VALUES (1,?,?)',(interval,successes))
+    return interval
 
 
 def pool_warming(row):
@@ -48,6 +70,13 @@ def chart_is_fresh(record, now):
     seen, closed = record.get('at'), value.get('closed_at')
     return (type(seen) in (int, float) and type(closed) in (int, float)
             and 0 <= now - seen <= FRESH_SECONDS and 0 <= now - closed <= FRESH_SECONDS)
+
+
+def chart_fresh_for(record, now):
+    """Seconds until available evidence fails the existing two freshness limits."""
+    if not chart_is_fresh(record, now):
+        return 0
+    return FRESH_SECONDS + min(record['at'], record['value']['closed_at']) - now
 
 
 def chart_coverage(rows, records, now):
@@ -89,6 +118,9 @@ CREATE TABLE IF NOT EXISTS research(
 CREATE TABLE IF NOT EXISTS research_tasks(
     name TEXT PRIMARY KEY, due REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS chart_provider_budget(
+    id INTEGER PRIMARY KEY CHECK(id=1), interval REAL NOT NULL, successes INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS research_mail(
     version INTEGER PRIMARY KEY, body TEXT NOT NULL, due REAL NOT NULL, sent REAL
 );
@@ -128,7 +160,7 @@ def _chart_signal(candles, now):
     latest = max(bars)
     if now - latest > FRESH_SECONDS:
         # Preserve the stricter existing validation on candle start age.
-        raise ChartUnavailable('stale_candles')
+        raise ChartUnavailable('stale_candles', latest + 60)
     times = range(latest - (CHART_BARS - 1) * 60, latest + 1, 60)
     if any(at not in bars for at in times):
         raise ChartUnavailable('insufficient_history')

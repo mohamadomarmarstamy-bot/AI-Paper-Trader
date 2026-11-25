@@ -72,6 +72,23 @@ class JarvisResearchTests(unittest.TestCase):
             tasks=jarvis.claim_research(conn,NOW+19)
             self.assertFalse(any(source=='chart' for source,_ in tasks))
 
+    def test_healthy_holding_does_not_starve_uncovered_entry(self):
+        rows = self.prepare_chart_watch(2)
+        held, uncovered = rows
+        with jarvis.connection() as conn, conn:
+            state, _ = jarvis.read(conn)
+            state['bots']['research-01']['positions'][held] = {}
+            conn.execute('UPDATE run SET state=?', (json.dumps(state),))
+            def set_chart(closed):
+                conn.execute('INSERT OR REPLACE INTO research VALUES (?,?,?,?)', (held, PAIR, NOW-70,
+                    json.dumps({'chart': {'at': NOW-70, 'value': {'closed_at': closed}}})))
+            set_chart(NOW-70)
+            jobs = jarvis.claim_research(conn, NOW)
+            self.assertEqual(next(row['mint'] for source, row in jobs if source == 'chart'), uncovered)
+            set_chart(NOW-165)
+            jobs = jarvis.claim_research(conn, NOW+6)
+            self.assertEqual(next(row['mint'] for source, row in jobs if source == 'chart'), held)
+
     def test_empty_chart_backoff_does_not_starve_other_coins(self):
         self.prepare_chart_watch(2);called=[]
         def chart(row,now):called.append(row['mint']);return None
@@ -101,6 +118,34 @@ class JarvisResearchTests(unittest.TestCase):
             self.assertTrue(jarvis.entry_evidence(conn,row,NOW)['chart'])
             self.assertNotIn('chart',jarvis.entry_evidence(conn,row,NOW+121))
             self.assertFalse(any(source=='chart' for source,_ in jarvis.claim_research(conn,NOW+6)))
+
+    def test_rate_limit_budget_persists_and_recovers_cautiously(self):
+        with jarvis.connection() as conn,conn:
+            self.assertEqual(research.chart_interval(conn),6)
+            self.assertEqual(research.record_chart_result(conn,'rate_limited'),12)
+            self.assertEqual(research.record_chart_result(conn,'rate_limited'),24)
+        with jarvis.connection() as conn,conn:
+            self.assertEqual(research.chart_interval(conn),24)
+            for _ in range(4):research.record_chart_result(conn,'ready')
+            self.assertEqual(research.chart_interval(conn),24)
+            research.record_chart_result(conn,'ready')
+            self.assertEqual(research.chart_interval(conn),23)
+            for _ in range(10):research.record_chart_result(conn,'rate_limited')
+            self.assertEqual(research.chart_interval(conn),60)
+
+    def test_stale_response_lag_is_observed_without_admitting_chart(self):
+        rows=self.prepare_chart_watch(1)
+        bars=[[NOW-1200-(20-i)*60,100,101,99,100,100] for i in range(20)]
+        def chart(row,now):return research._chart_signal(bars,now)
+        jarvis.research_tick(clock=lambda:NOW,chart=chart,social=lambda *_:None)
+        with jarvis.connection() as conn:
+            record=json.loads(conn.execute('SELECT evidence FROM research').fetchone()[0])['chart']
+            self.assertEqual(record['status'],'stale_candles')
+            self.assertEqual(record['returned_lag_seconds'],1200)
+            self.assertIsNone(record['value'])
+            self.assertNotIn('chart',jarvis.entry_evidence(conn,next(iter(rows.values())),NOW))
+            coverage=jarvis.chart_coverage(conn,jarvis.read(conn)[0],NOW)
+            self.assertEqual(coverage['provider']['median_returned_lag_seconds'],1200)
 
     def test_chart_does_not_query_pool_that_cannot_have_enough_bars(self):
         rows = self.prepare_chart_watch(2)
