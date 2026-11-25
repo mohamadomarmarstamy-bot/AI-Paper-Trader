@@ -16,6 +16,7 @@ import requests
 
 import database
 import jarvis_hourly_mail as hourly_mail
+import jarvis_audit as audit
 import jarvis_local_lab as local_lab
 import jarvis_autonomy as autonomy
 import jarvis_experiments as experiments
@@ -107,7 +108,7 @@ def connection():
     path = database.DATABASE_PATH.with_name('jarvis_paper.sqlite3')
     with closing(sqlite3.connect(path, timeout=5)) as conn:
         conn.row_factory = sqlite3.Row
-        conn.executescript(SCHEMA + research.SCHEMA + experiments.SCHEMA + outcomes.SCHEMA + backlog.SCHEMA + autonomy.SCHEMA + local_lab.SCHEMA + hourly_mail.SCHEMA)
+        conn.executescript(SCHEMA + research.SCHEMA + experiments.SCHEMA + outcomes.SCHEMA + backlog.SCHEMA + autonomy.SCHEMA + local_lab.SCHEMA + hourly_mail.SCHEMA + audit.SCHEMA)
         conn.execute('INSERT OR IGNORE INTO run(id,state) VALUES (1,?)', (json.dumps(initial()),))
         conn.commit()
         yield conn
@@ -1280,6 +1281,7 @@ def status():
         comparison = experiments.read_board(conn)
         autonomous = autonomy.status(conn)
         hourly = hourly_mail.status(conn)
+        audit_report = audit.latest(conn)
         route_retries = sum(bool(p.get('mark_stale') and 'quote_due_since' in p)
                             for bot in state['bots'].values() for p in bot['positions'].values())
         legacy_summary = conn.execute('SELECT data FROM legacy_outcome_summary WHERE id=1').fetchone()
@@ -1292,7 +1294,7 @@ def status():
                   'quoted_closes':conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.reason')='PBH owner-requested paper closeout'").fetchone()[0],
                   'writeoffs':conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.owner_closeout')=1 AND json_extract(data,'$.paper_writeoff') IS NOT NULL").fetchone()[0]}
     local = local_lab.context(__import__(__name__))
-    return {'pbh_closeout':closeout,'preset_entries_paused':bool(state.get('preset_entries_paused')), 'notification_focus': __import__('jarvis_focus').enabled(), 'hourly_email': hourly, 'local_lab': local, 'autonomy': autonomous, 'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
+    return {'automated_audit':audit_report,'pbh_closeout':closeout,'preset_entries_paused':bool(state.get('preset_entries_paused')), 'notification_focus': __import__('jarvis_focus').enabled(), 'hourly_email': hourly, 'local_lab': local, 'autonomy': autonomous, 'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
             'research': {'recent_coins': coverage, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
                          'latest_proposal': dict(latest_mail) if latest_mail else None},
             'backlog_guard': {**backlog.summary(state, now),
@@ -1509,6 +1511,8 @@ def research_diagnostic():
     with connection() as conn:
         state,_=read(conn)
         entries=local_entry_status(conn,state,now)
+        with conn:
+            audit.refresh(conn,state,entries,now)
         counts={row['bot']:dict(row) for row in conn.execute(
             "SELECT bot,count(*) AS closed FROM trades WHERE bot LIKE 'research-%' GROUP BY bot")}
         slots=[]

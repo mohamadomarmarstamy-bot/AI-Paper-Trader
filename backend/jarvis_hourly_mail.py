@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 import solana_http
 import jarvis_health_mail
+import jarvis_audit
 
 LOG = logging.getLogger(__name__)
 ET = ZoneInfo('America/New_York')
@@ -244,6 +245,9 @@ def tick(api, clock=time.time, post=solana_http.post):
             content=render_overnight(report,overnight_rows(conn,start,boundary)) if overnight else render(report)
             payload={'from':os.environ['HEALTH_ALERT_EMAIL_FROM'].strip(),
                      'to':[os.environ['HEALTH_ALERT_EMAIL_TO'].strip()],**content}
+            note=jarvis_audit.brief(jarvis_audit.latest(conn))
+            payload['text']+='\n\n'+note
+            payload['html']=payload['html'].replace('</body>','<p style="font-family:Arial;font-size:12px;padding:16px;color:#475569">'+escape(note)+'</p></body>')
             ident='jarvis-hourly/'+str(boundary)
             # Fold unsent old summaries into the catch-up report instead of flooding at 9 AM.
             if overnight:
