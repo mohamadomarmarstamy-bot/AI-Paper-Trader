@@ -89,35 +89,52 @@ def check_units(node):
 
 
 def check_exit_logic(root):
-    """Reject a simple profit cap at/below the trailing arm level.
+    """Check profit/trailing conflicts through nested AND/OR expressions.
 
-    This catches a common dead branch, not every possible strategy defect.
+    Normalize to bounded conjunction cases. A profit-cap case shadows a
+    trailing case when its other requirements are shared by the trailing case.
+    This remains a conservative check, not a proof of strategy correctness.
     """
-    if not isinstance(root, ast.BoolOp) or not isinstance(root.op, ast.Or):
-        return
-    targets = []
-    for branch in root.values:
-        if (isinstance(branch, ast.Compare) and isinstance(branch.left, ast.Name)
-                and branch.left.id == 'gain' and len(branch.ops) == 1
-                and isinstance(branch.ops[0], (ast.GtE, ast.Gt))
-                and isinstance(branch.comparators[0], ast.Constant)):
-            targets.append(branch.comparators[0].value)
-    for branch in root.values:
-        if not isinstance(branch, ast.BoolOp) or not isinstance(branch.op, ast.And):
-            continue
-        arms = []
-        trailing = False
-        for node in branch.values:
-            if not isinstance(node, ast.Compare) or len(node.ops) != 1 or not isinstance(node.left, ast.Name):
-                continue
-            right = node.comparators[0]
-            if node.left.id == 'peak' and isinstance(node.ops[0], (ast.GtE, ast.Gt)) and isinstance(right, ast.Constant):
-                arms.append(right.value)
-            if (node.left.id == 'gain' and isinstance(node.ops[0], (ast.LtE, ast.Lt))
-                    and isinstance(right, ast.BinOp) and isinstance(right.op, ast.Sub)
-                    and isinstance(right.left, ast.Name) and right.left.id == 'peak'):
-                trailing = True
-        if trailing and any(target <= arm for target in targets for arm in arms):
+    def cases(node):
+        if not isinstance(node, ast.BoolOp):
+            return [[node]]
+        groups = [cases(child) for child in node.values]
+        if isinstance(node.op, ast.Or):
+            result = [case for group in groups for case in group]
+        else:
+            result = [[]]
+            for group in groups:
+                if len(result) * len(group) > 64:
+                    raise ValueError('Exit logic expands beyond 64 cases')
+                result = [left + right for left in result for right in group]
+        if len(result) > 64:
+            raise ValueError('Exit logic expands beyond 64 cases')
+        return result
+
+    groups = cases(root)
+    def threshold(node, field):
+        if (isinstance(node, ast.Compare) and isinstance(node.left, ast.Name)
+                and node.left.id == field and len(node.ops) == 1
+                and isinstance(node.ops[0], (ast.GtE, ast.Gt))
+                and isinstance(node.comparators[0], ast.Constant)):
+            return node.comparators[0].value
+        return None
+
+    targets = [(threshold(node, 'gain'), {ast.dump(other) for other in group if other is not node})
+               for group in groups for node in group if threshold(node, 'gain') is not None]
+    for group in groups:
+        arms = [threshold(node, 'peak') for node in group if threshold(node, 'peak') is not None]
+        trailing = any(
+            isinstance(node, ast.Compare) and len(node.ops) == 1
+            and isinstance(node.left, ast.Name) and node.left.id == 'gain'
+            and isinstance(node.ops[0], (ast.LtE, ast.Lt))
+            and isinstance(node.comparators[0], ast.BinOp)
+            and isinstance(node.comparators[0].op, ast.Sub)
+            and isinstance(node.comparators[0].left, ast.Name)
+            and node.comparators[0].left.id == 'peak' for node in group)
+        signatures = {ast.dump(node) for node in group}
+        if trailing and any(target <= arm and requirements <= signatures
+                            for target, requirements in targets for arm in arms):
             raise ValueError('Profit target must exceed the trailing arm level, or remove the target')
 
 

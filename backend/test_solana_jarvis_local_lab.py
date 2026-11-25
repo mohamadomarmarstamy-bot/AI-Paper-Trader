@@ -209,3 +209,18 @@ class StrategyQualityTests(unittest.TestCase):
         for entry in ('age > liquidity','buys_m5 + volume_m5_usd > 10','rsi * liquidity > 100'):
             with self.assertRaises(ValueError):lab.validate({**RULE,'entry':entry})
         lab.validate({**RULE,'entry':'sells_m5 > 0 and buys_m5 / sells_m5 > 1.5'})
+
+    def test_rejects_exact_second_benchmark_with_nested_time_condition(self):
+        rule={'name':'Dynamic Volume RSI Strategy','hypothesis':'Untested oversold hypothesis',
+              'entry':'liquidity >= 50000 and volume_m5_usd >= 10000 and volume_ratio >= 1.5 and rsi < 20',
+              'exit':'gain >= 10 or (peak >= 10 and gain <= peak - 5) and held_seconds <= 3600'}
+        with self.assertRaisesRegex(ValueError,'Profit target'):
+            lab.validate(rule)
+
+    def test_conflict_detected_inside_shared_outer_conditions(self):
+        with self.assertRaisesRegex(ValueError,'Profit target'):
+            lab.validate({**RULE,'exit':'held_seconds < 1800 and (gain >= 10 or (peak >= 10 and gain <= peak - 5))'})
+        lab.validate({**RULE,'exit':'held_seconds < 1800 and (gain >= 20 or (peak >= 10 and gain <= peak - 5))'})
+
+    def test_different_profit_time_gate_does_not_imply_shadow(self):
+        lab.validate({**RULE,'exit':'(gain >= 10 and held_seconds > 1800) or (peak >= 10 and gain <= peak - 5)'})

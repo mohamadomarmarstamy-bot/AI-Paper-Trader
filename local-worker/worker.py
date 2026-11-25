@@ -115,6 +115,8 @@ class Worker:
             'Compare volume_ratio directly (for example >= 1.5); NEVER divide USD volume by volume_ratio or RSI. '
             'Only divide matching quantities, such as buys_m5/sells_m5; guard against zero. '
             'If using a trailing exit, an immediate gain target must be ABOVE its peak activation level, or omit the target. '
+            'BAD exit: gain >= 10 or (peak >= 10 and gain <= peak - 5). GOOD exit: peak >= 10 and gain <= peak - 5. '
+            'A higher fixed target is optional. Do not use held_seconds <= 3600 as a maximum-hold exit; that guard is already enforced. '
             'Reference snippets are background, NOT evidence for numerical thresholds. State that thresholds are untested hypotheses. '
             'No return guarantees. Explain the hypothesis without claiming sources validated it. '
             'Historical aggregate paper results: '+json.dumps(context.get('results',[])[:12],separators=(',',':'))[:1200]+
