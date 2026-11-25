@@ -1244,6 +1244,22 @@ def status():
                           'coverage': 'Discoverable active Solana pairs; not the entire meme-coin market.'}}
 
 
+def archive(before=None):
+    with connection() as conn:
+        state,_=read(conn)
+        rows=conn.execute("SELECT rowid AS cursor,* FROM local_strategies WHERE status IN ('failed','inactive') AND rowid<? ORDER BY rowid DESC LIMIT 26",
+                          (before if before is not None else 2**63-1,)).fetchall()
+        stats={row['version']:dict(row) for row in conn.execute("SELECT json_extract(data,'$.policy.local_rule.id') AS version,count(*) AS closed,COALESCE(sum(pnl),0)/1000000.0 AS net FROM trades WHERE bot LIKE 'research-%' GROUP BY version")}
+        items=[]
+        for row in rows[:25]:
+            sample=stats.get(row['id'],{})
+            items.append({'id':row['id'],'slot':row['slot'],'created':row['created'],'status':row['status'],
+                          'rule':json.loads(row['rule']),'report':json.loads(row['report']),
+                          'closed':sample.get('closed',0),'net':sample.get('net',0),
+                          'open':sum(p.get('policy',{}).get('local_rule',{}).get('id')==row['id'] for p in state['bots'][row['slot']]['positions'].values())})
+    return {'strategies':items,'next':rows[24]['cursor'] if len(rows)>25 else None}
+
+
 def history(jarvis, before=None, bot=None, rugs_only=False):
     limit = 25
     condition = "bot='jarvis'" if jarvis else "bot!='jarvis'"

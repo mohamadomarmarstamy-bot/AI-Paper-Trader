@@ -149,6 +149,26 @@ class LocalLabTests(unittest.TestCase):
         self.assertEqual(len(report['slots']),10)
         self.assertNotIn('sources',json.dumps(report))
 
+    def test_archive_retains_versions_and_pages_without_changing_trading_state(self):
+        first=self.submit()
+        with api.connection() as conn,conn:
+            state,_=api.read(conn)
+            self.insert(conn,first['slot'],first['id'],2,-1_000000)
+            conn.execute("UPDATE local_strategies SET status='failed' WHERE id=?",(first['id'],))
+            for index in range(26):
+                conn.execute('INSERT INTO local_strategies(id,slot,created,rule,sources,status) VALUES (?,?,?,?,?,?)',
+                    ('archived-'+str(index),first['slot'],200+index,json.dumps(RULE),json.dumps(SOURCES),'inactive'))
+            before=conn.execute('SELECT state FROM run').fetchone()[0]
+        page=api.archive()
+        self.assertEqual(len(page['strategies']),25)
+        older=api.archive(page['next'])
+        self.assertEqual(len(older['strategies']),2)
+        item=next(row for row in older['strategies'] if row['id']==first['id'])
+        self.assertEqual(item['closed'],2);self.assertEqual(item['net'],-2)
+        self.assertEqual(item['status'],'failed');self.assertIsNone(older['next'])
+        with api.connection() as conn:
+            self.assertEqual(conn.execute('SELECT state FROM run').fetchone()[0],before)
+
     def insert(self, conn, slot, ident, count, pnl):
         for i in range(count):
             data={'policy':{'local_rule':{'id':ident}},'pnl':pnl}
