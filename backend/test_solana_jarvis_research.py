@@ -72,6 +72,23 @@ class JarvisResearchTests(unittest.TestCase):
             tasks=jarvis.claim_research(conn,NOW+19)
             self.assertFalse(any(source=='chart' for source,_ in tasks))
 
+    def test_healthy_holding_does_not_starve_uncovered_entry(self):
+        rows = self.prepare_chart_watch(2)
+        held, uncovered = rows
+        with jarvis.connection() as conn, conn:
+            state, _ = jarvis.read(conn)
+            state['bots']['research-01']['positions'][held] = {}
+            conn.execute('UPDATE run SET state=?', (json.dumps(state),))
+            def set_chart(closed):
+                conn.execute('INSERT OR REPLACE INTO research VALUES (?,?,?,?)', (held, PAIR, NOW-70,
+                    json.dumps({'chart': {'at': NOW-70, 'value': {'closed_at': closed}}})))
+            set_chart(NOW-70)
+            jobs = jarvis.claim_research(conn, NOW)
+            self.assertEqual(next(row['mint'] for source, row in jobs if source == 'chart'), uncovered)
+            set_chart(NOW-165)
+            jobs = jarvis.claim_research(conn, NOW+6)
+            self.assertEqual(next(row['mint'] for source, row in jobs if source == 'chart'), held)
+
     def test_empty_chart_backoff_does_not_starve_other_coins(self):
         self.prepare_chart_watch(2);called=[]
         def chart(row,now):called.append(row['mint']);return None

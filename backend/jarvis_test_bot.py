@@ -1424,13 +1424,24 @@ def claim_research(conn, now):
             fresh = record.get('value') is not None and 0 <= now-last < research.FRESH_SECONDS
             if source=='chart':
                 local_held=any(row['mint'] in state['bots'][slot]['positions'] for slot in local_lab.SLOTS)
-                eligible=(not row.get('monitor_only') and 0<=now-row['first']<=900
-                          and any(row['first']>=rule['created'] for rule in state.get('local_rules',{}).values()))
-                # Research opportunities precede old preset holdings; oldest
-                # attempt wins within each group so new discoveries cannot starve it.
-                tier=0 if local_held else 1 if eligible else 2 if row['mint'] in study_mints else 3
-                return (tier, research.chart_is_fresh(record, now),
-                        record.get('attempt_at', last), -row['first'])
+                eligible = (not row.get('monitor_only') and 0 <= now-row['first'] <= ENTRY_WINDOW
+                            and now >= row.get('retry', 0)
+                            and any(row['first'] >= rule['created'] for rule in state.get('local_rules', {}).values()))
+                remaining = research.chart_fresh_for(record, now)
+                # Keep holdings above entries when their chart is missing or
+                # approaching expiry, but do not spend scarce slots refreshing
+                # healthy holdings ahead of uncovered research opportunities.
+                if local_held and remaining <= 30:
+                    tier = 0
+                elif eligible and not remaining:
+                    tier = 1
+                elif local_held:
+                    tier = 2
+                elif eligible:
+                    tier = 3
+                else:
+                    tier = 4 if row['mint'] in study_mints else 5
+                return (tier, bool(remaining), record.get('attempt_at', last), -row['first'])
             return (fresh, row['mint'] not in study_mints, last if fresh else -row['first'])
 
         candidates=rows

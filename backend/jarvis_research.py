@@ -50,6 +50,13 @@ def chart_is_fresh(record, now):
             and 0 <= now - seen <= FRESH_SECONDS and 0 <= now - closed <= FRESH_SECONDS)
 
 
+def chart_fresh_for(record, now):
+    """Seconds until available evidence fails the existing two freshness limits."""
+    if not chart_is_fresh(record, now):
+        return 0
+    return FRESH_SECONDS + min(record['at'], record['value']['closed_at']) - now
+
+
 def chart_coverage(rows, records, now):
     """Count same-pool evidence against this cycle's research candidates."""
     counts = dict.fromkeys(('complete', 'zero_volume_baseline', 'partial_indicators',
