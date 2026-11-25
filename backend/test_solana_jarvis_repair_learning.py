@@ -80,6 +80,16 @@ class RepairLearningTests(unittest.TestCase):
               'strategy':None,'patch':self.value,'sources':[]}
         brain.apply_plan(api,{'kind':'engine_error','id':'incident'},plan,None,NOW)
         with api.connection() as conn:self.assertEqual(conn.execute('SELECT status FROM brain_proposals').fetchone()[0],'repeat_blocked')
+    def test_temporary_runner_failure_can_rearm_same_proposal_after_cooldown(self):
+        self.remember('runner_error')
+        plan={'summary':'Try a repair','hypothesis':'Test hypothesis','action':'monitor','checks':[],
+              'strategy':None,'patch':self.value,'sources':[]}
+        brain.apply_plan(api,{'kind':'engine_error','id':'incident'},plan,None,NOW+60)
+        with api.connection() as conn:self.assertEqual(conn.execute('SELECT status FROM brain_proposals').fetchone()[0],'repeat_blocked')
+        brain.apply_plan(api,{'kind':'engine_error','id':'incident'},plan,None,NOW+3601)
+        with api.connection() as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM brain_proposals').fetchone()[0],1)
+            self.assertEqual(conn.execute('SELECT status FROM brain_proposals').fetchone()[0],'needs_functional_tests')
     def test_observed_chart_cases_are_bounded_numeric_and_identifier_free(self):
         with api.connection() as conn,conn:
             state,_=api.read(conn)

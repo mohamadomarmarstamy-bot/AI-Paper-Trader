@@ -355,10 +355,12 @@ def apply_plan(api,job,plan,error,now):
         plan['applied_action']=action
         conn.execute('UPDATE brain_incidents SET plan=?,last_error=NULL WHERE id=?',(json.dumps(plan),job['id']))
         if plan.get('patch'):
-            ident=hashlib.sha256(json.dumps(plan['patch'],sort_keys=True).encode()).hexdigest()[:24]
+            ident=hashlib.sha256(json.dumps({'patch':plan['patch'],'incident':job['id']},sort_keys=True).encode()).hexdigest()[:24]
             import jarvis_repair_learning as repair_learning
             proposal_status='repeat_blocked' if repair_learning.blocked(conn,plan['patch'],now) else 'needs_functional_tests'
-            conn.execute('INSERT OR IGNORE INTO brain_proposals(id,created,kind,status,data) VALUES (?,?,?,?,?)',
+            conn.execute("""INSERT INTO brain_proposals(id,created,kind,status,data) VALUES (?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET status=excluded.status,data=excluded.data
+                WHERE brain_proposals.status IN ('runner_error','repeat_blocked') AND excluded.status='needs_functional_tests'""",
                 (ident,now,'code',proposal_status,json.dumps({**plan['patch'],'incident_id':job['id']})))
         if state.get('brain_pause')!=original_pause:
             conn.execute('UPDATE run SET state=?,revision=? WHERE id=1',(json.dumps(state),revision+1))
