@@ -357,6 +357,7 @@ def context(api, now=None):
         free = [slot for slot in SLOTS if slot not in occupied and not state['bots'][slot]['positions']
                 and (not state['bots'][slot].get('local_funded') or state['bots'][slot]['cash'] >= api.BUY_COST)]
         return {'enabled':state['enabled'],'available_slots':free,'strategies':rows,
+                'entry_status':api.local_entry_status(conn,state,now),
                 'minimum_coins':MIN_COINS,'entry_fields':sorted(ENTRY_FIELDS),'exit_fields':sorted(EXIT_FIELDS),
                 'outcome_warnings':(state.get('outcome_review') or {}).get('warnings',[]),
                 'results':[dict(r) for r in conn.execute("SELECT bot,count(*) AS closed,sum(pnl)/1000000.0 AS net FROM trades GROUP BY bot")],

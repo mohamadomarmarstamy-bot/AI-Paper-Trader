@@ -49,6 +49,7 @@
     if (state.backlog_guard?.timer_active || state.backlog_guard?.until_all_closed || state.entry_catchup_pause?.active) return 'Buys paused · exits monitored';
     if (!state.enabled) return bot.open ? 'Paused · exits monitored' : 'Paused';
     if (!state.last_cycle || Date.now() / 1000 - state.last_cycle > 30) return 'Waiting for scan';
+    if (bot.research_slot && state.local_lab?.entry_status?.[bot.id]) return state.local_lab.entry_status[bot.id].label;
     return 'Running';
   }
 

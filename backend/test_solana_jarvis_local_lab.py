@@ -74,6 +74,49 @@ class LocalLabTests(unittest.TestCase):
         self.assertEqual(completed[0]['reason'],'Research strategy exit')
         self.assertEqual(completed[0]['pnl'],9_650000)
 
+    def test_research_uses_shared_entry_queue_when_regular_exits_are_overdue(self):
+        result=self.submit()
+        with api.connection() as conn:
+            state,_=api.read(conn)
+            row={'mint':'new','pair':'pair','symbol':'New','first':499,'last':500,
+                 'liquidity_usd':100000,'age_minutes':120,'buys_m5':40,'sells_m5':10,
+                 'volume_m5_usd':20000,'price_usd':1,'monitor_only':False,'pullback':None}
+            held={**row,'mint':'old','first':101}
+            api.open_trade(state,'instant-step',held,1000,101)
+            state['watch']={'new':row}
+            exits=api.quote_jobs(state,500)
+            self.assertTrue(api.exit_queue(exits,500)['backed_up'])
+            self.assertEqual(api.entry_quote_budget(exits,500),api.BACKLOG_EXIT_QUOTES_PER_ENTRY)
+            self.assertIn(result['slot'],api.entry_jobs(conn,state,500)['new'])
+            status=api.local_entry_status(conn,state,500)[result['slot']]
+            self.assertEqual(status['matching_coins'],1)
+            self.assertIn('shared quote capacity',status['label'])
+            state['entry_pause_until']=600
+            self.assertIn('Buy pause active',api.local_entry_status(conn,state,500)[result['slot']]['label'])
+            state['enabled']=False
+            self.assertIn('Paper entries paused',api.local_entry_status(conn,state,500)[result['slot']]['label'])
+
+    def test_entry_status_distinguishes_missing_chart_from_unmet_signal(self):
+        result=self.submit({**RULE,'entry':'volume_ratio >= 1.5 and rsi <= 30'})
+        with api.connection() as conn,conn:
+            state,_=api.read(conn)
+            state['watch']={'new':{'mint':'new','pair':'pair','symbol':'New','first':499,'last':500,
+                 'liquidity_usd':100000,'age_minutes':120,'buys_m5':40,'sells_m5':10,
+                 'volume_m5_usd':20000,'price_usd':1,'monitor_only':False,'pullback':None}}
+            status=api.local_entry_status(conn,state,500)[result['slot']]
+            self.assertIn('Waiting for fresh data',status['label'])
+            self.assertEqual(status['missing_observations']['rsi'],1)
+            evidence={'chart':{'at':500,'value':{'closed_at':480,'rsi':50,'volume_ratio':2}}}
+            conn.execute('INSERT INTO research VALUES (?,?,?,?)',('new','pair',500,json.dumps(evidence)))
+            status=api.local_entry_status(conn,state,500)[result['slot']]
+            self.assertIn('No matching signal',status['label'])
+            self.assertEqual(status['complete_observations'],1)
+            evidence['chart']['value']['rsi']=20
+            conn.execute('UPDATE research SET evidence=?',(json.dumps(evidence),))
+            self.assertEqual(api.local_entry_status(conn,state,500)[result['slot']]['matching_coins'],1)
+            state['bots']['instant-step']['positions']={'old':{'mint':'old','quantity':1000,'due':100,'mark_stale':False,'exit_priority':0}}
+            self.assertIn('urgent exits',api.local_entry_status(conn,state,500)[result['slot']]['label'])
+
     def insert(self, conn, slot, ident, count, pnl):
         for i in range(count):
             data={'policy':{'local_rule':{'id':ident}},'pnl':pnl}
