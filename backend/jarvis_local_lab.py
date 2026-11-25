@@ -32,6 +32,95 @@ COMPARISONS = {ast.Gt: lambda a,b:a>b, ast.GtE: lambda a,b:a>=b, ast.Lt: lambda 
                ast.LtE: lambda a,b:a<=b, ast.Eq: lambda a,b:a==b, ast.NotEq: lambda a,b:a!=b}
 
 
+UNITS = {'liquidity':'usd', 'volume_m5_usd':'usd', 'age':'minutes',
+         'buys_m5':'count', 'sells_m5':'count', 'volume_ratio':'ratio',
+         'rsi':'rsi', 'gain':'percent', 'peak':'percent', 'held_seconds':'seconds'}
+
+
+def check_units(node):
+    """Conservative grammar: normalize ratios only between matching quantities."""
+    if isinstance(node, ast.Name):
+        return UNITS[node.id]
+    if isinstance(node, ast.Constant):
+        return 'bool' if type(node.value) is bool else 'literal'
+    if isinstance(node, ast.UnaryOp):
+        unit = check_units(node.operand)
+        if isinstance(node.op, ast.Not):
+            if unit != 'bool':
+                raise ValueError('not requires a comparison')
+            return 'bool'
+        if unit == 'bool':
+            raise ValueError('Boolean arithmetic is unsupported')
+        return unit
+    if isinstance(node, ast.BoolOp):
+        if any(check_units(value) != 'bool' for value in node.values):
+            raise ValueError('and/or require comparisons')
+        return 'bool'
+    if isinstance(node, ast.Compare):
+        units = [check_units(value) for value in [node.left, *node.comparators]]
+        for left, right in zip(units, units[1:]):
+            if 'bool' in (left,right) or (left != right and 'literal' not in (left,right)):
+                raise ValueError('Comparison mixes incompatible units')
+        return 'bool'
+    if isinstance(node, ast.BinOp):
+        left, right = check_units(node.left), check_units(node.right)
+        if 'bool' in (left,right):
+            raise ValueError('Boolean arithmetic is unsupported')
+        if isinstance(node.op, ast.Div):
+            if right == 'literal':
+                return left
+            if left == right:
+                return 'ratio'
+            raise ValueError('Divide matching quantities only; compare volume_ratio directly')
+        if isinstance(node.op, ast.Mult):
+            if left == 'literal':
+                return right
+            if right == 'literal':
+                return left
+            raise ValueError('Multiply a quantity by a numeric constant only')
+        if left == right:
+            return left
+        if left == 'literal':
+            return right
+        if right == 'literal':
+            return left
+        raise ValueError('Arithmetic mixes incompatible units')
+    raise ValueError('Unsupported expression')
+
+
+def check_exit_logic(root):
+    """Reject a simple profit cap at/below the trailing arm level.
+
+    This catches a common dead branch, not every possible strategy defect.
+    """
+    if not isinstance(root, ast.BoolOp) or not isinstance(root.op, ast.Or):
+        return
+    targets = []
+    for branch in root.values:
+        if (isinstance(branch, ast.Compare) and isinstance(branch.left, ast.Name)
+                and branch.left.id == 'gain' and len(branch.ops) == 1
+                and isinstance(branch.ops[0], (ast.GtE, ast.Gt))
+                and isinstance(branch.comparators[0], ast.Constant)):
+            targets.append(branch.comparators[0].value)
+    for branch in root.values:
+        if not isinstance(branch, ast.BoolOp) or not isinstance(branch.op, ast.And):
+            continue
+        arms = []
+        trailing = False
+        for node in branch.values:
+            if not isinstance(node, ast.Compare) or len(node.ops) != 1 or not isinstance(node.left, ast.Name):
+                continue
+            right = node.comparators[0]
+            if node.left.id == 'peak' and isinstance(node.ops[0], (ast.GtE, ast.Gt)) and isinstance(right, ast.Constant):
+                arms.append(right.value)
+            if (node.left.id == 'gain' and isinstance(node.ops[0], (ast.LtE, ast.Lt))
+                    and isinstance(right, ast.BinOp) and isinstance(right.op, ast.Sub)
+                    and isinstance(right.left, ast.Name) and right.left.id == 'peak'):
+                trailing = True
+        if trailing and any(target <= arm for target in targets for arm in arms):
+            raise ValueError('Profit target must exceed the trailing arm level, or remove the target')
+
+
 @lru_cache(maxsize=128)
 def parse(expression, exit_rule=False):
     if not isinstance(expression, str) or not 1 <= len(expression) <= 500:
@@ -55,6 +144,9 @@ def parse(expression, exit_rule=False):
             raise ValueError('Invalid constant')
     if not isinstance(root, (ast.BoolOp, ast.Compare)):
         raise ValueError('Strategy must return a comparison')
+    check_units(root)
+    if exit_rule:
+        check_exit_logic(root)
     return root
 
 

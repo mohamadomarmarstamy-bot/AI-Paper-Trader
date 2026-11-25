@@ -188,3 +188,24 @@ class WorkerTests(unittest.TestCase):
         worker=self.module.Worker({**self.config,'model':'qwen:cloud'},Path(self.tmp)/'state.json',session=Mock())
         with self.assertRaises(ValueError):worker.generate({},SOURCES)
         worker.http.post.assert_not_called()
+
+class StrategyQualityTests(unittest.TestCase):
+    def test_rejects_benchmark_volume_units(self):
+        with self.assertRaisesRegex(ValueError,'Divide matching'):
+            lab.validate({**RULE,'entry':'liquidity >= 50000 and volume_m5_usd / volume_ratio > 1'})
+
+    def test_rejects_shadowed_trailing_branch(self):
+        with self.assertRaisesRegex(ValueError,'Profit target'):
+            lab.validate({**RULE,'exit':'gain >= 10 or (peak >= 10 and gain <= peak - 5)'})
+
+    def test_accepts_direct_volume_ratio_and_working_trailing_exit(self):
+        rule={**RULE,'entry':'liquidity >= 50000 and volume_ratio >= 1.5 and rsi > 30'}
+        lab.validate(rule)
+        self.assertTrue(lab.run(rule['exit'],{'gain':7,'peak':12},True))
+        self.assertFalse(lab.run(rule['exit'],{'gain':11,'peak':12},True))
+        self.assertTrue(lab.run(rule['exit'],{'gain':15,'peak':15},True))
+
+    def test_rejects_other_mixed_units_but_accepts_buy_sell_ratio(self):
+        for entry in ('age > liquidity','buys_m5 + volume_m5_usd > 10','rsi * liquidity > 100'):
+            with self.assertRaises(ValueError):lab.validate({**RULE,'entry':entry})
+        lab.validate({**RULE,'entry':'sells_m5 > 0 and buys_m5 / sells_m5 > 1.5'})
