@@ -225,7 +225,9 @@ def build_job(api,now):
                     'chart':{k:(evidence.get('chart') or {}).get(k) for k in ('rsi','volume_ratio')},
                     'market':{k:(evidence.get('market') or {}).get(k) for k in ('buys_m5','sells_m5','volume_m5_usd')},
                     'quote_wait':value.get('exit_quote_wait'),'writeoff':bool(value.get('paper_writeoff'))})
-        return {'id':ident,'kind':kind,'snapshot':snapshot,'retrospective_examples':examples,'audit':{'strategies':report.get('strategies',[])[-15:],
+        repairs=[{'status':r['status'],'function':json.loads(r['data']).get('function'),'report':json.loads(r['report'])}
+                 for r in conn.execute("SELECT status,data,report FROM brain_proposals WHERE kind='code' ORDER BY created DESC LIMIT 5")]
+        return {'id':ident,'kind':kind,'snapshot':snapshot,'retrospective_examples':examples,'repair_history':repairs,'audit':{'strategies':report.get('strategies',[])[-15:],
                 'limitations':report.get('limitations',[])},'rules':rules,'memory':memory,
                 'code':code_context() if kind!='strategy' else {}}
 

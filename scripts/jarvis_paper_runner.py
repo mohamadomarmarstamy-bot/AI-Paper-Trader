@@ -71,7 +71,8 @@ def regression(folder):
     return value['failures']
 
 
-def prove(patch,baseline_source=None):
+def prove(patch,baseline_source=None,evidence=None):
+    evidence={} if evidence is None else evidence
     file,name=patch.get('file'),patch.get('function')
     if file not in policy.TARGETS or name not in policy.TARGETS[file]:raise ValueError('Outside automatic scope')
     original=(ROOT/'backend'/file).read_text() if baseline_source is None else baseline_source
@@ -91,11 +92,14 @@ def prove(patch,baseline_source=None):
         # it on some Docker hosts; bind-mount contents need read/search access.
         for folder in (root,baseline,candidate):folder.chmod(0o755)
         if regression(baseline)<1:raise RuntimeError('No demonstrated baseline failure')
+        evidence['baseline_failed']=True
         if regression(candidate)!=0:raise RuntimeError('Repair did not fix regression')
+        evidence['regression_passed']=True
         full=command([*container_args(candidate),'python','-m','unittest','discover','-s','.','-p','test_solana*.py','-q'],timeout=240)
         if full.returncode:
             if DEBUG:print(full.stderr[-10000:],flush=True)
             raise RuntimeError('Existing paper tests failed')
+        evidence['suite_passed']=True
         print('Baseline regression failed; candidate regression and existing Solana suite passed.',flush=True)
     return changed
 
@@ -180,7 +184,7 @@ def run():
         patch=job['patch'];base=git('rev-parse','HEAD')
         before=api('health')
         if before['source_sha']!=base:raise RuntimeError('Main and deployed source differ; wait for deployment')
-        changed=prove(patch)
+        changed=prove(patch,evidence=checks)
         checks.update(baseline_failed=True,regression_passed=True,suite_passed=True)
         if not api('health')['enabled']:raise RuntimeError('Owner disabled automatic repair')
         if git('ls-remote','origin','refs/heads/main').split()[0]!=base:raise RuntimeError('Main advanced during tests')
