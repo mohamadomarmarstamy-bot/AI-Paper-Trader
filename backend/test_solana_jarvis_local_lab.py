@@ -232,6 +232,60 @@ class WorkerTests(unittest.TestCase):
         with self.assertRaises(ValueError):worker.generate({},SOURCES)
         worker.http.post.assert_not_called()
 
+    def test_submission_outage_survives_restart_without_another_search_or_quota(self):
+        worker=self.module.Worker({**self.config,'sessions_per_day':1},Path(self.tmp)/'state.json',session=Mock())
+        response=self.module.requests.Response();response.status_code=502
+        worker.api=Mock(side_effect=[{'enabled':True,'available_slots':['research-01'],'strategies':[]},
+                                     self.module.requests.HTTPError('private response',response=response)])
+        worker.search=Mock(return_value=SOURCES);worker.generate=Mock(return_value=RULE)
+        worker.state['benchmark']={}
+        with patch.object(self.module.time,'time',return_value=10000):
+            with self.assertRaises(self.module.requests.HTTPError):worker.cycle()
+        self.assertEqual(worker.state['pending_proposal']['rule'],RULE)
+        restarted=self.module.Worker(worker.config,worker.state_path,session=Mock())
+        restarted.api=Mock(return_value={'status':'duplicate'})
+        restarted.search=Mock();restarted.generate=Mock()
+        with patch.object(self.module.time,'time',return_value=10059):
+            self.assertEqual(restarted.cycle(),'waiting_to_retry_submission')
+        with patch.object(self.module.time,'time',return_value=10060):
+            self.assertEqual(restarted.cycle(),'duplicate')
+        restarted.search.assert_not_called();restarted.generate.assert_not_called()
+        self.assertEqual(restarted.state['sessions'],1)
+        self.assertNotIn('pending_proposal',restarted.state)
+        restarted.api.assert_called_once_with('POST','strategy',{'rule':RULE,'sources':SOURCES})
+
+    def test_error_labels_identify_service_without_private_details(self):
+        worker=self.module.Worker(self.config,Path(self.tmp)/'state.json',session=Mock())
+        response=self.module.requests.Response();response.status_code=429
+        worker.stage='Brave search'
+        message=worker.error_message(self.module.requests.HTTPError('SECRET https://private',response=response))
+        self.assertIn('Brave search: HTTP 429',message)
+        self.assertNotIn('SECRET',message);self.assertNotIn('https://',message)
+        worker.stage='local Ollama model'
+        self.assertIn('check Ollama',worker.error_message(self.module.requests.ConnectionError('SECRET')))
+        worker.http.request.return_value=Mock(status_code=200,content=b'{}')
+        worker.api('GET','context')
+        self.assertEqual(worker.stage,'app context')
+
+    def test_invalid_submission_stops_retrying_but_auth_failure_retains_it(self):
+        worker=self.module.Worker(self.config,Path(self.tmp)/'state.json',session=Mock())
+        for status,retained in ((401,True),(422,False)):
+            response=self.module.requests.Response();response.status_code=status
+            worker.state['pending_proposal']={'rule':RULE,'sources':SOURCES}
+            worker.api=Mock(side_effect=self.module.requests.HTTPError(response=response))
+            with self.assertRaises(self.module.requests.HTTPError):worker.submit_pending(100)
+            self.assertEqual('pending_proposal' in worker.state,retained)
+
+    def test_brave_pending_state_does_not_store_returned_search_content(self):
+        worker=self.module.Worker({**self.config,'search_provider':'brave'},Path(self.tmp)/'state.json',session=Mock())
+        worker.api=Mock(side_effect=[{'enabled':True,'available_slots':['slot']},self.module.requests.ConnectionError()])
+        worker.search=Mock(return_value=[{'url':'https://private-source.test','title':'PRIVATE-TITLE','snippet':'PRIVATE-SNIPPET'}])
+        worker.generate=Mock(return_value=RULE);worker.state['benchmark']={}
+        with self.assertRaises(self.module.requests.ConnectionError):worker.cycle()
+        saved=worker.state_path.read_text()
+        self.assertNotIn('PRIVATE-',saved);self.assertNotIn('private-source',saved)
+        self.assertIn('Brave Search research',saved)
+
 class StrategyQualityTests(unittest.TestCase):
     def test_rejects_benchmark_volume_units(self):
         with self.assertRaisesRegex(ValueError,'Divide matching'):
