@@ -326,7 +326,7 @@ def review(conn, state, now):
                 report['note'] = 'Profitable but not robust across both halves without their biggest winners; keep testing.'
             if status == 'failed':
                 del state['local_rules'][slot]
-        elif now-rule['created'] >= 48*3600 and not rows and not state['bots'][slot]['positions']:
+        elif now-rule['created'] >= 24*3600 and not rows and not state['bots'][slot]['positions']:
             # Inactive is explicitly not a profitability failure.
             status = 'inactive'
             del state['local_rules'][slot]

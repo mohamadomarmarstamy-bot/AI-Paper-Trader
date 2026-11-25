@@ -207,9 +207,25 @@ class LocalLabTests(unittest.TestCase):
         result=self.submit()
         with api.connection() as conn, conn:
             state,_=api.read(conn)
-            lab.review(conn,state,100+48*3600)
+            lab.review(conn,state,100+24*3600-1)
+            self.assertEqual(conn.execute('SELECT status FROM local_strategies').fetchone()[0],'testing')
+            self.assertIn(result['slot'],state['local_rules'])
+            lab.review(conn,state,100+24*3600)
             self.assertEqual(conn.execute('SELECT status FROM local_strategies').fetchone()[0],'inactive')
+            self.assertNotIn(result['slot'],state['local_rules'])
             self.assertIsNone(state['strategy'])
+
+    def test_24_hour_inactivity_does_not_retire_a_strategy_with_trades_or_holdings(self):
+        result=self.submit()
+        with api.connection() as conn,conn:
+            state,_=api.read(conn)
+            state['bots'][result['slot']]['positions']['held']={'policy':{'local_rule':{'id':result['id']}}}
+            lab.review(conn,state,100+24*3600)
+            self.assertEqual(conn.execute('SELECT status FROM local_strategies').fetchone()[0],'testing')
+            state['bots'][result['slot']]['positions'].clear()
+            self.insert(conn,result['slot'],result['id'],1,-1_000000)
+            lab.review(conn,state,100+25*3600)
+            self.assertEqual(conn.execute('SELECT status FROM local_strategies').fetchone()[0],'testing')
 
     def test_routes_require_token_and_reject_invalid_strategy(self):
         from fastapi import FastAPI
