@@ -1,11 +1,13 @@
 """Quota-bounded, exact-pool USD Codex trial and opt-in paper fallback."""
 from datetime import datetime, timezone
 import json
+import ast
 import math
 import os
 
 import solana_http
 import jarvis_research as research
+import jarvis_local_lab as local_lab
 
 URL='https://graph.codex.io/graphql'
 NETWORK=1399811149
@@ -15,6 +17,10 @@ CREATE INDEX IF NOT EXISTS codex_calls_period ON codex_calls(month,day);
 CREATE TABLE IF NOT EXISTS codex_samples(pair TEXT PRIMARY KEY,mint TEXT NOT NULL,at REAL NOT NULL,status TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS codex_control(id INTEGER PRIMARY KEY CHECK(id=1),blocked_until REAL NOT NULL,status TEXT NOT NULL);
 '''
+OUTCOME_SCHEMA='''
+CREATE TABLE IF NOT EXISTS codex_outcomes(id INTEGER PRIMARY KEY,at REAL NOT NULL,complete_rules INTEGER NOT NULL,matching_rules INTEGER NOT NULL);
+'''
+SCHEMA += OUTCOME_SCHEMA
 META='''query JarvisPool($id:String!){pairMetadata(pairId:$id){id networkId token0{address networkId} token1{address networkId}}}'''
 BARS='''query JarvisBars($id:String!,$start:Int!,$end:Int!,$side:QuoteToken!){getBars(symbol:$id,symbolType:POOL,quoteToken:$side,currencyCode:"USD",resolution:"1",from:$start,to:$end,countback:30,removeEmptyBars:false){s t o h l c buyVolume sellVolume pair{address networkId token0 token1}}}'''
 
@@ -125,10 +131,120 @@ def attempt(api,row,*,clock,post=solana_http.post):
     return value if mode()=='fallback' and status=='validated' else None
 
 
+def possible(expression, values):
+    """Three-valued evaluation for selection only; unknown is never an entry."""
+    def visit(node):
+        if isinstance(node, ast.Name):
+            value=values.get(node.id)
+            return value if type(value) in (int,float) and math.isfinite(value) else None
+        if isinstance(node, ast.Constant):return node.value
+        if isinstance(node, ast.BoolOp):
+            children=[visit(n) for n in node.values]
+            if isinstance(node.op,ast.And):
+                return False if False in children else None if None in children else True
+            return True if True in children else None if None in children else False
+        if isinstance(node,ast.UnaryOp):
+            value=visit(node.operand)
+            return None if value is None else not value if isinstance(node.op,ast.Not) else -value
+        if isinstance(node,ast.BinOp):
+            a,b=visit(node.left),visit(node.right)
+            if a is None or b is None:return None
+            try:
+                value=local_lab.OPS[type(node.op)](a,b)
+                return value if math.isfinite(value) and abs(value)<=1e18 else None
+            except (ZeroDivisionError,OverflowError):return None
+        if isinstance(node,ast.Compare):
+            values_=[visit(n) for n in [node.left,*node.comparators]]
+            unknown=False
+            for op,a,b in zip(node.ops,values_,values_[1:]):
+                if a is None or b is None:unknown=True
+                elif not local_lab.COMPARISONS[type(op)](a,b):return False
+            return None if unknown else True
+        raise ValueError('Unsupported expression')
+    return visit(local_lab.parse(expression))
+
+
+def blocked_rules(api,conn,state,row,now):
+    """Return slots that could trade if missing chart observations matched."""
+    if (not state['enabled'] or row.get('monitor_only') or research.pool_warming(row)
+        or not 0<=now-row['last']<=90 or not 0<=now-row['first']<=api.ENTRY_WINDOW
+        or now<row.get('retry',0)):return []
+    values=local_lab.observations(row,api.entry_evidence(conn,row,now))
+    closed={r['bot'] for r in conn.execute('SELECT bot FROM trades WHERE mint=?',(row['mint'],))}
+    slots=[]
+    for slot,rule in state.get('local_rules',{}).items():
+        portfolio=state['bots'].get(slot,{})
+        positions=portfolio.get('positions',{})
+        if (slot not in local_lab.SLOTS or slot in closed or row['mint'] in positions
+            or len(positions)>=local_lab.MAX_OPEN or portfolio.get('cash',0)<api.BUY_COST
+            or row['first']<rule['created']):continue
+        required={n.id for n in ast.walk(local_lab.parse(rule['entry'])) if isinstance(n,ast.Name)}
+        missing={k for k in required if values.get(k) is None}
+        if missing and missing<= {'rsi','volume_ratio'} and possible(rule['entry'],values) is None:
+            slots.append(slot)
+    return slots
+
+
+def tick(api,*,clock):
+    """Spend fallback quota on the most actionable primary-feed gap."""
+    if not os.getenv('JARVIS_CODEX_API_KEY','').strip() or mode() not in ('trial','fallback'):return
+    now=clock()
+    with api.connection() as conn,conn:
+        state,_=api.read(conn)
+        if not state['enabled'] or api.backlog.paused(state,now) or (state.get('entry_catchup_pause') or {}).get('active'):return
+        control=conn.execute('SELECT blocked_until FROM codex_control WHERE id=1').fetchone()
+        if control and control['blocked_until']>now:return
+        dt=datetime.fromtimestamp(now,timezone.utc)
+        daily=conn.execute('SELECT COALESCE(sum(reserved),0) FROM codex_calls WHERE day=?',(dt.strftime('%Y-%m-%d'),)).fetchone()[0]
+        monthly=conn.execute('SELECT COALESCE(sum(reserved),0) FROM codex_calls WHERE month=?',(dt.strftime('%Y-%m'),)).fetchone()[0]
+        # Leave enough allowance for BOTH requests before starting metadata.
+        # reserve() still enforces the hard limits immediately before each call.
+        if daily+16>200 or monthly+16>8000:return
+        due=conn.execute("SELECT due FROM research_tasks WHERE name='codex-priority'").fetchone()
+        if due and due['due']>now:return
+        candidates=[]
+        for row in state['watch'].values():
+            if not all(isinstance(row.get(k),str) and research.ADDRESS.fullmatch(row[k]) for k in ('mint','pair')):continue
+            previous=conn.execute('SELECT at FROM codex_samples WHERE pair=?',(row['pair'],)).fetchone()
+            if previous and (mode()=='trial' or now-previous['at']<3600):continue
+            found=conn.execute('SELECT evidence FROM research WHERE mint=? AND pair=?',(row['mint'],row['pair'])).fetchone()
+            record=(json.loads(found['evidence']).get('chart') or {}) if found else {}
+            # Try the free primary first. Never pay for healthy or unattempted data.
+            if record.get('status')=='ready' or not 0<=now-record.get('attempt_at',0)<=180:continue
+            slots=blocked_rules(api,conn,state,row,now)
+            if slots:candidates.append((row,slots))
+        if not candidates:return
+        row,slots=max(candidates,key=lambda c:(len(c[1]),c[0].get('volume_m5_usd',0),c[0].get('liquidity_usd',0),c[0]['first']))
+        conn.execute("INSERT OR REPLACE INTO research_tasks VALUES ('codex-priority',?)",(now+60,))
+    value=attempt(api,row,clock=clock)
+    if value is None:return
+    at=clock()
+    with api.connection() as conn,conn:
+        conn.execute('BEGIN IMMEDIATE')
+        current,_=api.read(conn)
+        current_row=current['watch'].get(row['mint'])
+        if not current_row or current_row['pair']!=row['pair']:return
+        current_slots=blocked_rules(api,conn,current,current_row,at)
+        if not current_slots:return
+        full=local_lab.observations(current_row,{'chart':value})
+        complete=sum(all(type(full.get(n.id)) in (int,float) and math.isfinite(full[n.id])
+                     for n in ast.walk(local_lab.parse(current['local_rules'][slot]['entry'])) if isinstance(n,ast.Name)) for slot in current_slots)
+        matching=sum(local_lab.run(current['local_rules'][slot]['entry'],full) for slot in current_slots)
+        existing=conn.execute('SELECT evidence FROM research WHERE mint=? AND pair=?',(row['mint'],row['pair'])).fetchone()
+        evidence=json.loads(existing['evidence']) if existing else {}
+        evidence['chart']={'at':at,'value':value,'attempt_at':at,'status':'ready','next_attempt':at+research.CHART_REFRESH}
+        conn.execute('INSERT OR REPLACE INTO research VALUES (?,?,?,?)',(row['mint'],row['pair'],at,json.dumps(evidence)))
+        conn.execute('INSERT INTO codex_outcomes(at,complete_rules,matching_rules) VALUES (?,?,?)',(at,complete,matching))
+        conn.execute('DELETE FROM codex_outcomes WHERE at<?',(at-30*86400,))
+
+
 def status(conn):
     now=datetime.now(timezone.utc);month=now.strftime('%Y-%m');day=now.strftime('%Y-%m-%d')
     counts={r['status']:r['n'] for r in conn.execute('SELECT status,count(*) AS n FROM codex_samples GROUP BY status')}
     return {'configured':bool(os.getenv('JARVIS_CODEX_API_KEY','').strip()),'mode':mode(),
+        'impact_since_tracking':dict(conn.execute('SELECT count(*) AS fallback_charts,COALESCE(sum(complete_rules>0),0) AS charts_completing_rules,COALESCE(sum(matching_rules>0),0) AS charts_matching_rules FROM codex_outcomes').fetchone()),
+        'required_closed_entries':conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.codex_required')=1").fetchone()[0],
+        'required_open_entries':sum(bool(p.get('codex_required')) for b in json.loads(conn.execute('SELECT state FROM run WHERE id=1').fetchone()[0])['bots'].values() for p in b['positions'].values()) if conn.execute('SELECT 1 FROM run WHERE id=1').fetchone() else 0,
         'samples':counts,'calls':conn.execute('SELECT count(*) FROM codex_calls').fetchone()[0],
         'reserved_cu_today':conn.execute('SELECT COALESCE(sum(reserved),0) FROM codex_calls WHERE day=?',(day,)).fetchone()[0],
         'reserved_cu_month':conn.execute('SELECT COALESCE(sum(reserved),0) FROM codex_calls WHERE month=?',(month,)).fetchone()[0],

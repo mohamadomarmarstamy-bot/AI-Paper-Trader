@@ -79,4 +79,64 @@ class CodexTests(unittest.TestCase):
         with patch.dict(os.environ,{'JARVIS_CODEX_API_KEY':''}):
             post=Mock();self.assertIsNone(feed.attempt(api,ROW,clock=lambda:NOW,post=post));post.assert_not_called()
 
+
+class PriorityTests(unittest.TestCase):
+    setUp = CodexTests.setUp
+    def prepare(self):
+        row={**ROW,'last':NOW,'symbol':'Test','liquidity_usd':80000,'age_minutes':60,
+             'volume_m5_usd':15000,'buys_m5':20,'sells_m5':10}
+        with api.connection() as conn,conn:
+            state,_=api.read(conn)
+            state.update(enabled=True,watch={row['mint']:row},local_rules={'research-01':{
+                'created':NOW-120,'entry':'liquidity >= 50000 and rsi < 30','id':'test'}})
+            state['bots']['research-01']['cash']=2000_000000
+            conn.execute('UPDATE run SET state=?',(json.dumps(state),))
+            conn.execute('INSERT INTO research VALUES (?,?,?,?)',(row['mint'],row['pair'],NOW,json.dumps({
+                'chart':{'at':NOW,'value':None,'status':'stale_candles','attempt_at':NOW}})))
+        return row,state
+    def test_partial_expression_preserves_unknown_and_or_not(self):
+        self.assertIs(feed.possible('liquidity > 50000 and rsi < 30',{'liquidity':100}),False)
+        self.assertIsNone(feed.possible('liquidity > 50000 or rsi < 30',{'liquidity':100}))
+        self.assertIs(feed.possible('liquidity > 50000 or rsi < 30',{'liquidity':90000}),True)
+        self.assertIsNone(feed.possible('not (rsi < 30) and liquidity > 100',{'liquidity':80000}))
+        self.assertIsNone(feed.possible('buys_m5 / sells_m5 > 1.5',{'buys_m5':10,'sells_m5':0}))
+    def test_filters_full_stale_and_known_rejections(self):
+        row,state=self.prepare()
+        with api.connection() as conn:
+            self.assertEqual(feed.blocked_rules(api,conn,state,row,NOW),['research-01'])
+            for changed in ({'liquidity_usd':100},{'last':NOW-91},{'monitor_only':True},{'first':NOW-1000}):
+                self.assertEqual(feed.blocked_rules(api,conn,state,{**row,**changed},NOW),[])
+            state['bots']['research-01']['positions']={str(i):{} for i in range(4)}
+            self.assertEqual(feed.blocked_rules(api,conn,state,row,NOW),[])
+    def test_prioritizes_volume_and_persists_impact(self):
+        row,state=self.prepare();other={**row,'mint':OTHER,'volume_m5_usd':25000}
+        state['watch'][OTHER]=other
+        with api.connection() as conn,conn:
+            conn.execute('UPDATE run SET state=?',(json.dumps(state),))
+            conn.execute('INSERT INTO research VALUES (?,?,?,?)',(OTHER,row['pair'],NOW,json.dumps({
+                'chart':{'at':NOW,'value':None,'status':'stale_candles','attempt_at':NOW}})))
+        value={'closed_at':NOW-6,'rsi':20,'volume_ratio':2,'provider':'codex'}
+        with patch.object(feed,'attempt',return_value=value) as attempt:
+            feed.tick(api,clock=lambda:NOW)
+            self.assertEqual(attempt.call_args.args[1]['mint'],OTHER)
+            feed.tick(api,clock=lambda:NOW)
+            self.assertEqual(attempt.call_count,1)
+        with api.connection() as conn:
+            self.assertEqual(api.entry_evidence(conn,other,NOW)['chart'],value)
+            self.assertEqual(feed.status(conn)['impact_since_tracking'],{'fallback_charts':1,'charts_completing_rules':1,'charts_matching_rules':1})
+    def test_healthy_primary_does_not_spend(self):
+        row,state=self.prepare()
+        with api.connection() as conn,conn:
+            conn.execute('UPDATE research SET evidence=?',(json.dumps({'chart':{'at':NOW,'value':None,'status':'ready','attempt_at':NOW}}),))
+        with patch.object(feed,'attempt') as attempt:
+            feed.tick(api,clock=lambda:NOW);attempt.assert_not_called()
+    def test_attribution_requires_chart_dependency(self):
+        row,state=self.prepare()
+        evidence={'chart':{'provider':'codex','rsi':20,'volume_ratio':2}}
+        api.open_trade(state,'research-01',row,100,NOW,evidence)
+        self.assertTrue(state['bots']['research-01']['positions'][row['mint']]['codex_required'])
+        state['local_rules']['research-01']['entry']='liquidity >= 50000'
+        api.open_trade(state,'research-01',row,100,NOW,evidence)
+        self.assertFalse(state['bots']['research-01']['positions'][row['mint']]['codex_required'])
+
 if __name__=='__main__':unittest.main()
