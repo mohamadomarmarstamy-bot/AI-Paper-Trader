@@ -31,3 +31,32 @@ still lack a volume ratio when its reference median volume is zero; it is
 reported separately, not replaced with a fabricated number. This changes
 data collection and measurement only, not indicators, execution rules,
 trade sizing, open positions, or live copying.
+
+## Coverage-first queue and comparison tool
+
+An open research holding with missing candles or 30 seconds or less before
+expiry remains first in line for chart requests. For other requests, eligible
+research pools with no fresh chart now go ahead of holders whose chart is still
+fresh. Buy-cooldown pools do not receive this priority. This does not modify
+trade execution, provider pacing or indicator math.
+
+A separate operator tool, `python backend/jarvis_candle_benchmark.py pools.json`,
+compares GeckoTerminal and Birdeye at one as-of time per exact pool. Pass
+1–12 public `{"mint":"…","pair":"…"}` rows and supply
+`JARVIS_BIRDEYE_BENCHMARK_KEY` in the invoking process's environment. It makes
+only public market-data GETs, never reads or writes trader state, stops on
+authorization/rate-limit errors, and applies the same complete-candle rules
+to both sources. For overlap, confirm pair orientation and compare actual
+RSI and volume ratios; the tool is not a fallback and returns no signal to
+any bot. Twelve calls are 300 compute units at the documented 25 CU per
+short response; verify account entitlement before running.
+
+Provider source: https://data.birdeye.so/docs/data-api/price-ohlcv/get-defi-v3-ohlcv-pair
+
+## Adaptive recovery and measured upstream lag
+
+On HTTP 429 the persistent chart interval doubles (6-second baseline, 60-second ceiling), in addition to honoring Retry-After. Five consecutive ready results reduce that interval by one second; incomplete/error responses reset the success streak. Both the interval and request reservation survive restarts. There is no extra immediate retry or rate-limit bypass.
+
+Stale responses retain only their validated latest completed-candle timestamp and measured lag. Aggregate provider lag and current request interval appear in coverage diagnostics. These measurements do not renew old evidence or change the 180-second freshness rule. Invalid/missing observations remain unavailable.
+
+A bounded read-only public-feed check on November 25 returned HTTP 200 but candles roughly thirteen minutes old; adding before_timestamp did not recover newer candles for that sampled pool. This establishes upstream lag in that sample, not a universal provider outage. The scheduling changes cannot manufacture current data, and a deployment is not proof of recovered trading coverage. Verify fresh complete eligible coverage after deployment before declaring recovery. No paid provider fallback is enabled and no laptop update is required.
