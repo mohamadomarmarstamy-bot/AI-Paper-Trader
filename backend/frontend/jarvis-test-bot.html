@@ -35,10 +35,6 @@
     </div>
   </header>
   <nav aria-label="Jarvis test pages">
-    <a href="#instant-step">Instant Ladder</a>
-    <a href="#instant-trim">Instant Trim</a>
-    <a href="#patient-step">Pullback Ladder</a>
-    <a href="#patient-trim">Pullback Trim</a>
     <a href="#lab">Strategy Lab</a>
     <a href="#jarvis">Jarvis Trader</a>
     <a href="#history">History</a>
@@ -90,7 +86,7 @@
   </section>
   <section id="jarvis-lab" hidden>
     <div class="page-title">
-      <div><h1>Strategy Lab</h1><p class="meme-muted">Fourteen paper strategies. Tap a row for rules, holdings and history.</p></div>
+      <div><h1>Strategy Lab</h1><p class="meme-muted">All paper strategies in one place. Tap a row for rules, holdings and history.</p></div>
       <button id="jarvis-lab-run" type="button" class="primary-button" disabled>Start all paper tests</button>
     </div>
     <p id="jarvis-lab-summary" class="meme-muted"></p>
@@ -106,6 +102,7 @@
   </section>
   <section id="jarvis-settings" hidden>
     <div class="page-title"><h1>Paper buy safeguards</h1></div>
+    <p id="jarvis-email-focus" class="status-strip" role="status"></p>
     <section class="panel">
       <h2>Exit backlog email</h2>
       <p>Get one alert when waiting paper positions reach your threshold. The email offers 10-minute, 30-minute, one-hour and until-all-positions-close buy pauses. Sells keep running.</p>
@@ -139,6 +136,6 @@
     </section>
   </section>
 </main>
-<script src="/js/jarvis-test-bot.js?v=local-research-v1"></script>
+<script src="/js/jarvis-test-bot.js?v=jarvis-focus-v1"></script>
 </body>
 </html>

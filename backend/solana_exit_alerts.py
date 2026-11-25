@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS solana_exit_mail (
 
 
 def configured():
+    from jarvis_focus import email_allowed
+    if not email_allowed('legacy_live_exit'):
+        return False
     return all(os.getenv(k, '').strip() for k in ('RESEND_API_KEY', 'HEALTH_ALERT_EMAIL_FROM', 'HEALTH_ALERT_EMAIL_TO'))
 
 

@@ -127,6 +127,7 @@
   }
 
   const labHistory = new Map();
+  let pendingLabExpansion = null;
 
   async function loadLabHistory(id, append = false) {
     const cached = labHistory.get(id);
@@ -144,7 +145,7 @@
   }
 
   function renderLab() {
-    const bots = state.bots.filter(bot => bot.lab || bot.research_slot);
+    const bots = state.bots.filter(bot => bot.id !== 'jarvis');
     const open = new Set([...$('jarvis-lab-rows').querySelectorAll('details[open]')].map(row => row.dataset.bot));
     const sum = key => bots.reduce((total, bot) => total + bot[key], 0);
     $('jarvis-lab-summary').textContent = `${bots.length} strategies · ${sum('closed')} completed paper positions · ${sum('open')} open · ${money(sum('realized'))} realized P/L`;
@@ -154,7 +155,7 @@
     const rows = bots.map(bot => {
       const detail = el('details', '', 'lab-row');
       detail.dataset.bot = bot.id;
-      detail.open = open.has(bot.id);
+      detail.open = open.has(bot.id) || pendingLabExpansion === bot.id;
       const summary = el('summary', '', 'lab-summary');
       const name = el('span');
       name.append(el('strong', bot.name), el('small', botState(bot)));
@@ -191,6 +192,7 @@
       return detail;
     });
     $('jarvis-lab-rows').replaceChildren(...rows);
+    pendingLabExpansion = null;
   }
 
   function render() {
@@ -203,6 +205,7 @@
     $('jarvis-health').hidden = active !== 'health';
     $('jarvis-settings').hidden = active !== 'settings';
     if (active === 'settings') {
+      $('jarvis-email-focus').textContent = state.notification_focus ? 'Jarvis focus is on: only the hourly research report and Jarvis health / 30-minute inactivity alerts are emailed. All other emails, including backlog and timer notices, are paused.' : '';
       const guard = state.backlog_guard || {};
       const form = $('jarvis-backlog-form');
       if (!form.contains(document.activeElement)) {
@@ -473,7 +476,12 @@
 
   function selectTab() {
     const hash = location.hash.slice(1);
-    active = tabs.some(tab => tab.hash === '#' + hash) ? hash : 'instant-step';
+    const moved = ['instant-step', 'instant-trim', 'patient-step', 'patient-trim'].includes(hash);
+    active = moved ? 'lab' : tabs.some(tab => tab.hash === '#' + hash) ? hash : 'jarvis';
+    if (moved) {
+      history.replaceState(null, '', '#lab');
+      pendingLabExpansion = hash;
+    }
     for (const tab of tabs) {
       if (tab.hash === '#' + active) tab.setAttribute('aria-current', 'page');
       else tab.removeAttribute('aria-current');

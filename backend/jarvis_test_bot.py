@@ -307,6 +307,7 @@ def open_trade(state, bot, row, quantity, now, evidence=None):
     if portfolio['cash'] < BUY_COST:
         return
     portfolio['cash'] -= BUY_COST
+    portfolio['last_trade_at'] = now
     source = bot if bot != 'jarvis' else (state.get('strategy') or {}).get('source')
     policy = dict(state['strategy']) if bot == 'jarvis' else {'entry': BOTS[bot][1], 'exit': BOTS[bot][2]}
     if bot in local_lab.SLOTS:
@@ -323,6 +324,8 @@ def open_trade(state, bot, row, quantity, now, evidence=None):
 
 
 def sell(completed, portfolio, bot, position, quantity, amount, now, reason):
+    if not position.get('paper_writeoff'):
+        portfolio['last_trade_at'] = now
     if quantity == position['quantity']:
         cost = position['cost']
     else:
@@ -1133,7 +1136,7 @@ def status():
         rug_pulls = dict(conn.execute("SELECT count(*) AS positions, count(DISTINCT mint) AS coins, COALESCE(sum(pnl),0)/1000000.0 AS pnl FROM trades WHERE json_extract(data,'$.paper_writeoff.category')='no_route'").fetchone())
         timer_report = conn.execute("SELECT started,ends,(id LIKE 'partial/%') AS partial FROM backlog_pause_report WHERE ends=? AND cancelled IS NULL ORDER BY started DESC LIMIT 1", (backlog.pause_key(state),)).fetchone()
     local = local_lab.context(__import__(__name__))
-    return {'hourly_email': hourly, 'local_lab': local, 'autonomy': autonomous, 'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
+    return {'notification_focus': __import__('jarvis_focus').enabled(), 'hourly_email': hourly, 'local_lab': local, 'autonomy': autonomous, 'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
             'research': {'recent_coins': coverage, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
                          'latest_proposal': dict(latest_mail) if latest_mail else None},
             'backlog_guard': {**backlog.summary(state, now),
