@@ -11,3 +11,23 @@ Research diagnostics expose fixed status labels: ready, insufficient_history, pr
 References: https://api.geckoterminal.com/docs/index.html and its official /docs/v2/swagger.json schema document include_empty_intervals and one-minute caching. https://support.coingecko.com/articles/6867086195-does-geckoterminal-have-an-api describes the conflicting public rate limit.
 
 Validation covers forward research priority and fair rotation, global pacing, per-pool backoff, provider request parameters, rejection of missing candle history, original-age preservation on failed refresh, and rate-limit cooldown.
+
+## Decision-time coverage and rate-limit recovery
+
+The paper research scheduler skips chart requests for pools younger than
+19 minutes, when 20 completed one-minute intervals are not possible. Unknown
+pool age is not grounds for skipping. The existing shared request pace and
+holding priority are unchanged. When the provider returns HTTP 429, the
+shared chart queue honors Retry-After with a one-minute minimum. Stale or
+incomplete observations wait two minutes, and transient failures retry after
+30 seconds, subject to the shared budget. A failed refresh never renews the
+age of an older observation.
+
+Authenticated status and diagnostic logs now report coverage for the current
+eligible local research coin set, counted once per coin. Reasons separate
+young pools, unsampled pools, insufficient history, stale candles/evidence,
+invalid payloads, provider errors and rate limits. A fresh valid chart can
+still lack a volume ratio when its reference median volume is zero; it is
+reported separately, not replaced with a fabricated number. This changes
+data collection and measurement only, not indicators, execution rules,
+trade sizing, open positions, or live copying.

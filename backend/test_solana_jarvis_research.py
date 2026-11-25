@@ -1,5 +1,6 @@
 from contextlib import closing
 from datetime import datetime, timezone
+from email.utils import format_datetime
 from pathlib import Path
 import json
 import tempfile
@@ -100,6 +101,119 @@ class JarvisResearchTests(unittest.TestCase):
             self.assertTrue(jarvis.entry_evidence(conn,row,NOW)['chart'])
             self.assertNotIn('chart',jarvis.entry_evidence(conn,row,NOW+121))
             self.assertFalse(any(source=='chart' for source,_ in jarvis.claim_research(conn,NOW+6)))
+
+    def test_chart_does_not_query_pool_that_cannot_have_enough_bars(self):
+        rows = self.prepare_chart_watch(2)
+        young, mature = rows
+        rows[young]['age_minutes'] = 18.99
+        rows[mature]['age_minutes'] = 19
+        with jarvis.connection() as conn, conn:
+            state, _ = jarvis.read(conn)
+            state['watch'] = rows
+            conn.execute('UPDATE run SET state=?', (json.dumps(state),))
+            coverage = jarvis.chart_coverage(conn, state, NOW)
+        self.assertEqual(coverage['eligible'], 2)
+        self.assertEqual(coverage['reasons']['pool_warming'], 1)
+        self.assertEqual(coverage['reasons']['not_sampled'], 1)
+        called = []
+        def chart(row, now):
+            called.append(row['mint'])
+        for offset in (0, 6):
+            jarvis.research_tick(clock=lambda: NOW + offset, chart=chart, social=lambda *_: None)
+        self.assertEqual(called, [mature])
+        rows[young]['age_minutes'] = 19
+        with jarvis.connection() as conn, conn:
+            state, _ = jarvis.read(conn)
+            state['watch'] = rows
+            conn.execute('UPDATE run SET state=?', (json.dumps(state),))
+        jarvis.research_tick(clock=lambda: NOW + 12, chart=chart, social=lambda *_: None)
+        self.assertEqual(called, [mature, young])
+
+    def test_provider_unavailable_reasons_and_zero_baseline(self):
+        def bars(close, volume):
+            return [[close - (20-i)*60, 100, 101, 99, 100, volume] for i in range(20)]
+        row = {'mint': MINT, 'pair': PAIR}
+        for value, reason in (([], 'insufficient_history'), (bars(NOW, 1)[1:], 'insufficient_history'),
+                              (bars(NOW-180, 1), 'stale_candles'), ({}, 'invalid_chart'), ([None], 'invalid_chart')):
+            with self.subTest(reason=reason, value=type(value)), self.assertRaises(research.ChartUnavailable) as error:
+                research.chart(row, NOW, lambda *_a, **_kw: {'data': {'attributes': {'ohlcv_list': value}}})
+            self.assertEqual(error.exception.status, reason)
+        zero = research.chart_signal(bars(NOW, 0), NOW)
+        self.assertEqual(zero['rsi'], 50)
+        self.assertIsNone(zero['volume_ratio'])
+        result = research.chart_coverage([row], {MINT: (PAIR, {'chart': {'at': NOW, 'value': zero}})}, NOW)
+        self.assertEqual(result['reasons']['zero_volume_baseline'], 1)
+        self.assertEqual(result['reasons']['complete'], 0)
+
+    def test_chart_coverage_checks_pool_and_both_freshness_clocks(self):
+        rows = self.prepare_chart_watch(5)
+        first, second, third, fourth, fifth = rows
+        item = lambda at, closed, status='ready': {'chart': {'at': at, 'status': status,
+                                                            'value': {'rsi': 50, 'volume_ratio': 1, 'closed_at': closed}}}
+        records = {first: (PAIR, item(NOW, NOW-60)),
+                   second: (PAIR, item(NOW, NOW-181)),
+                   third: ('old-pool', item(NOW, NOW-60)),
+                   fourth: (PAIR, item(NOW-181, NOW-60, 'provider_error')),
+                   fifth: (PAIR, item(NOW, NOW-60, 'rate_limited'))}
+        coverage = research.chart_coverage(list(rows.values()), records, NOW)
+        self.assertEqual(coverage['eligible'], sum(coverage['reasons'].values()))
+        self.assertEqual({reason: count for reason, count in coverage['reasons'].items() if count},
+                         {'complete': 2, 'stale_evidence': 1, 'not_sampled': 1, 'provider_error': 1})
+
+    def test_rate_limit_reserves_provider_cooldown_for_whole_chart_queue(self):
+        rows = self.prepare_chart_watch(2)
+        import requests
+        response = requests.Response()
+        response.status_code = 429
+        response.headers['Retry-After'] = '150'
+        def fail(*_):
+            raise requests.HTTPError(response=response)
+        jarvis.research_tick(clock=lambda: NOW, chart=fail, social=lambda *_: None)
+        with jarvis.connection() as conn, conn:
+            state, _ = jarvis.read(conn)
+            for mint in rows:
+                state['watch'][mint]['last'] = NOW + 145
+            conn.execute('UPDATE run SET state=?', (json.dumps(state),))
+            self.assertFalse(any(source == 'chart' for source, _ in jarvis.claim_research(conn, NOW + 149)))
+            self.assertTrue(any(source == 'chart' for source, _ in jarvis.claim_research(conn, NOW + 150)))
+        future = format_datetime(datetime.fromtimestamp(NOW + 180, timezone.utc), usegmt=True)
+        self.assertEqual(research.rate_limit_delay({'Retry-After': future}, NOW), 180)
+        self.assertEqual(research.rate_limit_delay({'Retry-After': 'invalid'}, NOW), 60)
+        self.assertEqual(research.rate_limit_delay({'Retry-After': '5'}, NOW), 60)
+
+    def test_chart_errors_and_transient_failures_retry_on_different_delays(self):
+        rows = self.prepare_chart_watch(2)
+        attempted = []
+        def chart(row, now):
+            attempted.append(row['mint'])
+            if row['mint'] == next(iter(rows)):
+                raise research.ChartUnavailable('stale_candles')
+            raise TimeoutError()
+        for offset in (0, 6):
+            jarvis.research_tick(clock=lambda: NOW + offset, chart=chart, social=lambda *_: None)
+        with jarvis.connection() as conn:
+            stored = {row['mint']: json.loads(row['evidence'])['chart'] for row in conn.execute('SELECT mint,evidence FROM research')}
+        for status, delay in (('stale_candles', 120), ('provider_error', 30)):
+            chart = next(record for record in stored.values() if record['status'] == status)
+            self.assertEqual(chart['next_attempt'] - chart['attempt_at'], delay)
+            self.assertIsNone(chart['value'])
+        self.assertEqual(len(set(attempted)), 2)
+
+    def test_status_reports_coverage_for_eligible_pool(self):
+        rows = self.prepare_chart_watch(1)
+        mint = next(iter(rows))
+        with jarvis.connection() as conn, conn:
+            state, _ = jarvis.read(conn)
+            state['local_rules']['research-01'].update(entry='rsi > 50 and volume_ratio > 1')
+            state['watch'][mint].update(pullback=None, age_minutes=30, liquidity_usd=100000,
+                                        volume_m5_usd=1000, buys_m5=15, sells_m5=5, price_usd=1)
+            conn.execute('UPDATE run SET state=?', (json.dumps(state),))
+            conn.execute('INSERT INTO research VALUES (?,?,?,?)', (mint, PAIR, NOW, json.dumps({
+                'chart': {'at': NOW, 'value': {'closed_at': NOW, 'rsi': 55, 'volume_ratio': 1.5}}})))
+        with patch.object(jarvis.time, 'time', return_value=NOW):
+            report = jarvis.status()
+        self.assertEqual(report['research']['chart_coverage']['eligible'], 1)
+        self.assertEqual(report['research']['chart_coverage']['reasons']['complete'], 1)
 
     def test_x_deduplicates_and_does_not_treat_name_as_verified(self):
         ts = datetime.fromtimestamp(NOW - 60, timezone.utc).isoformat()

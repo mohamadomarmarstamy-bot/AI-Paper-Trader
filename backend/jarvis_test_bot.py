@@ -1277,6 +1277,7 @@ def status():
         coverage = conn.execute("""SELECT count(*) FROM research WHERE checked>=? AND (
             json_extract(evidence,'$.chart.value') IS NOT NULL OR json_extract(evidence,'$.bluesky.value') IS NOT NULL
             OR json_extract(evidence,'$.x.value') IS NOT NULL)""", (now - research.FRESH_SECONDS,)).fetchone()[0]
+        coverage_details = chart_coverage(conn, state, now)
         latest_mail = conn.execute('SELECT version, sent FROM research_mail ORDER BY version DESC LIMIT 1').fetchone()
         comparison = experiments.read_board(conn)
         autonomous = autonomy.status(conn)
@@ -1295,7 +1296,7 @@ def status():
                   'writeoffs':conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.owner_closeout')=1 AND json_extract(data,'$.paper_writeoff') IS NOT NULL").fetchone()[0]}
     local = local_lab.context(__import__(__name__))
     return {'automated_audit':audit_report,'pbh_closeout':closeout,'preset_entries_paused':bool(state.get('preset_entries_paused')), 'notification_focus': __import__('jarvis_focus').enabled(), 'hourly_email': hourly, 'local_lab': local, 'autonomy': autonomous, 'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
-            'research': {'recent_coins': coverage, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
+            'research': {'recent_coins': coverage, 'chart_coverage': coverage_details, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
                          'latest_proposal': dict(latest_mail) if latest_mail else None},
             'backlog_guard': {**backlog.summary(state, now),
                               'latest_alert': dict(latest_backlog_mail) if latest_backlog_mail else None,
@@ -1383,6 +1384,17 @@ async def worker():
         await asyncio.sleep(max(.1, WORKER_INTERVAL - (time.monotonic() - started)))
 
 
+def chart_coverage(conn, state, now):
+    starts = [rule['created'] for rule in state.get('local_rules', {}).values()]
+    rows = [row for row in state['watch'].values()
+            if starts and not row.get('monitor_only') and 0 <= now - row['last'] <= 90
+            and 0 <= now - row['first'] <= ENTRY_WINDOW and row['first'] >= min(starts)
+            and now >= row.get('retry', 0)]
+    records = {r['mint']: (r['pair'], json.loads(r['evidence']))
+               for r in conn.execute('SELECT mint,pair,evidence FROM research WHERE checked>=?', (now - 900,))}
+    return research.chart_coverage(rows, records, now)
+
+
 def claim_research(conn, now):
     """Reserve provider calls independently of the two-second trading worker."""
     state, _ = read(conn)
@@ -1417,12 +1429,15 @@ def claim_research(conn, now):
                 # Research opportunities precede old preset holdings; oldest
                 # attempt wins within each group so new discoveries cannot starve it.
                 tier=0 if local_held else 1 if eligible else 2 if row['mint'] in study_mints else 3
-                return (tier,fresh,record.get('attempt_at',last),-row['first'])
+                return (tier, research.chart_is_fresh(record, now),
+                        record.get('attempt_at', last), -row['first'])
             return (fresh, row['mint'] not in study_mints, last if fresh else -row['first'])
 
         candidates=rows
         if source=='chart':
             def due_for_chart(row):
+                if research.pool_warming(row):
+                    return False
                 pair,evidence=records.get(row['mint'],(None,{}))
                 record=evidence.get('chart',{}) if pair==row['pair'] else {}
                 due=record.get('next_attempt',0)
@@ -1476,11 +1491,17 @@ def research_tick(clock=time.time, chart=research.chart, social=research.social_
                     conn.execute('UPDATE research_mail SET sent=? WHERE version=?', (clock(), mail['version']))
     for source, row in tasks:
         http_status=None
+        retry_after=None
         try:
             value = chart(row, clock()) if source == 'chart' else social(source, row, clock())
             result_status='ready' if value is not None else 'insufficient_history' if source=='chart' else 'unavailable'
+        except research.ChartUnavailable as error:
+            result_status, value = error.status, None
         except Exception as error:
-            http_status=getattr(getattr(error,'response',None),'status_code',None)
+            response = getattr(error, 'response', None)
+            http_status = getattr(response, 'status_code', None)
+            if http_status == 429:
+                retry_after = getattr(response, 'headers', None)
             result_status='rate_limited' if http_status==429 else 'provider_error'
             LOG.warning('Jarvis %s research is unavailable (%s%s)', source,result_status,
                         f', HTTP {http_status}' if http_status is not None else '')
@@ -1496,12 +1517,15 @@ def research_tick(clock=time.time, chart=research.chart, social=research.social_
             # never extend its timestamp or the existing candle freshness limit.
             record={'at':at,'value':value} if value is not None else {
                 'at':previous.get('at',at),'value':previous.get('value')}
-            retry=research.CHART_REFRESH if value is not None else 120 if result_status=='insufficient_history' else 30
+            retry = (research.rate_limit_delay(retry_after, at) if source=='chart' and http_status==429
+                     else research.CHART_REFRESH if value is not None
+                     else 120 if result_status in ('insufficient_history', 'stale_candles') else 30)
             record.update(attempt_at=at,status=result_status,next_attempt=at+retry)
             if http_status is not None:record['http_status']=http_status
             evidence[source] = record
             if source=='chart' and http_status==429:
-                conn.execute("INSERT OR REPLACE INTO research_tasks(name,due) VALUES ('chart',?)",(at+60,))
+                conn.execute("""INSERT INTO research_tasks(name,due) VALUES ('chart',?)
+                    ON CONFLICT(name) DO UPDATE SET due=max(due,excluded.due)""", (at + retry,))
             conn.execute('INSERT OR REPLACE INTO research(mint,pair,checked,evidence) VALUES (?,?,?,?)',
                          (row['mint'], row['pair'], at, json.dumps(evidence)))
 
@@ -1520,6 +1544,7 @@ def research_diagnostic():
             slots.append({'slot':slot,'closed':counts.get(slot,{}).get('closed',0),
                           'open':len(state['bots'][slot]['positions']),**entries[slot]})
         queue=exit_queue(quote_jobs(state,now),now)
+        coverage_details = chart_coverage(conn, state, now)
         chart_status={row['status'] or 'legacy':row['count'] for row in conn.execute(
             "SELECT json_extract(evidence,'$.chart.status') AS status,count(*) AS count FROM research WHERE checked>=? GROUP BY status",(now-900,))}
     # Fixed labels and aggregate counts only: no tokens, wallet/coin IDs,
@@ -1536,7 +1561,7 @@ def research_diagnostic():
     return {'enabled':state['enabled'],'presets_paused':bool(state.get('preset_entries_paused')),
             'pbh_closeout':{'requested':(state.get('pbh_closeout_v1') or {}).get('positions',0),'quoted_closes':sold,'writeoffs':written,'pending':pending_pbh},'quote_failure_categories':failures,
             'cycle_age':round(now-state['last_cycle']) if state['last_cycle'] else None,
-            'oldest_quote_wait':round(queue['oldest_wait']),'chart_status':chart_status, 'slots':slots}
+            'oldest_quote_wait':round(queue['oldest_wait']),'chart_status':chart_status, 'chart_coverage':coverage_details, 'slots':slots}
 
 
 async def diagnostic_worker():
