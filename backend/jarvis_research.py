@@ -199,6 +199,9 @@ def recommendation(trades):
 
 
 def deliver(version, body):
+    from jarvis_focus import email_allowed
+    if not email_allowed('jarvis_code_proposal'):
+        return False
     key = os.getenv('RESEND_API_KEY', '').strip()
     sender = os.getenv('HEALTH_ALERT_EMAIL_FROM', '').strip()
     recipient = os.getenv('HEALTH_ALERT_EMAIL_TO', '').strip()

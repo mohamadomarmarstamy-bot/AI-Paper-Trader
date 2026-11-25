@@ -9,6 +9,7 @@ import time
 from zoneinfo import ZoneInfo
 
 import solana_http
+import jarvis_health_mail
 
 LOG = logging.getLogger(__name__)
 ET = ZoneInfo('America/New_York')
@@ -26,7 +27,7 @@ CREATE TABLE IF NOT EXISTS jarvis_digest_mail(
  due REAL NOT NULL, lease REAL NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0,
  first_attempt REAL, sent REAL, provider_id TEXT, status TEXT NOT NULL DEFAULT 'pending'
 );
-'''
+''' + jarvis_health_mail.SCHEMA
 
 
 def enabled():
@@ -187,9 +188,10 @@ def tick(api, clock=time.time, post=solana_http.post):
     with api.connection() as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
         schedule=conn.execute('SELECT * FROM jarvis_digest_schedule WHERE id=1').fetchone()
+        state,_=api.read(conn)
+        jarvis_health_mail.queue(conn,state,now)
         if schedule is None or now>=schedule['next_at']:
             start=schedule['last_end'] if schedule else now-3600
-            state,_=api.read(conn)
             report=collect(conn,state,start,now)
             payload={'from':os.environ['HEALTH_ALERT_EMAIL_FROM'].strip(),
                      'to':[os.environ['HEALTH_ALERT_EMAIL_TO'].strip()],**render(report)}
@@ -225,7 +227,7 @@ def tick(api, clock=time.time, post=solana_http.post):
 
 def status(conn):
     schedule=conn.execute('SELECT next_at FROM jarvis_digest_schedule WHERE id=1').fetchone()
-    last=conn.execute("SELECT end,sent FROM jarvis_digest_mail WHERE status='accepted' ORDER BY end DESC LIMIT 1").fetchone()
+    last=conn.execute("SELECT end,sent FROM jarvis_digest_mail WHERE status='accepted' AND id LIKE 'jarvis-hourly/%' ORDER BY end DESC LIMIT 1").fetchone()
     return {'enabled':enabled(),'configured':configured(),'next_at':schedule['next_at'] if schedule else None,
             'last_accepted':dict(last) if last else None,
             'pending':conn.execute("SELECT count(*) FROM jarvis_digest_mail WHERE status='pending'").fetchone()[0],

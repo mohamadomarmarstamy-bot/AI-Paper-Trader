@@ -12,6 +12,9 @@ def configured():
 
 
 def deliver_one(clock=time.time,post=None):
+    from jarvis_focus import email_allowed
+    if not email_allowed('legacy_meme_learning'):
+        return False
     now=clock()
     if not configured():return False
     with closing(database.get_connection()) as conn:

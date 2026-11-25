@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS crypto_idle_mail(
 
 
 def configured():
+    from jarvis_focus import email_allowed
+    if not email_allowed('legacy_crypto_idle'):
+        return False
     return all(os.getenv(k,'').strip() for k in ('RESEND_API_KEY','HEALTH_ALERT_EMAIL_FROM','HEALTH_ALERT_EMAIL_TO'))
 
 

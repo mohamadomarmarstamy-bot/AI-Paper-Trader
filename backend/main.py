@@ -1801,6 +1801,8 @@ async def pro_ticker_scheduler_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from jarvis_focus import apply_startup_pause
+    apply_startup_pause()
     load_auto_trader_log()
     load_auto_trader_journal()
     restore_broker_exit_notifications_from_log()
@@ -14056,6 +14058,9 @@ def send_health_alert_email(
     attachments: list[dict[str, Any]]
     | None = None,
 ) -> bool:
+    from jarvis_focus import email_allowed
+    if not email_allowed('legacy_stock'):
+        return False
     if not health_alert_env_enabled(
         "HEALTH_ALERT_EMAIL_ENABLED"
     ):

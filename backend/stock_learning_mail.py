@@ -94,6 +94,9 @@ def summary(conn):
 
 
 def deliver_one(*,clock=time.time,post=None):
+    from jarvis_focus import email_allowed
+    if not email_allowed('stock_learning'):
+        return False
     if not configured():return False
     now=clock();token=str(uuid.uuid4())
     with closing(database.get_connection()) as conn:

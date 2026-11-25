@@ -282,6 +282,9 @@ def email_control(token, clock=time.time):
 
 
 def mail_tick(clock=time.time, post=solana_http.post):
+    from jarvis_focus import email_allowed
+    if not email_allowed('jarvis_backlog'):
+        return
     now = clock()
     base = origin()
     if not base or not all(os.getenv(k, '').strip() for k in ('RESEND_API_KEY', 'HEALTH_ALERT_EMAIL_FROM', 'HEALTH_ALERT_EMAIL_TO')):
