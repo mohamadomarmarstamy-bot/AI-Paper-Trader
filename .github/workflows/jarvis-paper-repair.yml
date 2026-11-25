@@ -1,0 +1,54 @@
+name: Jarvis isolated paper repairs
+on:
+  pull_request:
+    paths:
+      - 'backend/jarvis_repair*.py'
+      - 'backend/test_solana_jarvis_repair*.py'
+      - 'scripts/jarvis_paper_runner.py'
+      - '.github/workflows/jarvis-paper-repair.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'backend/jarvis_repair*.py'
+      - 'scripts/jarvis_paper_runner.py'
+      - '.github/workflows/jarvis-paper-repair.yml'
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: jarvis-isolated-paper-repair
+  cancel-in-progress: false
+jobs:
+  sandbox-tests:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Reproduce a fixture failure and validate isolated repair
+        run: python scripts/jarvis_paper_runner.py --self-test
+  repair:
+    needs: sandbox-tests
+    if: always() && !cancelled() && github.event_name != 'pull_request' && (needs.sandbox-tests.result == 'success' || needs.sandbox-tests.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Process one verified paper repair
+        run: python scripts/jarvis_paper_runner.py
