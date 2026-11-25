@@ -42,6 +42,32 @@
     @media(max-width:500px) { .health-cards { gap:8px; } .health-card { padding:12px; } .health-card strong { font-size:1.6rem; } .health-metrics { gap:16px; } }
     @media (max-width: 650px) { .lab-summary { grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px; } }
     #jarvis-note:empty { display: none; }
+    .lab-metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:20px 0 12px; }
+    .lab-metric { padding:16px; border:1px solid #ffffff18; border-radius:14px; background:#ffffff05; }
+    .lab-metric small { display:block; color:#a8b5ca; margin-bottom:8px; font-size:.78rem; }
+    .lab-metric strong { font-size:1.3rem; font-variant-numeric:tabular-nums; }
+    .lab-row { margin:12px 0; border-radius:14px; overflow:hidden; }
+    .lab-summary { padding:18px; gap:20px; list-style:none; }
+    .lab-summary::-webkit-details-marker { display:none; }
+    .lab-name strong { display:block; line-height:1.45; }
+    .lab-name:before { content:'＋'; float:right; margin-left:12px; color:#8de0d0; }
+    .lab-row[open] > .lab-summary .lab-name:before { content:'−'; }
+    .lab-summary strong { font-variant-numeric:tabular-nums; }
+    .lab-details { padding:20px; display:grid; gap:14px; }
+    .lab-details p { margin:6px 0; line-height:1.6; }
+    .lab-details > small { color:#a8b5ca; line-height:1.7; }
+    .lab-rules { background:#00000018; border:1px solid #ffffff12; border-radius:10px; padding:14px; overflow-wrap:anywhere; }
+    .lab-rules > summary { cursor:pointer; font-weight:600; color:#b9ded8; }
+    .lab-rules p { font-size:.9rem; }
+    @media(max-width:760px) {
+      .lab-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+      .lab-summary { grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; padding:16px; }
+      .lab-name { grid-column:1/-1; }
+      .lab-summary > span:last-child { grid-column:1/-1; border-top:1px solid #ffffff12; padding-top:12px; }
+      .lab-summary small { font-size:.8rem; line-height:1.5; }
+      .lab-details { padding:16px; }
+      #jarvis-lab .page-title { align-items:flex-start; flex-wrap:wrap; }
+    }
   </style>
 </head>
 <body>
@@ -111,8 +137,8 @@
       <div><h1 id="jarvis-lab-title">Strategy Lab</h1><p id="jarvis-lab-description" class="meme-muted">AI strategy tests and validated candidates.</p></div>
       <button id="jarvis-lab-run" type="button" class="primary-button" disabled>Start all paper tests</button>
     </div>
-    <p id="jarvis-lab-summary" class="meme-muted"></p>
-    <p class="meme-muted">$50 per paper entry · Identical quotes are shared · Exits use available quotes and include modeled costs</p>
+    <div id="jarvis-lab-summary" class="lab-metrics"></div>
+    <p class="meme-muted">$50 paper entries · Results include modeled costs · Shared quotes</p>
     <div id="jarvis-lab-rows"></div>
     <section id="jarvis-archive-panel" class="panel" hidden>
       <h2>Retired AI strategies</h2>
