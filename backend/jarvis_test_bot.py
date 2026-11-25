@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 18084)
+Total output lines: 1382
+
 """Independent, quote-only Solana paper portfolios and strategy evaluation."""
 import asyncio
 from contextlib import closing, contextmanager
@@ -14,6 +17,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 import database
+import jarvis_hourly_mail as hourly_mail
 import jarvis_local_lab as local_lab
 import jarvis_autonomy as autonomy
 import jarvis_experiments as experiments
@@ -105,7 +109,7 @@ def connection():
     path = database.DATABASE_PATH.with_name('jarvis_paper.sqlite3')
     with closing(sqlite3.connect(path, timeout=5)) as conn:
         conn.row_factory = sqlite3.Row
-        conn.executescript(SCHEMA + research.SCHEMA + experiments.SCHEMA + outcomes.SCHEMA + backlog.SCHEMA + autonomy.SCHEMA + local_lab.SCHEMA)
+        conn.executescript(SCHEMA + research.SCHEMA + experiments.SCHEMA + outcomes.SCHEMA + backlog.SCHEMA + autonomy.SCHEMA + local_lab.SCHEMA + hourly_mail.SCHEMA)
         conn.execute('INSERT OR IGNORE INTO run(id,state) VALUES (1,?)', (json.dumps(initial()),))
         conn.commit()
         yield conn
@@ -727,14 +731,7 @@ def exit_work_summary(conn, state, now):
                               'p95_seconds': latencies[max(0, math.ceil(len(latencies)*.95)-1)] if latencies else None}}
 
 
-def schedule_market_exits(state, now):
-    for portfolio in state['bots'].values():
-        for p in portfolio['positions'].values():
-            priority = observe_exit_signal(p, state, now)
-            # Keep retry cooldowns even when an exit signal is present.
-            if p.get('mark_stale') and 'quote_due_since' in p:
-                continue
-            if priority <= 1:
+def schedule_market_exits(state, n…84 tokens truncated…priority <= 1:
                 earliest = max(now, (p.get('mark_at') or p['opened']) + POLL)
                 p['due'] = min(p['due'], earliest)
 
@@ -1123,6 +1120,7 @@ def status():
         latest_mail = conn.execute('SELECT version, sent FROM research_mail ORDER BY version DESC LIMIT 1').fetchone()
         comparison = experiments.read_board(conn)
         autonomous = autonomy.status(conn)
+        hourly = hourly_mail.status(conn)
         route_retries = sum(bool(p.get('mark_stale') and 'quote_due_since' in p)
                             for bot in state['bots'].values() for p in bot['positions'].values())
         legacy_summary = conn.execute('SELECT data FROM legacy_outcome_summary WHERE id=1').fetchone()
@@ -1131,7 +1129,7 @@ def status():
         rug_pulls = dict(conn.execute("SELECT count(*) AS positions, count(DISTINCT mint) AS coins, COALESCE(sum(pnl),0)/1000000.0 AS pnl FROM trades WHERE json_extract(data,'$.paper_writeoff.category')='no_route'").fetchone())
         timer_report = conn.execute("SELECT started,ends,(id LIKE 'partial/%') AS partial FROM backlog_pause_report WHERE ends=? AND cancelled IS NULL ORDER BY started DESC LIMIT 1", (backlog.pause_key(state),)).fetchone()
     local = local_lab.context(__import__(__name__))
-    return {'local_lab': local, 'autonomy': autonomous, 'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
+    return {'hourly_email': hourly, 'local_lab': local, 'autonomy': autonomous, 'enabled': state['enabled'], 'last_cycle': state['last_cycle'], 'error': state['error'], 'day': day,
             'research': {'recent_coins': coverage, 'x_configured': bool(os.getenv('JARVIS_X_BEARER_TOKEN', '').strip()),
                          'latest_proposal': dict(latest_mail) if latest_mail else None},
             'backlog_guard': {**backlog.summary(state, now),
