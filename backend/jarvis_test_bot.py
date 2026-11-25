@@ -565,7 +565,6 @@ def opportunity_evidence(conn, row, now, benchmark=None):
 
 def entry_jobs(conn, state, now):
     possible = {}
-    local_capacity = not exit_queue(quote_jobs(state, now), now)['backed_up']
     for mint, row in state['watch'].items():
         if row.get('monitor_only') or now - row['last'] > 90 or now < row.get('retry', 0):
             continue
@@ -576,7 +575,9 @@ def entry_jobs(conn, state, now):
             if bot in closed or mint in portfolio['positions']:
                 continue
             if bot in local_lab.SLOTS:
-                if local_capacity and local_lab.entry_allowed(state, bot, row, market_evidence, now):
+                # Research shares the same bounded entry queue as every other
+                # strategy. step() retains urgent-exit priority and buy pauses.
+                if local_lab.entry_allowed(state, bot, row, market_evidence, now):
                     possible.setdefault(mint, []).append(bot)
                 continue
             if bot == 'jarvis':
@@ -606,6 +607,57 @@ def entry_jobs(conn, state, now):
             if signal is not None and 0 <= now - signal <= window:
                 possible.setdefault(mint, []).append(bot)
     return possible
+
+
+def local_entry_status(conn, state, now):
+    """Explain current research eligibility without placing or scheduling trades."""
+    import ast
+    matches = entry_jobs(conn,state,now)
+    urgent = any(p.get('due',math.inf)<=now and (p.get('exit_priority')==0 or p.get('exit_signal'))
+                 for portfolio in state['bots'].values() for p in portfolio['positions'].values())
+    labels = {}
+    for slot in local_lab.SLOTS:
+        rule = state.get('local_rules',{}).get(slot)
+        if not rule:
+            labels[slot]={'label':'Waiting for local researcher','matching_coins':0}
+            continue
+        portfolio=state['bots'][slot]
+        matching=sum(slot in bots for bots in matches.values())
+        fresh=[row for row in state['watch'].values()
+               if not row.get('monitor_only') and 0<=now-row['last']<=90
+               and row['first']>=rule['created'] and 0<=now-row['first']<=900
+               and now>=row.get('retry',0)]
+        required={node.id for node in ast.walk(local_lab.parse(rule['entry'])) if isinstance(node,ast.Name)}
+        missing={field:0 for field in required}
+        complete=0
+        for row in fresh:
+            values=local_lab.observations(row,entry_evidence(conn,row,now))
+            absent=[field for field in required if type(values.get(field)) not in (int,float)
+                    or not math.isfinite(values[field])]
+            for field in absent:missing[field]+=1
+            complete+=not absent
+        if not state['enabled']:
+            label='Paper entries paused · exits monitored'
+        elif backlog.paused(state,now) or (state.get('entry_catchup_pause') or {}).get('active'):
+            label='Buy pause active · exits monitored'
+        elif len(portfolio['positions'])>=local_lab.MAX_OPEN:
+            label='Experiment position limit reached · exits monitored'
+        elif portfolio['cash']<BUY_COST:
+            label='Insufficient experiment cash'
+        elif urgent:
+            label=f'Waiting for urgent exits · {matching} matching coins'
+        elif matching:
+            label=f'{matching} matching coins · waiting for shared quote capacity'
+        elif not fresh:
+            label='Waiting for newly discovered eligible coins'
+        elif not complete:
+            fields=', '.join(sorted(field for field,count in missing.items() if count))
+            label='Waiting for fresh data: '+fields
+        else:
+            label=f'No matching signal · {complete} coins with required data'
+        labels[slot]={'label':label,'matching_coins':matching,'fresh_eligible_coins':len(fresh),
+                      'complete_observations':complete,'missing_observations':missing}
+    return labels
 
 
 def quote_jobs(state, now):
