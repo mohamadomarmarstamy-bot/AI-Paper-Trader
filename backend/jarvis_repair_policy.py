@@ -6,11 +6,11 @@ change accounting or alter the runner, tests, validation gates or risk constants
 import ast
 import hashlib
 
-TARGETS={'jarvis_test_bot.py':{'entry_quote_budget','next_exit'},'jarvis_research.py':{'chart_fresh_for'}}
+TARGETS={'jarvis_test_bot.py':{'entry_quote_budget','next_exit'},'jarvis_research.py':{'chart_fresh_for','pool_warming'}}
 CALLS={'min','max','any','all','len','sorted','int','float','bool','isinstance','type',
        'exit_queue','stop_distance','retry_group','quote_due_since','chart_is_fresh'}
 GLOBALS={'BACKLOG_EXIT_QUOTES_PER_ENTRY','EXIT_QUOTES_PER_ENTRY','NEAR_STOP_POINTS',
-         'OLDEST_EXIT_INTERVAL','EXIT_RETRY_INTERVAL','FRESH_SECONDS','local_lab','dict','list','tuple'}
+         'OLDEST_EXIT_INTERVAL','EXIT_RETRY_INTERVAL','FRESH_SECONDS','MIN_POOL_AGE_MINUTES','local_lab','dict','list','tuple'}
 METHODS={'get','items','values','keys'}
 NODES=(ast.Module,ast.FunctionDef,ast.arguments,ast.arg,ast.Return,ast.Assign,ast.AugAssign,
        ast.If,ast.IfExp,ast.Expr,ast.Constant,ast.Name,ast.Load,ast.Store,ast.Subscript,
@@ -123,3 +123,23 @@ def check_test(source,file,name):
         if isinstance(node,ast.Assign) and any(not isinstance(n,ast.Name) for n in node.targets):raise ValueError('Regression mutation unsupported')
         if isinstance(node,ast.Name) and node.id.startswith('_'):raise ValueError('Private regression name')
     return True
+
+
+def symptom_present(kind,snapshot):
+    if not snapshot.get('paper_enabled'):return False
+    if kind=='exit_backlog':return snapshot.get('oldest_quote_wait',0)>=120
+    if kind=='worker_stalled':return snapshot.get('cycle_age') is None or snapshot['cycle_age']>=180
+    if kind=='chart_data_gap':return snapshot.get('eligible_candidates',0)>=10 and snapshot.get('complete_candidates',0)==0
+    if kind=='engine_error':return bool(snapshot.get('engine_error_present'))
+    return False
+
+
+def goal_met(kind,before,after):
+    """Independent observed recovery, never a claim of causal profitability."""
+    if (not after.get('paper_enabled') or after.get('cycle_age') is None or after['cycle_age']>45
+        or after.get('oldest_quote_wait',0)>120):return False
+    if kind=='exit_backlog':return after.get('oldest_quote_wait',0)<120 and after.get('oldest_quote_wait',0)<before.get('oldest_quote_wait',0)
+    if kind=='worker_stalled':return after['cycle_age']<45
+    if kind=='chart_data_gap':return after.get('complete_candidates',0)>before.get('complete_candidates',0)
+    if kind=='engine_error':return not after.get('engine_error_present',True)
+    return False

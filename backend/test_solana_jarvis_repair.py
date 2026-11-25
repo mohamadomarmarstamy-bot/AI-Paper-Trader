@@ -72,9 +72,9 @@ class CoordinatorTests(unittest.TestCase):
         self.enterContext(patch.dict(os.environ,{'JARVIS_PAPER_REPAIR_ENABLED':'true','RAILWAY_GIT_COMMIT_SHA':'a'*40}))
         self.claims={'run_id':'123'}
         with api.connection() as conn,conn:
-            state,_=api.read(conn);state.update(enabled=True,last_cycle=NOW)
+            state,_=api.read(conn);state.update(enabled=True,last_cycle=NOW,error='Provider unavailable')
             conn.execute('UPDATE run SET state=?',(json.dumps(state),))
-            conn.execute("INSERT INTO brain_incidents(id,kind,opened,last_seen,status) VALUES ('incident','exit_backlog',?,?, 'investigating')",(NOW,NOW))
+            conn.execute("INSERT INTO brain_incidents(id,kind,opened,last_seen,status) VALUES ('incident','engine_error',?,?, 'investigating')",(NOW,NOW))
             _,value=fixture();value['incident_id']='incident'
             conn.execute("INSERT INTO brain_proposals(id,created,kind,status,data) VALUES ('proposal',?,'code','needs_functional_tests',?)",(NOW,json.dumps(value)))
     def test_claim_is_single_run_bound_and_status_does_not_expose_token(self):
@@ -93,6 +93,8 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(repair.report(api,self.claims,payload,NOW+1)['status'],'deploying')
         deployed={**payload,'outcome':'deployed','checks':{**payload['checks'],'canary_passed':True}}
         with self.assertRaises(ValueError):repair.report(api,self.claims,deployed,NOW+2)
+        with api.connection() as conn,conn:
+            state,_=api.read(conn);state['error']=None;conn.execute('UPDATE run SET state=?',(json.dumps(state),))
         with patch.dict(os.environ,{'RAILWAY_GIT_COMMIT_SHA':'b'*40}):
             self.assertEqual(repair.report(api,self.claims,deployed,NOW+3)['status'],'deployed')
         with self.assertRaises(ValueError):repair.report(api,self.claims,payload,NOW+4)

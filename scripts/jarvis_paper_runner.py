@@ -129,17 +129,20 @@ def api(path,payload=None):
     return fetch(BASE+'/jarvis-test-bot/repair-runner/'+path,{'Authorization':'Bearer '+token()},payload)
 
 
-def canary(sha,baseline,limit=480):
+def canary(sha,baseline,limit=480,kind=None):
     deadline=time.monotonic()+limit;healthy=0
     while time.monotonic()<deadline:
         try:
             value=api('health')
-            ok=(value['source_sha']==sha and value['cycle_age'] is not None and value['cycle_age']<=45
-                and value['oldest_quote_wait']<=120)
+            healthy=(value['cycle_age'] is not None and value['cycle_age']<=45 and value['oldest_quote_wait']<=120)
+            # An intentional owner pause is compatible with verified code rollback,
+            # but can never count as recovery of the incident that motivated a fix.
+            ok=value['source_sha']==sha and ((not value['paper_enabled'] or healthy) if kind is None
+                else policy.goal_met(kind,baseline,value))
             healthy=healthy+1 if ok else 0
-            if healthy>=3:return True
+            if healthy>=5:return True
         except Exception:healthy=0
-        time.sleep(20)
+        time.sleep(30)
     return False
 
 
@@ -198,7 +201,7 @@ def run():
         # Normal fast-forward push rejects concurrent main changes. Never force.
         git('push','origin','HEAD:refs/heads/main');pushed=True
         report('deploying',new_sha)
-        if canary(new_sha,before):
+        if canary(new_sha,job['baseline'],kind=job['incident_kind']):
             checks['canary_passed']=True;report('deployed',new_sha)
             print('Paper repair deployed and passed independent live checks.',flush=True);return
         raise RuntimeError('Live checks did not verify recovery')
