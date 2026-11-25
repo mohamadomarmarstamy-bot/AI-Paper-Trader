@@ -140,7 +140,8 @@ class BrainTests(unittest.TestCase):
             self.assertEqual(brain.build_job(api,NOW+200)['id'],incident['id'])
             self.assertIsNone(brain.build_job(api,NOW+400))
             self.assertEqual(brain.build_job(api,NOW+4000)['id'],incident['id'])
-            self.assertIsNone(brain.build_job(api,NOW+8000))
+            self.assertEqual(brain.build_job(api,NOW+8000)['id'],incident['id'])
+            self.assertIsNone(brain.build_job(api,NOW+12000))
     def test_model_cannot_pause_healthy_engine_or_change_accounting(self):
         incident=self.confirm('engine_error')
         state=self.state()

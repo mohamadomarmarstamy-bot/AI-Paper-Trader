@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives.asymmetric import padding,rsa
 from cryptography.hazmat.primitives import hashes
 import solana_http
 import jarvis_repair_policy as policy
+import jarvis_repair_learning as learning
 
 REPOSITORY='mohamadomarmarstamy-bot/AI-Paper-Trader'
 REPOSITORY_ID='1306820068'
@@ -25,6 +26,7 @@ SCHEMA='''CREATE TABLE IF NOT EXISTS repair_runs(
  started REAL NOT NULL,expires REAL NOT NULL,status TEXT NOT NULL,report TEXT NOT NULL DEFAULT '{}');
 CREATE UNIQUE INDEX IF NOT EXISTS repair_active ON repair_runs(proposal) WHERE status IN ('testing','deploying');
 CREATE TABLE IF NOT EXISTS repair_runner(id INTEGER PRIMARY KEY CHECK(id=1),seen REAL NOT NULL,run_id TEXT NOT NULL);'''
+SCHEMA += learning.SCHEMA
 _KEYS={'at':0,'keys':[]}
 _LOCK=threading.Lock()
 
@@ -103,6 +105,8 @@ def claim(api,claims,now):
         for expired in conn.execute("SELECT * FROM repair_runs WHERE expires<=? AND status IN ('testing','deploying')",(now,)).fetchall():
             conn.execute("UPDATE repair_runs SET status='expired' WHERE id=?",(expired['id'],))
             conn.execute("UPDATE brain_proposals SET status='needs_review' WHERE id=?",(expired['proposal'],))
+            proposal=conn.execute('SELECT data FROM brain_proposals WHERE id=?',(expired['proposal'],)).fetchone()
+            if proposal:learning.remember(conn,expired['id'],json.loads(proposal['data']),{**json.loads(expired['report']),'outcome':'expired'},now)
             escalate(api,conn,expired['proposal'],now,'The isolated repair runner timed out. No successful recovery has been verified; review the code proposal and deployment status.')
         if conn.execute("SELECT 1 FROM repair_runs WHERE status IN ('testing','deploying')").fetchone():return {'status':'busy'}
         day_count=conn.execute('SELECT count(*) FROM repair_runs WHERE started>?',(now-86400,)).fetchone()[0]
@@ -120,6 +124,8 @@ def claim(api,claims,now):
                 policy.check_test(patch.get('regression_test'),patch['file'],patch['function'])
             except (ValueError,TypeError,SyntaxError):
                 conn.execute("UPDATE brain_proposals SET status='needs_review' WHERE id=?",(row['id'],));continue
+            if learning.blocked(conn,patch,now):
+                conn.execute("UPDATE brain_proposals SET status='repeat_blocked' WHERE id=?",(row['id'],));continue
             ident=secrets.token_hex(16);token=secrets.token_urlsafe(32)
             conn.execute('INSERT INTO repair_runs(id,proposal,run_id,token_hash,started,expires,status,report) VALUES (?,?,?,?,?,?,?,?)',
                 (ident,row['id'],claims['run_id'],hashlib.sha256(token.encode()).hexdigest(),now,now+1200,'testing',json.dumps({'baseline':baseline,'incident_kind':incident['kind']})))
@@ -166,6 +172,10 @@ def report(api,claims,payload,now):
         conn.execute('UPDATE repair_runs SET status=?,report=?,expires=? WHERE id=?',
             (outcome,json.dumps(result),max(row['expires'],now+900) if outcome=='deploying' else row['expires'],row['id']))
         conn.execute('UPDATE brain_proposals SET status=?,report=? WHERE id=?',(outcome,json.dumps(result),row['proposal']))
+        proposal=json.loads(conn.execute('SELECT data FROM brain_proposals WHERE id=?',(row['proposal'],)).fetchone()['data'])
+        learning.remember(conn,row['id'],proposal,result,now)
+        if outcome in ('tests_failed','runner_error','rolled_back'):
+            conn.execute('UPDATE brain_incidents SET next_attempt=? WHERE id=? AND resolved IS NULL',(now+300,proposal.get('incident_id','')))
         if outcome in ('runner_error','rollback_blocked','rolled_back'):
             escalate(api,conn,row['proposal'],now,'The proposed paper code repair was not kept. Outcome: '+outcome.replace('_',' ')+'. Existing incident monitoring continues; review is needed.')
         return {'status':outcome}
@@ -175,5 +185,6 @@ def status(conn,now):
     runner=conn.execute('SELECT * FROM repair_runner WHERE id=1').fetchone()
     return {'enabled':enabled(),'runner_seen':runner['seen'] if runner else None,
         'runner_recent':bool(runner and 0<=now-runner['seen']<=3600),
+        'learning':{'lessons':learning.lessons(conn),'repeat_failed_patch_blocked':True},
         'scope':{k:sorted(v) for k,v in policy.TARGETS.items()},'max_repairs_per_day':2,
         'runs':[dict(r)|{'report':json.loads(r['report'])} for r in conn.execute('SELECT id,proposal,started,status,report FROM repair_runs ORDER BY started DESC LIMIT 5')]}

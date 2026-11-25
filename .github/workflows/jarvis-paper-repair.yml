@@ -5,12 +5,14 @@ on:
       - 'backend/jarvis_*.py'
       - 'backend/test_solana_jarvis_*.py'
       - 'scripts/jarvis_paper_runner.py'
+      - 'tests/test_jarvis_runner_canary.py'
       - '.github/workflows/jarvis-paper-repair.yml'
   push:
     branches: [main]
     paths:
       - 'backend/jarvis_repair*.py'
       - 'scripts/jarvis_paper_runner.py'
+      - 'tests/test_jarvis_runner_canary.py'
       - '.github/workflows/jarvis-paper-repair.yml'
   schedule:
     - cron: '7,22,37,52 * * * *'
@@ -32,6 +34,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Verify sustained recovery and rollback canary gates
+        run: python -m unittest discover -s tests -p 'test_jarvis_runner_canary.py' -v
       - name: Reproduce a fixture failure and validate isolated repair
         run: python scripts/jarvis_paper_runner.py --self-test
   repair:
