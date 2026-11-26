@@ -1457,7 +1457,7 @@ def claim_research(conn, now):
                 # healthy holdings ahead of uncovered research opportunities.
                 if local_held and remaining <= 30:
                     tier = 0
-                elif eligible and not remaining:
+                elif eligible and remaining <= research.chart_interval(conn):
                     tier = 1
                 elif local_held:
                     tier = 2
@@ -1465,7 +1465,7 @@ def claim_research(conn, now):
                     tier = 3
                 else:
                     tier = 4 if row['mint'] in study_mints else 5
-                return (tier, bool(remaining), record.get('attempt_at', last), -row['first'])
+                return (tier, remaining, record.get('attempt_at', last), -row['first'])
             return (fresh, row['mint'] not in study_mints, last if fresh else -row['first'])
 
         candidates=rows
@@ -1567,9 +1567,10 @@ def research_tick(clock=time.time, chart=research.chart, social=research.social_
                 interval=research.record_chart_result(conn,primary_status)
                 conn.execute("INSERT INTO research_tasks(name,due) VALUES ('chart',?) ON CONFLICT(name) DO UPDATE SET due=max(due,excluded.due)",(at+interval,))
             evidence[source] = record
-            if source=='chart' and http_status==429:
-                conn.execute("""INSERT INTO research_tasks(name,due) VALUES ('chart',?)
-                    ON CONFLICT(name) DO UPDATE SET due=max(due,excluded.due)""", (at + retry,))
+            if http_status==429 or (source!='chart' and http_status in (401,403)):
+                cooldown = research.rate_limit_delay(retry_after, at) if http_status==429 else 1800
+                conn.execute("""INSERT INTO research_tasks(name,due) VALUES (?,?)
+                    ON CONFLICT(name) DO UPDATE SET due=max(due,excluded.due)""", (source, at + cooldown))
             conn.execute('INSERT OR REPLACE INTO research(mint,pair,checked,evidence) VALUES (?,?,?,?)',
                          (row['mint'], row['pair'], at, json.dumps(evidence)))
 
