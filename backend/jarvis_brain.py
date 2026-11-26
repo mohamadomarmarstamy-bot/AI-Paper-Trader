@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS brain_proposals(
  id TEXT PRIMARY KEY,created REAL NOT NULL,kind TEXT NOT NULL,status TEXT NOT NULL,
  data TEXT NOT NULL,report TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS brain_incident_history ON brain_incidents(kind,opened);
+CREATE TABLE IF NOT EXISTS brain_provider_validation(
+ call_id TEXT PRIMARY KEY, counts TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS brain_provider_review(
  id INTEGER PRIMARY KEY CHECK(id=1), claim TEXT NOT NULL, next_attempt REAL NOT NULL,
  status TEXT NOT NULL, researched_at REAL, options TEXT NOT NULL DEFAULT '[]');
@@ -391,7 +393,7 @@ DIAGNOSTIC_DOMAINS=('docs.python.org','sqlite.org','fastapi.tiangolo.com','docs.
                     'dev.jup.ag','apiguide.geckoterminal.com','docs.coingecko.com','docs.codex.io','www.codex.io','support.coingecko.com','docs.birdeye.so','developers.openai.com')
 
 
-def research_sources(values,domains=()):
+def research_sources(values,domains=(),*,limit=10):
     sources={}
     for source in values:
         if not isinstance(source,dict):continue
@@ -405,7 +407,7 @@ def research_sources(values,domains=()):
         if value.scheme!='https' or not host or value.username is not None or chr(92) in value.netloc:continue
         if domains and not any(host==domain or host.endswith('.'+domain) for domain in domains):continue
         sources.setdefault(url,{'url':url,'title':str(source.get('title',''))[:200],'snippet':''})
-        if len(sources)==10:break
+        if limit is not None and len(sources)>=limit:break
     return list(sources.values())
 
 
@@ -458,6 +460,44 @@ def provider_options(options, sources):
     return options
 
 
+def validate_provider_followup(raw,sources,counts):
+    """Evaluate each proposed provider against evidence returned by this web search."""
+    if not isinstance(raw,dict) or set(raw)!={'provider_options'} or not isinstance(raw['provider_options'],list):
+        return [],'provider_response_shape'
+    options=raw['provider_options']
+    counts['submitted']=len(options)
+    if len(options)>3:return [],'provider_response_shape'
+    attested={s['url'] for s in sources}
+    valid={}
+    for option in options:
+        if (not isinstance(option,dict) or set(option)!={'name','price','quota','coverage','unknown','trial','source'}
+                or any(not isinstance(v,str) or not v.strip() or len(v)>500 for v in option.values())):
+            counts['invalid_fields']+=1
+            continue
+        name,url=option['name'],option['source']
+        try:
+            parts=urlsplit(url)
+            official=(parts.scheme=='https' and parts.netloc.lower() in PROVIDER_HOSTS.get(name,set())
+                      and not any(c.isspace() or ord(c)<32 for c in url))
+        except ValueError:
+            official=False
+        if not official:counts['invalid_identity']+=1
+        elif url not in attested:counts['unattested']+=1
+        elif name in valid:counts['duplicates']+=1
+        else:valid[name]=option
+    counts['accepted']=len(valid)
+    if len(valid)>=2:return list(valid.values()),'completed'
+    return [],'provider_too_few_distinct'
+
+
+def latest_provider_validation(conn):
+    row=conn.execute("""SELECT c.at,c.status,v.counts FROM brain_calls c
+        LEFT JOIN brain_provider_validation v ON v.call_id=c.id
+        WHERE c.purpose='provider_followup' ORDER BY c.at DESC,c.rowid DESC LIMIT 1""").fetchone()
+    if row is None or row['counts'] is None:return None
+    return {'at':row['at'],'status':row['status'],'counts':json.loads(row['counts'])}
+
+
 def research_job(api,job,now,post=solana_http.post):
     key=os.getenv('OPENAI_API_KEY','').strip()
     if not key:return None,'missing_api_key'
@@ -486,6 +526,12 @@ def research_job(api,job,now,post=solana_http.post):
             'Prefer cache, pacing and existing allowances. Do not predict measured coverage. '
             'Separate the 60-second per-pool refresh floor, current global pace, cooldown, returned lag, '
             'accepted candle age, history and momentum readiness. Return an empty array if insufficient sources.')
+    followup=job['kind']=='provider_followup'
+    if followup:
+        instruction += (' Start with these official documentation targets: '+json.dumps(PROVIDER_DOCS)+
+                        '. A target must be retrieved or cited by the completed search before using its exact URL.')
+    counts=dict.fromkeys(('search_completed','official_sources','submitted','accepted','invalid_fields',
+                          'invalid_identity','unattested','duplicates'),0)
     outcome='provider_error';usage={};data=None
     domains=DIAGNOSTIC_DOMAINS if job['kind']!='strategy' else ()
     if job['kind']=='provider_followup':domains=tuple(sorted(set().union(*PROVIDER_HOSTS.values())))
@@ -516,16 +562,21 @@ def research_job(api,job,now,post=solana_http.post):
                     texts.append(part['text'])
                     cited.extend(a for a in (part.get('annotations') or [])
                                  if isinstance(a,dict) and a.get('type')=='url_citation')
-        sources=research_sources(cited+retrieved,domains) if searched else []
+        sources=research_sources(cited+retrieved,domains,limit=None if followup else 10) if searched else []
+        if followup:
+            sources=[s for s in sources if urlsplit(s['url']).netloc.lower() in domains]
+            counts.update(search_completed=int(searched),official_sources=len(sources))
         if not local_reasoning and not sources:outcome='no_research_sources';return None,outcome
-        raw=json.loads('\n'.join(texts))
-        if job['kind']=='provider_followup':
-            validated = provider_options(raw['provider_options'],sources) if isinstance(raw,dict) and set(raw)=={'provider_options'} else []
-            if not validated:
-                outcome='insufficient_provider_evidence'
-                return None,outcome
-            outcome='completed'
-            return {'provider_options':validated,'sources':sources},None
+        try:
+            raw=json.loads('\n'.join(texts))
+        except ValueError:
+            outcome='provider_invalid_json' if followup else 'invalid_or_unavailable'
+            return None,outcome
+        if followup:
+            validated,outcome=validate_provider_followup(raw,sources,counts)
+            if not validated:return None,outcome
+            used={o['source'] for o in validated}
+            return {'provider_options':validated,'sources':[s for s in sources if s['url'] in used]},None
         options=raw.pop('provider_options', []) if isinstance(raw,dict) and job['kind']=='chart_data_gap' else []
         plan=validate_plan(raw,job['kind'])
         if options and not local_reasoning:
@@ -539,6 +590,8 @@ def research_job(api,job,now,post=solana_http.post):
         outcome='invalid_or_unavailable';return None,outcome
     finally:
         with api.connection() as conn,conn:
+            if followup:
+                conn.execute('INSERT INTO brain_provider_validation VALUES (?,?)',(ident,json.dumps(counts)))
             conn.execute('UPDATE brain_calls SET status=?,input_tokens=?,output_tokens=? WHERE id=?',
                 (outcome,usage.get('input_tokens'),usage.get('output_tokens'),ident))
 
@@ -699,7 +752,7 @@ def status(conn,now=None):
         provider_result=dict(provider_review,options=json.loads(provider_review['options']))
         if provider_result['status']=='researching' and now>=provider_result['next_attempt']:
             provider_result['status']='claim_expired'
-    return {'provider_research':provider_result,
+    return {'provider_validation':latest_provider_validation(conn),'provider_research':provider_result,
         'sell_quote_study':sell_study.report(conn),'fallback_scorecard':scorecard.status(conn,now),'admission_checks':[r for r in waiting if r],'strategy_due_at':due[0] if due else None,
         'enabled':enabled(),'cloud_configured':bool(os.getenv('OPENAI_API_KEY','').strip()),'model':MODEL,
         'monthly_budget_usd':MONTHLY_CENTS/100,'reserved_this_month_usd':spent/100,

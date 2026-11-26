@@ -215,14 +215,21 @@ function renderFallback(s){
     node('p',s.provider_review_at?'Latest provider recommendation queued '+stamp(s.provider_review_at)+'.':
       'No provider recommendation queued. Research and allowance checks govern escalation.'));
 }
-function renderProviderReview(review){
+function renderProviderReview(review,validation){
   const panel=byId('provider-panel'),box=byId('provider-results');
   panel.hidden=!review;
   box.replaceChildren();
   if(!review)return;
   const status={completed:'Comparison available',researching:'Research claimed',budget_exhausted:'Waiting for existing budget',
-    claim_expired:'Previous research claim expired',no_research_sources:'No official sources returned',insufficient_provider_evidence:'Too little sourced evidence'};
+    provider_response_shape:'Unexpected response structure',provider_invalid_json:'Response was not valid JSON',provider_too_few_distinct:'Fewer than two distinct providers passed validation',claim_expired:'Previous research claim expired',no_research_sources:'No official sources returned',insufficient_provider_evidence:'Too little sourced evidence'};
   box.append(node('p',label(status,review.status)));
+  if(validation){
+    const c=validation.counts;
+    box.append(node('p','Latest validation · '+stamp(validation.at)+' · '+c.official_sources+' official sources · '+
+      c.accepted+' distinct candidates accepted of '+c.submitted+' submitted.'));
+    const labels={invalid_fields:'invalid fields',invalid_identity:'provider or host mismatch',unattested:'URL absent from search evidence',duplicates:'duplicate provider'};
+    for(const [key,name] of Object.entries(labels))if(c[key])box.append(node('p',name+' · '+c[key]));
+  }
   if(review.options?.length){
     box.append(node('p','Informational candidates from model-reviewed official sources · researched '+stamp(review.researched_at)+'. Actual coverage on eligible pools is unmeasured.'));
     for(const o of review.options){
@@ -233,7 +240,7 @@ function renderProviderReview(review){
   }
 }
 function render(d){
-  renderProviderReview(d.provider_research);
+  renderProviderReview(d.provider_research,d.provider_validation);
   renderSellStudy(d.sell_quote_study);
   renderFallback(d.fallback_scorecard);
   byId('state').textContent=d.enabled?'Monitoring':'Paused';
