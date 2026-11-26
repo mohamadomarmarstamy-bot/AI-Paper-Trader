@@ -15,6 +15,7 @@ def build_router(*,require_session):
     import solana_real_copy as real_copy
     import solana_paper_trials as trials
     import jarvis_test_bot as jarvis
+    import jarvis_local_lab as local
     import jarvis_backlog as backlog
     import jarvis_hourly_mail as hourly_mail
     import jarvis_brain as brain
@@ -102,7 +103,6 @@ def build_router(*,require_session):
 
     @router.get('/jarvis-test-bot/local-worker/context')
     def local_worker_context(request: Request):
-        import jarvis_local_lab as local
         if not local.authorized(request.headers.get('authorization')):
             raise HTTPException(401, 'Local worker token missing or invalid.')
         local.heartbeat(jarvis)
@@ -110,7 +110,6 @@ def build_router(*,require_session):
 
     @router.post('/jarvis-test-bot/local-worker/strategy')
     async def local_worker_strategy(request: Request):
-        import jarvis_local_lab as local
         if not local.authorized(request.headers.get('authorization')):
             raise HTTPException(401, 'Local worker token missing or invalid.')
         raw = bytearray()
@@ -126,13 +125,15 @@ def build_router(*,require_session):
         return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
     @router.get('/jarvis-test-bot/history')
-    def jarvis_history(request: Request, jarvis_only: bool = False, before: int | None = None, bot: str | None = None, rugs_only: bool = False):
+    def jarvis_history(request: Request, jarvis_only: bool = False, before: int | None = None, bot: str | None = None, rugs_only: bool = False, strategy_id: str | None = None):
         require_session(request)
         if before is not None and not 0 < before < 2**63:
             raise HTTPException(422, 'Invalid history cursor.')
         if bot is not None and bot not in jarvis.BOTS:
             raise HTTPException(422, 'Unknown paper bot.')
-        return JSONResponse(jarvis.history(jarvis_only, before, bot, rugs_only), headers={'Cache-Control': 'no-store'})
+        if strategy_id is not None and (bot not in local.SLOTS or jarvis_only or rugs_only or not 1 <= len(strategy_id) <= 128):
+            raise HTTPException(422, 'Invalid paper strategy history filter.')
+        return JSONResponse(jarvis.history(jarvis_only, before, bot, rugs_only, strategy_id), headers={'Cache-Control': 'no-store'})
 
     @router.get('/jarvis-test-bot/archive')
     def jarvis_archive(request: Request, before: int | None = None):

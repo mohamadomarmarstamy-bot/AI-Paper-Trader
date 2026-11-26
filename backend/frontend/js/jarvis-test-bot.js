@@ -43,7 +43,7 @@
   }
 
   function botState(bot) {
-    if (bot.research_slot && !state.local_lab?.strategies.some(rule => rule.slot === bot.id && ['testing', 'proven'].includes(rule.status))) return bot.open ? 'Retired strategy · exits monitored' : 'Waiting for local researcher';
+    if (bot.research_slot && !bot.current_trial) return bot.open ? 'Retired strategy · exits monitored' : 'Waiting for local researcher';
     if (bot.id === 'jarvis' && !state.strategy) return bot.open ? 'Waiting for strategy · exits monitored' : 'Waiting for strategy';
     if (bot.id === 'jarvis' && state.entry_guard) return 'Entries paused · exits monitored';
     if (state.backlog_guard?.timer_active || state.backlog_guard?.until_all_closed || state.entry_catchup_pause?.active) return 'Buys paused · exits monitored';
@@ -152,17 +152,22 @@
   $('jarvis-archive-more').onclick = () => loadArchive(true);
   let pendingLabExpansion = null;
 
-  async function loadLabHistory(id, append = false) {
-    const cached = labHistory.get(id);
+  const labHistoryKey = (bot, trial) => JSON.stringify([bot, trial || null]);
+
+  async function loadLabHistory(id, trial, closed, append = false) {
+    const key = labHistoryKey(id, trial);
+    const cached = labHistory.get(key);
     if (cached?.loading) return;
-    labHistory.set(id, {...cached, loading: true, error: null});
+    labHistory.set(key, {...cached, loading: true, error: null});
     render();
     try {
-      const data = await call(`history?bot=${encodeURIComponent(id)}${append ? '&before=' + cached.next : ''}`);
-      labHistory.set(id, {coins: [...(append ? cached.coins : []), ...data.coins], next: data.next,
-        closed: state.bots.find(bot => bot.id === id).closed});
+      const params = new URLSearchParams({bot: id});
+      if (trial) params.set('strategy_id', trial);
+      if (append) params.set('before', cached.next);
+      const data = await call('history?' + params);
+      labHistory.set(key, {coins: [...(append ? cached.coins : []), ...data.coins], next: data.next, closed});
     } catch (error) {
-      labHistory.set(id, {...cached, error: error.message, loading: false});
+      labHistory.set(key, {...cached, error: error.message, loading: false});
     }
     render();
   }
@@ -178,9 +183,12 @@
     if (!archived && challenger) $('jarvis-lab-description').textContent += ` Challenger in ${challenger.slot}: ${challenger.status === 'draining' ? 'window ended; monitoring remaining exits' : 'test window ends ' + displayTime(challenger.ends) + ' ET'}. Original trial history is preserved.`;
     const open = new Set([...$('jarvis-lab-rows').querySelectorAll('details[open]')].map(row => row.dataset.bot));
     const openRules = new Set([...$('jarvis-lab-rows').querySelectorAll('.lab-rules[open]')].map(row => row.parentElement.parentElement.dataset.bot));
-    const sum = key => bots.reduce((total, bot) => total + bot[key], 0);
+    const score = bot => archived ? bot : (bot.current_trial || {
+      closed: 0, open: 0, wins: 0, losses: 0, realized: 0, today: {realized: 0}, holdings: [],
+    });
+    const sum = key => bots.reduce((total, bot) => total + score(bot)[key], 0);
     const metric = (label, value, tone = '') => { const card = el('div', '', 'lab-metric'); card.append(el('small', label), el('strong', value, tone)); return card; };
-    $('jarvis-lab-summary').replaceChildren(metric('Research slots', String(bots.length)), metric('Closed positions', String(sum('closed'))), metric('Open positions', String(sum('open'))), metric('Realized P/L', money(sum('realized')), sign(sum('realized'))));
+    $('jarvis-lab-summary').replaceChildren(metric('Research slots', String(bots.length)), metric(archived ? 'Closed positions' : 'Current trials closed', String(sum('closed'))), metric(archived ? 'Open positions' : 'Current trials open', String(sum('open'))), metric(archived ? 'Realized P/L' : 'Current trials realized P/L', money(sum('realized')), sign(sum('realized'))));
     const run = $('jarvis-lab-run');
     run.hidden = archived;
     run.textContent = state.enabled ? 'Pause all paper entries' : 'Start all paper tests';
@@ -191,39 +199,43 @@
       detail.open = open.has(bot.id) || pendingLabExpansion === bot.id;
       const summary = el('summary', '', 'lab-summary');
       const name = el('span', '', 'lab-name');
-      const candidate = state.local_lab?.strategies.find(item => item.slot === bot.id && ['testing', 'proven'].includes(item.status));
-      name.append(el('strong', candidate?.rule.name || bot.name), el('small', botState(bot)));
-      const total = el('span', '', sign(bot.estimated_pnl));
-      total.append(el('strong', money(bot.pnl ?? bot.estimated_pnl)), el('small', bot.research_slot ? 'Slot P/L · all trials' : bot.unpriced ? 'Estimated total P/L' : 'Total P/L'));
-      const today = el('span', '', sign(bot.today.realized));
-      today.append(el('strong', money(bot.today.realized)), el('small', bot.research_slot ? 'Slot today realized' : 'Today realized'));
+      const trial = score(bot);
+      const trialId = bot.current_trial?.id;
+      const candidate = state.local_lab?.strategies.find(item => item.id === trialId);
+      name.append(el('strong', bot.current_trial?.name || bot.name), el('small', botState(bot)));
+      const pnl = archived ? bot.pnl ?? bot.estimated_pnl : trial.realized;
+      const total = el('span', '', sign(pnl));
+      total.append(el('strong', money(pnl)), el('small', archived ? (bot.unpriced ? 'Estimated total P/L' : 'Total P/L') : 'Current trial realized P/L'));
+      const today = el('span', '', sign(trial.today.realized));
+      today.append(el('strong', money(trial.today.realized)), el('small', archived ? 'Today realized' : 'Trial today realized'));
       const stats = el('span');
-      stats.append(el('strong', `${bot.closed} ${bot.research_slot ? 'slot closes' : 'closed'} · ${bot.open} open`),
-        el('small', `${bot.wins} wins / ${bot.losses} losses${bot.closed ? ' · ' + Math.round(100 * bot.wins / bot.closed) + '% wins' : ''}`));
+      stats.append(el('strong', `${trial.closed} closed · ${trial.open} open`),
+        el('small', `${trial.wins} wins / ${trial.losses} losses${trial.closed ? ' · ' + Math.round(100 * trial.wins / trial.closed) + '% wins' : ''}`));
       summary.append(name, total, today, stats);
       const body = el('div', '', 'lab-details');
-      body.append(el('small', `Realized P/L ${money(bot.realized)} · Virtual funding ${money(bot.funding)} · Cash ${money(bot.cash)} · Entry misses ${bot.entry_misses} · Exit misses ${bot.quote_misses}`));
+      body.append(el('small', `${archived ? 'Realized P/L ' + money(bot.realized) + ' · ' : 'Slot funds (unchanged): '}Virtual funding ${money(bot.funding)} · Cash ${money(bot.cash)}`));
+      if (!archived && bot.open > trial.open) body.append(el('small', 'A previous trial still has holdings monitored separately.'));
       const rules = el('details', '', 'lab-rules'); rules.open = openRules.has(bot.id); rules.append(el('summary', 'Strategy rules & research'));
-      if (candidate) rules.append(el('p', `Current trial: ${candidate.report?.closed || 0} closes · recent validation sample P/L ${money(candidate.report?.net || 0)}. Slot totals include earlier trials.`), el('p', candidate.rule.hypothesis), el('p', 'Entry: ' + candidate.rule.entry), el('p', 'Exit: ' + candidate.rule.exit), el('small', candidate.status === 'proven' ? (state.strategy?.local_rule?.id === candidate.id ? 'Validated · adopted by Jarvis Trader' : 'Validated · available for adoption') : 'Testing · 100 distinct closed coins required before profitability review'));
+      if (candidate) rules.append(el('p', `Current trial: ${candidate.report?.closed || 0} closes · recent validation sample P/L ${money(candidate.report?.net || 0)}.`), el('p', candidate.rule.hypothesis), el('p', 'Entry: ' + candidate.rule.entry), el('p', 'Exit: ' + candidate.rule.exit), el('small', candidate.status === 'proven' ? (state.strategy?.local_rule?.id === candidate.id ? 'Validated · adopted by Jarvis Trader' : 'Validated · available for adoption') : 'Testing · 100 distinct closed coins required before profitability review'));
       if (candidate) body.append(rules);
       const holdings = el('div', '', 'meme-scroll');
-      for (const holding of bot.holdings) {
+      for (const holding of trial.holdings) {
         const item = el('p', `${holding.symbol} · ${money(holding.mark ?? holding.estimated_value)}${holding.mark == null ? ' estimated' : ''} · ${displayTime(holding.opened)} ET`);
         if (holding.route_failure) item.append(el('small', ` · ${holding.route_failure.reason} Next check ${displayTime(holding.next_quote_at)} ET.`));
         holdings.append(item);
       }
-      if (!bot.holdings.length) holdings.append(el('p', 'No open holdings. Entries wait for the strategy signal and available quotes.', 'meme-muted'));
+      if (!trial.holdings.length) holdings.append(el('p', 'No open holdings. Entries wait for the strategy signal and available quotes.', 'meme-muted'));
       body.append(el('h3', 'Holdings'), holdings, el('h3', 'Trade history'));
-      const cached = labHistory.get(bot.id);
+      const cached = labHistory.get(labHistoryKey(bot.id, trialId));
       const history = el('div', '', 'meme-scroll');
       if (cached?.coins) history.append(...cached.coins.map(coinCard));
       if (cached?.coins?.length === 0) history.append(el('p', 'No completed positions yet.', 'meme-muted'));
       if (cached?.error) history.append(el('p', cached.error));
-      const button = el('button', cached?.loading ? 'Loading…' : !cached ? 'View history' : cached.closed !== bot.closed ? 'Refresh history' : cached?.next ? 'Load older trades' : 'View history');
+      const button = el('button', cached?.loading ? 'Loading…' : !cached ? 'View history' : cached.closed !== trial.closed ? 'Refresh history' : cached?.next ? 'Load older trades' : 'View history');
       button.type = 'button';
       button.disabled = !!cached?.loading;
-      button.hidden = cached?.closed === bot.closed && cached.next == null && !cached.error;
-      button.onclick = () => loadLabHistory(bot.id, !!cached?.next && cached.closed === bot.closed);
+      button.hidden = (!archived && !trialId) || (cached?.closed === trial.closed && cached.next == null && !cached.error);
+      button.onclick = () => loadLabHistory(bot.id, trialId, trial.closed, !!cached?.next && cached.closed === trial.closed);
       body.append(history, button);
       detail.append(summary, body);
       return detail;
