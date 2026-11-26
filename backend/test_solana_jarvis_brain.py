@@ -296,6 +296,40 @@ class BrainTests(unittest.TestCase):
             self.assertEqual(counts[key],expected)
         self.assertEqual(brain.provider_options([opts[0],opts[1],{}],sources),[])
 
+    def test_provider_request_schema_and_fail_closed_responses(self):
+        self.provider_episodes()
+        job=brain.build_job(api,NOW)
+        for index,(case,expected) in enumerate((('unsupported','http_400'),('refusal','provider_refused'),
+                                                ('incomplete','incomplete'))):
+            response=self.response({})
+            if case=='unsupported':response.status_code=400
+            elif case=='refusal':
+                response.json.return_value['output'][1]['content']=[{'type':'refusal','refusal':'private fixture'}]
+            else:response.json.return_value['status']='incomplete'
+            post=Mock(return_value=response)
+            plan,error=brain.research_job(api,job,NOW+index,post)
+            self.assertEqual((plan,error),(None,expected))
+            post.assert_called_once()
+            req=post.call_args.kwargs['json']
+            fmt=req['text']['format']
+            self.assertEqual((fmt['type'],fmt['strict'],req['tools'][0]['type']),('json_schema',True,'web_search'))
+            root=fmt['schema']
+            self.assertFalse(root['additionalProperties'])
+            options=root['properties']['provider_options']
+            self.assertEqual(options['maxItems'],3)
+            candidate=options['items']
+            self.assertFalse(candidate['additionalProperties'])
+            self.assertEqual(set(candidate['required']),set(candidate['properties']))
+            self.assertEqual(set(candidate['required']),{'name','price','quota','coverage','unknown','trial','source'})
+            self.assertEqual(set(candidate['properties']['name']['enum']),set(brain.PROVIDER_DOCS))
+            for key in set(candidate['required'])-{'name'}:
+                self.assertEqual(candidate['properties'][key],{'type':'string','pattern':'^.{1,500}$'})
+        post=Mock(return_value=self.response({}))
+        brain.research_job(api,{'kind':'strategy'},NOW+10,post)
+        self.assertNotIn('text',post.call_args.kwargs['json'])
+        with api.connection() as conn:
+            self.assertFalse(conn.execute('SELECT 1 FROM brain_mail').fetchone())
+
     def test_provider_parse_failure_is_private_and_preserves_six_hour_retry(self):
         self.provider_episodes()
         job=brain.build_job(api,NOW)
