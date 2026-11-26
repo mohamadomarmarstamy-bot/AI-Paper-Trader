@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 import database
 from day_trader_strategy import POLICY, VERSION, stamp
+import friday_rsi
 import friday_phase
 import friday_replay
 from friday_research import COHORT, classify, ledger_path
@@ -117,7 +118,7 @@ def advance(*, source=None, target=None, clock=time.time):
         raise ValueError('Friday requires a separate ledger')
     with closing(sqlite3.connect(path, timeout=2)) as db, db:
         db.row_factory = sqlite3.Row
-        db.executescript(SCHEMA + friday_replay.SCHEMA)
+        db.executescript(SCHEMA + friday_replay.SCHEMA + friday_rsi.SCHEMA)
         db.execute('BEGIN IMMEDIATE')
         decisions = {}
         def health(reason):
@@ -195,6 +196,7 @@ def advance(*, source=None, target=None, clock=time.time):
                         db.execute('INSERT INTO friday_trial_evidence VALUES(?,?,?,?,?,?)',
                                    (row['request_id'],newest['finished'],candidate['evidence'],row['decision_json'],
                                     alert['event_id'] if alert else None,alert['received'] if alert else None))
+                        friday_rsi.freeze(db,row['request_id'],now,chart)
                         admitted += 1
             return health('simulated_position_opened' if admitted else 'no_new_timely_matching_chart')
 
@@ -210,6 +212,7 @@ def status(path=None):
         db.execute('BEGIN')
         if not db.execute("SELECT 1 FROM sqlite_master WHERE name='friday_trial_health'").fetchone():
             return result
+        result['rsi_shadow']=friday_rsi.summary(db)
         health = db.execute('SELECT checked,reason FROM friday_trial_health WHERE id=1').fetchone()
         if health:
             result.update(health=health['reason'],checked=health['checked'])

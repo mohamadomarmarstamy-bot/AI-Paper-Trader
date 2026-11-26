@@ -42,5 +42,7 @@ class FridayHttpTests(unittest.TestCase):
             self.assertEqual(len(replay),4)
             self.assertTrue(all(r['reason']=='scanner_coverage_gap' for r in replay))
             self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()['trials']['rsi_shadow']['admissions'],0)
+            self.assertIn('Friday Breakout + RSI 55',(await client.get('/ai-friday')).text)
             self.assertFalse(response.json()['execution_enabled'])
             self.assertEqual((await client.get('/ai-friday/research')).json()['latest']['finished'], NOW)

@@ -107,13 +107,19 @@ def observe(payload, *, data_request, broker_read, feed, clock=time.time):
     frozen = clock()
     from day_trader_strategy import bars
     sessions = {}
-    for bar in bars(raw,observed_at=frozen):
+    completed_bars = bars(raw,observed_at=frozen)
+    for bar in completed_bars:
         dt = datetime.fromtimestamp(bar['t'],ZoneInfo('America/New_York'))
         if dt.date()<local.date() and dt.hour==9 and 30<=dt.minute<35:
             sessions.setdefault(dt.date(),[]).append(bar)
     volumes = [sum(b['v'] for b in sessions[d]) for d in sorted(sessions)
                if len(sessions[d])==5 and sessions[d][0]['t']%60==0]
     decision = evaluate(raw,quote,session_open=opened,session_close=closed,observed_at=frozen,opening_volumes=volumes)
+    # Attach point-in-time evidence only; the stock scanner's decision is unchanged.
+    from friday_research import COHORT
+    if symbol in COHORT and feed=='iex' and decision.get('status')=='evaluated':
+        from friday_rsi import measure
+        decision['friday_rsi']=measure(completed_bars,opened,frozen,decision['bar_as_of'])
     with closing(database.get_connection()) as conn:
         # One frozen set per symbol/session/minute, even across browser retries.
         conn.execute('BEGIN IMMEDIATE')
