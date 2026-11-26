@@ -87,6 +87,13 @@ def indicator_count(value):
                for field in ('rsi', 'volume_ratio'))
 
 
+def expired_after_failed_refresh(record, now):
+    """An expired indicator pair retained across an explicitly unsuccessful refresh."""
+    value = record.get('value')
+    return (record.get('status') in ('stale_candles','insufficient_history','invalid_chart','provider_error','rate_limited')
+            and isinstance(value,dict) and indicator_count(value)==2 and not chart_is_fresh(record,now))
+
+
 def choose_chart_record(previous, value, now):
     """Keep a valid chart when a refresh returns older/equally timed weaker evidence."""
     selected = {'at': now, 'value': value}
@@ -108,9 +115,11 @@ def chart_coverage(rows, records, now):
                             'provider_error', 'rate_limited'), 0)
     ready = {'rsi': 0, 'volume_ratio': 0}
     candle_ages = []
+    expired_after_failure = 0
     for row in rows:
         pair, evidence = records.get(row['mint'], (None, {}))
         record = evidence.get('chart', {}) if pair == row['pair'] else {}
+        expired_after_failure += int(expired_after_failed_refresh(record, now))
         if chart_is_fresh(record, now):
             value = record['value']
             finite = lambda field: type(value.get(field)) in (int, float) and math.isfinite(value[field])
@@ -133,6 +142,7 @@ def chart_coverage(rows, records, now):
             reason = 'not_sampled'
         counts[reason] += 1
     return {'eligible': len(rows), 'reasons': counts, 'fresh_indicator_counts': ready,
+            'expired_complete_after_failed_refresh': expired_after_failure,
             'oldest_accepted_candle_age_seconds': max(candle_ages, default=None)}
 
 POST_LOOKBACK = 3600

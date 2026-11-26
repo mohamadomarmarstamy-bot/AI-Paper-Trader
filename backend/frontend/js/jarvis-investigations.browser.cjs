@@ -22,7 +22,7 @@ const sample={
     {kind:'chart_data_gap',status:'needs_attention',opened:1795654329,last_error:'no_research_sources',
      plan:{provider_options:[{name:'Candidate feed',price:'Existing allowance',quota:'Fixture quota',coverage:'Exact pools',unknown:'Overlap',trial:'Compare matched pools'}],summary:'Long historical assessment',hypothesis:'Possible chart timing issue',checks:['Check timing'],
            applied_action:'monitor',sources:[{url:'https://docs.coingecko.com',title:'Chart docs'},{url:'javascript:alert(1)',title:'Unsafe link'}]},
-     evidence:{latest:{metrics:{chart_coverage:{reasons:{complete:3},eligible:39},queue:{oldest_wait:0}}}}},
+     evidence:{latest:{metrics:{chart_coverage:{reasons:{complete:3,stale_evidence:31,stale_candles:5},expired_complete_after_failed_refresh:2,eligible:39},queue:{oldest_wait:0}}}}},
     {kind:'engine_error',status:'resolved',opened:1795654129,resolved:1795654329}
   ],
   proposals:[{id:'abc',status:'waiting_slot',created:1795654329,data:{rule:{name:'Paper trial',hypothesis:'Paper only',entry:'A',exit:'B'}},
@@ -43,6 +43,8 @@ test('investigations summarize active work and preserve disclosures at phone and
     });
     await page.goto('https://jarvis.test/jarvis-test-bot/brain');
     await page.getByText('3 of 39 charts complete').waitFor();
+    await page.getByText('Expired cache 31 · Returned stale 5').waitFor();
+    await page.getByText('Previously complete, now expired after failed refresh: 2 (included above)').waitFor();
     await page.getByText('Queued · 0/100 distinct mints (first Jarvis paper entry per mint)').waitFor();
     assert.match(await page.locator('#sell-study').textContent(),/Only existing exit jobs/);
     assert.match(await page.locator('#sell-study').textContent(),/Many or all entries/);

@@ -115,6 +115,16 @@ function observations(parent,metrics){
   const complete=coverage?.reasons?.complete??metrics.complete, eligible=coverage?.eligible??metrics.eligible;
   const exit=metrics.queue?.oldest_wait??metrics.oldest_quote_wait;
   if(Number.isFinite(complete)&&Number.isFinite(eligible)&&eligible>0)list.append(node('li',complete+' of '+eligible+' charts complete'));
+  if(coverage?.reasons){
+    const r=coverage.reasons;
+    const causes=[['Expired cache',r.stale_evidence],['Returned stale',r.stale_candles],['Insufficient history',r.insufficient_history],
+      ['Warming',r.pool_warming],['Unsampled',r.not_sampled],['Zero volume baseline',r.zero_volume_baseline],
+      ['Partial indicators',r.partial_indicators],['Rate limited',r.rate_limited],['Invalid chart',r.invalid_chart],['Provider error',r.provider_error]];
+    const detail=causes.filter(([,count])=>count>0).map(([name,count])=>name+' '+count);
+    if(detail.length)list.append(node('li',detail.join(' · ')));
+    if(coverage.expired_complete_after_failed_refresh>0)list.append(node('li',
+      'Previously complete, now expired after failed refresh: '+coverage.expired_complete_after_failed_refresh+' (included above)'));
+  }
   if(Number.isFinite(exit))list.append(node('li','Oldest overdue paper exit check: '+Math.round(exit)+'s'));
   if(list.childElementCount)parent.append(list);
 }

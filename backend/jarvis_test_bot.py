@@ -1488,12 +1488,13 @@ def claim_research(conn, now):
             remaining = research.chart_fresh_for(record, now)
             value = record.get('value')
             complete = isinstance(value, dict) and research.indicator_count(value) == 2
-            discovery = eligible and not complete
+            renewable = complete and not research.expired_after_failed_refresh(record, now)
+            discovery = eligible and not renewable
             if local_held and remaining <= 30:
                 tier = 0
             elif discovery and explore and now >= explore['due']:
                 tier = 1
-            elif eligible and complete and remaining <= interval:
+            elif eligible and renewable and remaining <= interval:
                 tier = 2
             elif discovery:
                 tier = 3

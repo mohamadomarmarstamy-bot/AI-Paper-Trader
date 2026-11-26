@@ -93,6 +93,30 @@ class JarvisResearchTests(unittest.TestCase):
         self.assertEqual(set(called), set(rows))
         self.assertEqual(len(called), 7)  # The early call did not increase request rate.
 
+    def test_expired_last_good_chart_is_not_a_successful_latest_refresh(self):
+        rows = self.prepare_chart_watch(2)
+        failed, renewable = rows
+        with jarvis.connection() as conn, conn:
+            for mint, status, attempt in [(failed, 'stale_candles', NOW-130),
+                                          (renewable, 'ready', NOW-100)]:
+                conn.execute('INSERT INTO research VALUES (?,?,?,?)',(mint,PAIR,attempt,json.dumps({
+                    'chart':{'at':NOW-190 if mint==failed else attempt,'attempt_at':attempt,'status':status,
+                             'value':{'closed_at':NOW-190,'rsi':50,'volume_ratio':2}}})))
+        calls=[]
+        def chart(row,now):
+            calls.append(row['mint'])
+            if row['mint']==failed:
+                raise research.ChartUnavailable('stale_candles',now-230)
+            return {'closed_at':now,'rsi':50,'volume_ratio':2}
+        jarvis.research_tick(clock=lambda:NOW,chart=chart,social=lambda *_:None)
+        with jarvis.connection() as conn:
+            coverage=jarvis.chart_coverage(conn,jarvis.read(conn)[0],NOW)
+        self.assertEqual((coverage['reasons']['complete'],coverage['eligible']),(1,2))
+        self.assertEqual(coverage['expired_complete_after_failed_refresh'],1)
+        self.assertEqual(calls,[renewable])
+        jarvis.research_tick(clock=lambda:NOW+6,chart=chart,social=lambda *_:None)
+        self.assertEqual(calls,[renewable,failed])
+
     def test_healthy_holding_does_not_starve_uncovered_entry(self):
         rows = self.prepare_chart_watch(2)
         held, uncovered = rows
