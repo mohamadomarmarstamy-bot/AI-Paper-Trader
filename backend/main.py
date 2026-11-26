@@ -3157,6 +3157,8 @@ def fetch_alpaca_market_calendar_today() -> dict[str, Any] | None:
         )
 
     _alpaca_market_calendar_today_date = today
+    from friday_phase import remember_calendar
+    remember_calendar(entry)
     _alpaca_market_calendar_today_entry = dict(entry)
     _alpaca_market_calendar_today_cached = True
 

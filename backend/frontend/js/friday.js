@@ -11,7 +11,7 @@ async function refresh(method) {
     try {
         const response = await fetch('/ai-friday/research', {method});
         if (!response.ok) throw new Error();
-        const {latest, message, passive_capture, trials} = await response.json();
+        const {latest, message, passive_capture, trials, extended} = await response.json();
         element('message').textContent = message || '';
         element('coverage').textContent = latest
             ? `${latest.screened} of ${latest.universe} supported symbols screened. Scan completed ${new Date(latest.finished * 1000).toLocaleString()}; reviewed ${new Date(latest.reviewed * 1000).toLocaleString()}.`
@@ -28,6 +28,8 @@ async function refresh(method) {
             open_position_cap: 'Admissions resume after an owned position reconciles.'
         };
         element('remedy').textContent = remedies[trials.health] || '';
+        element('phase-health').textContent = extended.health ? extended.health.phase.replaceAll('_',' ') + ' · ' + extended.health.reason.replaceAll('_',' ') + ' · ' + new Date(extended.health.checked*1000).toLocaleString() : 'Extended-hours capture awaits its first cycle.';
+        items('phase-results', extended.probes.length ? extended.probes.map(p => p.symbol + ' · ' + p.phase.replaceAll('_',' ') + ' · ' + p.state + (p.net === null ? '' : ' · modeled net $' + p.net.toFixed(3))) : ['No extended-hours probes recorded.']);
         items('positions', trials.positions.length ? trials.positions.map(p => p.symbol + ' · ' + p.shares + ' modeled shares · regular session') : ['No open simulated positions.']);
         items('outcomes', trials.history.length ? trials.history.map(p => p.symbol + ' · ' + p.source_group.replaceAll('_', ' ') + ' · ' + p.outcome.scenarios.map(s =>
             s.bps_per_side + ' bps/side: $' + s.modeled_pnl_usd.toFixed(2) + ' vs matched hold $' + s.matched_hold_pnl_usd.toFixed(2)).join(' / ')) : ['No closed simulations.']);
