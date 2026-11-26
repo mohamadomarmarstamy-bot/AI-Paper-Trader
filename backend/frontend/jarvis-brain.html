@@ -1,14 +1,201 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Jarvis · System investigations</title><link rel="stylesheet" href="/meme-coins.css"><style>
-body{background:#0b1020;color:#e2e8f0;font-family:system-ui;margin:0}main{max-width:1050px;margin:auto;padding:28px 20px}a{color:#a5e4d6}header{display:flex;align-items:center;justify-content:space-between;gap:18px}h1{font-size:1.8rem}h2{font-size:1.15rem}p,small{line-height:1.6}small,.muted{color:#a8b5ca}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}.card,article{border:1px solid #ffffff20;border-radius:14px;background:#ffffff05;padding:20px;margin-bottom:16px}.value{font-size:1.7rem;font-weight:650}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#070b16;padding:16px;border-radius:8px;font-size:.8rem}button{background:#18384a;color:#d3fff5;border:1px solid #a5e4d650;border-radius:8px;padding:10px 15px;cursor:pointer}summary{cursor:pointer}ul{padding-left:20px}#error{color:#fbbf24}
-</style></head><body><main><header><div><small>JARVIS · PAPER RESEARCH</small><h1>System investigations</h1></div><a href="/jarvis-test-bot#health">Back to Jarvis</a></header><p class="muted">Investigations, verified recovery, and new strategy hypotheses. Eligible paper helper fixes run through isolated regression tests, the existing test suite, and live health checks. Other code changes stay in review.</p><p id="error" role="status"></p><div class="cards"><section class="card"><small>Investigator</small><div class="value" id="state">Loading…</div><p id="call" class="muted"></p></section><section class="card"><small>Monthly AI allowance</small><div class="value" id="budget">—</div><p class="muted">Conservative reservations include failed requests. This is separate from hosting, market data, local searches and other AI clients.</p></section></div><header><h2>Incidents</h2><button id="refresh">Refresh</button></header><div id="incidents"></div><h2>Improvement backlog</h2><div id="improvement-tasks"></div><h2>Repair outcomes</h2><div id="repair-runs"></div><h2>Repair memory</h2><div id="repair-lessons"></div><h2>Strategy and code proposals</h2><p class="muted">Strategies enter an available paper slot and must meet the existing forward-test criteria. Automatic repairs cannot change live trading, accounting, risk constants, budgets, the runner, or its tests.</p><div id="proposals"></div></main><script>
-const node=(tag,text,cls)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el};
-const stamp=n=>n?new Date(n*1000).toLocaleString():'—';
-function sourceLinks(parent,sources){for(const s of sources||[]){try{const u=new URL(s.url);if(u.protocol!=='https:')continue;const p=node('p');const a=node('a',s.title||u.hostname);a.href=u.href;a.rel='noopener noreferrer';a.target='_blank';p.append(a);parent.append(p)}catch{}}}
-async function refresh(){try{const r=await fetch('/jarvis-test-bot/brain/status',{cache:'no-store'});if(!r.ok)throw Error('Unable to load investigations. Check your sign-in and try again.');const d=await r.json();document.getElementById('state').textContent=d.enabled?(d.cloud_configured?'Monitoring':'Cloud key needed'):'Paused';document.getElementById('budget').textContent='$'+d.reserved_this_month_usd.toFixed(2)+' / $'+d.monthly_budget_usd.toFixed(2);document.getElementById('call').textContent=(d.paper_repair?.enabled?(d.paper_repair.runner_recent?'Isolated repair runner connected. ':'Waiting for isolated runner. '):'Automatic code repair paused. ')+(d.last_call.at?'Last cloud review: '+stamp(d.last_call.at)+' · '+d.last_call.status:'Waiting for the first cloud review.');
-const box=document.getElementById('incidents');box.replaceChildren();if(!d.incidents.length)box.append(node('p','No incidents recorded.','muted'));for(const i of d.incidents){const a=node('article');a.append(node('h2',i.kind.replaceAll('_',' ')+' · '+i.status.replaceAll('_',' ')),node('small','Opened '+stamp(i.opened)+(i.resolved?' · Recovered '+stamp(i.resolved):'')));const p=i.plan||{};if(p.summary)a.append(node('p',p.summary));if(p.hypothesis)a.append(node('p',p.hypothesis,'muted'));if(i.evidence?.latest?.diagnosis?.observed_facts?.length)a.append(node('p','Observed: '+i.evidence.latest.diagnosis.observed_facts.map(s=>s.replaceAll('_',' ')).join(' · '),'muted'));if(p.applied_action)a.append(node('p','Applied action: '+p.applied_action.replaceAll('_',' ')));if(i.last_error)a.append(node('p','Cloud review: '+i.last_error.replaceAll('_',' '),'muted'));if(p.checks?.length){const ul=node('ul');for(const c of p.checks)ul.append(node('li',c));a.append(ul)}sourceLinks(a,p.sources);box.append(a)}
-const tasks=document.getElementById('improvement-tasks');tasks.replaceChildren();const backlog=d.improvement_backlog||{};if(!backlog.tasks?.length)tasks.append(node('p','No confirmed improvement goals recorded yet.','muted'));for(const task of backlog.tasks||[]){const a=node('article');a.append(node('h2',task.kind.replaceAll('_',' ')+' · '+task.status.replaceAll('_',' ')),node('p',task.goal),node('small','Priority '+task.priority+' · Updated '+stamp(task.updated)+' · Recurrences '+task.recurrences));tasks.append(a)}for(const check of backlog.rechecks||[])tasks.append(node('p','Retained repair check: '+check.status.replaceAll('_',' ')+' · '+stamp(check.checked),'muted'));
-const repairs=document.getElementById('repair-runs');repairs.replaceChildren();if(!d.paper_repair?.runs?.length)repairs.append(node('p','No production repair attempts yet.','muted'));for(const r of d.paper_repair?.runs||[]){const a=node('article'),v=r.report||{},b=v.baseline||{},after=v.after||{};a.append(node('h2',r.status.replaceAll('_',' ')),node('small',stamp(r.started)));a.append(node('p','Exit delay: '+Math.round(b.oldest_quote_wait||0)+'s → '+(after.oldest_quote_wait===undefined?'not verified':Math.round(after.oldest_quote_wait)+'s')+' · Complete chart candidates: '+(b.complete_candidates??'—')+' → '+(after.complete_candidates??'not verified')));if(v.checks)a.append(node('p','Regression: '+(v.checks.regression_passed?'passed':'not verified')+' · Existing tests: '+(v.checks.suite_passed?'passed':'not verified')+' · Live goal: '+(v.checks.canary_passed?'passed':'not verified'),'muted'));repairs.append(a)}
-const lessons=document.getElementById('repair-lessons');lessons.replaceChildren();const history=d.paper_repair?.learning?.lessons||[];if(!history.length)lessons.append(node('p','No verified repair outcomes to learn from yet.','muted'));for(const lesson of history){const a=node('article');a.append(node('h2',lesson.failure_or_verification_stage.replaceAll('_',' ')),node('small',stamp(lesson.at)),node('p',lesson.file+' · '+lesson.function,'muted'));lessons.append(a)}
-const proposals=document.getElementById('proposals');proposals.replaceChildren();if(!d.proposals.length)proposals.append(node('p','No proposals yet.','muted'));for(const p of d.proposals){const a=node('article'),v=p.data||{};a.append(node('h2',(v.rule?.name||v.file||p.kind)+' · '+p.status.replaceAll('_',' ')),node('small',stamp(p.created)));if(v.rule){const experiment=p.report?.experiment;if(experiment)a.append(node('p','Research family: '+experiment.family.replaceAll('_',' ')+' · '+(experiment.control_id?'Saved reference · '+experiment.changed_expressions.join(' + ')+' changed':'New hypothesis')+(experiment.admission==='diversity_blocked'?' · Similar rules already occupy this research space':''),'muted'));const scout=d.queued_scouting?.find(s=>s.id===p.id);if(scout)a.append(node('p','Scouting: '+scout.complete+'/'+scout.distinct_coin_pools+' coin/pools had complete data; '+scout.matched+' ever matched. Signal overlap: '+(scout.measured_signal_overlap===null?'unknown':Math.round(100*scout.measured_signal_overlap)+'%')+'. These are observations, not trades or profit.','muted'));a.append(node('p',v.rule.hypothesis),node('pre','Entry: '+v.rule.entry+'\nExit: '+v.rule.exit));sourceLinks(a,v.sources)}if(v.diff){const f=node('details');f.append(node('summary','Review proposed code change'),node('pre',v.diff));a.append(f)}proposals.append(a)}document.getElementById('error').textContent='';}catch(e){document.getElementById('error').textContent=e.message}}
-document.getElementById('refresh').addEventListener('click',refresh);refresh();setInterval(refresh,60000);
-</script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Jarvis · System investigations</title>
+  <link rel="stylesheet" href="/meme-coins.css">
+  <style>
+    :root{color-scheme:dark}
+    body{background:#0b1020;color:#e5edf7;font:15px/1.55 system-ui;margin:0}
+    main{width:min(100%,56rem);margin:auto;padding:24px clamp(14px,4vw,30px);box-sizing:border-box}
+    header,.row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+    main>header{margin-bottom:12px} h1,h2,h3,p{margin:0} h1{font-size:clamp(1.5rem,5vw,2.1rem);line-height:1.2}
+    h2{font-size:1.22rem} h3{font-size:1rem} p{margin-block:7px} small,.muted,.meta{color:#abb9cd}
+    .eyebrow{font-size:.73rem;letter-spacing:.11em;font-weight:700;color:#92d5c7}
+    .intro{max-width:64ch;margin:0 0 18px}
+    a{color:#a5e4d6} button{background:#173449;color:#e5fff8;border:1px solid #64888d;border-radius:8px;padding:8px 14px;cursor:pointer;font:inherit}
+    a:focus-visible,summary:focus-visible,button:focus-visible{outline:2px solid #94dccc;outline-offset:3px}
+    .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,16rem),1fr));gap:12px}
+    .card{border:1px solid #29364d;border-radius:12px;background:#121a2a;padding:14px 16px;min-width:0}
+    .list{display:grid;gap:9px}.value{font-size:1.27rem;font-weight:700;margin-top:4px}
+    .section{margin-top:24px}.section>header,.section>h2{margin-bottom:5px}.section>.muted{margin-bottom:10px}
+    .meta{font-size:.81rem;display:block;margin-top:6px}
+    .badge{font-size:.77rem;font-weight:650;padding:2px 8px;border-radius:20px;background:#20334b;color:#b8dbff}
+    .badge.attention{background:#44331d;color:#ffda97}.badge.done{background:#174034;color:#a7ecd6}
+    details{margin-top:10px;overflow-wrap:anywhere} summary{cursor:pointer;color:#b9d9ef;font-weight:600;padding:5px 0}
+    details.section{padding-top:10px;border-top:1px solid #29364d}
+    ul{padding-left:1.25rem;margin:7px 0}.chips{display:flex;flex-wrap:wrap;gap:6px;padding:0;list-style:none}
+    .chips li{background:#1b3049;border-radius:6px;padding:3px 8px;font-size:.82rem}
+    pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#090f1e;padding:12px;border-radius:8px;font-size:.82rem}
+    #error{color:#ffd28f} #error:empty{display:none}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><p class="eyebrow">JARVIS · PAPER RESEARCH</p><h1>System investigations</h1></div>
+    <div class="row"><a href="/jarvis-test-bot#health">Back to Jarvis</a><button id="refresh" type="button">Refresh</button></div>
+  </header>
+  <p class="intro muted">See what Jarvis is monitoring, what needs attention, and what has recovered.</p>
+  <p id="error" role="status"></p>
+  <div class="stats">
+    <section class="card"><small>Paper monitoring</small><div class="value" id="state">Loading…</div><p id="runner" class="muted"></p><small id="call"></small></section>
+    <section class="card"><small>AI research budget · this month</small><div class="value" id="budget">—</div><p class="muted">Reserved by Jarvis, not a bill. Includes failed calls. Hosting and market data are separate.</p></section>
+  </div>
+  <section class="section" aria-labelledby="work-title">
+    <h2 id="work-title">Improvement queue</h2>
+    <p class="muted">Paper-system issues Jarvis has flagged and is tracking, highest priority first. This is not a trade queue or a list of completed fixes.</p>
+    <div id="improvement-tasks" class="list"></div>
+    <details id="past-improvements" hidden><summary id="improvement-history-label">Observed recoveries</summary><div id="improvement-history" class="list"></div></details>
+  </section>
+  <section class="section" aria-labelledby="incident-title">
+    <h2 id="incident-title">Active incidents</h2>
+    <p class="muted">Open alerts and what Jarvis has observed.</p>
+    <div id="incidents" class="list"></div>
+    <details id="past-incidents" hidden><summary id="incident-history-label">Resolved incidents</summary><div id="incident-history" class="list"></div></details>
+  </section>
+  <details class="section"><summary>Repair history and lessons</summary>
+    <p class="muted">Only eligible paper-system repairs can run automatically. Other code changes require review.</p>
+    <h3>Repair outcomes</h3><div id="repair-runs" class="list"></div>
+    <h3>Follow-up checks</h3><div id="rechecks"></div>
+    <h3>Lessons from repairs</h3><div id="repair-lessons" class="list"></div>
+  </details>
+  <details class="section"><summary>Strategy and code proposals</summary>
+    <p class="muted">Paper strategy ideas wait for usable data and a safe slot. A proposal is not an approved strategy or code change.</p><div id="proposals" class="list"></div>
+  </details>
+</main>
+<script>
+const byId=id=>document.getElementById(id);
+const node=(tag,value,cls)=>{const el=document.createElement(tag);if(value!==undefined)el.textContent=value;if(cls)el.className=cls;return el};
+const stamp=n=>Number.isFinite(n)&&n>0?new Date(n*1000).toLocaleString():'—';
+const human=s=>typeof s==='string'&&s?s.replaceAll('_',' ').replace(/^./,x=>x.toUpperCase()):'Unknown';
+const label=(labels,key)=>Object.hasOwn(labels,key)?labels[key]:human(key);
+const kinds={
+  chart_data_gap:'Chart data gaps',data_coverage:'Low indicator coverage',exit_backlog:'Delayed paper exits',
+  worker_stalled:'Paper worker delay',engine_error:'Paper engine error'
+};
+const phases={
+  queued:'Queued',investigating:'Investigating',measuring:'Checking results',
+  observed_recovery:'Recovery observed',needs_attention:'Needs attention',resolved:'Resolved'
+};
+const actions={monitor:'Monitoring only',pause_entries:'Paused new paper entries',cooldown_chart:'Slowed chart requests'};
+const reviews={completed:'Completed',no_research_sources:'No usable sources returned',rate_limited:'Provider rate limit',authentication_or_access:'Provider access issue',invalid_or_unavailable:'Response could not be used'};
+const facts={
+  provider_returned_stale_candles:'Provider returned old candles',cached_chart_evidence_expired:'Cached chart data expired',
+  low_complete_indicator_coverage:'Few charts have all indicators',no_complete_candidate_indicators:'No chart had all indicators',
+  volume_ratio_undefined_zero_baseline:'No volume baseline',some_pools_lack_completed_history:'Some pools need more history',
+  primary_rate_limit_observed:'Chart provider rate limit',fallback_allowance_exhausted:'Backup data allowance unavailable'
+};
+function sourceLinks(parent,sources){
+  if(!sources?.length)return;
+  const list=node('ul');
+  for(const s of sources){try{const u=new URL(s.url);if(u.protocol!=='https:')continue;
+    const item=node('li'), a=node('a',s.title||u.hostname);a.href=u.href;a.rel='noopener noreferrer';a.target='_blank';item.append(a);list.append(item);
+  }catch{}}
+  if(list.childElementCount)parent.append(node('h3','Sources'),list);
+}
+function titleRow(title,status){
+  const row=node('div',undefined,'row');
+  const tone=['needs_attention'].includes(status)?' attention':['observed_recovery','resolved'].includes(status)?' done':'';
+  row.append(node('h3',title),node('span',label(phases,status),'badge'+tone));return row;
+}
+function observations(parent,metrics){
+  if(!metrics)return;
+  const list=node('ul',undefined,'chips');
+  const coverage=metrics.chart_coverage;
+  const complete=coverage?.reasons?.complete??metrics.complete, eligible=coverage?.eligible??metrics.eligible;
+  const exit=metrics.queue?.oldest_wait??metrics.oldest_quote_wait;
+  if(Number.isFinite(complete)&&Number.isFinite(eligible)&&eligible>0)list.append(node('li',complete+' of '+eligible+' charts complete'));
+  if(Number.isFinite(exit))list.append(node('li','Oldest overdue paper exit check: '+Math.round(exit)+'s'));
+  if(list.childElementCount)parent.append(list);
+}
+function incident(i){
+  const a=node('article',undefined,'card'), plan=i.plan||{}, latest=i.evidence?.latest;
+  a.append(titleRow(label(kinds,i.kind),i.status),node('small','Opened '+stamp(i.opened)+(i.resolved?' · Recovered '+stamp(i.resolved):''),'meta'));
+  observations(a,latest?.metrics);
+  const observed=latest?.diagnosis?.observed_facts||[];
+  if(observed.length)a.append(node('p',observed.slice(0,3).map(s=>label(facts,s)).join(' · '),'muted'));
+  if(plan.applied_action)a.append(node('p','Response: '+label(actions,plan.applied_action)));
+  if(i.last_error)a.append(node('p','Cloud review: '+label(reviews,i.last_error),'muted'));
+  if(plan.summary||plan.hypothesis||plan.checks?.length||plan.sources?.length||observed.length>3){
+    const details=node('details');
+    details.append(node('summary','Investigation details'));
+    if(plan.summary)details.append(node('h3','Assessment at the time'),node('p',plan.summary));
+    if(plan.hypothesis)details.append(node('h3','Possible cause'),node('p',plan.hypothesis,'muted'));
+    if(observed.length>3)details.append(node('p','All observations: '+observed.map(s=>label(facts,s)).join(' · '),'muted'));
+    if(plan.checks?.length){const ul=node('ul');for(const c of plan.checks)ul.append(node('li',c));details.append(node('h3','Suggested checks'),ul);}
+    sourceLinks(details,plan.sources);a.append(details);
+  }
+  return a;
+}
+function improvement(t,recovered){
+  const a=node('article',undefined,'card');a.append(titleRow(label(kinds,t.kind),t.status),node('p',t.goal));
+  const recurrences=t.recurrences||0;
+  a.append(node('small',(recovered?'Recovery observed ':'Updated ')+stamp(t.updated)+(recurrences?' · Returned '+recurrences+' '+(recurrences===1?'time':'times'):''),'meta'));
+  if(recovered)a.append(node('p','The metric recovered. This does not establish what caused the recovery.','muted'));
+  return a;
+}
+function updateList(id,items,render,empty){
+  byId(id).replaceChildren(...(items.length?items.map(render):[node('p',empty,'muted')]));
+}
+function updateHistory(id,list,labelId,items,render,title){
+  byId(id).hidden=!items.length;byId(labelId).textContent=title+' ('+items.length+')';
+  byId(list).replaceChildren(...items.map(render));
+}
+function render(d){
+  byId('state').textContent=d.enabled?'Monitoring':'Paused';
+  const repair=d.paper_repair||{}, call=d.last_call||{};
+  byId('runner').textContent=!repair.enabled?'Automatic repairs paused.':repair.runner_recent?'Repair worker checked in recently.':repair.runner_seen?'Repair worker check-in overdue.':'No repair worker check-in yet.';
+  byId('call').textContent=!d.cloud_configured?'Cloud research isn’t configured.':call.at?'Last cloud review: '+stamp(call.at)+' · '+label(reviews,call.status):'No cloud review recorded yet.';
+  const money=n=>Number.isFinite(n)?'$'+n.toFixed(2):'—';
+  byId('budget').textContent=money(d.reserved_this_month_usd)+' / '+money(d.monthly_budget_usd);
+  const all=d.incidents||[], tasks=d.improvement_backlog?.tasks||[];
+  updateList('incidents',all.filter(i=>!i.resolved&&i.status!=='resolved'),incident,'No active incidents.');
+  updateHistory('past-incidents','incident-history','incident-history-label',all.filter(i=>i.resolved||i.status==='resolved'),incident,'Resolved incidents');
+  updateList('improvement-tasks',tasks.filter(t=>t.status!=='observed_recovery'),t=>improvement(t,false),'No open improvement items.');
+  updateHistory('past-improvements','improvement-history','improvement-history-label',tasks.filter(t=>t.status==='observed_recovery'),t=>improvement(t,true),'Observed recoveries');
+  updateList('repair-runs',repair.runs||[],r=>{
+    const a=node('article',undefined,'card'), v=r.report||{}, before=v.baseline||{}, after=v.after||{};
+    a.append(node('h3',human(r.status)),node('small',stamp(r.started),'meta'));
+    const measurement=(n,unit='')=>Number.isFinite(n)?Math.round(n)+unit:'Not measured';
+    a.append(node('p','Oldest exit check: '+measurement(before.oldest_quote_wait,'s')+' → '+measurement(after.oldest_quote_wait,'s')));
+    a.append(node('p','Complete charts: '+measurement(before.complete_candidates)+' → '+measurement(after.complete_candidates),'muted'));
+    if(v.checks)a.append(node('p','Regression test: '+(v.checks.regression_passed?'passed':'not verified')+' · Existing tests: '+(v.checks.suite_passed?'passed':'not verified')+' · Live goal: '+(v.checks.canary_passed?'verified':'not verified'),'muted'));
+    return a;
+  },'No production repair attempts recorded.');
+  updateList('rechecks',d.improvement_backlog?.rechecks||[],c=>node('p',human(c.status)+' · '+stamp(c.checked),'muted'),'No repair follow-up checks recorded.');
+  updateList('repair-lessons',repair.learning?.lessons||[],r=>{
+    const a=node('article',undefined,'card');a.append(node('h3',human(r.failure_or_verification_stage)),node('small',stamp(r.at),'meta'),node('p',[r.file,r.function].filter(Boolean).join(' · '),'muted'));return a;
+  },'No repair lessons recorded.');
+  updateList('proposals',d.proposals||[],p=>{
+    const a=node('article',undefined,'card'), v=p.data||{};
+    a.append(titleRow(v.rule?.name||v.file||human(p.kind),p.status),node('small',stamp(p.created),'meta'));
+    const check=p.report?.admission_check;
+    if(check?.reason)a.append(node('p','Waiting reason: '+human(check.reason),'muted'));
+    if(v.rule){
+      a.append(node('p',v.rule.hypothesis));
+      const e=p.report?.experiment,s=d.queued_scouting?.find(s=>s.id===p.id);
+      if(e?.family)a.append(node('small','Research family: '+human(e.family),'meta'));
+      if(s)a.append(node('p','Data check: '+(s.complete_coins??s.complete)+' with complete inputs; '+(s.matched_coins??s.matched)+' matched. These are not trades.','muted'));
+      const f=node('details');f.append(node('summary','Strategy rules and sources'),node('pre','Entry: '+v.rule.entry+'\nExit: '+v.rule.exit));sourceLinks(f,v.sources);a.append(f);
+    }
+    if(v.diff){const f=node('details');f.append(node('summary','Proposed code change'),node('pre',v.diff));a.append(f);}
+    return a;
+  },'No proposals recorded.');
+}
+let busy=false;
+async function refresh(){
+  if(busy)return;
+  busy=true;byId('refresh').disabled=true;
+  try{
+    const r=await fetch('/jarvis-test-bot/brain/status',{cache:'no-store'});
+    if(!r.ok)throw Error();
+    render(await r.json());byId('error').textContent='';
+  }catch{byId('error').textContent='Couldn’t load the latest status. Try refreshing or sign back in.';}
+  finally{busy=false;byId('refresh').disabled=false;}
+}
+byId('refresh').addEventListener('click',refresh);refresh();setInterval(refresh,60000);
+</script>
+</body>
+</html>
