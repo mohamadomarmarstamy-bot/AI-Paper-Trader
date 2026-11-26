@@ -7,6 +7,7 @@ import os
 
 import solana_http
 import jarvis_research as research
+import jarvis_fallback_score as scorecard
 import jarvis_local_lab as local_lab
 
 URL='https://graph.codex.io/graphql'
@@ -22,7 +23,7 @@ CREATE TABLE IF NOT EXISTS codex_control(id INTEGER PRIMARY KEY CHECK(id=1),bloc
 OUTCOME_SCHEMA='''
 CREATE TABLE IF NOT EXISTS codex_outcomes(id INTEGER PRIMARY KEY,at REAL NOT NULL,complete_rules INTEGER NOT NULL,matching_rules INTEGER NOT NULL);
 '''
-SCHEMA += OUTCOME_SCHEMA
+SCHEMA += OUTCOME_SCHEMA + scorecard.SCHEMA
 META='''query JarvisPool($id:String!){pairMetadata(pairId:$id){id networkId token0{address networkId} token1{address networkId}}}'''
 BARS='''query JarvisBars($id:String!,$start:Int!,$end:Int!,$side:QuoteToken!){getBars(symbol:$id,symbolType:POOL,quoteToken:$side,currencyCode:"USD",resolution:"1",from:$start,to:$end,countback:30,removeEmptyBars:false){s t o h l c buyVolume sellVolume pair{address networkId token0 token1}}}'''
 
@@ -38,7 +39,7 @@ def hourly_allowance(hour):
 def mode():return os.getenv('JARVIS_CODEX_MODE','trial').strip().lower()
 
 
-def reserve(api,now,units):
+def reserve(api,now,units,score_id=None):
     dt=datetime.fromtimestamp(now,timezone.utc)
     day,month=dt.strftime('%Y-%m-%d'),dt.strftime('%Y-%m')
     with api.connection() as conn,conn:
@@ -52,11 +53,13 @@ def reserve(api,now,units):
         if daily+units>DAILY_CU_LIMIT or monthly+units>MONTHLY_CU_LIMIT:raise Unavailable('quota_reached')
         if mode()=='trial' and conn.execute('SELECT count(*) FROM codex_calls').fetchone()[0]>=6:
             raise Unavailable('trial_complete')
+        if score_id is not None:
+            conn.execute('UPDATE fallback_scores SET reserved=reserved+? WHERE id=?',(units,score_id))
         conn.execute('INSERT INTO codex_calls(at,day,month,reserved) VALUES (?,?,?,?)',(now,day,month,units))
 
 
-def request(api,query,variables,units,clock,post):
-    reserve(api,clock(),units)
+def request(api,query,variables,units,clock,post,score_id=None):
+    reserve(api,clock(),units,score_id)
     key=os.getenv('JARVIS_CODEX_API_KEY','').strip()
     try:
         response=post(URL,json={'query':query,'variables':variables},headers={'Authorization':key,'Content-Type':'application/json'},timeout=5,allow_redirects=False)
@@ -112,7 +115,7 @@ def parse_bars(data,row,addresses,now):
     return value
 
 
-def attempt(api,row,*,clock,post=solana_http.post):
+def attempt(api,row,*,clock,post=solana_http.post,score_id=None):
     if not os.getenv('JARVIS_CODEX_API_KEY','').strip() or mode() not in ('trial','fallback'):return None
     now=clock()
     if row.get('monitor_only') or research.pool_warming(row) or not all(isinstance(row.get(k),str) and research.ADDRESS.fullmatch(row[k]) for k in ('mint','pair')):return None
@@ -122,10 +125,10 @@ def attempt(api,row,*,clock,post=solana_http.post):
         if mode()=='trial' and conn.execute('SELECT count(*) FROM codex_samples').fetchone()[0]>=3:return None
     value=None
     try:
-        data=request(api,META,{'id':row['pair']+':'+str(NETWORK)},11,clock,post)
+        data=request(api,META,{'id':row['pair']+':'+str(NETWORK)},11,clock,post,score_id)
         side,addresses=parse_metadata(data,row)
         end=int(clock()-5)//60*60
-        data=request(api,BARS,{'id':row['pair']+':'+str(NETWORK),'start':end-30*60,'end':end,'side':side},5,clock,post)
+        data=request(api,BARS,{'id':row['pair']+':'+str(NETWORK),'start':end-30*60,'end':end,'side':side},5,clock,post,score_id)
         value=parse_bars(data,row,addresses,clock());status='validated'
     except Unavailable as error:status=error.status
     with api.connection() as conn,conn:
@@ -196,6 +199,7 @@ def tick(api,*,clock):
     if not os.getenv('JARVIS_CODEX_API_KEY','').strip() or mode() not in ('trial','fallback'):return
     now=clock()
     with api.connection() as conn,conn:
+        conn.execute('BEGIN IMMEDIATE')
         state,_=api.read(conn)
         if not state['enabled'] or api.backlog.paused(state,now) or (state.get('entry_catchup_pause') or {}).get('active'):return
         control=conn.execute('SELECT blocked_until FROM codex_control WHERE id=1').fetchone()
@@ -225,16 +229,19 @@ def tick(api,*,clock):
         if not candidates:return
         row,slots=max(candidates,key=lambda c:(len(c[1]),c[0].get('volume_m5_usd',0),c[0].get('liquidity_usd',0),c[0]['first']))
         conn.execute("INSERT OR REPLACE INTO research_tasks VALUES ('codex-priority',?)",(now+60,))
-    value=attempt(api,row,clock=clock)
-    if value is None:return
+        score_id=scorecard.start(conn,row,now) if mode()=='fallback' else None
+    value=attempt(api,row,clock=clock,score_id=score_id)
+    if value is None and score_id is None:return
     at=clock()
     with api.connection() as conn,conn:
         conn.execute('BEGIN IMMEDIATE')
         current,_=api.read(conn)
         current_row=current['watch'].get(row['mint'])
-        if not current_row or current_row['pair']!=row['pair']:return
-        current_slots=blocked_rules(api,conn,current,current_row,at)
-        if not current_slots:return
+        same_episode = current_row and current_row['pair']==row['pair'] and current_row['first']==row['first']
+        current_slots=blocked_rules(api,conn,current,current_row,at) if value is not None and same_episode else []
+        if not current_slots:
+            scorecard.finish(conn,current,score_id,at,False,api.ENTRY_WINDOW)
+            return
         full=local_lab.observations(current_row,{'chart':value})
         complete=sum(all(type(full.get(n.id)) in (int,float) and math.isfinite(full[n.id])
                      for n in ast.walk(local_lab.parse(current['local_rules'][slot]['entry'])) if isinstance(n,ast.Name)) for slot in current_slots)
@@ -243,6 +250,7 @@ def tick(api,*,clock):
         evidence=json.loads(existing['evidence']) if existing else {}
         evidence['chart']={'at':at,'value':value,'attempt_at':at,'status':'ready','next_attempt':at+research.CHART_REFRESH}
         conn.execute('INSERT OR REPLACE INTO research VALUES (?,?,?,?)',(row['mint'],row['pair'],at,json.dumps(evidence)))
+        scorecard.finish(conn,current,score_id,at,True,api.ENTRY_WINDOW)
         conn.execute('INSERT INTO codex_outcomes(at,complete_rules,matching_rules) VALUES (?,?,?)',(at,complete,matching))
         conn.execute('DELETE FROM codex_outcomes WHERE at<?',(at-30*86400,))
 

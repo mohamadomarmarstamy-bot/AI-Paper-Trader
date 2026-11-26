@@ -49,6 +49,10 @@
     <div id="improvement-tasks" class="list"></div>
     <details id="past-improvements" hidden><summary id="improvement-history-label">Observed recoveries</summary><div id="improvement-history" class="list"></div></details>
   </section>
+  <section class="section" aria-labelledby="score-title">
+    <h2 id="score-title">Chart fallback scorecard</h2>
+    <div id="fallback-score" aria-live="polite"></div>
+  </section>
   <section class="section" aria-labelledby="incident-title">
     <h2 id="incident-title">Active incidents</h2>
     <p class="muted">Open alerts and what Jarvis has observed.</p>
@@ -147,7 +151,37 @@ function updateHistory(id,list,labelId,items,render,title){
   byId(id).hidden=!items.length;byId(labelId).textContent=title+' ('+items.length+')';
   byId(list).replaceChildren(...items.map(render));
 }
+function renderFallback(s){
+  const box=byId('fallback-score');
+  box.replaceChildren();
+  if(!s?.attempts){
+    box.append(node('p','No recorded fallback attempts in the last 24 hours.'));
+    return;
+  }
+  const verdicts={retry_measurement:'Keep measuring on the existing schedule.',
+    change_approach:'Review the approach. A gain lapsed or comparable trials showed no sustained gain.',
+    sustained_in_measured_window:'Matched gains held through six minutes.'};
+  box.append(node('p',verdicts[s.verdict]),node('p',s.attempts+' attempts in 24 hours · '+s.pools+
+    ' distinct coin/pools · '+s.post_matched+' comparable immediately after · '+s.applied+' fallbacks applied.'));
+  const fields={candles:'Fresh complete candle history',rsi:'Usable RSI',volume_ratio:'Usable volume ratio',complete:'Both indicators and fresh candles'};
+  function readings(title,values,total){
+    box.append(node('h3',title));
+    if(!total){box.append(node('p','Awaiting comparable observations.'));return;}
+    for(const [key,label] of Object.entries(fields)){
+      box.append(node('p',label+' · '+values[key].map(n=>n+'/'+total).join(' → ')));
+    }
+  }
+  readings('Same pools before and immediately after',s.immediate,s.post_matched);
+  readings('Same pools before, after, and at 1, 4 and 6 minutes',s.series,s.matched);
+  box.append(node('p',s.durable+' pools gained and retained complete coverage · '+s.recurrences+
+    ' gains lapsed · '+(s.pools-s.matched)+' missing a comparable check. Later primary refreshes can contribute.'),
+    node('p','Incremental fallback credits across all attempts: '+s.reserved_cu+
+    ' CU reserved (usage estimate). Actual billed CU unknown.'),
+    node('p',s.provider_review_at?'Latest provider recommendation queued '+stamp(s.provider_review_at)+'.':
+      'No provider recommendation queued. Research and allowance checks govern escalation.'));
+}
 function render(d){
+  renderFallback(d.fallback_scorecard);
   byId('state').textContent=d.enabled?'Monitoring':'Paused';
   const repair=d.paper_repair||{}, call=d.last_call||{};
   byId('runner').textContent=!repair.enabled?'Automatic repairs paused.':repair.runner_recent?'Repair worker checked in recently.':repair.runner_seen?'Repair worker check-in overdue.':'No repair worker check-in yet.';

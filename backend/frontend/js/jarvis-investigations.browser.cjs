@@ -5,6 +5,9 @@ const fs=require('node:fs');
 const {chromium}=require(process.env.PAPER_PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve(__dirname,'..');
 const sample={
+  fallback_scorecard:{attempts:3,pools:3,post_matched:3,applied:2,matched:1,durable:0,recurrences:1,
+    verdict:'change_approach',reserved_cu:43,immediate:{candles:[0,2],rsi:[0,2],volume_ratio:[0,2],complete:[0,2]},
+    series:{candles:[0,1,1,1,0],rsi:[0,1,1,1,0],volume_ratio:[0,1,1,1,0],complete:[0,1,1,1,0]}},
   enabled:true,cloud_configured:true,monthly_budget_usd:25,reserved_this_month_usd:2.50,
   paper_repair:{enabled:true,runner_recent:false,runner_seen:1795659976,runs:[]},
   last_call:{at:1795654329,status:'no_research_sources'},
@@ -37,6 +40,9 @@ test('investigations summarize active work and preserve disclosures at phone and
     });
     await page.goto('https://jarvis.test/jarvis-test-bot/brain');
     await page.getByText('3 of 39 charts complete').waitFor();
+    await page.getByText('Review the approach.',{exact:false}).waitFor();
+    assert.match(await page.locator('#fallback-score').textContent(),/43 CU reserved/);
+    assert.match(await page.locator('#fallback-score').textContent(),/0\/1 → 1\/1 → 1\/1 → 1\/1 → 0\/1/);
     assert.equal(await page.locator('#state').textContent(),'Monitoring');
     assert.match(await page.locator('#runner').textContent(),/overdue/i);
     assert.match(await page.locator('#call').textContent(),/No usable sources returned/);

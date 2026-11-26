@@ -143,6 +143,77 @@ class PriorityTests(unittest.TestCase):
             conn.execute('UPDATE research SET evidence=?',(json.dumps({'chart':{'at':NOW,'value':None,'status':'ready','attempt_at':NOW}}),))
         with patch.object(feed,'attempt') as attempt:
             feed.tick(api,clock=lambda:NOW);attempt.assert_not_called()
+    def test_scorecard_matches_same_episode_through_recurrence_and_reservations(self):
+        import jarvis_brain as brain
+        row,state=self.prepare()
+        attempt=feed.attempt
+        post=Mock(side_effect=[CodexTests.response(self,CodexTests.metadata(self)),
+                               CodexTests.response(self,CodexTests.bars(self))])
+        with patch.dict(os.environ,{'JARVIS_CODEX_MODE':'fallback'}), patch.object(feed,'attempt',
+                side_effect=lambda *args,**kwargs:attempt(*args,post=post,**kwargs)):
+            feed.tick(api,clock=lambda:NOW)
+        for seconds in (60,240,360):
+            with api.connection() as conn,conn:
+                state,_=api.read(conn)
+                state['watch'][row['mint']]['last']=NOW+seconds
+                state['last_cycle']=NOW+seconds
+                conn.execute('UPDATE run SET state=?',(json.dumps(state),))
+            brain.observe(api,NOW+seconds)
+        with api.connection() as conn:
+            score=brain.status(conn,NOW+360)['fallback_scorecard']
+            self.assertEqual(score['series']['candles'],[0,1,1,0,0])
+            self.assertEqual(score['matched'],1)
+            self.assertEqual(score['recurrences'],1)
+            self.assertEqual(score['durable'],0)
+            self.assertEqual(score['verdict'],'change_approach')
+            self.assertEqual(score['reserved_cu'],16)
+            self.assertIsNone(score['billed_cu'])
+            self.assertEqual(post.call_count,2)
+
+    def test_repeated_fresh_observations_keep_fixed_denominators_and_separate_indicators(self):
+        row,state=self.prepare()
+        with api.connection() as conn,conn:
+            for i in range(3):
+                pool={**row,'mint':str(i),'pair':'pool-'+str(i)}
+                state['watch'][pool['mint']]=pool
+                chart={'at':NOW,'value':{'closed_at':NOW,'rsi':45,'volume_ratio':None}}
+                def record(at,ratio):
+                    chart['at']=chart['value']['closed_at']=at
+                    chart['value']['volume_ratio']=ratio
+                    conn.execute('INSERT OR REPLACE INTO research VALUES (?,?,?,?)',
+                        (pool['mint'],pool['pair'],at,json.dumps({'chart':chart})))
+                record(NOW,None)
+                ident=feed.scorecard.start(conn,pool,NOW)
+                record(NOW,2)
+                feed.scorecard.finish(conn,state,ident,NOW,True,api.ENTRY_WINDOW)
+            for delay in feed.scorecard.WINDOWS:
+                for key in range(3):
+                    pool=state['watch'][str(key)]
+                    pool['last']=NOW+delay
+                    record(NOW+delay,2)
+                feed.scorecard.observe(conn,state,NOW+delay,api.ENTRY_WINDOW)
+            score=feed.scorecard.status(conn,NOW+360)
+            self.assertEqual(score['series']['rsi'],[3,3,3,3,3])
+            self.assertEqual(score['series']['volume_ratio'],[0,3,3,3,3])
+            self.assertEqual(score['durable'],3)
+            self.assertEqual(score['verdict'],'sustained_in_measured_window')
+
+    def test_changing_population_cannot_establish_a_durable_fallback_gain(self):
+        import jarvis_brain as brain
+        row,state=self.prepare()
+        with api.connection() as conn,conn:
+            ident=feed.scorecard.start(conn,row,NOW)
+            feed.scorecard.finish(conn,state,ident,NOW,False,api.ENTRY_WINDOW)
+            for offset,eligible,complete in [(60,24,2),(240,20,5),(360,25,2)]:
+                # Same mint moves to another pool; even a usable replacement is unmatched.
+                state['watch'][row['mint']]={**row,'pair':OTHER,'last':NOW+offset}
+                feed.scorecard.observe(conn,state,NOW+offset,api.ENTRY_WINDOW)
+                brain.improvement.observe(conn,set(),{'paper_enabled':True,'cycle_age':1,
+                    'chart_coverage':{'eligible':eligible,'reasons':{'complete':complete}}},NOW+offset)
+            score=brain.status(conn,NOW+360)['fallback_scorecard']
+            self.assertEqual((score['post_matched'],score['matched'],score['durable']),(1,0,0))
+            self.assertEqual(score['verdict'],'retry_measurement')
+
     def test_attribution_requires_chart_dependency(self):
         row,state=self.prepare()
         evidence={'chart':{'provider':'codex','rsi':20,'volume_ratio':2}}
