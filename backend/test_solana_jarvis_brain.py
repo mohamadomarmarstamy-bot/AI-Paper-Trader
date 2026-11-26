@@ -165,8 +165,11 @@ class BrainTests(unittest.TestCase):
         options=[dict(name=n,price='fixture',quota='fixture',coverage='pool candles',unknown='overlap',
             trial='compare matched pools',source=u) for n,u in [('Codex','https://www.codex.io/pricing'),
             ('GeckoTerminal','https://support.coingecko.com/articles/fixture')]]
-        response=self.response({'provider_options':options})
-        response.json.return_value['output'][0]['action']['sources']=[{'url':o['source']} for o in options]
+        response=self.response({'provider_options':options+[{'untrusted-field':'PRIVATE-RAW-MARKER'}]})
+        output=response.json.return_value['output']
+        output[1]['content'][0]['annotations']=[{'type':'url_citation','url':options[0]['source']}]
+        output[0]['action']['sources']=[{'url':f'https://docs.codex.io/fixture/{i}'} for i in range(12)]
+        output[0]['action']['sources'].append({'url':options[1]['source']})
         post=Mock(return_value=response)
         before=self.state()
         with patch.object(brain,'symptoms',return_value=(set(),{})),patch.object(brain,'admit_proposal') as admit:
@@ -180,14 +183,33 @@ class BrainTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT count(*) FROM brain_mail WHERE id LIKE '%/provider-review'").fetchone()[0],0)
         self.assertEqual(self.state(),before)
         self.assertEqual(post.call_count,1)
+        for target in brain.PROVIDER_DOCS.values():
+            self.assertIn(target,post.call_args.kwargs['json']['instructions'])
         self.assertNotIn('code',json.loads(post.call_args.kwargs['json']['input']))
-        from fastapi import FastAPI
+        from fastapi import FastAPI, HTTPException
         from fastapi.testclient import TestClient
         from solana_meme_routes import build_router
         app=FastAPI()
-        app.include_router(build_router(require_session=lambda request: True))
-        response=TestClient(app).get('/jarvis-test-bot/brain/status')
+        def require_owner(request):
+            if request.headers.get('x-test-owner')!='yes':raise HTTPException(401)
+        app.include_router(build_router(require_session=require_owner))
+        client=TestClient(app)
+        self.assertEqual(client.get('/jarvis-test-bot/brain/status').status_code,401)
+        response=client.get('/jarvis-test-bot/brain/status',headers={'x-test-owner':'yes'})
         self.assertEqual(response.json()['provider_research']['options'],options)
+        diagnostics=response.json()['provider_validation']
+        self.assertEqual(diagnostics['status'],'completed')
+        self.assertEqual(diagnostics['counts']['official_sources'],14)
+        self.assertEqual(diagnostics['counts']['submitted'],3)
+        self.assertEqual(diagnostics['counts']['accepted'],2)
+        self.assertEqual(diagnostics['counts']['invalid_fields'],1)
+        logged=api.research_diagnostic()['brain']['provider_validation']
+        self.assertEqual(logged,diagnostics)
+        for marker in ('PRIVATE-RAW-MARKER','fixture','https://','provider_options','private@example'):
+            self.assertNotIn(marker,json.dumps(logged))
+        with api.connection() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM brain_mail WHERE id GLOB 'provider-info/*'").fetchone()[0],1)
+            self.assertEqual(conn.execute("SELECT sum(reserved_cents) FROM brain_calls").fetchone()[0],brain.RESERVATION_CENTS)
         with api.connection() as conn,conn:
             conn.execute("INSERT INTO brain_incidents(id,kind,opened,last_seen,status,resolved) VALUES ('third','chart_data_gap',?,?,'resolved',?)",
                          (when+200,when+300,when+400))
@@ -211,7 +233,7 @@ class BrainTests(unittest.TestCase):
         for url in ('https://data.birdeye.so.example.net/docs','http://data.birdeye.so/docs'):
             plan,error=research([opts[0],dict(opts[1],source=url)])
             self.assertIsNone(plan)
-            self.assertEqual(error,'insufficient_provider_evidence')
+            self.assertEqual(error,'provider_too_few_distinct')
         plan,error=research(opts)
         self.assertIsNone(error)
         before=self.state()
@@ -256,6 +278,41 @@ class BrainTests(unittest.TestCase):
             self.assertEqual(brain.status(conn,NOW)['provider_research']['status'],'completed')
             self.assertFalse(conn.execute('SELECT 1 FROM brain_mail').fetchone())
 
+    def test_provider_candidate_rejection_counts_and_nonprovider_validator_is_strict(self):
+        opts=[dict(name=n,source=url,price='unknown',quota='unknown',coverage='unknown',
+                   unknown='pool overlap',trial='paper') for n,url in brain.PROVIDER_DOCS.items()]
+        sources=[{'url':o['source']} for o in opts]
+        cases=[
+            ([opts[0]],'accepted',1),
+            ([opts[0],opts[0]],'duplicates',1),
+            ([opts[0],dict(opts[1],source='https://docs.codex.io/missing')],'unattested',1),
+            ([opts[0],dict(opts[1],source='https://docs.codex.io.example.com/pricing')],'invalid_identity',1),
+            ([opts[0],dict(opts[1],name='Other')],'invalid_identity',1),
+            ([opts[0],dict(opts[1],quota={})],'invalid_fields',1)]
+        for options,key,expected in cases:
+            counts=dict.fromkeys(('duplicates','unattested','invalid_identity','invalid_fields'),0)
+            result,status=brain.validate_provider_followup({'provider_options':options},sources,counts)
+            self.assertEqual((result,status),([],'provider_too_few_distinct'))
+            self.assertEqual(counts[key],expected)
+        self.assertEqual(brain.provider_options([opts[0],opts[1],{}],sources),[])
+
+    def test_provider_parse_failure_is_private_and_preserves_six_hour_retry(self):
+        self.provider_episodes()
+        job=brain.build_job(api,NOW)
+        response=self.response({})
+        action,message=response.json.return_value['output']
+        action['action']['sources']=[{'url':brain.PROVIDER_DOCS['Birdeye']}]
+        message['content'][0]['text']='PRIVATE-INVALID-JSON'
+        plan,error=brain.research_job(api,job,NOW,Mock(return_value=response))
+        self.assertEqual((plan,error),(None,'provider_invalid_json'))
+        brain.apply_plan(api,job,plan,error,NOW+30)
+        with api.connection() as conn:
+            review=brain.status(conn,NOW+30)
+            self.assertEqual(review['provider_research']['next_attempt'],NOW+30+6*3600)
+            self.assertEqual(review['provider_validation']['counts']['accepted'],0)
+            self.assertNotIn('PRIVATE-INVALID-JSON',json.dumps(review))
+            self.assertFalse(conn.execute('SELECT 1 FROM brain_mail').fetchone())
+
     def test_provider_watch_expires_and_yields_to_strategy_urgent_work_and_global_lease(self):
         self.provider_episodes()
         with api.connection() as conn,conn:
@@ -291,7 +348,7 @@ class BrainTests(unittest.TestCase):
         response.json.return_value['output'][0]['action']['sources']=[{'url':'https://www.codex.io/pricing'}]
         result,error=brain.research_job(api,job,NOW,Mock(return_value=response))
         self.assertIsNone(result)
-        self.assertEqual(error,'insufficient_provider_evidence')
+        self.assertEqual(error,'provider_response_shape')
         brain.apply_plan(api,{**job,'id':'old-claim'},None,error,NOW)
         with api.connection() as conn:
             self.assertEqual(brain.status(conn,NOW)['provider_research']['status'],'researching')
