@@ -293,6 +293,9 @@ def _refresh_momentum_universe(*, request_func, market_data_request_func, force_
             except Exception: failures.append('snapshot_batch_unavailable')
     symbols=rank_pool(pool,rotation,metadata)
     finished=time.time()
+    # Publish one completed generation. Later selected-symbol refreshes replace metadata.
+    global _friday_scan
+    _friday_scan = (finished, len(allowed_list), tuple(pool), metadata)
     _hot_universe_cache.update(symbols=symbols.copy(),movers=metadata,updated_at=finished,
         coverage={'profile':'fast_movers_v1','tradable_universe':len(allowed_list),'screened_symbols':len(pool),
           'hot_symbols':len(hot),'rotating_symbols':len(rotation),'fresh_snapshots':snapshot_count,
@@ -366,3 +369,10 @@ def refresh_selected_momentum_snapshots(symbols, market_data_request_func):
         coverage['partial']=True
         coverage['limitations']=list(coverage.get('limitations',[]))+['selected_snapshots_unavailable']
     _hot_universe_cache['coverage']=coverage
+
+
+_friday_scan = None
+
+def latest_friday_scan():
+    """Borrow the last complete discovery batch without acquiring the provider lock."""
+    return _friday_scan

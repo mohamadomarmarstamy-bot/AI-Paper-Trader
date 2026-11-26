@@ -17,7 +17,7 @@ import secrets
 import re
 import requests
 import yfinance as yf
-from fastapi import FastAPI, Form, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Form, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -1853,9 +1853,15 @@ async def lifespan(app: FastAPI):
     stock_forward_task = asyncio.create_task(stock_forward_worker(
         alpaca_market_data_request, alpaca_paper_request,
         lambda: os.getenv('APP_QUOTE_FEED','iex'), fetch_pro_ticker_manual_signal_quote))
+    friday_tasks = []
+    if os.getenv("FRIDAY_RESEARCH_ENABLED", "").lower() == "true":
+        from friday_routes import research_worker
+        friday_tasks.append(asyncio.create_task(research_worker()))
     try:
         yield
     finally:
+        for task in friday_tasks:
+            task.cancel()
         await stop_monitor(position_monitor_task)
         refresh_task.cancel()
         auto_trade_task.cancel()
@@ -1891,6 +1897,7 @@ async def lifespan(app: FastAPI):
             stock_research_task,
             stock_reconciliation_task,
             stock_forward_task,
+            *friday_tasks,
         ):
             try:
                 await task
@@ -16355,6 +16362,9 @@ app.include_router(build_manual_signal_router(
 
 
 from solana_meme_routes import build_router as build_meme_router
+from friday_routes import router as friday_router
+app.include_router(friday_router, dependencies=[Depends(require_app_session)])
+
 app.include_router(build_meme_router(require_session=require_app_session))
 
 

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Friday · Stock research</title><link rel="stylesheet" href="/style.css">
+<style>
+body{display:block;min-height:100vh;background:#101722;color:#e6eef6}
+main{max-width:64rem;margin:auto;padding:2rem clamp(1rem,4vw,3rem);line-height:1.55}
+nav{display:flex;flex-wrap:wrap;gap:.5rem 1.25rem;margin:1.2rem 0}
+a{color:#90d7f7}section{padding:1.3rem;margin:1rem 0;border:1px solid #374456;border-radius:.8rem;background:#182332}
+h1,h2,p{margin:0 0 .65rem}button{cursor:pointer;color:inherit;background:#25465b;padding:.6rem 1rem;border:1px solid #5791a7;border-radius:.4rem}
+ul{padding-left:1.4rem}section:target{border-color:#90d7f7}
+</style></head>
+<body><main><header><a href="/">← Trading dashboard</a><h1>AI Friday</h1></header>
+<nav aria-label="Friday workspace"><a href="#trader">Friday Trader</a><a href="#lab">Strategy Lab</a><a href="#history">History</a><a href="#health">Health</a><a href="#investigations">System Investigations</a><a href="#settings">Settings</a></nav>
+<section id="trader"><h2>Friday Trader</h2><p>PAPER execution disabled. Order routing, fill reconciliation and Friday-owned positions await validation.</p></section>
+<section id="lab"><h2>Strategy Lab</h2><p>Momentum review queue · up to two candidates per scan. Saved reviews precede strategy trials and performance evaluation.</p><ul id="queue"></ul>
+<button type="button" id="capture">Record latest stock scan</button><p id="message" role="status"></p></section>
+<section id="history"><h2>History</h2><p>Latest 20 recorded scans</p><ul id="scans"></ul></section>
+<section id="health"><h2>Health</h2><p id="coverage"></p></section>
+<section id="investigations"><h2>System Investigations</h2><p>Latest scan decisions</p><ul id="reasons"></ul><p>Pro Ticker intake awaits a verified feed with publication and receipt times. The phone pilot records observations separately.</p></section>
+<section id="settings"><h2>Settings</h2><p id="passive"></p><p>Execution review cohort · AAPL, AMD, MSFT and NVDA. Maximum quote and trade age · 90 seconds. Review requires a 3–15% move, price at or above session VWAP, at least $5 million IEX session dollar volume and spread at most 0.15%.</p></section>
+</main><script src="/js/friday.js"></script></body></html>
