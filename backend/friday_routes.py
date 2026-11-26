@@ -51,3 +51,15 @@ async def research_worker():
         except (sqlite3.Error, ValueError, TypeError):
             logging.getLogger(__name__).exception('Friday simulation evidence unavailable')
         await asyncio.sleep(15)
+
+@router.get('/ai-friday/paper-history')
+def friday_paper_history():
+    """Owner-session middleware is applied to the whole Friday router in main."""
+    import database
+    from friday_paper_history import analyze
+    from fastapi import HTTPException
+    import sqlite3
+    try:
+        return analyze(database.DATABASE_PATH, {})
+    except sqlite3.OperationalError:
+        raise HTTPException(503, 'PAPER stock fill ledger unavailable.') from None

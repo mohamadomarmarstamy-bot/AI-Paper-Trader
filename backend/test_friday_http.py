@@ -23,6 +23,8 @@ class FridayHttpTests(unittest.TestCase):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app),base_url='http://testserver') as client:
             self.assertEqual((await client.post('/ai-friday/research')).status_code, 401)
             client.cookies.set(main.APP_SESSION_COOKIE, main.create_app_session_token())
+            historical = await client.get('/ai-friday/paper-history')
+            self.assertIn(historical.status_code, (200,503))
             self.assertIn('href="/ai-friday"', (await client.get('/')).text)
             self.assertIn('Record latest stock scan', (await client.get('/ai-friday')).text)
             self.assertEqual((await client.get('/js/friday.js')).status_code, 200)
