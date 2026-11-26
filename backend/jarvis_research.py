@@ -48,7 +48,9 @@ def record_chart_result(conn, status):
     successes=row['successes'] if row else 0
     if status=='rate_limited':
         interval=min(60,interval*2);successes=0
-    elif status=='ready':
+    # These are successful provider responses, even when the pool has no
+    # usable chart. Only transport/response failures interrupt recovery.
+    elif status in ('ready', 'stale_candles', 'insufficient_history'):
         successes+=1
         if successes>=5:
             interval=max(CHART_INTERVAL,interval-1);successes=0
@@ -77,6 +79,24 @@ def chart_fresh_for(record, now):
     if not chart_is_fresh(record, now):
         return 0
     return FRESH_SECONDS + min(record['at'], record['value']['closed_at']) - now
+
+
+def indicator_count(value):
+    return sum(type(value.get(field)) in (int, float) and math.isfinite(value[field])
+               for field in ('rsi', 'volume_ratio'))
+
+
+def choose_chart_record(previous, value, now):
+    """Keep a valid chart when a refresh returns older/equally timed weaker evidence."""
+    selected = {'at': now, 'value': value}
+    if chart_is_fresh(previous, now):
+        old = previous['value']
+        if (not chart_is_fresh(selected, now)
+                or value['closed_at'] < old['closed_at']
+                or (value['closed_at'] == old['closed_at']
+                    and indicator_count(value) < indicator_count(old))):
+            return {'at': previous['at'], 'value': old}
+    return selected
 
 
 def chart_coverage(rows, records, now):
