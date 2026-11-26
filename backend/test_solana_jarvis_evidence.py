@@ -48,6 +48,28 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn('fallback_allowance_exhausted',facts)
         self.assertNotIn('exit_checks_overdue',facts)
         self.assertEqual(evidence.diagnose({'chart_coverage':{'provider':{'median_returned_lag_seconds':None}}})['observed_facts'],[])
+    def test_chart_investigation_receives_regression_examples_not_authority(self):
+        with api.connection() as conn,conn:
+            conn.execute("INSERT INTO brain_incidents(id,kind,opened,last_seen,status,next_attempt) "
+                         "VALUES ('chart','chart_data_gap',?,?,'investigating',?)",(NOW,NOW,NOW))
+        job=brain.build_job(api,NOW)
+        lessons=job['repair_regression_examples']
+        self.assertEqual(lessons[0]['reference'],'PR #177')
+        self.assertEqual(len(lessons[0]['fixtures']),2)
+        self.assertIn('not proof of live coverage',lessons[0]['verification'])
+        self.assertIn('Do not expand repair scope',lessons[0]['limits'])
+        self.assertNotIn('choose_chart_record',policy.TARGETS['jarvis_research.py'])
+        self.assertNotIn('record_chart_result',policy.TARGETS['jarvis_research.py'])
+
+    def test_diagnosis_separates_expired_cache_stale_provider_and_retained_refresh(self):
+        snapshot={'chart_coverage':{'eligible':12,'reasons':{'complete':4,'stale_evidence':8},
+                   'provider':{'cached_pools_last_refresh_retained':1}}}
+        result=evidence.diagnose(snapshot)
+        self.assertIn('cached_chart_evidence_expired',result['observed_facts'])
+        self.assertIn('inferior_chart_refresh_retained',result['observed_facts'])
+        self.assertNotIn('provider_returned_stale_candles',result['observed_facts'])
+        self.assertTrue(any('not proof of a defect' in x for x in result['next_measurements']))
+
     def test_incident_evidence_preserves_detection_and_updates_latest(self):
         with api.connection() as conn,conn:
             before=self.snapshot();after={**before,'queue':{'oldest_wait':2}}

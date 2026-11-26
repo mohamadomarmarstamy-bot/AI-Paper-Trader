@@ -48,6 +48,32 @@ def lessons(conn,kind=None):
              'failure_or_verification_stage':r['stage'],'evidence':json.loads(r['evidence'])} for r in rows]
 
 
+def regression_examples(kind):
+    """Curated, fixed paper regressions; separate from verified live repair outcomes."""
+    if kind not in ('chart_data_gap', 'data_coverage'):
+        return []
+    return [{
+        'reference': 'PR #177',
+        'verification': 'Offline regression examples, not proof of live coverage recovery.',
+        'fixtures': [
+            {'test': 'test_chart_refresh_cannot_replace_fresh_evidence_with_older_or_weaker_chart',
+             'symptom': 'A successful primary response is older than the cached closed candle, '
+                        'or is equally timed but missing a usable indicator.',
+             'expected': 'Retain the valid chart and its original observation time. The retained '
+                         'chart must still expire normally. A newer valid chart can replace it.'},
+            {'test': 'test_successful_responses_without_candles_recover_pace_not_trade_evidence',
+             'symptom': 'Valid responses with unusable history interrupt pacing recovery after an HTTP 429.',
+             'expected': 'Count valid responses toward gradual pacing recovery without treating '
+                         'their candles as trade evidence. HTTP 429 and transport failures still reset recovery.'},
+        ],
+        'apply': 'Distinguish expired cache, upstream data gaps and rate limits before proposing a fix. '
+                 'If a suspected behavior can be reproduced, require a failing baseline, a passing '
+                 'regression and the existing paper suite. If not, measure or escalate; do not invent a patch.',
+        'limits': 'Do not expand repair scope, change provider rights or quotas, relax freshness, '
+                  'or touch real-money trading. This case did not add automatically editable functions.',
+    }]
+
+
 def chart_cases(api,conn,state,now):
     """A bounded sample of actual inputs, with identifiers and provider text removed."""
     cases=[]

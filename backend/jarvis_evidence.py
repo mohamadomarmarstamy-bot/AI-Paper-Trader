@@ -29,6 +29,8 @@ def diagnose(snapshot):
     lag=provider.get('median_returned_lag_seconds')
     if reasons.get('stale_candles',0) or (type(lag) in (int,float) and math.isfinite(lag) and lag>180):
         facts.append('provider_returned_stale_candles')
+    if reasons.get('stale_evidence',0):facts.append('cached_chart_evidence_expired')
+    if provider.get('cached_pools_last_refresh_retained',0):facts.append('inferior_chart_refresh_retained')
     if reasons.get('zero_volume_baseline',0):facts.append('volume_ratio_undefined_zero_baseline')
     if reasons.get('pool_warming',0):facts.append('some_pools_lack_completed_history')
     allowance=snapshot.get('fallback_allowance',{})
@@ -38,6 +40,8 @@ def diagnose(snapshot):
     elif coverage.get('eligible',0)>=10 and reasons.get('complete',0)/coverage['eligible']<0.2:facts.append('low_complete_indicator_coverage')
     measurements=[]
     if 'provider_returned_stale_candles' in facts:measurements.append('Compare the same pool and closed candle timestamp across providers before changing scheduling.')
+    if 'cached_chart_evidence_expired' in facts:measurements.append('Measure cache expiry separately from stale responses and compare expiry to the next permitted refresh.')
+    if 'inferior_chart_refresh_retained' in facts:measurements.append('Replay the chart refresh fixture. A retained chart keeps its original timestamps; this count is protection working, not proof of a defect.')
     if 'primary_rate_limit_observed' in facts:measurements.append('Measure Retry-After compliance and shared request pacing; do not raise quotas.')
     if 'fallback_allowance_exhausted' in facts:measurements.append('Wait for the recorded allowance reset or use already available fresh data; do not increase spending.')
     if 'some_pools_lack_completed_history' in facts or 'volume_ratio_undefined_zero_baseline' in facts:measurements.append('Separate insufficient history and zero volume from code errors; missing indicators remain unknown.')

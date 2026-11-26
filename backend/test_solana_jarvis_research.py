@@ -158,6 +158,9 @@ class JarvisResearchTests(unittest.TestCase):
             record = json.loads(conn.execute('SELECT evidence FROM research').fetchone()[0])['chart']
             self.assertEqual(record['at'], NOW-60)
             self.assertEqual(record['attempt_at'], NOW)
+            self.assertTrue(record['refresh_retained'])
+            coverage = jarvis.chart_coverage(conn, jarvis.read(conn)[0], NOW)
+            self.assertEqual(coverage['provider']['cached_pools_last_refresh_retained'], 1)
             self.assertNotIn('chart', jarvis.entry_evidence(conn, row, NOW+121))
         weaker = {**good, 'volume_ratio': None}
         prior = {'at': NOW-60, 'value': good}
