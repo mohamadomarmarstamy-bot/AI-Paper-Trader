@@ -1414,8 +1414,12 @@ def chart_coverage(conn, state, now):
     result=research.chart_coverage(rows, records, now)
     lags=[e.get('chart',{}).get('returned_lag_seconds') for pair,e in records.values()]
     lags=[v for v in lags if isinstance(v,(int,float)) and math.isfinite(v)]
+    charts = (evidence.get('chart', {}) for _, evidence in records.values())
+    retained = sum(1 for record in charts if record.get('refresh_retained') is True
+                   and now - 900 <= record['attempt_at'] <= now)
     result['provider']={'request_interval_seconds':research.chart_interval(conn),'stale_responses_measured':len(lags),
-        'median_returned_lag_seconds':round(sorted(lags)[len(lags)//2]) if lags else None}
+        'median_returned_lag_seconds':round(sorted(lags)[len(lags)//2]) if lags else None,
+        'cached_pools_last_refresh_retained':retained}
     return result
 
 
@@ -1555,6 +1559,8 @@ def research_tick(clock=time.time, chart=research.chart, social=research.social_
             # never extend its timestamp or the existing candle freshness limit.
             if source == 'chart' and value is not None:
                 record = research.choose_chart_record(previous, value, at)
+                if record['value'] is not value:
+                    record['refresh_retained'] = True
             else:
                 record = {'at': at, 'value': value} if value is not None else {
                     'at': previous.get('at', at), 'value': previous.get('value')}
