@@ -54,7 +54,10 @@ class ResearchMemoryTests(unittest.TestCase):
         self.submit()
         plan={'strategy':{**RULE,'exit':'gain >= 20'},'sources':SOURCES,'summary':'Refine exit only','checks':['Forward comparison']}
         brain.apply_plan(api,{'kind':'strategy'},plan,None,NOW)
-        brain.admit_proposal(api,NOW+1)
+        with api.connection() as conn:
+            ident=conn.execute('SELECT id FROM brain_proposals').fetchone()[0]
+        with patch.object(brain.insight,'scouting_status',return_value=[{'id':ident,'data_ready':True}]):
+            brain.admit_proposal(api,NOW+1)
         with api.connection() as conn:
             row=conn.execute('SELECT status,report FROM brain_proposals').fetchone();report=json.loads(row['report'])
             self.assertEqual(row['status'],'testing')
@@ -81,6 +84,53 @@ class ResearchMemoryTests(unittest.TestCase):
             self.assertEqual(value['control_net_usd'],-1)
             self.assertEqual(conn.execute('SELECT status FROM local_strategies WHERE id=?',(candidate['id'],)).fetchone()[0],'testing')
         self.assertEqual(local.MIN_COINS,100)
+    def test_forward_paired_gate_rejects_lucky_outlier_then_retains_robust_challenger(self):
+        self.submit()
+        candidate=self.submit({**RULE,'exit':'gain >= 20'},NOW)
+        with api.connection() as conn,conn:
+            state,_=api.read(conn)
+            state['strategy']={'version':'current-paper'}
+            rule=state['local_rules'][candidate['slot']]
+            spec=memory.specification(conn,{**RULE,'exit':'gain >= 20'},NOW,state=state)
+            self.assertEqual(spec['control_version'],'current-paper')
+            report=json.dumps({'experiment':spec})
+            conn.execute("INSERT INTO brain_proposals VALUES (?,?,'strategy','testing','{}',?)",
+                         (candidate['id'],NOW,report))
+            for i in range(100):
+                opened=NOW+i+1
+                for bot,pnl,policy in ((candidate['slot'],2_000_000,{'local_rule':{'id':rule['id']}}),
+                                        ('jarvis',3_000_000,{'version':'current-paper'})):
+                    conn.execute('INSERT INTO trades(bot,mint,opened,closed,day,pnl,entry_cost,data) VALUES (?,?,?,?,?,?,?,?)',
+                                 (bot,f'm{i}',opened,opened+1000,'day',pnl,api.BUY_COST,json.dumps({'policy':policy})))
+
+            def review():
+                local.review(conn,state,NOW+2000)
+                row=conn.execute('SELECT status,report FROM local_strategies WHERE id=?',(rule['id'],)).fetchone()
+                return row['status'],json.loads(row['report'])
+
+            conn.execute('UPDATE trades SET pnl=300000000 WHERE bot=? AND mint=?',(candidate['slot'],'m0'))
+            status,out=review()
+            self.assertEqual(status,'testing')
+            self.assertEqual(out['frozen_comparison']['matched'],100)
+            self.assertFalse(out['frozen_comparison']['passed'])
+            self.assertEqual(state.get('local_proven',[]),[])
+
+            # Use a different fixture outcome: consistent post-cost wins across both halves.
+            conn.execute('UPDATE trades SET pnl=4000000 WHERE bot=?',(candidate['slot'],))
+            conn.execute('UPDATE trades SET entry_cost=1 WHERE bot=? AND mint=?',('jarvis','m99'))
+            status,out=review()
+            self.assertEqual(status,'testing')
+            self.assertEqual(out['frozen_comparison']['matched'],99)
+            conn.execute('UPDATE trades SET entry_cost=? WHERE bot=?',(api.BUY_COST,'jarvis'))
+            state['strategy']={'version':'different-paper'}
+            self.assertEqual(review()[0],'testing')  # don't claim the new version lost
+            state['strategy']={'version':'current-paper'}
+            status,out=review()
+            self.assertEqual(status,'proven')
+            self.assertTrue(out['frozen_comparison']['passed'])
+            self.assertEqual(state['local_proven'],[rule['id']])
+            self.assertEqual(state['strategy']['version'],'current-paper')
+
     def test_families_describe_inputs_without_claiming_price_patterns(self):
         self.assertEqual(memory.family(RULE),'order_pressure')
         self.assertEqual(memory.family({**RULE,'entry':'rsi < 30 and buys_m5 > sells_m5'}),'rsi')
