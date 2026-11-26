@@ -53,6 +53,9 @@
     <h2 id="sell-study-title">Pre-entry sell quote experiment</h2>
     <div id="sell-study"></div>
   </section>
+  <section id="provider-panel" class="section" aria-labelledby="provider-title" hidden>
+    <h2 id="provider-title">Chart provider research</h2><div id="provider-results"></div>
+  </section>
   <section class="section" aria-labelledby="score-title">
     <h2 id="score-title">Chart fallback scorecard</h2>
     <div id="fallback-score" aria-live="polite"></div>
@@ -212,7 +215,25 @@ function renderFallback(s){
     node('p',s.provider_review_at?'Latest provider recommendation queued '+stamp(s.provider_review_at)+'.':
       'No provider recommendation queued. Research and allowance checks govern escalation.'));
 }
+function renderProviderReview(review){
+  const panel=byId('provider-panel'),box=byId('provider-results');
+  panel.hidden=!review;
+  box.replaceChildren();
+  if(!review)return;
+  const status={completed:'Comparison available',researching:'Research claimed',budget_exhausted:'Waiting for existing budget',
+    claim_expired:'Previous research claim expired',no_research_sources:'No official sources returned',insufficient_provider_evidence:'Too little sourced evidence'};
+  box.append(node('p',label(status,review.status)));
+  if(review.options?.length){
+    box.append(node('p','Informational candidates from model-reviewed official sources · researched '+stamp(review.researched_at)+'. Actual coverage on eligible pools is unmeasured.'));
+    for(const o of review.options){
+      box.append(node('h3',o.name),node('p','Reported pricing and quota: '+o.price+' · '+o.quota),
+        node('p','Documented capability: '+o.coverage),node('p','Unknown: '+o.unknown),node('p','Proposed paper check: '+o.trial));
+      sourceLinks(box,[{url:o.source,title:o.name+' official source'}]);
+    }
+  }
+}
 function render(d){
+  renderProviderReview(d.provider_research);
   renderSellStudy(d.sell_quote_study);
   renderFallback(d.fallback_scorecard);
   byId('state').textContent=d.enabled?'Monitoring':'Paused';
