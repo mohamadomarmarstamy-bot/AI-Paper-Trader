@@ -169,6 +169,51 @@ class LocalLabTests(unittest.TestCase):
         with api.connection() as conn:
             self.assertEqual(conn.execute('SELECT state FROM run').fetchone()[0],before)
 
+    def test_reused_slot_shows_only_current_trial_and_preserves_pbh(self):
+        from datetime import datetime
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from solana_meme_routes import build_router
+
+        old = self.submit()
+        slot = old['slot']
+        with api.connection() as conn, conn:
+            state, _ = api.read(conn)
+            self.insert(conn, slot, old['id'], 100, -6_000000)
+            lab.review(conn, state, 2000)
+            self.assertNotIn(slot, state['local_rules'])
+            conn.execute('UPDATE run SET state=?', (json.dumps(state),))
+        replacement = self.submit({**RULE, 'name': 'New trial', 'entry': 'liquidity >= 70000'}, now=2100)
+        self.assertEqual(replacement['slot'], slot)
+        app = FastAPI()
+        app.include_router(build_router(require_session=lambda request: None))
+        client = TestClient(app)
+        status = lambda: next(b for b in client.get('/jarvis-test-bot/status').json()['bots'] if b['id'] == slot)
+        new = status()
+        self.assertEqual(new['current_trial']['id'], replacement['id'])
+        self.assertEqual(new['current_trial']['name'], 'New trial')
+        self.assertEqual((new['current_trial']['closed'], new['current_trial']['realized'], new['current_trial']['open']), (0, 0, 0))
+        self.assertEqual((new['closed'], new['realized']), (100, -600))
+        self.assertEqual(new['funding'], lab.CAPITAL / api.DOLLAR)
+        self.assertEqual(client.get('/jarvis-test-bot/history', params={'bot': slot, 'strategy_id': replacement['id']}).json()['coins'], [])
+        day = datetime.now(api.ET).date().isoformat()
+        with api.connection() as conn, conn:
+            for coin, pnl, trade_day in [('winner', 5_000000, day), ('loser', -1_000000, 'earlier')]:
+                trade = {'bot': slot, 'symbol': coin, 'policy': {'local_rule': {'id': replacement['id']}},
+                         'pnl': pnl, 'entry_cost': 50_250000, 'banked': 50_250000 + pnl,
+                         'opened': 2200, 'closed': 2210, 'reason': 'Paper test'}
+                conn.execute('INSERT INTO trades(bot,mint,opened,closed,day,pnl,entry_cost,data) VALUES (?,?,?,?,?,?,?,?)',
+                             (slot, coin, 2200, 2210, trade_day, pnl, 50_250000, json.dumps(trade)))
+        updated = status()
+        trial = updated['current_trial']
+        self.assertEqual((trial['closed'], trial['realized'], trial['wins'], trial['losses'], trial['today']['realized']), (2, 4, 1, 1, 5))
+        self.assertEqual(updated['cash'], new['cash'])
+        items = client.get('/jarvis-test-bot/history', params={'bot': slot, 'strategy_id': replacement['id']}).json()['coins']
+        self.assertEqual({item['mint'] for item in items}, {'winner', 'loser'})
+        self.assertEqual(client.get('/jarvis-test-bot/history', params={'bot': 'jarvis', 'strategy_id': replacement['id']}).status_code, 422)
+        archive = client.get('/jarvis-test-bot/archive').json()['strategies']
+        self.assertEqual([(item['id'], item['closed'], item['net']) for item in archive], [(old['id'], 100, -600)])
+
     def insert(self, conn, slot, ident, count, pnl):
         for i in range(count):
             data={'policy':{'local_rule':{'id':ident}},'pnl':pnl}

@@ -1263,6 +1263,22 @@ def status():
                            (DESCRIPTIONS.get(exit_rule) or lab.DESCRIPTIONS.get(exit_rule + '_exit') or lab.DESCRIPTIONS.get(exit_rule, 'Research exit expression; fixed safety limits apply.'))) if entry else (
                 'Waiting for a validated strategy learned from the paper bots.')
             sample = reviewed.get(bot)
+            holdings = [{'mint': p['mint'], 'symbol': p['symbol'], 'opened': p['opened'],
+                         'mark': value / DOLLAR if basis == 'current_quote' else None,
+                         'estimated_value': value / DOLLAR, 'valuation_basis': basis,
+                         'route_failure': p.get('route_failure'), 'next_quote_at': p['due']}
+                        for p, (value, basis) in zip(positions, valuations)]
+            trial = state.get('local_rules', {}).get(bot) if bot in local_lab.SLOTS else None
+            current_trial = None
+            if trial and trial.get('id'):
+                trial_id = trial['id']
+                scoped_sql = totals_sql + " AND json_extract(data,'$.policy.local_rule.id')=?"
+                trial_holdings = [holding for position, holding in zip(positions, holdings)
+                                  if position.get('policy', {}).get('local_rule', {}).get('id') == trial_id]
+                current_trial = {'id': trial_id, 'name': trial.get('name', name),
+                                 **stats(conn.execute(scoped_sql, (bot, trial_id)).fetchone()),
+                                 'today': stats(conn.execute(scoped_sql + ' AND day=?', (bot, trial_id, day)).fetchone()),
+                                 'open': len(trial_holdings), 'holdings': trial_holdings}
             rows.append({
                 'exit_sample': {
                     'open': sum(p.get('exit_cohort') == EXIT_COHORT for p in positions),
@@ -1283,11 +1299,7 @@ def status():
                 'valuation': {'at_cost': cost_count, 'last_quote': stale_count},
                 'open': len(positions), 'unpriced': missing, 'quote_misses': portfolio['quote_misses'],
                 'entry_misses': portfolio['entry_misses'],
-                'holdings': [{'mint': p['mint'], 'symbol': p['symbol'], 'opened': p['opened'],
-                              'mark': value / DOLLAR if basis == 'current_quote' else None,
-                              'estimated_value': value / DOLLAR, 'valuation_basis': basis,
-                              'route_failure': p.get('route_failure'), 'next_quote_at': p['due']}
-                             for p, (value, basis) in zip(positions, valuations)],
+                'holdings': holdings, 'current_trial': current_trial,
             })
         coverage = conn.execute("""SELECT count(*) FROM research WHERE checked>=? AND (
             json_extract(evidence,'$.chart.value') IS NOT NULL OR json_extract(evidence,'$.bluesky.value') IS NOT NULL
@@ -1360,7 +1372,7 @@ def archive(before=None):
     return {'strategies':items,'next':rows[24]['cursor'] if len(rows)>25 else None}
 
 
-def history(jarvis, before=None, bot=None, rugs_only=False):
+def history(jarvis, before=None, bot=None, rugs_only=False, strategy_id=None):
     limit = 25
     condition = "bot='jarvis'" if jarvis else "bot!='jarvis'"
     parameters = ()
@@ -1368,6 +1380,11 @@ def history(jarvis, before=None, bot=None, rugs_only=False):
         if bot not in BOTS:
             raise ValueError('Unknown paper bot.')
         condition, parameters = 'bot=?', (bot,)
+    if strategy_id is not None:
+        if bot not in local_lab.SLOTS or jarvis or rugs_only or not 1 <= len(strategy_id) <= 128:
+            raise ValueError('Invalid paper strategy history filter.')
+        condition += " AND json_extract(data,'$.policy.local_rule.id')=?"
+        parameters += (strategy_id,)
     if rugs_only:
         condition = "json_extract(data,'$.paper_writeoff.category')='no_route'"
         parameters = ()
