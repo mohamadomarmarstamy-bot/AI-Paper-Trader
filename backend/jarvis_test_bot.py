@@ -1462,30 +1462,42 @@ def claim_research(conn, now):
         if due and due['due'] > now:
             continue
 
+        explore = None
+        if source == 'chart':
+            explore = conn.execute("SELECT due FROM research_tasks WHERE name='chart-explore'").fetchone()
+
+        def chart_rank(row, record):
+            local_held = any(row['mint'] in state['bots'][slot]['positions'] for slot in local_lab.SLOTS)
+            eligible = (not row.get('monitor_only') and 0 <= now-row['first'] <= ENTRY_WINDOW
+                        and now >= row.get('retry', 0)
+                        and any(row['first'] >= rule['created'] for rule in state.get('local_rules', {}).values()))
+            remaining = research.chart_fresh_for(record, now)
+            value = record.get('value')
+            complete = isinstance(value, dict) and research.indicator_count(value) == 2
+            discovery = eligible and not complete
+            if local_held and remaining <= 30:
+                tier = 0
+            elif discovery and explore and now >= explore['due']:
+                tier = 1
+            elif eligible and complete and remaining <= interval:
+                tier = 2
+            elif discovery:
+                tier = 3
+            elif local_held:
+                tier = 4
+            elif eligible:
+                tier = 5
+            else:
+                tier = 6 if row['mint'] in study_mints else 7
+            return tier, remaining, discovery
+
         def priority(row):
             pair, evidence = records.get(row['mint'], (None, {}))
             last = evidence.get(source, {}).get('at', 0) if pair == row['pair'] else 0
             record=evidence.get(source,{}) if pair==row['pair'] else {}
             fresh = record.get('value') is not None and 0 <= now-last < research.FRESH_SECONDS
             if source=='chart':
-                local_held=any(row['mint'] in state['bots'][slot]['positions'] for slot in local_lab.SLOTS)
-                eligible = (not row.get('monitor_only') and 0 <= now-row['first'] <= ENTRY_WINDOW
-                            and now >= row.get('retry', 0)
-                            and any(row['first'] >= rule['created'] for rule in state.get('local_rules', {}).values()))
-                remaining = research.chart_fresh_for(record, now)
-                # Keep holdings above entries when their chart is missing or
-                # approaching expiry, but do not spend scarce slots refreshing
-                # healthy holdings ahead of uncovered research opportunities.
-                if local_held and remaining <= 30:
-                    tier = 0
-                elif eligible and remaining <= research.chart_interval(conn):
-                    tier = 1
-                elif local_held:
-                    tier = 2
-                elif eligible:
-                    tier = 3
-                else:
-                    tier = 4 if row['mint'] in study_mints else 5
+                tier, remaining, _ = chart_rank(row, record)
                 return (tier, remaining, record.get('attempt_at', last), -row['first'])
             return (fresh, row['mint'] not in study_mints, last if fresh else -row['first'])
 
@@ -1508,6 +1520,12 @@ def claim_research(conn, now):
             # Keep recurring storage bounded and retain recent coverage for diagnosis.
             conn.execute('DELETE FROM research WHERE checked<?', (now - 900,))
         chosen = min(candidates, key=priority)
+        if source == 'chart':
+            pair, evidence = records.get(chosen['mint'], (None, {}))
+            record = evidence.get('chart', {}) if pair == chosen['pair'] else {}
+            if explore is None or chart_rank(chosen, record)[2]:
+                conn.execute("INSERT OR REPLACE INTO research_tasks(name,due) VALUES ('chart-explore',?)",
+                             (now + research.CHART_EXPLORATION_INTERVALS * interval,))
         conn.execute('INSERT OR REPLACE INTO research_tasks(name,due) VALUES (?,?)', (source, now + interval))
         tasks.append((source, chosen))
     return tasks
@@ -1639,7 +1657,7 @@ def research_diagnostic():
     return {'improvement_backlog':{'tasks':[{k:t[k] for k in ('kind','priority','status','recurrences')} for t in brain_status.get('improvement_backlog',{}).get('tasks',[])], 'rechecks':[{k:r[k] for k in ('checked','status')} for r in brain_status.get('improvement_backlog',{}).get('rechecks',[])]},
             'learning':{k:learning_status[k] for k in ('interval_coins','reviewed_coins','pending_closed_coins','next_checkpoint')},
             'challenger_rotation':{'active':[{'slot':r['slot'],'started':r['started'],'ends':r['ends'],'status':r['status']} for r in rotation_status['runs'] if r['status'] in ('active','draining')]},
-            'brain':{k:brain_status[k] for k in ('enabled','cloud_configured','model','monthly_budget_usd','reserved_this_month_usd','last_call','proposal_counts','paper_repair','scouting_summary')},'codex_feed':codex_status,'enabled':state['enabled'],'presets_paused':bool(state.get('preset_entries_paused')),
+            'brain':{k:brain_status[k] for k in ('enabled','cloud_configured','model','monthly_budget_usd','reserved_this_month_usd','last_call','proposal_counts','paper_repair','scouting_summary','admission_checks','strategy_due_at')},'codex_feed':codex_status,'enabled':state['enabled'],'presets_paused':bool(state.get('preset_entries_paused')),
             'pbh_closeout':{'requested':(state.get('pbh_closeout_v1') or {}).get('positions',0),'quoted_closes':sold,'writeoffs':written,'pending':pending_pbh},'quote_failure_categories':failures,
             'cycle_age':round(now-state['last_cycle']) if state['last_cycle'] else None,
             'oldest_quote_wait':round(queue['oldest_wait']),'chart_status':chart_status, 'chart_coverage':coverage_details, 'slots':slots}

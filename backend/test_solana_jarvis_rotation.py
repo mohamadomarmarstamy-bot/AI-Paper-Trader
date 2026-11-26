@@ -64,6 +64,18 @@ class RotationTests(unittest.TestCase):
             state['entry_pause_until_all']=True
             conn.execute('UPDATE run SET state=?',(json.dumps(state),))
         self.assertEqual(self.submit()['status'],'full')
+    def test_waiting_reason_explains_protected_and_recent_slots_without_overriding_them(self):
+        with api.connection() as conn,conn:
+            state,_=api.read(conn)
+            for rule in state['local_rules'].values():rule['resumed_at']=NOW-60
+            protected=state['local_rules']['research-10']['id']
+            choice,reason=rotation.selection(conn,state,NOW,api.BUY_COST,protect_control=protected)
+        self.assertIsNone(choice)
+        self.assertEqual(reason['reason'],'no_safe_rotation')
+        self.assertEqual(reason['excluded']['protected'],1)
+        self.assertEqual(reason['excluded']['recent_activity'],9)
+        self.assertEqual(reason['next_idle_at'],NOW-60+rotation.STALL_SECONDS)
+
     def test_window_blocks_entries_and_resumes_original_without_reset(self):
         old=self.state()['local_rules']['research-10'];result=self.submit();end=NOW+rotation.WINDOW_SECONDS
         row={'first':end,'buys_m5':20,'sells_m5':1,'liquidity_usd':90000}

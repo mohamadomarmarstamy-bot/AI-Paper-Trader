@@ -415,21 +415,30 @@ def admit_proposal(api,now):
         result={'status':'expired'}
     else:
         ready=next((s['data_ready'] for s in insight.scouting_status(api,now) if s['id']==row['id']),False)
-        if not ready:return
-        control=(json.loads(row['report']).get('experiment') or {}).get('control_id')
-        try:result=local.submit(api,json.loads(row['data']),now,allow_rotation=True,protect_control=control)
-        except (ValueError,TypeError):result={'status':'rejected'}
+        if not ready:
+            result={'status':'full','reason':'waiting_for_fresh_data'}
+        else:
+            control=(json.loads(row['report']).get('experiment') or {}).get('control_id')
+            try:result=local.submit(api,json.loads(row['data']),now,allow_rotation=True,protect_control=control)
+            except (ValueError,TypeError):result={'status':'rejected'}
     if result['status']=='duplicate':
         with api.connection() as conn:
             actual=conn.execute('SELECT id,slot,status FROM local_strategies WHERE id=?',(row['id'],)).fetchone()
             if actual:result={**dict(actual),'recovered_after_submit':True}
-    if result['status'] in ('full','capital_exhausted'):return
+    waiting=result['status'] in ('full','capital_exhausted')
     with api.connection() as conn,conn:
         conn.execute('BEGIN IMMEDIATE')
-        saved=conn.execute('SELECT report FROM brain_proposals WHERE id=?',(row['id'],)).fetchone()
-        report={**(json.loads(saved['report']) if saved else {}),**result}
+        saved=conn.execute("SELECT report FROM brain_proposals WHERE id=? AND status='waiting_slot'",(row['id'],)).fetchone()
+        if not saved:return
+        report=json.loads(saved['report'])
+        if waiting:
+            report['admission_check']={k:v for k,v in result.items() if k!='status'}
+            report['admission_check']['at']=now
+        else:
+            report.pop('admission_check',None)
+            report.update(result)
         conn.execute('UPDATE brain_proposals SET status=?,report=? WHERE id=?',
-            (result['status'],json.dumps(report),row['id']))
+            ('waiting_slot' if waiting else result['status'],json.dumps(report),row['id']))
 
 
 def mail_tick(api,now,post=solana_http.post):
@@ -463,7 +472,11 @@ def status(conn,now=None):
     dt=datetime.fromtimestamp(now,timezone.utc)
     spent=conn.execute('SELECT COALESCE(sum(reserved_cents),0) FROM brain_calls WHERE month=?',(dt.strftime('%Y-%m'),)).fetchone()[0]
     scouts=insight.scouting(conn,now)
-    return {'enabled':enabled(),'cloud_configured':bool(os.getenv('OPENAI_API_KEY','').strip()),'model':MODEL,
+    waiting=[json.loads(r['report']).get('admission_check',{}) for r in conn.execute(
+        "SELECT report FROM brain_proposals WHERE kind='strategy' AND status='waiting_slot' ORDER BY created LIMIT 3")]
+    due=conn.execute("SELECT due FROM research_tasks WHERE name='brain-strategy'").fetchone()
+    return {'admission_checks':[r for r in waiting if r],'strategy_due_at':due[0] if due else None,
+        'enabled':enabled(),'cloud_configured':bool(os.getenv('OPENAI_API_KEY','').strip()),'model':MODEL,
         'monthly_budget_usd':MONTHLY_CENTS/100,'reserved_this_month_usd':spent/100,
         'reservation_per_call_usd':RESERVATION_CENTS/100,'daily_budget_usd':DAILY_CENTS/100,
         'budget_basis':'Conservative reservations, not measured billing; failed calls remain reserved.',

@@ -72,6 +72,27 @@ class JarvisResearchTests(unittest.TestCase):
             tasks=jarvis.claim_research(conn,NOW+19)
             self.assertFalse(any(source=='chart' for source,_ in tasks))
 
+    def test_chart_refresh_prefers_recoverable_coverage_but_reserves_exploration(self):
+        rows = self.prepare_chart_watch(7)
+        warm = list(rows)[:5]
+        called = []
+        with jarvis.connection() as conn, conn:
+            for i, mint in enumerate(warm):
+                stamp = NOW - 190 + i
+                conn.execute('INSERT INTO research VALUES (?,?,?,?)', (mint, PAIR, stamp, json.dumps({
+                    'chart': {'at': stamp, 'attempt_at': stamp,
+                              'value': {'closed_at': stamp, 'rsi': 50, 'volume_ratio': 2}}})))
+        def chart(row, now):
+            called.append(row['mint'])
+            return {'closed_at': now, 'rsi': 50, 'volume_ratio': 2}
+        for offset in (0, 5, 6, 12, 18, 24, 30, 36):
+            jarvis.research_tick(clock=lambda: NOW+offset, chart=chart, social=lambda *_: None)
+        self.assertEqual(called[:3], warm[:3])
+        self.assertNotIn(called[3], warm)  # A cold pool gets its turn despite remaining warm demand.
+        self.assertEqual(called[4:6], warm[3:])
+        self.assertEqual(set(called), set(rows))
+        self.assertEqual(len(called), 7)  # The early call did not increase request rate.
+
     def test_healthy_holding_does_not_starve_uncovered_entry(self):
         rows = self.prepare_chart_watch(2)
         held, uncovered = rows

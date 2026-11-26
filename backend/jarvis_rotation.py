@@ -10,19 +10,36 @@ CREATE UNIQUE INDEX IF NOT EXISTS challenger_one_active ON challenger_rotations(
 
 
 def select(conn,state,now,minimum_cash=50_250000,*,protect_control=None):
+    return selection(conn,state,now,minimum_cash,protect_control=protect_control)[0]
+
+
+def selection(conn,state,now,minimum_cash,*,protect_control=None):
     from jarvis_local_lab import SLOTS
-    if conn.execute("SELECT 1 FROM challenger_rotations WHERE status IN ('active','draining')").fetchone():return None
-    if conn.execute('SELECT count(*) FROM challenger_rotations WHERE started>?',(now-86400,)).fetchone()[0]>=2:return None
+    if conn.execute("SELECT 1 FROM challenger_rotations WHERE status IN ('active','draining')").fetchone():
+        return None,{'reason':'rotation_already_active'}
+    if conn.execute('SELECT count(*) FROM challenger_rotations WHERE started>?',(now-86400,)).fetchone()[0]>=2:
+        return None,{'reason':'rotation_daily_limit'}
     protected=(state.get('strategy') or {}).get('local_rule',{}).get('id')
     candidates=[]
+    excluded=dict(protected=0,open_positions=0,cash=0,not_testing=0,recent_activity=0)
+    next_idle=None
     for slot,rule in state.get('local_rules',{}).items():
-        if slot not in SLOTS or rule['id'] in (protected,protect_control) or state['bots'][slot]['positions'] or state['bots'][slot]['cash']<minimum_cash:continue
-        candidate=conn.execute("SELECT * FROM local_strategies WHERE id=? AND status='testing'",(rule['id'],)).fetchone()
-        if not candidate:continue
+        if slot not in SLOTS:continue
+        if rule['id'] in (protected,protect_control):excluded['protected']+=1;continue
+        if state['bots'][slot]['positions']:excluded['open_positions']+=1;continue
+        if state['bots'][slot]['cash']<minimum_cash:excluded['cash']+=1;continue
+        candidate=conn.execute("SELECT 1 FROM local_strategies WHERE id=? AND status='testing'",(rule['id'],)).fetchone()
+        if not candidate:excluded['not_testing']+=1;continue
         last=conn.execute("SELECT max(closed) FROM trades WHERE bot=? AND json_extract(data,'$.policy.local_rule.id')=?",(slot,rule['id'])).fetchone()[0]
         anchor=max(rule.get('resumed_at',rule['created']),last or 0)
-        if now-anchor>=STALL_SECONDS:candidates.append((anchor,slot,rule))
-    return min(candidates,key=lambda v:(v[0],v[1])) if candidates else None
+        eligible_at=anchor+STALL_SECONDS
+        if eligible_at<=now:candidates.append((anchor,slot,rule))
+        else:
+            excluded['recent_activity']+=1
+            next_idle=eligible_at if next_idle is None else min(next_idle,eligible_at)
+    choice=min(candidates,key=lambda v:(v[0],v[1])) if candidates else None
+    return choice,{'reason':'rotation_ready' if choice else 'no_safe_rotation',
+                   'excluded':excluded,'next_idle_at':next_idle}
 
 
 def pause(conn,state,choice,challenger,now):
