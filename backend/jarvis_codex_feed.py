@@ -202,6 +202,9 @@ def tick(api,*,clock):
         # Leave enough allowance for BOTH requests before starting metadata.
         # reserve() still enforces the hard limits immediately before each call.
         if daily+16>DAILY_CU_LIMIT or monthly+16>MONTHLY_CU_LIMIT:return
+        # Release fallback allowance across UTC hours, with one request pair available immediately.
+        paced_limit=min(DAILY_CU_LIMIT, max(16, int(DAILY_CU_LIMIT*(dt.hour+1)/24)))
+        if mode()=='fallback' and daily+16>paced_limit:return
         due=conn.execute("SELECT due FROM research_tasks WHERE name='codex-priority'").fetchone()
         if due and due['due']>now:return
         candidates=[]
