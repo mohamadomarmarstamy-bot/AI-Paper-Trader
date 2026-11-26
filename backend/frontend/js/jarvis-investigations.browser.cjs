@@ -6,6 +6,9 @@ const {chromium}=require(process.env.PAPER_PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve(__dirname,'..');
 const arm={net_usd:null,realized_drawdown_usd:null,failed_exit_attempts:0,no_route_attempts:0};
 const sample={
+  provider_research:{status:'completed',researched_at:1795654329,options:[{name:'Codex',price:'Fixture pricing',
+    quota:'Fixture quota',coverage:'Exact-pool bars',unknown:'Eligible overlap',trial:'Use existing allowance',
+    source:'https://www.codex.io/pricing'}]},
   sell_quote_study:{status:'queued',sampled:0,limit:100,matched:0,matched_closed:0,unknown:0,missing:0,unavailable:0,
     blocked_winners:0,arms:{baseline:arm,challenger:arm}},
   fallback_scorecard:{attempts:3,pools:3,post_matched:3,applied:2,matched:1,durable:0,recurrences:1,
@@ -43,6 +46,8 @@ test('investigations summarize active work and preserve disclosures at phone and
     });
     await page.goto('https://jarvis.test/jarvis-test-bot/brain');
     await page.getByText('3 of 39 charts complete').waitFor();
+    await page.getByText('Unknown: Eligible overlap',{exact:true}).waitFor();
+    assert.equal(await page.getByRole('link',{name:'Codex official source'}).getAttribute('href'),'https://www.codex.io/pricing');
     await page.getByText('Expired cache 31 · Returned stale 5').waitFor();
     await page.getByText('Previously complete, now expired after failed refresh: 2 (included above)').waitFor();
     await page.getByText('Queued · 0/100 distinct mints (first Jarvis paper entry per mint)').waitFor();

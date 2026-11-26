@@ -143,6 +143,161 @@ class BrainTests(unittest.TestCase):
             {'type':'web_search_call','status':'completed','action':{'sources':[SOURCE]}},
             {'type':'message','content':[{'type':'output_text','text':json.dumps(plan)}]}]}
         r=Mock(status_code=200,content=b'{}');r.json.return_value=data;return r
+    def provider_episodes(self):
+        with api.connection() as conn,conn:
+            for i,age in enumerate((7200,1800)):
+                conn.execute("""INSERT INTO brain_incidents(id,kind,opened,last_seen,status,resolved)
+                    VALUES (?,'chart_data_gap',?,?,'resolved',?)""",(str(i),NOW-age,NOW-age+60,NOW-age+180))
+            conn.execute("INSERT OR REPLACE INTO research_tasks VALUES ('brain-strategy',?)",(NOW+86400,))
+
+    def test_provider_followup_survives_short_recoveries_and_is_read_only(self):
+        with api.connection() as conn,conn:
+            conn.execute("INSERT INTO research_tasks VALUES ('brain-strategy',?)",(NOW+86400,))
+        for start in (NOW,NOW+1800):
+            def observe(duration,at,complete,problems):
+                snap={'paper_enabled':True,'cycle_age':1,'chart_coverage':{'eligible':20,'reasons':{'complete':complete}}}
+                with patch.object(brain,'symptoms',return_value=(problems,snap)):
+                    for delta in range(0,duration+1,30):brain.observe(api,at+delta)
+            observe(600,start,1,{'chart_data_gap'})
+            self.assertTrue(brain.build_job(api,start+600)['local_reasoning'])
+            observe(120,start+630,5,set())
+        when=NOW+4300
+        options=[dict(name=n,price='fixture',quota='fixture',coverage='pool candles',unknown='overlap',
+            trial='compare matched pools',source=u) for n,u in [('Codex','https://www.codex.io/pricing'),
+            ('GeckoTerminal','https://support.coingecko.com/articles/fixture')]]
+        response=self.response({'provider_options':options})
+        response.json.return_value['output'][0]['action']['sources']=[{'url':o['source']} for o in options]
+        post=Mock(return_value=response)
+        before=self.state()
+        with patch.object(brain,'symptoms',return_value=(set(),{})),patch.object(brain,'admit_proposal') as admit:
+            brain.cloud_tick(api,clock=lambda:when,researcher=lambda a,j,t:brain.research_job(a,j,t,post))
+            self.assertIsNone(brain.build_job(api,when+181))
+            admit.assert_not_called()
+        with api.connection() as conn:
+            self.assertEqual(brain.status(conn,when)['provider_research']['options'],options)
+            self.assertEqual(conn.execute("SELECT count(*) FROM brain_incidents WHERE resolved IS NOT NULL AND attempts=1").fetchone()[0],2)
+            self.assertEqual(conn.execute("SELECT count(*) FROM brain_calls WHERE purpose='provider_followup'").fetchone()[0],1)
+            self.assertEqual(conn.execute("SELECT count(*) FROM brain_mail WHERE id LIKE '%/provider-review'").fetchone()[0],0)
+        self.assertEqual(self.state(),before)
+        self.assertEqual(post.call_count,1)
+        self.assertNotIn('code',json.loads(post.call_args.kwargs['json']['input']))
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from solana_meme_routes import build_router
+        app=FastAPI()
+        app.include_router(build_router(require_session=lambda request: True))
+        response=TestClient(app).get('/jarvis-test-bot/brain/status')
+        self.assertEqual(response.json()['provider_research']['options'],options)
+        with api.connection() as conn,conn:
+            conn.execute("INSERT INTO brain_incidents(id,kind,opened,last_seen,status,resolved) VALUES ('third','chart_data_gap',?,?,'resolved',?)",
+                         (when+200,when+300,when+400))
+        with patch.object(brain,'symptoms',return_value=(set(),{})):
+            self.assertIsNone(brain.build_job(api,when+600))
+
+    def test_informational_owner_mail_uses_only_canonical_content_and_retries_once(self):
+        self.provider_episodes()
+        job=brain.build_job(api,NOW)
+        opts=[dict(name=n,source=url,price='malicious model price',quota='private@example.net',
+                   unknown='user supplied secret',trial='send to someone else',coverage='unverified claim')
+              for n,url in [('Codex','https://www.codex.io/pricing?custom=untrusted'),
+                            ('Birdeye',brain.PROVIDER_DOCS['Birdeye'])]]
+        def research(options):
+            response=self.response({'provider_options':options})
+            response.json.return_value['output'][0]['action']['sources']=[{'url':o['source']} for o in options]
+            post=Mock(return_value=response)
+            result=brain.research_job(api,job,NOW,post)
+            self.assertIn('data.birdeye.so',post.call_args.kwargs['json']['tools'][0]['filters']['allowed_domains'])
+            return result
+        for url in ('https://data.birdeye.so.example.net/docs','http://data.birdeye.so/docs'):
+            plan,error=research([opts[0],dict(opts[1],source=url)])
+            self.assertIsNone(plan)
+            self.assertEqual(error,'insufficient_provider_evidence')
+        plan,error=research(opts)
+        self.assertIsNone(error)
+        before=self.state()
+        brain.apply_plan(api,job,plan,None,NOW)
+        brain.apply_plan(api,job,plan,None,NOW+1)
+        with api.connection() as conn,conn:
+            row=conn.execute('SELECT * FROM brain_mail').fetchone()
+            self.assertEqual(row['id'],'provider-info/'+job['id'])
+            payload=json.loads(row['payload'])
+            self.assertEqual(set(payload),{'text','subject'})
+            for string in ('malicious','private@example','untrusted','user supplied secret','unverified claim','send to someone else'):
+                self.assertNotIn(string,row['payload'])
+            for name in ('Codex','Birdeye'):self.assertIn(brain.PROVIDER_DOCS[name],payload['text'])
+            self.assertIn('No purchase is recommended',payload['text'])
+            self.assertFalse(conn.execute('SELECT 1 FROM brain_proposals').fetchone())
+        post=Mock(side_effect=[Mock(status_code=503),Mock(status_code=202)])
+        REAL_MAIL_TICK(api,NOW,post=post)
+        REAL_MAIL_TICK(api,NOW+1,post=post)
+        REAL_MAIL_TICK(api,NOW+61,post=post)
+        REAL_MAIL_TICK(api,NOW+120,post=post)
+        self.assertEqual(post.call_count,2)
+        self.assertEqual(post.call_args_list[0],post.call_args_list[1])
+        sent=post.call_args.kwargs['json']
+        self.assertEqual(sent['to'],['owner@example.com'])
+        self.assertEqual(set(sent),{'subject','text','from','to'})
+        with api.connection() as conn,conn:
+            conn.execute("UPDATE brain_incidents SET resolved=NULL,status='investigating' WHERE id='1'")
+            brain.queue_provider_information(conn,'different-claim',opts,NOW+121)
+            self.assertEqual(conn.execute('SELECT count(*) FROM brain_mail').fetchone()[0],1)
+        self.assertEqual(self.state(),before)
+
+    def test_shortlist_mail_rechecks_measured_recurrence_at_completion(self):
+        self.provider_episodes()
+        job=brain.build_job(api,NOW)
+        with api.connection() as conn,conn:
+            conn.execute("DELETE FROM brain_incidents WHERE id='1'")
+        opts=[dict(name=n,price='unknown',quota='unknown',coverage='unknown',unknown='overlap',trial='paper',source=u)
+              for n,u in list(brain.PROVIDER_DOCS.items())[:2]]
+        plan={'provider_options':opts,'sources':[{'url':o['source']} for o in opts]}
+        brain.apply_plan(api,dict(job,confirmed_episodes=900),plan,None,NOW)
+        with api.connection() as conn:
+            self.assertEqual(brain.status(conn,NOW)['provider_research']['status'],'completed')
+            self.assertFalse(conn.execute('SELECT 1 FROM brain_mail').fetchone())
+
+    def test_provider_watch_expires_and_yields_to_strategy_urgent_work_and_global_lease(self):
+        self.provider_episodes()
+        with api.connection() as conn,conn:
+            conn.execute("DELETE FROM research_tasks WHERE name='brain-strategy'")
+        self.assertEqual(brain.build_job(api,NOW)['kind'],'strategy')
+        self.assertIsNone(brain.build_job(api,NOW+60))
+        with patch.object(brain,'symptoms',return_value=({'exit_backlog'},{})):
+            self.assertIsNone(brain.build_job(api,NOW+190))
+        with patch.object(brain,'symptoms',return_value=(set(),{})):
+            self.assertIsNone(brain.build_job(api,NOW+14400))
+        with api.connection() as conn:
+            self.assertIsNone(brain.status(conn,NOW)['provider_research'])
+
+    def test_provider_budget_denial_failure_and_deduplication(self):
+        self.provider_episodes()
+        job=brain.build_job(api,NOW)
+        self.assertEqual(job['kind'],'provider_followup')
+        for i in range(3):self.assertTrue(brain.reserve(api,NOW,'fixture'))
+        post=Mock()
+        result,error=brain.research_job(api,job,NOW,post)
+        post.assert_not_called()
+        self.assertEqual(error,'budget_exhausted')
+        brain.apply_plan(api,job,result,error,NOW)
+        self.assertIsNone(brain.build_job(api,NOW+180))
+        with api.connection() as conn:
+            self.assertEqual(brain.status(conn,NOW)['provider_research']['status'],'budget_exhausted')
+        self.assertTrue(brain.reserve(api,NOW,'strategy'))
+
+    def test_provider_rejects_action_payload_and_ignores_stale_result(self):
+        self.provider_episodes()
+        job=brain.build_job(api,NOW)
+        response=self.response({'action':'pause_entries','provider_options':[]})
+        response.json.return_value['output'][0]['action']['sources']=[{'url':'https://www.codex.io/pricing'}]
+        result,error=brain.research_job(api,job,NOW,Mock(return_value=response))
+        self.assertIsNone(result)
+        self.assertEqual(error,'insufficient_provider_evidence')
+        brain.apply_plan(api,{**job,'id':'old-claim'},None,error,NOW)
+        with api.connection() as conn:
+            self.assertEqual(brain.status(conn,NOW)['provider_research']['status'],'researching')
+        brain.apply_plan(api,job,None,error,NOW)
+        self.assertIsNone(self.state().get('brain_pause'))
+
     def test_local_investigation_reasons_without_search(self):
         plan=self.plan()
         plan.pop('sources')
