@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import httpx
 
@@ -33,7 +33,14 @@ class FridayHttpTests(unittest.TestCase):
             self.assertIn('Record latest stock scan', (await client.get('/ai-friday')).text)
             self.assertEqual((await client.get('/js/friday.js')).status_code, 200)
             self.assertEqual((await client.post('/ai-friday/research')).status_code, 403)
-            response = await client.post('/ai-friday/research', headers={'origin':'http://testserver'})
+            import friday_phase
+            from datetime import datetime
+            mark=datetime.fromisoformat('2026-11-25T16:05:00-05:00').timestamp()
+            with patch.object(friday_phase,'_latest_batch',(mark,{})),patch.object(friday_phase,'_calendar',{'date':'2026-11-25','open':'09:30','close':'16:00'}),patch.object(friday_phase,'time',Mock(time=lambda:mark)):
+                response = await client.post('/ai-friday/research', headers={'origin':'http://testserver'})
+            replay=response.json()['extended']['replays']
+            self.assertEqual(len(replay),4)
+            self.assertTrue(all(r['reason']=='scanner_coverage_gap' for r in replay))
             self.assertEqual(response.status_code, 200)
             self.assertFalse(response.json()['execution_enabled'])
             self.assertEqual((await client.get('/ai-friday/research')).json()['latest']['finished'], NOW)
