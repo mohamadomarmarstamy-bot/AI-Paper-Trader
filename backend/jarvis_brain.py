@@ -23,6 +23,7 @@ import jarvis_audit as audit
 import jarvis_evidence as insight
 import jarvis_strategy_memory as strategy_memory
 import jarvis_improvement as improvement
+from jarvis_repair_policy import chart_recovered
 
 LOG=logging.getLogger(__name__)
 MODEL='gpt-6.2-sol'
@@ -129,8 +130,11 @@ def symptoms(api,conn,state,now):
               for side in ('entry','exit')}
     snapshot={'paper_enabled':True,'cycle_age':age,'queue':queue,'chart_coverage':coverage,
               'engine_error_present':bool(state.get('error')),'quote_failures':failures}
-    usage=api.codex_feed.status(conn)
+    usage=api.codex_feed.status(conn,now)
     snapshot['fallback_allowance']={'remaining_daily_cu':max(0,usage['daily_reserved_cu_limit']-usage['reserved_cu_today']),
+        'calls':usage['calls'], 'impact':usage['impact_since_tracking'],
+        'hourly_pacing_blocks_pair':usage['configured'] and usage['mode']=='fallback' and
+            usage['reserved_cu_today'] + 16 > api.codex_feed.hourly_allowance(datetime.fromtimestamp(now,timezone.utc).hour),
         'remaining_monthly_cu':max(0,usage['monthly_reserved_cu_limit']-usage['reserved_cu_month'])}
     snapshot['diagnosis']=insight.diagnose(snapshot)
     return problems,snapshot
@@ -138,7 +142,7 @@ def symptoms(api,conn,state,now):
 
 def queue_mail(conn,incident,stage,now,detail):
     title=TITLES[incident['kind']]
-    heading={'opened':'Investigating','resolved':'Resolved','escalated':'Needs attention'}[stage]
+    heading={'opened':'Investigating','resolved':'Resolved','escalated':'Needs attention','provider-review':'Paper chart decision'}[stage]
     from jarvis_backlog import origin
     link=(origin() or '')+'/jarvis-test-bot/brain'
     detail+='\nInvestigation details: '+link
@@ -147,6 +151,42 @@ def queue_mail(conn,incident,stage,now,detail):
         'html':'<html><body style="font-family:Arial;background:#f1f5f9;color:#0f172a;padding:24px"><div style="max-width:640px;margin:auto;background:white;padding:28px;border-radius:12px"><p style="color:#64748b">JARVIS · SYSTEM UPDATE</p><h2>'+escape(heading+': '+title)+'</h2><p>'+escape(detail).replace('\n','<br>')+'</p><p style="font-size:12px;color:#64748b">Paper trading only. Existing exits remain monitored.</p></div></body></html>'}
     conn.execute('INSERT OR IGNORE INTO brain_mail(id,created,payload,due) VALUES (?,?,?,?)',
                  (incident['id']+'/'+stage,now,json.dumps(payload),now))
+
+
+def provider_decision(conn, incident, snapshot, now):
+    """Use persisted research and locally observed outcomes to gate the owner outbox."""
+    plan = json.loads(incident['plan'])
+    options = plan.get('provider_options', [])
+    allowance = snapshot.get('fallback_allowance', {})
+    if (len(options) < 2 or now - plan.get('researched_at', 0) > 7 * 86400
+            or min(allowance.get('remaining_monthly_cu', 16), allowance.get('remaining_daily_cu', 16)) >= 16):
+        return
+    if allowance.get('remaining_monthly_cu', 16) >= 16:
+        # A single busy day is a reason to wait. Require repeated binding daily caps.
+        from jarvis_codex_feed import DAILY_CU_LIMIT
+        days = conn.execute(
+            'SELECT day FROM codex_calls WHERE at BETWEEN ? AND ? GROUP BY day HAVING sum(reserved)>?',
+            (max(incident['opened'], now - 7 * 86400), now, DAILY_CU_LIMIT - 16)).fetchall()
+        if len(days) < 2:
+            return
+    if conn.execute("SELECT 1 FROM brain_mail WHERE id LIKE '%/provider-review' AND created>?", (now-7*86400,)).fetchone():
+        return
+    successes = conn.execute(
+        'SELECT count(*) FROM codex_outcomes WHERE at BETWEEN ? AND ? AND complete_rules>0',
+        (max(incident['opened'], now - 7 * 86400), now)).fetchone()[0]
+    if successes < 3:
+        return
+    coverage = snapshot['chart_coverage']
+    lines = [f"Fresh complete charts: {coverage['reasons']['complete']}/{coverage['eligible']} eligible. "
+             f"{successes} fallback observations completed previously blocked paper rules during this investigation. "
+             "The current Jarvis allowance cannot cover another request pair.",
+             "Recommendation: keep the current free primary and paced fallback. Decide whether to commission "
+             "a separate paper comparison for additional coverage. Incremental coverage is unknown."]
+    for option in options:
+        lines.append(f"{option['name']} — {option['price']}. Quota: {option['quota']}. "
+                     f"Applicable data: {option['coverage']}. Unknown: {option['unknown']}. "
+                     f"Paper trial: {option['trial']}. Source: {option['source']}")
+    queue_mail(conn, incident, 'provider-review', now, '\n\n'.join(lines))
 
 
 def observe(api,now):
@@ -177,18 +217,29 @@ def observe(api,now):
                 if incident:
                     conn.execute('UPDATE brain_incidents SET last_seen=?,healthy_since=NULL,healthy_checks=0 WHERE id=?',(now,incident['id']))
                     insight.record(conn,incident['id'],now,snapshot)
+                    if kind == 'chart_data_gap':
+                        provider_decision(conn, incident, snapshot, now)
                     # Deterministic emergency recovery does not wait for an LLM.
                     if kind in ('exit_backlog','worker_stalled'):
                         state.setdefault('brain_pause',{'since':now,'reason':'Investigating delayed paper monitoring'})
                     if now-incident['opened']>=3600 and incident['status']!='needs_attention':
                         conn.execute("UPDATE brain_incidents SET status='needs_attention' WHERE id=?",(incident['id'],))
-                        queue_mail(conn,incident,'escalated',now,'The issue persists. Automatic recovery has not verified a fix; the investigation and any code proposal are available in Jarvis system status.')
+                        if kind != 'chart_data_gap':queue_mail(conn,incident,'escalated',now,'The issue persists. Automatic recovery has not verified a fix; the investigation and any code proposal are available in Jarvis system status.')
             else:
                 conn.execute('DELETE FROM brain_observations WHERE kind=?',(kind,))
                 if not incident:continue
                 insight.record(conn,incident['id'],now,snapshot)
+                coverage = snapshot.get('chart_coverage', {})
+                if kind == 'chart_data_gap' and (snapshot.get('cycle_age') is None or snapshot['cycle_age'] > 45
+                        or not chart_recovered(coverage.get('eligible', 0), coverage.get('reasons', {}).get('complete', 0))):
+                    conn.execute('UPDATE brain_incidents SET healthy_since=NULL,healthy_checks=0 WHERE id=?', (incident['id'],))
+                    continue
                 healthy=incident['healthy_since'] if incident['healthy_since'] is not None else now
-                checks=incident['healthy_checks']+1
+                if kind == 'chart_data_gap' and due and now - due['due'] > 60:
+                    healthy = now
+                    checks = 1
+                else:
+                    checks=incident['healthy_checks']+1
                 conn.execute('UPDATE brain_incidents SET healthy_since=?,healthy_checks=? WHERE id=?',(healthy,checks,incident['id']))
                 if checks>=3 and now-healthy>=HEALTHY_SECONDS:
                     conn.execute("UPDATE brain_incidents SET status='resolved',resolved=? WHERE id=?",(now,incident['id']))
@@ -200,6 +251,12 @@ def observe(api,now):
                     detail=('Monitoring stayed healthy for at least two minutes. '
                         f'Oldest exit-check delay: {round(before_wait)}s → {round(after_wait)}s. '
                         'This confirms observed recovery, not a proven root cause.')
+                    if kind == 'chart_data_gap':
+                        initial = first.get('chart_coverage', {})
+                        detail = (f"Fresh complete charts among eligible coins moved from "
+                                  f"{initial.get('reasons', {}).get('complete', 'unknown')}/{initial.get('eligible', 'unknown')} "
+                                  f"to {coverage['reasons']['complete']}/{coverage['eligible']}. "
+                                  "Coverage met the recovery threshold for two minutes. The cause remains unverified.")
                     queue_mail(conn,incident,'resolved',now,detail)
         active=conn.execute("SELECT 1 FROM brain_incidents WHERE resolved IS NULL AND kind IN ('exit_backlog','worker_stalled')").fetchone()
         if not active:state.pop('brain_pause',None)
@@ -250,7 +307,8 @@ def build_job(api,now):
                  for r in conn.execute("SELECT status,data,report FROM brain_proposals WHERE kind='code' ORDER BY created DESC LIMIT 5")]
         scouts=insight.scouting(conn,now)
         import jarvis_repair_learning as repair_learning
-        return {'id':ident,'kind':kind,'snapshot':snapshot,'retrospective_examples':examples,'repair_history':repairs,'queued_scouting':scouts,'scouting_summary':{'queued':len(scouts),'candidate_observations':sum(s['distinct_coin_pools'] for s in scouts),'data_ready':sum(s['data_ready'] for s in scouts)},'audit':{'strategies':report.get('strategies',[])[-15:],
+        return {'id':ident,'kind':kind,'local_reasoning':bool(incident and (kind!='chart_data_gap' or incident['attempts']==0)),
+                'snapshot':snapshot,'retrospective_examples':examples,'repair_history':repairs,'queued_scouting':scouts,'scouting_summary':{'queued':len(scouts),'candidate_observations':sum(s['distinct_coin_pools'] for s in scouts),'data_ready':sum(s['data_ready'] for s in scouts)},'audit':{'strategies':report.get('strategies',[])[-15:],
                 'limitations':report.get('limitations',[])},'rules':rules,'memory':memory,'learning_checkpoint':__import__('jarvis_learning').status(conn,state,now),
                 'strategy_research_memory':strategy_memory.context(conn,state,now),
                 'improvement_backlog':improvement.status(conn),'selected_improvement':next((task for task in improvement.status(conn)['tasks'] if task['kind']==kind and task['status']!='observed_recovery'),None),
@@ -273,7 +331,7 @@ For operations, choose pause_entries only for observed queue/heartbeat delays, c
 
 
 DIAGNOSTIC_DOMAINS=('docs.python.org','sqlite.org','fastapi.tiangolo.com','docs.railway.com','docs.jup.ag',
-                    'dev.jup.ag','apiguide.geckoterminal.com','docs.coingecko.com','docs.codex.io','developers.openai.com')
+                    'dev.jup.ag','apiguide.geckoterminal.com','docs.coingecko.com','docs.codex.io','www.codex.io','support.coingecko.com','docs.birdeye.so','developers.openai.com')
 
 
 def research_sources(values,domains=()):
@@ -294,6 +352,30 @@ def research_sources(values,domains=()):
     return list(sources.values())
 
 
+PROVIDER_HOSTS = {
+    'GeckoTerminal': {'apiguide.geckoterminal.com','docs.coingecko.com','support.coingecko.com'},
+    'Codex': {'www.codex.io','docs.codex.io'},
+    'Birdeye': {'docs.birdeye.so'},
+}
+
+
+def provider_options(options, sources):
+    retrieved = {source['url'] for source in sources}
+    if not isinstance(options, list) or not 2 <= len(options) <= 3:
+        return []
+    names = set()
+    for option in options:
+        if not isinstance(option, dict) or set(option) != {'name','price','quota','coverage','unknown','trial','source'}:
+            return []
+        if any(not isinstance(value,str) or not value.strip() or len(value)>500 for value in option.values()):
+            return []
+        name, url = option['name'], option['source']
+        if name in names or url not in retrieved or urlsplit(url).hostname not in PROVIDER_HOSTS.get(name, set()):
+            return []
+        names.add(name)
+    return options
+
+
 def research_job(api,job,now,post=solana_http.post):
     key=os.getenv('OPENAI_API_KEY','').strip()
     if not key:return None,'missing_api_key'
@@ -301,13 +383,30 @@ def research_job(api,job,now,post=solana_http.post):
     if len(encoded)+len(INSTRUCTION)>60000:return None,'context_too_large'
     ident=reserve(api,now,job['kind'])
     if not ident:return None,'budget_exhausted'
+    local_reasoning = job.get('local_reasoning') is True and job['kind'] != 'strategy'
+    instruction = INSTRUCTION
+    if local_reasoning:
+        instruction = instruction.replace('Research official provider documentation and primary research with web search.',
+            'Reason from the supplied local measurements and code. Identify the next falsifiable check. '
+            'Defer external claims and provider comparisons to a sourced research pass.')
+    elif job['kind'] == 'chart_data_gap':
+        instruction += (' For chart investigations include an extra provider_options array with 2–3 distinct '
+            'GeckoTerminal, Codex or Birdeye options. For each give name, price, quota, coverage '
+            '(documented exact-pool capability only), unknown, trial (bounded matched-pool paper test), '
+            'and source (exact retrieved official URL). State unknown for unsupported terms. '
+            'Prefer cache, pacing and existing allowances. Do not predict measured coverage. '
+            'Separate the 60-second per-pool refresh floor, current global pace, cooldown, returned lag, '
+            'accepted candle age, history and momentum readiness. Return an empty array if insufficient sources.')
     outcome='provider_error';usage={};data=None
     domains=DIAGNOSTIC_DOMAINS if job['kind']!='strategy' else ()
     try:
+        request={'model':MODEL,'instructions':instruction,'input':encoded,'store':False,'max_output_tokens':4500}
+        if not local_reasoning:
+            request.update(tools=[{'type':'web_search','search_context_size':'low',
+                **({'filters':{'allowed_domains':list(domains)}} if domains else {})}],
+                tool_choice='required',max_tool_calls=2,include=['web_search_call.action.sources'])
         response=post('https://api.openai.com/v1/responses',headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'},
-            json={'model':MODEL,'instructions':INSTRUCTION,'input':encoded,'store':False,
-                  'tools':[{'type':'web_search','search_context_size':'low',**({'filters':{'allowed_domains':list(domains)}} if domains else {})}],'tool_choice':'required','max_tool_calls':2,
-                  'include':['web_search_call.action.sources'],'max_output_tokens':4500},timeout=90,allow_redirects=False)
+                      json=request,timeout=90,allow_redirects=False)
         if response.status_code in (401,403):outcome='authentication_or_access';return None,outcome
         if response.status_code==429:outcome='rate_limited';return None,outcome
         if response.status_code!=200:
@@ -328,8 +427,14 @@ def research_job(api,job,now,post=solana_http.post):
                     cited.extend(a for a in (part.get('annotations') or [])
                                  if isinstance(a,dict) and a.get('type')=='url_citation')
         sources=research_sources(cited+retrieved,domains) if searched else []
-        if not sources:outcome='no_research_sources';return None,outcome
-        plan=validate_plan(json.loads('\n'.join(texts)),job['kind'])
+        if not local_reasoning and not sources:outcome='no_research_sources';return None,outcome
+        raw=json.loads('\n'.join(texts))
+        options=raw.pop('provider_options', []) if isinstance(raw,dict) and job['kind']=='chart_data_gap' else []
+        plan=validate_plan(raw,job['kind'])
+        if options and not local_reasoning:
+            validated = provider_options(options, sources)
+            if validated:
+                plan.update(provider_options=validated, researched_at=now)
         plan['sources']=sources
         outcome='completed'
         return plan,None
@@ -387,6 +492,10 @@ def apply_plan(api,job,plan,error,now):
             conn.execute("INSERT INTO research_tasks VALUES ('chart',?) ON CONFLICT(name) DO UPDATE SET due=max(due,excluded.due)",(now+interval,))
             action='cooldown_chart'
         improvement.transition(conn,job['kind'],'measuring',now)
+        previous = json.loads(incident['plan'])
+        if job['kind']=='chart_data_gap' and 'provider_options' in previous and 'provider_options' not in plan:
+            plan['provider_options']=previous['provider_options']
+            plan['researched_at']=previous['researched_at']
         plan['applied_action']=action
         conn.execute('UPDATE brain_incidents SET plan=?,last_error=NULL WHERE id=?',(json.dumps(plan),job['id']))
         if plan.get('patch'):

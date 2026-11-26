@@ -125,6 +125,10 @@ function incident(i){
     if(plan.hypothesis)details.append(node('h3','Possible cause'),node('p',plan.hypothesis,'muted'));
     if(observed.length>3)details.append(node('p','All observations: '+observed.map(s=>label(facts,s)).join(' · '),'muted'));
     if(plan.checks?.length){const ul=node('ul');for(const c of plan.checks)ul.append(node('li',c));details.append(node('h3','Suggested checks'),ul);}
+    for(const option of plan.provider_options||[]){
+      details.append(node('h3',option.name),node('p',option.price+' · '+option.quota),
+        node('p',option.coverage),node('p','Unknown: '+option.unknown),node('p','Paper trial: '+option.trial));
+    }
     sourceLinks(details,plan.sources);a.append(details);
   }
   return a;

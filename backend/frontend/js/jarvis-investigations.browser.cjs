@@ -14,7 +14,7 @@ const sample={
   ]},
   incidents:[
     {kind:'chart_data_gap',status:'needs_attention',opened:1795654329,last_error:'no_research_sources',
-     plan:{summary:'Long historical assessment',hypothesis:'Possible chart timing issue',checks:['Check timing'],
+     plan:{provider_options:[{name:'Candidate feed',price:'Existing allowance',quota:'Fixture quota',coverage:'Exact pools',unknown:'Overlap',trial:'Compare matched pools'}],summary:'Long historical assessment',hypothesis:'Possible chart timing issue',checks:['Check timing'],
            applied_action:'monitor',sources:[{url:'https://docs.coingecko.com',title:'Chart docs'},{url:'javascript:alert(1)',title:'Unsafe link'}]},
      evidence:{latest:{metrics:{chart_coverage:{reasons:{complete:3},eligible:39},queue:{oldest_wait:0}}}}},
     {kind:'engine_error',status:'resolved',opened:1795654129,resolved:1795654329}
@@ -49,6 +49,7 @@ test('investigations summarize active work and preserve disclosures at phone and
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     await page.getByText('Investigation details').click();
     await page.getByText('Long historical assessment').waitFor({state:'visible'});
+    await page.getByText('Paper trial: Compare matched pools').waitFor({state:'visible'});
     assert.equal(await page.getByRole('link',{name:'Chart docs'}).count(),1);
     assert.equal(await page.getByRole('link',{name:'Unsafe link'}).count(),0);
     await page.getByText('Resolved incidents (1)').click();

@@ -106,12 +106,17 @@ def chart_coverage(rows, records, now):
                             'pool_warming', 'not_sampled', 'insufficient_history',
                             'stale_candles', 'stale_evidence', 'invalid_chart',
                             'provider_error', 'rate_limited'), 0)
+    ready = {'rsi': 0, 'volume_ratio': 0}
+    candle_ages = []
     for row in rows:
         pair, evidence = records.get(row['mint'], (None, {}))
         record = evidence.get('chart', {}) if pair == row['pair'] else {}
         if chart_is_fresh(record, now):
             value = record['value']
             finite = lambda field: type(value.get(field)) in (int, float) and math.isfinite(value[field])
+            candle_ages.append(now - value['closed_at'])
+            for field in ready:
+                ready[field] += int(finite(field))
             if finite('rsi') and finite('volume_ratio'):
                 reason = 'complete'
             elif finite('rsi') and 'volume_ratio' in value and value['volume_ratio'] is None:
@@ -127,7 +132,8 @@ def chart_coverage(rows, records, now):
         else:
             reason = 'not_sampled'
         counts[reason] += 1
-    return {'eligible': len(rows), 'reasons': counts}
+    return {'eligible': len(rows), 'reasons': counts, 'fresh_indicator_counts': ready,
+            'oldest_accepted_candle_age_seconds': max(candle_ages, default=None)}
 
 POST_LOOKBACK = 3600
 X_INTERVAL = 1800

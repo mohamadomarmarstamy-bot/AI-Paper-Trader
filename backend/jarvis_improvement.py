@@ -1,5 +1,6 @@
 """Persistent paper improvement goals and independent regression follow-ups."""
 import json
+from jarvis_repair_policy import chart_recovered
 
 SCHEMA='''CREATE TABLE IF NOT EXISTS improvement_tasks(
  kind TEXT PRIMARY KEY,priority INTEGER NOT NULL,status TEXT NOT NULL,opened REAL NOT NULL,
@@ -50,6 +51,9 @@ def observe(conn,problems,snapshot,now):
         elif row and row['status']!='observed_recovery':
             # Missing diagnostics or an intentional pause do not establish recovery.
             if not snapshot.get('paper_enabled') or snapshot.get('cycle_age') is None or snapshot['cycle_age']>45:continue
+            if kind in ('chart_data_gap', 'data_coverage') and not chart_recovered(eligible, coverage.get('reasons', {}).get('complete', 0)):
+                conn.execute('UPDATE improvement_tasks SET healthy_since=NULL WHERE kind=?', (kind,))
+                continue
             since=row['healthy_since'] if row['healthy_since'] is not None and now-row['updated']<=90 else now
             conn.execute('UPDATE improvement_tasks SET healthy_since=?,updated=? WHERE kind=?',(since,now,kind))
             if now-since>=120:transition(conn,kind,'observed_recovery',now)

@@ -1434,7 +1434,10 @@ def chart_coverage(conn, state, now):
     charts = (evidence.get('chart', {}) for _, evidence in records.values())
     retained = sum(1 for record in charts if record.get('refresh_retained') is True
                    and now - 900 <= record['attempt_at'] <= now)
-    result['provider']={'request_interval_seconds':research.chart_interval(conn),'stale_responses_measured':len(lags),
+    shared_due = conn.execute("SELECT due FROM research_tasks WHERE name='chart'").fetchone()
+    result['provider']={'per_pool_refresh_floor_seconds':research.CHART_REFRESH,
+        'shared_wait_seconds':max(0,shared_due['due']-now) if shared_due else 0,
+        'request_interval_seconds':research.chart_interval(conn),'stale_responses_measured':len(lags),
         'median_returned_lag_seconds':round(sorted(lags)[len(lags)//2]) if lags else None,
         'cached_pools_last_refresh_retained':retained}
     return result

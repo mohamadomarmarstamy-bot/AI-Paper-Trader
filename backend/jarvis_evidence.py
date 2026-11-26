@@ -36,6 +36,10 @@ def diagnose(snapshot):
     allowance=snapshot.get('fallback_allowance',{})
     if allowance.get('remaining_daily_cu',16)<16 or allowance.get('remaining_monthly_cu',16)<16:
         facts.append('fallback_allowance_exhausted')
+    elif allowance.get('hourly_pacing_blocks_pair'):
+        facts.append('fallback_waiting_for_hourly_headroom')
+    if reasons.get('insufficient_history', 0):facts.append('returned_history_incomplete')
+    if reasons.get('partial_indicators', 0):facts.append('momentum_indicators_incomplete')
     if coverage.get('eligible',0)>0 and reasons.get('complete',0)==0:facts.append('no_complete_candidate_indicators')
     elif coverage.get('eligible',0)>=10 and reasons.get('complete',0)/coverage['eligible']<0.2:facts.append('low_complete_indicator_coverage')
     measurements=[]
@@ -45,6 +49,8 @@ def diagnose(snapshot):
     if 'primary_rate_limit_observed' in facts:measurements.append('Measure Retry-After compliance and shared request pacing; do not raise quotas.')
     if 'fallback_allowance_exhausted' in facts:measurements.append('Wait for the recorded allowance reset or use already available fresh data; do not increase spending.')
     if 'some_pools_lack_completed_history' in facts or 'volume_ratio_undefined_zero_baseline' in facts:measurements.append('Separate insufficient history and zero volume from code errors; missing indicators remain unknown.')
+    if 'fallback_waiting_for_hourly_headroom' in facts:
+        measurements.append('Recheck the existing fallback after UTC hourly pacing admits a request pair; record call and usable-chart deltas.')
     if 'low_complete_indicator_coverage' in facts:measurements.append('Measure complete versus eligible pools over time, including partial coverage; do not infer strategy failure.')
     return {'observed_facts':facts,'next_measurements':measurements,'interpretation':'Observed constraints, not a proven root cause. Missing/stale data is not evidence that a strategy is unprofitable.'}
 

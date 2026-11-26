@@ -143,7 +143,8 @@ class EvidenceTests(unittest.TestCase):
         before={'complete_candidates':0,'oldest_quote_wait':0,'cycle_age':1,'paper_enabled':True}
         after={**before,'source_sha':'a'*40}
         self.assertFalse(policy.goal_met('chart_data_gap',before,after))
-        self.assertTrue(policy.goal_met('chart_data_gap',before,{**after,'complete_candidates':1}))
+        self.assertFalse(policy.goal_met('chart_data_gap',before,{**after,'complete_candidates':1}))
+        self.assertTrue(policy.goal_met('chart_data_gap',before,{**after,'eligible_candidates':10,'complete_candidates':2}))
         self.assertFalse(policy.goal_met('chart_data_gap',before,{**after,'complete_candidates':1,'paper_enabled':False}))
     def test_queue_repair_must_improve_queue_and_engine_error_must_clear(self):
         before={'oldest_quote_wait':300,'cycle_age':1,'paper_enabled':True}
