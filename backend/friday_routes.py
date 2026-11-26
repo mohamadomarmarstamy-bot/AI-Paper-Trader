@@ -52,14 +52,31 @@ async def research_worker():
             logging.getLogger(__name__).exception('Friday simulation evidence unavailable')
         await asyncio.sleep(15)
 
-@router.get('/ai-friday/paper-history')
+from fastapi import HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
+
+
+class PrivateHistoryRoute(APIRoute):
+    def get_route_handler(self):
+        handle = super().get_route_handler()
+        async def private_response(request):
+            try:
+                response = await handle(request)
+            except HTTPException as exc:
+                exc.headers = {**(exc.headers or {}), 'Cache-Control':'private, no-store'}
+                raise
+            response.headers['Cache-Control'] = 'private, no-store'
+            return response
+        return private_response
+
+
 def friday_paper_history():
-    """Owner-session middleware is applied to the whole Friday router in main."""
     import database
-    from friday_paper_history import analyze
-    from fastapi import HTTPException
-    import sqlite3
-    try:
-        return analyze(database.DATABASE_PATH, {})
-    except sqlite3.OperationalError:
-        raise HTTPException(503, 'PAPER stock fill ledger unavailable.') from None
+    from friday_paper_history import live_report
+    code, body = live_report(database.DATABASE_PATH)
+    return JSONResponse(body,status_code=code,headers={'Retry-After':'60'} if code != 200 else {})
+
+
+router.add_api_route('/ai-friday/paper-history',friday_paper_history,methods=['GET'],
+                     route_class_override=PrivateHistoryRoute)

@@ -7,6 +7,8 @@ from decimal import Decimal, InvalidOperation
 import json
 from pathlib import Path
 import sqlite3
+import threading
+import time
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo('America/New_York')
@@ -16,7 +18,9 @@ def stamp(value):
     value = datetime.fromisoformat(str(value).replace('Z','+00:00'))
     if value.tzinfo is None:
         raise ValueError('Timezone required')
-    return value.astimezone(timezone.utc)
+    result = value.astimezone(timezone.utc)
+    result.astimezone(ET)  # Verify the date can be grouped in exchange time.
+    return result
 
 
 def positive(value):
@@ -29,7 +33,7 @@ def positive(value):
 def phase(when, calendar):
     local = when.astimezone(ET)
     session = calendar.get(local.date().isoformat())
-    if not session:
+    if not isinstance(session,dict):
         return 'unverified'
     minutes = local.strftime('%H:%M')
     opened, closed = session.get('open'), session.get('close')
@@ -71,18 +75,40 @@ def summarize(rows):
             'groups':{k:agg(v) for k,v in sorted(groups.items())}}
 
 
-def analyze(path, calendar):
+class LiveLimit(Exception):
+    pass
+
+
+def limit_live_snapshot(db, deadline):
+    db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 500)
+    db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 256 * 1024)
+    for table, payload in [('broker_fills','raw_order_json'),('trade_book',None),
+                           ('trade_book_order_links',None),('day_trader_experiments','decision_json')]:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+            continue
+        # Stop after cap + 1 even if the source contains millions of records.
+        if db.execute(f'SELECT 1 FROM {table} LIMIT 1 OFFSET 5000').fetchone():
+            raise LiveLimit()
+        if payload:
+            size = db.execute(f'SELECT sum(length(CAST({payload} AS BLOB))) FROM {table}').fetchone()[0]
+            if (size or 0) > 8 * 1024 * 1024:
+                raise LiveLimit()
+
+
+def analyze(path, calendar, *, deadline=None):
     counts = Counter()
-    calendar = dict(calendar)
+    calendar = dict(calendar) if isinstance(calendar,dict) else {}
     fills = {}
     links = defaultdict(set)
-    with closing(sqlite3.connect(Path(path).resolve().as_uri()+'?mode=ro',uri=True)) as db:
+    with closing(sqlite3.connect(Path(path).resolve().as_uri()+'?mode=ro',uri=True,timeout=.1 if deadline is not None else 5)) as db:
         db.row_factory = sqlite3.Row
         db.execute('PRAGMA query_only=ON')
         db.execute('BEGIN')
-        counts['paper_orders_without_asset_class']=db.execute('''SELECT count(*) FROM broker_fills WHERE source='alpaca_paper' AND CASE WHEN json_valid(raw_order_json) THEN json_extract(raw_order_json,'$.asset_class') END IS NULL''').fetchone()[0]
+        if deadline is not None:
+            limit_live_snapshot(db, deadline)
+        counts['paper_orders_without_asset_class']=db.execute('''SELECT count(*) FROM broker_fills WHERE source IN ('alpaca_paper','alpaca_paper_immediate') AND CASE WHEN json_valid(raw_order_json) THEN json_extract(raw_order_json,'$.asset_class') END IS NULL''').fetchone()[0]
         for r in db.execute("""SELECT order_id,symbol,side,shares,price,filled_at,raw_order_json
-                               FROM broker_fills WHERE source='alpaca_paper'
+                               FROM broker_fills WHERE source IN ('alpaca_paper','alpaca_paper_immediate')
                                AND CASE WHEN json_valid(raw_order_json) THEN json_extract(raw_order_json,'$.asset_class') END='us_equity'"""):
             counts['paper_equity_orders']+=1
             raw=json.loads(r['raw_order_json'])
@@ -94,15 +120,16 @@ def analyze(path, calendar):
                     positive(raw['filled_qty'])!=qty or positive(raw['filled_avg_price'])!=price or
                     stamp(raw['filled_at'])!=at):
                     raise ValueError()
-            except (ValueError,KeyError,InvalidOperation,TypeError):
+            except (ValueError,KeyError,InvalidOperation,TypeError,OverflowError,OSError):
                 counts['unverified_fill_orders']+=1
                 continue
             client=str(raw.get('client_order_id') or '').strip().lower()
             source='old_ai' if client.startswith('auto-entry-') else 'manual_or_untagged' if not client else 'unknown'
             fills[r['order_id']] = (r['symbol'],r['side'],qty,price,at,source)
             if r['side']=='BUY':
-                for leg in (raw.get('legs') or []):
-                    if isinstance(leg,dict) and leg.get('side')=='sell' and leg.get('id'):
+                legs=raw.get('legs')
+                for leg in legs if isinstance(legs,list) else ():
+                    if isinstance(leg,dict) and leg.get('side')=='sell' and isinstance(leg.get('id'),str) and leg['id']:
                         links[leg['id']].add(r['order_id'])
         tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         # Reuse only dated calendar evidence previously frozen by the app.
@@ -155,9 +182,37 @@ def analyze(path, calendar):
         rows.append(dict(symbol=symbol,qty=qty,entry=entered,exit=max(x[4] for x in exits),
                          gross=proceeds-buy*qty,turnover=proceeds+buy*qty,phase=phase(entered,calendar),provenance=origin))
     times=[r[4] for r in fills.values()]
+    if deadline is not None and time.monotonic() >= deadline:
+        raise LiveLimit()
     return {'scope':'stock-only, full-paper-order fills; modeled fee $0.005/share/side plus incremental bps; actual fees unknown',
             'counts':dict(counts),'verified_fill_range':[min(times).isoformat(),max(times).isoformat()] if times else None,
             'verified_closed':len(rows),**summarize(rows)}
+
+
+_live_lock = threading.Lock()
+_live_cache = None
+
+
+def live_report(path):
+    """One computation per app process. Cache failures as well as successes."""
+    global _live_cache
+    key = Path(path).resolve()
+    if not _live_lock.acquire(blocking=False):
+        return 429, {'complete':False, 'detail':'A history analysis is already running.'}
+    try:
+        now = time.monotonic()
+        if _live_cache and _live_cache[0] == key and now < _live_cache[1]:
+            return _live_cache[2]
+        try:
+            result = 200, {**analyze(key, {}, deadline=now+1), 'complete':True}
+        except (LiveLimit, sqlite3.DataError):
+            result = 503, {'complete':False, 'detail':'Online analysis limit reached. Use a private offline export for full history.'}
+        except sqlite3.DatabaseError:
+            result = 503, {'complete':False, 'detail':'PAPER ledger unavailable or online read budget exhausted. Full history requires an offline export.'}
+        _live_cache = key, time.monotonic()+60, result
+        return result
+    finally:
+        _live_lock.release()
 
 
 if __name__=='__main__':

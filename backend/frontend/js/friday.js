@@ -50,8 +50,11 @@ element('load-baseline').addEventListener('click', async () => {
     button.disabled = true;
     try {
         const response = await fetch('/ai-friday/paper-history');
-        if (!response.ok) throw new Error();
         const report = await response.json();
+        if (!response.ok) {
+            element('baseline').textContent = report.detail || 'Historical analysis unavailable.';
+            return;
+        }
         const total = report.groups.all;
         element('baseline').textContent = total
             ? report.verified_closed + ' explicitly linked closed entries. At 10 bps per side plus modeled fees: $' + total.modeled_net_usd['10'].toFixed(2) + '. Holdout: ' + (report.groups.holdout?.trades || 0) + ' trades. Unresolved entries: ' + (report.counts.open_incomplete_or_unlinked_entries || 0) + '.'
