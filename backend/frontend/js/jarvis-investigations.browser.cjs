@@ -43,8 +43,9 @@ test('investigations summarize active work and preserve disclosures at phone and
     });
     await page.goto('https://jarvis.test/jarvis-test-bot/brain');
     await page.getByText('3 of 39 charts complete').waitFor();
-    await page.getByText('Queued · 0/100 Jarvis paper entries').waitFor();
-    assert.match(await page.locator('#sell-study').textContent(),/preceding 15 seconds/);
+    await page.getByText('Queued · 0/100 distinct mints (first Jarvis paper entry per mint)').waitFor();
+    assert.match(await page.locator('#sell-study').textContent(),/Only existing exit jobs/);
+    assert.match(await page.locator('#sell-study').textContent(),/Many or all entries/);
     await page.getByText('Review the approach.',{exact:false}).waitFor();
     assert.match(await page.locator('#fallback-score').textContent(),/43 CU reserved/);
     assert.match(await page.locator('#fallback-score').textContent(),/0\/1 → 1\/1 → 1\/1 → 1\/1 → 0\/1/);

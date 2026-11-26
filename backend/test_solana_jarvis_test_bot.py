@@ -106,6 +106,30 @@ class JarvisTests(unittest.TestCase):
         self.assertEqual((result['sampled'],result['matched'],result['missing']),(1,0,1))
         self.assertIsNone(result['arms']['challenger']['net_usd'])
 
+    def test_shadow_observes_delayed_sell_success_and_failure_only_after_return(self):
+        jarvis.set_enabled(True)
+        self.advance()
+        for category in ('usable','temporary'):
+            self.now+=90
+            started=self.now
+            def delayed_quote(input_mint,output_mint,amount):
+                self.assertEqual(output_mint,jarvis.USDC)
+                self.now+=8
+                if category=='temporary':
+                    raise jarvis.QuoteUnavailable('temporary','temporary')
+                return 50_000_000
+            jarvis.tick(providers=self.market,get_quote=delayed_quote,clock=lambda:self.now)
+            state=self.state()
+            self.assertEqual(state['last_cycle'],started)
+            quote=state['sell_quote_study']['quotes'][-1]
+            self.assertEqual((quote['at'],quote['kind']),(started+8,category))
+            for offset,expected in [(4,'missing'),(8,'missing'),(9,category)]:
+                shadow=jarvis.sell_study.queued()
+                shadow['quotes']=[quote]
+                jarvis.sell_study.enter(shadow,{'mint':MINT,'pair':PAIR,'quantity':quote['size'],
+                    'opened':started+offset,'entry_cost':jarvis.BUY_COST,'policy':{}})
+                self.assertEqual(shadow['samples'][MINT]['evidence'],expected)
+
     def test_estimated_totals_keep_last_sell_quote_and_value_unquoted_holdings_at_cost(self):
         jarvis.set_enabled(True)
         self.advance()

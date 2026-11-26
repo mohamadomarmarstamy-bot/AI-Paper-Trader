@@ -160,7 +160,8 @@ function renderSellStudy(s){
   box.replaceChildren();
   if(!s){box.append(node('p','Research status unavailable.'));return;}
   const statuses={queued:'Queued',collecting:'Collecting',awaiting_closes:'Awaiting closes',ready_for_review:'Ready for review'};
-  box.append(node('p',statuses[s.status]+' · '+s.sampled+'/'+s.limit+' Jarvis paper entries'),
+  box.append(node('p',statuses[s.status]+' · '+s.sampled+'/'+s.limit+' distinct mints (first Jarvis paper entry per mint)'),
+    node('p','Only existing exit jobs supply sell quotes. Many or all entries may have unknown evidence. A missing observation leaves route availability unknown; a confirmed no-route requires an explicit provider result.'),
     node('p','The challenger requires an existing token-to-USDC quote for the exact entry quantity, observed within the preceding 15 seconds. Both arms use the same baseline entry and exit records.'),
     node('p',s.matched+' matched · '+s.matched_closed+' matched closes · '+s.unknown+' unknown, including '+s.missing+' without a fresh exact-size observation · '+s.unavailable+' confirmed unavailable.'),
     node('p','Blocked winners on confirmed evidence: '+s.blocked_winners+'. Unknown evidence prevents entry in the shadow rule and is excluded from the matched comparison.'));

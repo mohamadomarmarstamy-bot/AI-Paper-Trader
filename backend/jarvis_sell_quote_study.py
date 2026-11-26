@@ -1,4 +1,4 @@
-"""Shadow-only replay of the first 100 prospective Jarvis paper entries."""
+"""Shadow-only replay of the first prospective Jarvis paper entry for up to 100 distinct mints."""
 import json
 
 LIMIT = 100

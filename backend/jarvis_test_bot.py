@@ -978,7 +978,7 @@ def record_quote_failure(state, side, error, now, mint=None, amount=None):
                       'mint': mint, 'amount': amount}
 
 
-def step(conn, state, providers, get_quote, now):
+def step(conn, state, providers, get_quote, now, *, quote_clock=time.time):
     completed = []
     study = state.setdefault('sell_quote_study', sell_study.queued())
     write_off_no_routes(completed, state, now)
@@ -1042,7 +1042,7 @@ def step(conn, state, providers, get_quote, now):
             state['error'] = 'Quote capacity temporarily unavailable.'
         except Exception as error:
             category=getattr(error,'category','unknown')
-            sell_study.observe_quote(study,mint,size,now,category)
+            sell_study.observe_quote(study,mint,size,quote_clock(),category)
             record_quote_failure(state, 'exit', error, now, mint, size)
             state['exit_quote_attempts'] = attempts + 1
             state['exit_attempts_since_entry'] = min(exit_attempts + 1, BACKLOG_EXIT_QUOTES_PER_ENTRY)
@@ -1075,8 +1075,9 @@ def step(conn, state, providers, get_quote, now):
             state['exit_quote_attempts'] = attempts + 1
             state['exit_attempts_since_entry'] = min(exit_attempts + 1, BACKLOG_EXIT_QUOTES_PER_ENTRY)
             activity['exit_quotes'] += 1
-            divergent=any(sell_study.diverges(p.get('market_anchor'),fresh_market(p,state,now),size,amount,now) for _,p in group)
-            sell_study.observe_quote(study,mint,size,now,'usable' if amount>SELL_FEE else 'below_fee',divergent)
+            received_at=quote_clock()
+            divergent=any(sell_study.diverges(p.get('market_anchor'),fresh_market(p,state,received_at),size,amount,received_at) for _,p in group)
+            sell_study.observe_quote(study,mint,size,received_at,'usable' if amount>SELL_FEE else 'below_fee',divergent)
             for bot, p in group:
                 was_pending = p['pending']
                 current = fresh_market(p, state, now)
@@ -1116,7 +1117,7 @@ def tick(*, providers=None, get_quote=quote, clock=time.time):
         conn.commit()
         try:
             state['error'] = None
-            completed = step(conn, state, providers or ReadOnlyProviders(), get_quote, now)
+            completed = step(conn, state, providers or ReadOnlyProviders(), get_quote, now, quote_clock=clock)
             with conn:
                 conn.execute('BEGIN IMMEDIATE')
                 current = conn.execute('SELECT revision,lease_until FROM run WHERE id=1').fetchone()
