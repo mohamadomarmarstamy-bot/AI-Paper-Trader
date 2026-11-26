@@ -33,19 +33,68 @@ def trials(conn):
              'report':json.loads(r['report'])} for r in conn.execute('SELECT * FROM local_strategies ORDER BY created')]
 
 
-def specification(conn,rule,now):
+def specification(conn,rule,now,*,state=None):
     active=[r for r in trials(conn) if r['status'] in ('testing','proven')]
     clones=[r for r in active if shape(r['rule']['entry'])==shape(rule['entry'])]
     for row in conn.execute("SELECT data FROM brain_proposals WHERE kind='strategy' AND status='waiting_slot'"):
         if shape(json.loads(row['data'])['rule']['entry'])==shape(rule['entry']):clones.append(row)
     def changes(r):return sum(ast.dump(ast.parse(r['rule'][k],mode='eval'))!=ast.dump(ast.parse(rule[k],mode='eval')) for k in ('entry','exit'))
-    control=min(active,key=lambda r:(changes(r),r['created'])) if active else None
+    state=state or {}
+    current=state.get('strategy') or {}
+    current_version=current.get('version') if not state.get('entry_guard') else None
+    current_id=(current.get('local_rule') or {}).get('id') if current_version else None
+    control=next((r for r in active if r['id']==current_id),None)
+    if control is None and active and not current_version:
+        control=min(active,key=lambda r:(changes(r),r['created']))
     changed=[] if control is None else [k for k in ('entry','exit') if ast.dump(ast.parse(control['rule'][k],mode='eval'))!=ast.dump(ast.parse(rule[k],mode='eval'))]
     return {'family':family(rule),'required_fields':features(rule),'similar_active_or_queued':len(clones),
         'admission':'diversity_blocked' if len(clones)>=2 else 'waiting_slot','frozen_at':now,
         'control_id':control['id'] if control else None,'control_rule':copy.deepcopy(control['rule']) if control else None,
         'changed_expressions':changed,'design':'single_expression_change' if len(changed)==1 else 'distinct_hypothesis',
-        'comparison_scope':'Fresh shared-coin closes only; not randomized, no causal or promotion claim.'}
+        'comparison_scope':'Fresh same-size shared-coin closes only; observational, not causal.',
+        'paired_gate':True,'control_version':current_version,
+        'control_slot':next((r['slot'] for r in conn.execute('SELECT slot FROM local_strategies WHERE id=?',
+                            (control['id'],))),None) if control else None}
+
+
+def promotion_gate(conn,state,rule,slot,now,minimum):
+    """Only newer cloud proposals use the stricter comparator; do not relabel existing trials."""
+    row=conn.execute("SELECT report FROM brain_proposals WHERE id=? AND kind='strategy'",(rule['id'],)).fetchone()
+    spec=(json.loads(row['report']).get('experiment') or {}) if row else {}
+    if not spec.get('paired_gate'):return None
+    version=spec.get('control_version')
+    control_slot='jarvis' if version else spec.get('control_slot')
+    control_id=version or spec.get('control_id')
+    result={'baseline':control_id,'matched':0,'edge_without_best_usd':None,'passed':False}
+    if not control_id or not control_slot:return result
+    # A changed live paper policy is a new comparison, never retroactive evidence.
+    current=state.get('strategy') or {}
+    if version and current.get('version') not in (version,'local-'+rule['id']):return result
+    start=max(rule['created'],spec['frozen_at'])
+    def first_closes(bot,key,ident):
+        out={}
+        # Only internal JSON paths are passed. Preserve full loss from unpriced write-offs.
+        for trade in conn.execute("""SELECT mint,opened,closed,entry_cost,pnl,id FROM trades
+                WHERE bot=? AND opened>=? AND closed<=? AND json_extract(data,?)=?
+                ORDER BY closed,id""",(bot,start,now,key,ident)):
+            out.setdefault(trade['mint'],trade)
+        return out
+    candidate=first_closes(slot,'$.policy.local_rule.id',rule['id'])
+    control=first_closes(control_slot,'$.policy.version' if version else '$.policy.local_rule.id',control_id)
+    pairs=[(a,control[mint]) for mint,a in candidate.items() if mint in control
+           and a['entry_cost']==control[mint]['entry_cost'] and abs(a['opened']-control[mint]['opened'])<=900]
+    # Fix the cohort by when both closes were knowable. Later lucky trades cannot rewrite it.
+    pairs.sort(key=lambda pair:(max(t['closed'] for t in pair),pair[0]['id'],pair[1]['id']))
+    pairs=pairs[:minimum]
+    result['matched']=len(pairs)
+    if len(pairs)<minimum:return result
+    edge=[a['pnl']-b['pnl'] for a,b in pairs]
+    mid=len(edge)//2
+    def without_best(vals):
+        return sum(vals)-max(0,max(vals))
+    result.update(edge_without_best_usd=without_best(edge)/1e6,
+                  passed=all(without_best(part)>0 for part in (edge[:mid],edge[mid:])))
+    return result
 
 
 def comparisons(conn,state,now):

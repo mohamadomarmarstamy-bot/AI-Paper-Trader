@@ -234,7 +234,7 @@ def record_event(conn, at, ident, kind, detail):
     jarvis_hourly_mail.event(conn,at,ident,kind,detail)
 
 
-def submit(api, payload, now=None, *, allow_rotation=False):
+def submit(api, payload, now=None, *, allow_rotation=False, protect_control=None):
     now = time.time() if now is None else now
     if not isinstance(payload, dict) or set(payload) != {'rule','sources'}:
         raise ValueError('Expected rule and sources')
@@ -268,7 +268,7 @@ def submit(api, payload, now=None, *, allow_rotation=False):
             # Recovery and owner pauses retain precedence over experiments.
             healthy=not api.backlog.paused(state,now) and not (state.get('entry_catchup_pause') or {}).get('active')
             healthy=healthy and not api.exit_queue(api.quote_jobs(state,now),now)['backed_up']
-            choice=jarvis_rotation.select(conn,state,now,api.BUY_COST) if healthy else None
+            choice=jarvis_rotation.select(conn,state,now,api.BUY_COST,protect_control=protect_control) if healthy else None
             if choice and state['bots'][choice[1]]['cash']>=api.BUY_COST:
                 slot=jarvis_rotation.pause(conn,state,choice,ident,now)
                 rotation_ends=now+jarvis_rotation.WINDOW_SECONDS
@@ -335,6 +335,14 @@ def review(conn, state, now):
                 status = 'proven'
             else:
                 report['note'] = 'Profitable but not robust across both halves without their biggest winners; keep testing.'
+            if status == 'proven':
+                from jarvis_strategy_memory import promotion_gate
+                match=promotion_gate(conn,state,rule,slot,now,MIN_COINS)
+                if match is not None:
+                    report['frozen_comparison']=match
+                    if not match['passed']:
+                        status='testing'
+                        report['note']='Not promoted: no robust win over the frozen paper baseline.'
             if status == 'failed':
                 del state['local_rules'][slot]
         elif now-rule.get('resumed_at',rule['created']) >= 24*3600 and not rows and not state['bots'][slot]['positions']:

@@ -9,14 +9,14 @@ SCHEMA='''CREATE TABLE IF NOT EXISTS challenger_rotations(
 CREATE UNIQUE INDEX IF NOT EXISTS challenger_one_active ON challenger_rotations((1)) WHERE status IN ('active','draining');'''
 
 
-def select(conn,state,now,minimum_cash=50_250000):
+def select(conn,state,now,minimum_cash=50_250000,*,protect_control=None):
     from jarvis_local_lab import SLOTS
     if conn.execute("SELECT 1 FROM challenger_rotations WHERE status IN ('active','draining')").fetchone():return None
     if conn.execute('SELECT count(*) FROM challenger_rotations WHERE started>?',(now-86400,)).fetchone()[0]>=2:return None
     protected=(state.get('strategy') or {}).get('local_rule',{}).get('id')
     candidates=[]
     for slot,rule in state.get('local_rules',{}).items():
-        if slot not in SLOTS or rule['id']==protected or state['bots'][slot]['positions'] or state['bots'][slot]['cash']<minimum_cash:continue
+        if slot not in SLOTS or rule['id'] in (protected,protect_control) or state['bots'][slot]['positions'] or state['bots'][slot]['cash']<minimum_cash:continue
         candidate=conn.execute("SELECT * FROM local_strategies WHERE id=? AND status='testing'",(rule['id'],)).fetchone()
         if not candidate:continue
         last=conn.execute("SELECT max(closed) FROM trades WHERE bot=? AND json_extract(data,'$.policy.local_rule.id')=?",(slot,rule['id'])).fetchone()[0]

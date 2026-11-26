@@ -105,9 +105,13 @@ def scouting(conn,now=None):
             COALESCE(sum(matched>0 AND matched>=?),0) AS matched,COALESCE(sum(comparable>0 AND comparable>=?),0) AS comparable_matches,
             COALESCE(sum(covered>0 AND covered>=?),0) AS matches_covered_by_active FROM brain_scout_samples WHERE proposal=? AND at>=?''',(cutoff,cutoff,cutoff,cutoff,row['id'],cutoff)).fetchone())
         rule=json.loads(row['data'])['rule']
+        # A token can move pools; do not let one mint unlock an experiment.
+        unique=dict(conn.execute('''SELECT count(DISTINCT CASE WHEN complete>0 AND complete>=? THEN mint END) AS complete_coins,
+            count(DISTINCT CASE WHEN matched>0 AND matched>=? THEN mint END) AS matched_coins
+            FROM brain_scout_samples WHERE proposal=? AND at>=?''',(cutoff,cutoff,row['id'],cutoff)).fetchone())
         ratio=sample['matches_covered_by_active']/sample['comparable_matches'] if sample['comparable_matches'] else None
         result.append({'id':row['id'],'name':rule['name'],'required_fields':fields(rule),**sample,
-            'measured_signal_overlap':ratio,'data_ready':sample['complete']>=10 and sample['matched']>=2,
+            **unique,'measured_signal_overlap':ratio,'data_ready':unique['complete_coins']>=10 and unique['matched_coins']>=2,
             'scope':'Distinct coin/pools ever observed complete or matching during the last 24h, not current signals, entries, fills, or profit. Unknown active indicators do not establish novelty.'})
     return result
 

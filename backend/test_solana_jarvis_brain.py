@@ -25,6 +25,9 @@ class BrainTests(unittest.TestCase):
         with api.connection() as conn,conn:
             state,_=api.read(conn);state.update(enabled=True,last_cycle=NOW)
             conn.execute('UPDATE run SET state=?',(json.dumps(state),))
+    def proposal_id(self):
+        with api.connection() as conn:return conn.execute('SELECT id FROM brain_proposals').fetchone()[0]
+
     def state(self):
         with api.connection() as conn:return api.read(conn)[0]
     def plan(self,**changes):
@@ -111,6 +114,55 @@ class BrainTests(unittest.TestCase):
         r=self.response(plan);r.json.return_value['output'][0]['action']['sources']=[]
         result,error=brain.research_job(api,{'kind':'strategy'},NOW+2,Mock(return_value=r))
         self.assertIsNone(result);self.assertEqual(error,'no_research_sources')
+    def test_cited_response_without_search_action_sources_runs_through_paper_worker(self):
+        rule={'name':'Pressure trial','hypothesis':'Test order pressure with available market fields',
+              'entry':'liquidity >= 50000 and buys_m5 > sells_m5 * 1.5','exit':'gain >= 15'}
+        plan=self.plan(strategy=rule);plan.pop('sources')
+        r=self.response(plan)
+        action,message=r.json.return_value['output']
+        action['action']={'type':'search'}
+        message['content'][0]['annotations']=[
+            {'type':'url_citation','url':SOURCE['url'],'title':SOURCE['title']},
+            {'type':'url_citation','url':SOURCE['url'],'title':'Duplicate'},
+            {'type':'url_citation','url':'https:///missing-host','title':'Invalid'},
+            {'type':'url_citation','url':'https://user:pass@example.org','title':'Invalid'}]
+        post=Mock(return_value=r)
+        brain.cloud_tick(api,clock=lambda:NOW,
+                         researcher=lambda a,j,t:brain.research_job(a,j,t,post))
+        with api.connection() as conn:
+            row=conn.execute('SELECT * FROM brain_proposals').fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row['status'],'waiting_slot')
+            self.assertEqual(json.loads(row['data'])['sources'],[SOURCE])
+            self.assertEqual(conn.execute('SELECT count(*) FROM local_strategies').fetchone()[0],0)
+        with api.connection() as conn,conn:
+            state,_=api.read(conn)
+            state['watch']={f'm{i}':{'mint':f'm{i}','pair':f'p{i}','first':NOW+1,'last':NOW+61,
+                           'liquidity_usd':75000,'age_minutes':8,'buys_m5':20,'sells_m5':8}
+                           for i in range(10)}
+            conn.execute('UPDATE run SET state=?',(json.dumps(state),))
+        with patch.object(api,'entry_evidence',side_effect=lambda conn,row,now:{'market':row}):
+            brain.monitor_tick(api,clock=lambda:NOW+61)
+        with api.connection() as conn:
+            rule_row=conn.execute('SELECT * FROM local_strategies').fetchone()
+            self.assertEqual(rule_row['status'],'testing')
+            self.assertEqual(rule_row['created'],NOW+61)
+            self.assertEqual(conn.execute('SELECT status FROM brain_proposals').fetchone()[0],'testing')
+            self.assertEqual(conn.execute('SELECT count(*) FROM brain_calls').fetchone()[0],1)
+        self.assertIsNone(self.state()['strategy'])
+
+    def test_citations_require_completed_search_and_diagnostic_domain(self):
+        plan=self.plan();plan.pop('sources')
+        for offset,status,quote in [(0,'in_progress',SOURCE),(1,'completed',{'url':'https://docs.python.org.example.com/','title':'Lookalike'})]:
+            with self.subTest(status=status):
+                r=self.response(plan)
+                action,message=r.json.return_value['output']
+                action.update(status=status,action={'type':'search'})
+                message['content'][0]['annotations']=[{'type':'url_citation',**quote}]
+                result,error=brain.research_job(api,{'kind':'engine_error'},NOW+offset,Mock(return_value=r))
+                self.assertIsNone(result)
+                self.assertEqual(error,'no_research_sources')
+
     def test_failed_cloud_call_consumes_reservation_without_logging_body(self):
         r=Mock(status_code=401,content=b'private')
         result,error=brain.research_job(api,{'kind':'strategy'},NOW,Mock(return_value=r))
@@ -153,7 +205,8 @@ class BrainTests(unittest.TestCase):
               'entry':'liquidity >= 50000 and buys_m5 > sells_m5 * 1.5','exit':'gain >= 15'}
         plan=self.plan(strategy=rule)
         brain.apply_plan(api,{'kind':'strategy'},plan,None,NOW)
-        brain.admit_proposal(api,NOW+30)
+        with patch.object(brain.insight,'scouting_status',return_value=[{'id':self.proposal_id(),'data_ready':True}]):
+            brain.admit_proposal(api,NOW+30)
         with api.connection() as conn:
             row=conn.execute('SELECT * FROM local_strategies').fetchone()
             self.assertEqual(row['status'],'testing');self.assertEqual(row['created'],NOW+30)
