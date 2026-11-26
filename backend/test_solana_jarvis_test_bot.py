@@ -76,6 +76,36 @@ class JarvisTests(unittest.TestCase):
         self.assertFalse(jarvis.history(True)['coins'])
         self.assertFalse(database.DATABASE_PATH.exists())
 
+    def test_shadow_study_keeps_baseline_entry_and_never_backfills_later_sell(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from solana_meme_routes import build_router
+        from unittest.mock import Mock
+        jarvis.set_enabled(True)
+        with jarvis.connection() as conn,conn:
+            state,_=jarvis.read(conn)
+            state['strategy']={'version':1,'source':'instant-step','entry':'instant','exit':'step',
+                               'activated_at':self.now,'min_age':0,'min_liquidity':0}
+            conn.execute('UPDATE run SET state=?',(json.dumps(state),))
+        app=FastAPI()
+        app.include_router(build_router(require_session=lambda request:True))
+        client=TestClient(app)
+        path='/jarvis-test-bot/brain/status'
+        self.assertEqual(client.get(path).json()['sell_quote_study']['status'],'queued')
+        quote=Mock(side_effect=self.quote)
+        for _ in range(2):
+            self.now+=5
+            jarvis.tick(providers=self.market,get_quote=quote,clock=lambda:self.now)
+        self.assertEqual(quote.call_count,2)
+        sample=self.state()['sell_quote_study']['samples'][MINT]
+        self.assertEqual(sample['decision'],'unknown')
+        self.assertEqual(sample['evidence'],'missing')
+        self.assertEqual(sample['size'],1_000_000)
+        self.assertEqual(sample['pnl'],-5_350_000)
+        result=client.get(path).json()['sell_quote_study']
+        self.assertEqual((result['sampled'],result['matched'],result['missing']),(1,0,1))
+        self.assertIsNone(result['arms']['challenger']['net_usd'])
+
     def test_estimated_totals_keep_last_sell_quote_and_value_unquoted_holdings_at_cost(self):
         jarvis.set_enabled(True)
         self.advance()

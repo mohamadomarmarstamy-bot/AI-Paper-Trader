@@ -25,6 +25,7 @@ import jarvis_repair as repair
 import jarvis_local_lab as local_lab
 import jarvis_autonomy as autonomy
 import jarvis_experiments as experiments
+import jarvis_sell_quote_study as sell_study
 import jarvis_backlog as backlog
 import jarvis_strategies as lab
 import jarvis_outcomes as outcomes
@@ -100,7 +101,7 @@ CREATE INDEX IF NOT EXISTS trades_mint ON trades(mint);
 def initial():
     return {
         'enabled': False, 'last_cycle': None, 'error': None, 'offset': 0,
-        'watch': {}, 'strategy': None, 'reviewed': 0, 'review': None,
+        'sell_quote_study': sell_study.queued(), 'watch': {}, 'strategy': None, 'reviewed': 0, 'review': None,
         'bots': {bot: {'cash': JARVIS_BUDGET if bot == 'jarvis' else 0,
                        'funding': JARVIS_BUDGET if bot == 'jarvis' else 0,
                        'positions': {}, 'quote_misses': 0, 'entry_misses': 0}
@@ -979,6 +980,7 @@ def record_quote_failure(state, side, error, now, mint=None, amount=None):
 
 def step(conn, state, providers, get_quote, now):
     completed = []
+    study = state.setdefault('sell_quote_study', sell_study.queued())
     write_off_no_routes(completed, state, now)
     activity = state.setdefault('quote_activity', {'since': now, 'entry_quotes': 0, 'paper_entries': 0,
                                                   'exit_quotes': 0, 'deferrals': 0})
@@ -1023,6 +1025,8 @@ def step(conn, state, providers, get_quote, now):
             activity['entry_quotes'] += 1
             for bot in entries[mint]:
                 open_trade(state, bot, row, quantity, now, evidence)
+                if bot=='jarvis' and mint in state['bots'][bot]['positions']:
+                    sell_study.enter(study,state['bots'][bot]['positions'][mint])
                 activity['paper_entries'] += 1
     elif exits:
         attempts = state.get('exit_quote_attempts', 0)
@@ -1037,10 +1041,13 @@ def step(conn, state, providers, get_quote, now):
             activity['deferrals'] += 1
             state['error'] = 'Quote capacity temporarily unavailable.'
         except Exception as error:
+            category=getattr(error,'category','unknown')
+            sell_study.observe_quote(study,mint,size,now,category)
             record_quote_failure(state, 'exit', error, now, mint, size)
             state['exit_quote_attempts'] = attempts + 1
             state['exit_attempts_since_entry'] = min(exit_attempts + 1, BACKLOG_EXIT_QUOTES_PER_ENTRY)
             for bot, p in group:
+                sell_study.exit_failure(study,bot,p,category)
                 p.setdefault('quote_due_since', p['due'])
                 # Existing failed routes start at the second interval after upgrade.
                 failures = min(6, p.get('route_failures', int(p.get('mark_stale', False))) + 1)
@@ -1068,6 +1075,8 @@ def step(conn, state, providers, get_quote, now):
             state['exit_quote_attempts'] = attempts + 1
             state['exit_attempts_since_entry'] = min(exit_attempts + 1, BACKLOG_EXIT_QUOTES_PER_ENTRY)
             activity['exit_quotes'] += 1
+            divergent=any(sell_study.diverges(p.get('market_anchor'),fresh_market(p,state,now),size,amount,now) for _,p in group)
+            sell_study.observe_quote(study,mint,size,now,'usable' if amount>SELL_FEE else 'below_fee',divergent)
             for bot, p in group:
                 was_pending = p['pending']
                 current = fresh_market(p, state, now)
@@ -1088,6 +1097,7 @@ def step(conn, state, providers, get_quote, now):
                 p['due'] = now + (POLL if was_pending or p['pending'] else interval)
     state['last_cycle'] = now
     write_off_no_routes(completed, state, now)
+    sell_study.settle(study,completed)
     return completed
 
 

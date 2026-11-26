@@ -4,7 +4,10 @@ const path=require('node:path');
 const fs=require('node:fs');
 const {chromium}=require(process.env.PAPER_PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve(__dirname,'..');
+const arm={net_usd:null,realized_drawdown_usd:null,failed_exit_attempts:0,no_route_attempts:0};
 const sample={
+  sell_quote_study:{status:'queued',sampled:0,limit:100,matched:0,matched_closed:0,unknown:0,missing:0,unavailable:0,
+    blocked_winners:0,arms:{baseline:arm,challenger:arm}},
   fallback_scorecard:{attempts:3,pools:3,post_matched:3,applied:2,matched:1,durable:0,recurrences:1,
     verdict:'change_approach',reserved_cu:43,immediate:{candles:[0,2],rsi:[0,2],volume_ratio:[0,2],complete:[0,2]},
     series:{candles:[0,1,1,1,0],rsi:[0,1,1,1,0],volume_ratio:[0,1,1,1,0],complete:[0,1,1,1,0]}},
@@ -40,6 +43,8 @@ test('investigations summarize active work and preserve disclosures at phone and
     });
     await page.goto('https://jarvis.test/jarvis-test-bot/brain');
     await page.getByText('3 of 39 charts complete').waitFor();
+    await page.getByText('Queued · 0/100 Jarvis paper entries').waitFor();
+    assert.match(await page.locator('#sell-study').textContent(),/preceding 15 seconds/);
     await page.getByText('Review the approach.',{exact:false}).waitFor();
     assert.match(await page.locator('#fallback-score').textContent(),/43 CU reserved/);
     assert.match(await page.locator('#fallback-score').textContent(),/0\/1 → 1\/1 → 1\/1 → 1\/1 → 0\/1/);

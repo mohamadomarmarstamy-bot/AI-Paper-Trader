@@ -24,6 +24,7 @@ import jarvis_evidence as insight
 import jarvis_strategy_memory as strategy_memory
 import jarvis_improvement as improvement
 import jarvis_fallback_score as scorecard
+import jarvis_sell_quote_study as sell_study
 from jarvis_repair_policy import chart_recovered
 
 LOG=logging.getLogger(__name__)
@@ -592,7 +593,7 @@ def status(conn,now=None):
     waiting=[json.loads(r['report']).get('admission_check',{}) for r in conn.execute(
         "SELECT report FROM brain_proposals WHERE kind='strategy' AND status='waiting_slot' ORDER BY created LIMIT 3")]
     due=conn.execute("SELECT due FROM research_tasks WHERE name='brain-strategy'").fetchone()
-    return {'fallback_scorecard':scorecard.status(conn,now),'admission_checks':[r for r in waiting if r],'strategy_due_at':due[0] if due else None,
+    return {'sell_quote_study':sell_study.report(conn),'fallback_scorecard':scorecard.status(conn,now),'admission_checks':[r for r in waiting if r],'strategy_due_at':due[0] if due else None,
         'enabled':enabled(),'cloud_configured':bool(os.getenv('OPENAI_API_KEY','').strip()),'model':MODEL,
         'monthly_budget_usd':MONTHLY_CENTS/100,'reserved_this_month_usd':spent/100,
         'reservation_per_call_usd':RESERVATION_CENTS/100,'daily_budget_usd':DAILY_CENTS/100,
