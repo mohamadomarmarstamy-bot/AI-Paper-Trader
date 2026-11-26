@@ -125,6 +125,10 @@ def check_test(source,file,name):
     return True
 
 
+def chart_recovered(eligible, complete):
+    return eligible >= 10 and eligible >= complete >= .2 * eligible
+
+
 def symptom_present(kind,snapshot):
     if not snapshot.get('paper_enabled'):return False
     if kind=='exit_backlog':return snapshot.get('oldest_quote_wait',0)>=120
@@ -141,6 +145,6 @@ def goal_met(kind,before,after):
     if kind=='exit_backlog':return after.get('oldest_quote_wait',0)<120 and after.get('oldest_quote_wait',0)<before.get('oldest_quote_wait',0)
     if kind=='worker_stalled':return after['cycle_age']<45
     if kind=='chart_data_gap':return (after.get('complete_candidates',0)>before.get('complete_candidates',0)
-        and (after.get('eligible_candidates',0)<10 or after.get('complete_candidates',0)/after['eligible_candidates']>=.2))
+        and chart_recovered(after.get('eligible_candidates',0), after.get('complete_candidates',0)))
     if kind=='engine_error':return not after.get('engine_error_present',True)
     return False

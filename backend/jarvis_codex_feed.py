@@ -31,6 +31,10 @@ class Unavailable(Exception):
     def __init__(self,status):self.status=status
 
 
+def hourly_allowance(hour):
+    return min(DAILY_CU_LIMIT, max(16, DAILY_CU_LIMIT * (hour + 1) // 24))
+
+
 def mode():return os.getenv('JARVIS_CODEX_MODE','trial').strip().lower()
 
 
@@ -203,7 +207,7 @@ def tick(api,*,clock):
         # reserve() still enforces the hard limits immediately before each call.
         if daily+16>DAILY_CU_LIMIT or monthly+16>MONTHLY_CU_LIMIT:return
         # Release fallback allowance across UTC hours, with one request pair available immediately.
-        paced_limit=min(DAILY_CU_LIMIT, max(16, int(DAILY_CU_LIMIT*(dt.hour+1)/24)))
+        paced_limit=hourly_allowance(dt.hour)
         if mode()=='fallback' and daily+16>paced_limit:return
         due=conn.execute("SELECT due FROM research_tasks WHERE name='codex-priority'").fetchone()
         if due and due['due']>now:return
@@ -243,8 +247,9 @@ def tick(api,*,clock):
         conn.execute('DELETE FROM codex_outcomes WHERE at<?',(at-30*86400,))
 
 
-def status(conn):
-    now=datetime.now(timezone.utc);month=now.strftime('%Y-%m');day=now.strftime('%Y-%m-%d')
+def status(conn, now=None):
+    now=datetime.now(timezone.utc) if now is None else datetime.fromtimestamp(now,timezone.utc)
+    month=now.strftime('%Y-%m');day=now.strftime('%Y-%m-%d')
     counts={r['status']:r['n'] for r in conn.execute('SELECT status,count(*) AS n FROM codex_samples GROUP BY status')}
     return {'configured':bool(os.getenv('JARVIS_CODEX_API_KEY','').strip()),'mode':mode(),
         'impact_since_tracking':dict(conn.execute('SELECT count(*) AS fallback_charts,COALESCE(sum(complete_rules>0),0) AS charts_completing_rules,COALESCE(sum(matching_rules>0),0) AS charts_matching_rules FROM codex_outcomes').fetchone()),

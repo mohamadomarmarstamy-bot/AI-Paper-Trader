@@ -60,6 +60,50 @@ class BrainTests(unittest.TestCase):
         with api.connection() as conn:
             self.assertEqual(conn.execute('SELECT status FROM brain_incidents').fetchone()[0],'resolved')
             self.assertEqual(conn.execute('SELECT count(*) FROM brain_mail').fetchone()[0],2)
+    def test_chart_observer_requires_eligible_samples_and_emails_chart_counts(self):
+        def observe(start, duration, eligible, complete, problems=()):
+            snapshot = {'paper_enabled':True, 'cycle_age':1, 'chart_coverage':{
+                'eligible':eligible,'reasons':{'complete':complete}}}
+            with patch.object(brain,'symptoms',return_value=(set(problems),snapshot)):
+                for offset in range(0,duration+1,30):
+                    brain.observe(api,start+offset)
+        observe(NOW,600,23,2,['chart_data_gap'])
+        observe(NOW+630,180,4,3)
+        with api.connection() as conn:
+            self.assertIsNone(conn.execute('SELECT resolved FROM brain_incidents').fetchone()[0])
+            self.assertEqual(conn.execute("SELECT count(*) FROM improvement_tasks WHERE status='observed_recovery'").fetchone()[0],0)
+        observe(NOW+840,120,20,5)
+        with api.connection() as conn:
+            body=json.loads(conn.execute("SELECT payload FROM brain_mail WHERE id LIKE '%/resolved'").fetchone()[0])['text']
+        self.assertIn('2/23 to 5/20',body)
+        self.assertNotIn('exit-check delay',body)
+
+    def test_chart_review_requires_measured_usefulness_sources_and_binding_cap(self):
+        options = [dict(name=name,source=url,price='fixture price',quota='fixture quota',
+                        coverage='same-pool candles',unknown='eligible overlap',trial='compare six pools')
+                   for name,url in [('Codex','https://www.codex.io/pricing'),
+                                    ('GeckoTerminal','https://support.coingecko.com/articles/fixture')]]
+        sources=[{'url':o['source']} for o in options]
+        self.assertEqual(brain.provider_options(options,sources[:1]),[])
+        verified=brain.provider_options(options,sources)
+        incident={'id':'fixture','kind':'chart_data_gap','opened':NOW-600,
+                  'plan':json.dumps({'provider_options':verified,'researched_at':NOW})}
+        snapshot={'chart_coverage':{'eligible':23,'reasons':{'complete':2}},
+                  'fallback_allowance':{'remaining_monthly_cu':0}}
+        with api.connection() as conn,conn:
+            brain.provider_decision(conn,incident,snapshot,NOW)
+            self.assertFalse(conn.execute('SELECT 1 FROM brain_mail').fetchone())
+            conn.executemany('INSERT INTO codex_outcomes(at,complete_rules,matching_rules) VALUES (?,1,0)',[(NOW-i,) for i in range(3)])
+            for _ in range(2):brain.provider_decision(conn,incident,snapshot,NOW)
+            self.assertEqual(conn.execute('SELECT count(*) FROM brain_mail').fetchone()[0],1)
+        post=Mock(return_value=Mock(status_code=202))
+        REAL_MAIL_TICK(api,NOW,post=post)
+        payload=post.call_args.kwargs['json']
+        self.assertEqual(payload['to'],['owner@example.com'])
+        self.assertIn('2/23',payload['text'])
+        self.assertIn('3 fallback observations',payload['text'])
+        self.assertIn('fixture price',payload['html'])
+
     def test_healthy_monitoring_does_not_invalidate_trading_revision(self):
         with api.connection() as conn:before=api.read(conn)[1]
         with patch.object(brain,'symptoms',return_value=(set(),{})):brain.observe(api,NOW)
@@ -99,6 +143,17 @@ class BrainTests(unittest.TestCase):
             {'type':'web_search_call','status':'completed','action':{'sources':[SOURCE]}},
             {'type':'message','content':[{'type':'output_text','text':json.dumps(plan)}]}]}
         r=Mock(status_code=200,content=b'{}');r.json.return_value=data;return r
+    def test_local_investigation_reasons_without_search(self):
+        plan=self.plan()
+        plan.pop('sources')
+        response=self.response(plan)
+        response.json.return_value['output'].pop(0)
+        post=Mock(return_value=response)
+        result,error=brain.research_job(api,{'kind':'chart_data_gap','local_reasoning':True},NOW,post)
+        self.assertIsNone(error)
+        self.assertEqual(result['sources'],[])
+        self.assertNotIn('tools',post.call_args.kwargs['json'])
+
     def test_research_requires_sources_and_never_returns_credentials(self):
         plan=self.plan();plan.pop('sources')
         post=Mock(return_value=self.response(plan))
