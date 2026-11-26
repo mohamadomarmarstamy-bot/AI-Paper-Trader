@@ -23,6 +23,7 @@ import jarvis_audit as audit
 import jarvis_evidence as insight
 import jarvis_strategy_memory as strategy_memory
 import jarvis_improvement as improvement
+import jarvis_fallback_score as scorecard
 from jarvis_repair_policy import chart_recovered
 
 LOG=logging.getLogger(__name__)
@@ -182,6 +183,11 @@ def provider_decision(conn, incident, snapshot, now):
              "The current Jarvis allowance cannot cover another request pair.",
              "Recommendation: keep the current free primary and paced fallback. Decide whether to commission "
              "a separate paper comparison for additional coverage. Incremental coverage is unknown."]
+    score = scorecard.status(conn, now)
+    lines.append(f"Last 24 hours: {score['matched']} exact coin/pools had all follow-ups; "
+                 f"{score['durable']} retained newly complete coverage through six minutes, "
+                 f"{score['recurrences']} gains lapsed. {score['reserved_cu']} CU reserved across recorded attempts; "
+                 "actual billed CU unknown. Later primary refreshes may contribute.")
     for option in options:
         lines.append(f"{option['name']} — {option['price']}. Quota: {option['quota']}. "
                      f"Applicable data: {option['coverage']}. Unknown: {option['unknown']}. "
@@ -200,6 +206,7 @@ def observe(api,now):
         problems,snapshot=symptoms(api,conn,state,now)
         # Pausing the owner-run switch isn't proof that an incident recovered.
         if not state['enabled']:return
+        scorecard.observe(conn,state,now,api.ENTRY_WINDOW)
         for kind in TITLES:
             incident=conn.execute('SELECT * FROM brain_incidents WHERE kind=? AND resolved IS NULL',(kind,)).fetchone()
             if kind in problems:
@@ -286,6 +293,7 @@ def build_job(api,now):
             kind='strategy';ident='strategy/'+str(int(now))
         conn.execute("INSERT OR REPLACE INTO research_tasks VALUES ('brain-cloud',?)",(now+180,))
         _,snapshot=symptoms(api,conn,state,now)
+        if kind=='chart_data_gap':snapshot['fallback_scorecard']=scorecard.status(conn,now)
         memory=[{'kind':r['kind'],'status':r['status'],'plan':{k:v for k,v in json.loads(r['plan']).items() if k in ('summary','hypothesis','checks','applied_action')}} for r in conn.execute(
             'SELECT kind,status,plan FROM brain_incidents WHERE plan!=? ORDER BY opened DESC LIMIT 4',('{}',))]
         rules=[{'id':r['id'],'status':r['status'],'rule':json.loads(r['rule']),'report':json.loads(r['report'])} for r in conn.execute(
@@ -584,7 +592,7 @@ def status(conn,now=None):
     waiting=[json.loads(r['report']).get('admission_check',{}) for r in conn.execute(
         "SELECT report FROM brain_proposals WHERE kind='strategy' AND status='waiting_slot' ORDER BY created LIMIT 3")]
     due=conn.execute("SELECT due FROM research_tasks WHERE name='brain-strategy'").fetchone()
-    return {'admission_checks':[r for r in waiting if r],'strategy_due_at':due[0] if due else None,
+    return {'fallback_scorecard':scorecard.status(conn,now),'admission_checks':[r for r in waiting if r],'strategy_due_at':due[0] if due else None,
         'enabled':enabled(),'cloud_configured':bool(os.getenv('OPENAI_API_KEY','').strip()),'model':MODEL,
         'monthly_budget_usd':MONTHLY_CENTS/100,'reserved_this_month_usd':spent/100,
         'reservation_per_call_usd':RESERVATION_CENTS/100,'daily_budget_usd':DAILY_CENTS/100,
