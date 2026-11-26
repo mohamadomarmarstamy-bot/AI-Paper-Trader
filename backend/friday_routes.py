@@ -2,6 +2,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse
 
+from friday_trials import advance, status as trial_status
 from friday_research import capture, latest
 from pro_ticker_http_security import require_same_origin
 from universe import latest_friday_scan
@@ -17,13 +18,15 @@ def friday_page():
 @router.get('/ai-friday/research')
 def friday_status():
     import os
-    return {'execution_enabled': False, 'passive_capture': os.getenv('FRIDAY_RESEARCH_ENABLED', '').lower() == 'true', 'latest': latest()}
+    return {'execution_enabled': False, 'passive_capture': os.getenv('FRIDAY_RESEARCH_ENABLED', '').lower() == 'true', 'latest': latest(), 'trials': trial_status()}
 
 
 @router.post('/ai-friday/research')
 def friday_capture(request: Request):
     require_same_origin(request)
-    return {'message': capture(latest_friday_scan()), **friday_status()}
+    message = capture(latest_friday_scan())
+    advance()
+    return {'message': message, **friday_status()}
 
 
 async def research_worker():
@@ -40,4 +43,8 @@ async def research_worker():
                 last_finished = scan[0]
             except sqlite3.Error:
                 logging.getLogger(__name__).exception('Friday research capture failed')
+        try:
+            await asyncio.to_thread(advance)
+        except (sqlite3.Error, ValueError, TypeError):
+            logging.getLogger(__name__).exception('Friday simulation evidence unavailable')
         await asyncio.sleep(15)
