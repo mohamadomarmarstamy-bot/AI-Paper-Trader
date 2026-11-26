@@ -283,16 +283,22 @@ def observe(api,now):
             conn.execute('UPDATE run SET state=?,revision=? WHERE id=1',(json.dumps(state),revision+1))
 
 
+def recent_chart_episodes(conn,now,cutoff):
+    episodes = conn.execute("""SELECT count(*) AS n,min(opened) AS first,max(last_seen) AS latest
+        FROM brain_incidents WHERE kind='chart_data_gap' AND opened>? AND opened<=?""",
+        (cutoff,now)).fetchone()
+    if episodes['n']<2 or now-episodes['first']<3600 or now-episodes['latest']>3*3600:
+        return 0
+    return episodes['n']
+
+
 def claim_provider_followup(api, conn, state, now):
     previous = conn.execute('SELECT * FROM brain_provider_review WHERE id=1').fetchone()
     if previous and previous['next_attempt'] > now:
         return None
     cutoff = max(now-86400, (previous['researched_at'] or 0) if previous else 0)
-    episodes = conn.execute("""SELECT count(*) AS n,min(opened) AS first,max(last_seen) AS latest
-        FROM brain_incidents WHERE kind='chart_data_gap' AND opened>? AND opened<=?""",
-        (cutoff,now)).fetchone()
-    if episodes['n']<2 or now-episodes['first']<3600 or now-episodes['latest']>3*3600:
-        return None
+    episodes=recent_chart_episodes(conn,now,cutoff)
+    if not episodes:return None
     # The ordinary incident scheduler runs first. Also yield to urgent work before its incident confirms.
     problems,snapshot = symptoms(api,conn,state,now)
     if problems & {'exit_backlog','worker_stalled','engine_error'}:
@@ -306,8 +312,8 @@ def claim_provider_followup(api, conn, state, now):
         ON CONFLICT(id) DO UPDATE SET claim=excluded.claim,next_attempt=excluded.next_attempt,status=excluded.status""",
         (claim,now+6*3600))
     conn.execute("INSERT OR REPLACE INTO research_tasks VALUES ('brain-cloud',?)",(now+180,))
-    return {'id':claim,'kind':'provider_followup','confirmed_episodes':episodes['n'],
-            'latest_episode_seen':episodes['latest'],'chart_coverage':snapshot.get('chart_coverage',{}),
+    return {'id':claim,'kind':'provider_followup','confirmed_episodes':episodes,
+            'chart_coverage':snapshot.get('chart_coverage',{}),
             'fallback_allowance':snapshot.get('fallback_allowance',{})}
 
 
@@ -406,8 +412,33 @@ def research_sources(values,domains=()):
 PROVIDER_HOSTS = {
     'GeckoTerminal': {'apiguide.geckoterminal.com','docs.coingecko.com','support.coingecko.com'},
     'Codex': {'www.codex.io','docs.codex.io'},
-    'Birdeye': {'docs.birdeye.so'},
+    'Birdeye': {'docs.birdeye.so','data.birdeye.so'},
 }
+
+
+PROVIDER_DOCS = {
+    'Birdeye':'https://data.birdeye.so/docs/data-api/price-ohlcv/get-defi-v3-ohlcv-pair',
+    'Codex':'https://docs.codex.io/api-reference/queries/getbars',
+    'GeckoTerminal':'https://docs.coingecko.com/reference/pool-ohlcv-contract-address',
+}
+
+
+def queue_provider_information(conn,claim,options,now):
+    # Called within the successful review write transaction, under BEGIN IMMEDIATE.
+    names = [name for name in PROVIDER_DOCS if any(o['name']==name for o in options)]
+    count = recent_chart_episodes(conn,now,now-86400)
+    if len(names)<2 or not count:return
+    if conn.execute("""SELECT 1 FROM brain_mail WHERE id GLOB 'provider-info/*'
+        AND (sent IS NULL OR sent>? OR created>?) LIMIT 1""",(now-7*86400,now-7*86400)).fetchone():
+        return
+    subject='Jarvis paper research · Chart provider reading list'
+    lines=[f'Jarvis recorded {count} chart coverage incidents in the past 24 hours.',
+           'Official chart documentation for the research candidates:',
+           *(f'{name} — {PROVIDER_DOCS[name]}' for name in names),
+           'Coverage on eligible pools and prices have not been tested. No purchase is recommended.']
+    payload={'subject':subject,'text':'\n\n'.join(lines)}
+    conn.execute('INSERT OR IGNORE INTO brain_mail(id,created,payload,due) VALUES (?,?,?,?)',
+                 ('provider-info/'+claim,now,json.dumps(payload),now))
 
 
 def provider_options(options, sources):
@@ -531,12 +562,13 @@ def apply_plan(api,job,plan,error,now):
     with api.connection() as conn,conn:
         conn.execute('BEGIN IMMEDIATE')
         if job['kind']=='provider_followup':
-            # This lane can only write its own research record. Old claims cannot publish a late result.
-            sources=research_sources((plan or {}).get('sources',[]),DIAGNOSTIC_DOMAINS)
+            # Only the current successful claim may atomically publish and enqueue its reading list.
+            sources=research_sources((plan or {}).get('sources',[]),set().union(*PROVIDER_HOSTS.values()))
             options=provider_options((plan or {}).get('provider_options',[]),sources)
             if options and not error:
-                conn.execute("""UPDATE brain_provider_review SET status='completed',options=?,researched_at=?,next_attempt=?
+                updated=conn.execute("""UPDATE brain_provider_review SET status='completed',options=?,researched_at=?,next_attempt=?
                     WHERE id=1 AND claim=? AND status='researching'""",(json.dumps(options),now,now+7*86400,job['id']))
+                if updated.rowcount==1:queue_provider_information(conn,job['id'],options,now)
             else:
                 conn.execute("""UPDATE brain_provider_review SET status=?,next_attempt=?
                     WHERE id=1 AND claim=? AND status='researching'""",(error or 'insufficient_provider_evidence',now+6*3600,job['id']))
