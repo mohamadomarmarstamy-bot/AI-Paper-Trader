@@ -29,6 +29,13 @@ async function refresh(method) {
         };
         element('remedy').textContent = remedies[trials.health] || '';
         element('phase-health').textContent = extended.health ? extended.health.phase.replaceAll('_',' ') + ' · ' + extended.health.reason.replaceAll('_',' ') + ' · ' + new Date(extended.health.checked*1000).toLocaleString() : 'Extended-hours capture awaits its first cycle.';
+        items('replays', extended.replays?.length ? extended.replays.map(r =>
+            r.symbol + ' · ' + new Date(r.decision_at*1000).toLocaleString() + ' · ' +
+            r.reason.replaceAll('_',' ') + ' · ' + r.outcome.replaceAll('_',' ') +
+            (r.net === null ? '' : ' · $' + r.net.toFixed(3)) + ' · gate: ' + r.evidence.decision_gate.replaceAll('_',' ') +
+            ' · scan lag ' + (r.decision_at-r.scanned_at).toFixed(1) + 's · quote ' + (r.evidence.quote_at || 'missing') +
+            ' · minute bar ' + (r.evidence.candle_at || 'missing') + ' · ' + r.evidence.version +
+            (r.evidence.alert ? ' · Pro Ticker published ' + r.evidence.alert.published + ', first seen ' + r.evidence.alert.first_seen : '')) : ['No replay observations recorded.']);
         items('phase-results', extended.probes.length ? extended.probes.map(p => p.symbol + ' · ' + p.phase.replaceAll('_',' ') + ' · ' + p.state + (p.net === null ? '' : ' · modeled net $' + p.net.toFixed(3))) : ['No extended-hours probes recorded.']);
         items('positions', trials.positions.length ? trials.positions.map(p => p.symbol + ' · ' + p.shares + ' modeled shares · regular session') : ['No open simulated positions.']);
         items('outcomes', trials.history.length ? trials.history.map(p => p.symbol + ' · ' + p.source_group.replaceAll('_', ' ') + ' · ' + p.outcome.scenarios.map(s =>

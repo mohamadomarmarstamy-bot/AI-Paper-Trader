@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo
 
 import database
 from day_trader_strategy import POLICY, VERSION, stamp
+import friday_phase
+import friday_replay
 from friday_research import COHORT, classify, ledger_path
 
 TRIAL_VERSION = 'friday-breakout-v1'
@@ -115,9 +117,11 @@ def advance(*, source=None, target=None, clock=time.time):
         raise ValueError('Friday requires a separate ledger')
     with closing(sqlite3.connect(path, timeout=2)) as db, db:
         db.row_factory = sqlite3.Row
-        db.executescript(SCHEMA)
+        db.executescript(SCHEMA + friday_replay.SCHEMA)
         db.execute('BEGIN IMMEDIATE')
+        decisions = {}
         def health(reason):
+            friday_phase.regular_replay(db,now,reason,decisions)
             db.execute('INSERT OR REPLACE INTO friday_trial_health VALUES(1,?,?)',(now,reason))
             return reason
         source = source or database.DATABASE_PATH
@@ -154,22 +158,35 @@ def advance(*, source=None, target=None, clock=time.time):
                 return health('awaiting_fresh_friday_scan')
             candidates = db.execute("""SELECT symbol,evidence FROM observations WHERE finished=? AND reason='review_candidate'
                 ORDER BY change DESC,spread,symbol""",(newest['finished'],)).fetchall()
+            for symbol,gate,evidence in db.execute('SELECT symbol,reason,evidence FROM observations WHERE finished=? AND symbol IN (?,?,?,?)',(newest['finished'],*sorted(COHORT))):
+                decisions[symbol]=(gate,{'scanner_completed':newest['finished'],'snapshot':decoded(evidence,dict)})
             admitted = 0
             for candidate in candidates:
                 if db.execute('SELECT count(*) FROM friday_trials WHERE closed IS NULL').fetchone()[0] >= MAX_OPEN:
+                    for other in candidates:
+                        sym=other['symbol']
+                        if decisions[sym][0]=='review_candidate':
+                            decisions[sym]=('open_position_cap',decisions[sym][1])
                     return health('open_position_cap')
                 symbol = candidate['symbol']
-                if symbol not in COHORT or classify(symbol,json.loads(candidate['evidence']),now) != 'review_candidate':
+                gate=classify(symbol,json.loads(candidate['evidence']),now)
+                if symbol not in COHORT or gate != 'review_candidate':
+                    decisions[symbol]=(gate,decisions[symbol][1])
                     continue
                 row = stocks.execute("""SELECT * FROM (SELECT * FROM day_trader_experiments ORDER BY rowid DESC LIMIT 64) WHERE symbol=?
                     AND frozen_at BETWEEN ? AND ? ORDER BY frozen_at DESC,request_id LIMIT 1""",(symbol,now-15,now)).fetchone()
                 if not row or row['outcome_json']:
+                    decisions[symbol]=('chart_already_resolved' if row else 'missing_timely_chart',decisions[symbol][1])
                     continue
                 chart = decoded(row['decision_json'],dict)
+                proof=decisions[symbol][1]
+                proof['chart']=chart
+                decisions[symbol]=('independent_chart_gate_failed',proof)
                 plan = entry_plan(chart,now)
                 if plan and chart['observed_at'] == row['frozen_at']:
                     inserted = db.execute('INSERT OR IGNORE INTO friday_trials VALUES(?,?,?,?,?,?,NULL,NULL)',
                                 (row['request_id'],symbol,now,'regular_session',json.dumps(plan),plan['expires_at'])).rowcount
+                    decisions[symbol]=("simulated_position_opened" if inserted else "owned_symbol_or_duplicate_chart",proof)
                     if inserted:
                         alert = None
                         if db.execute("SELECT 1 FROM sqlite_master WHERE name='alerts'").fetchone():

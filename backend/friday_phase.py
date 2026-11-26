@@ -5,6 +5,7 @@ import json
 import sqlite3
 import time
 
+import friday_replay
 from day_trader_strategy import bars
 from execution_quotes import parse_snapshot
 from fast_mover_discovery import EASTERN
@@ -67,9 +68,13 @@ def tick(batch, calendar, *, now, path):
     phase, start, end = window(now,calendar)
     with closing(sqlite3.connect(path,timeout=2)) as db, db:
         db.row_factory = sqlite3.Row
-        db.executescript(SCHEMA)
+        db.executescript(SCHEMA + friday_replay.SCHEMA)
         db.execute('BEGIN IMMEDIATE')
+        quotes = {}
+        details = {}
         def report(reason):
+            if phase != 'regular_session':
+                friday_replay.record(db,phase,start,end,now,batch,quotes,details,reason)
             db.execute('INSERT OR REPLACE INTO phase_health VALUES(1,?,?,?)',(phase,reason,now))
             return reason
         db.execute("UPDATE phase_probes SET state='unmeasured' WHERE state='open' AND due+15 < ?",(now,))
@@ -78,7 +83,6 @@ def tick(batch, calendar, *, now, path):
         if not batch or not 0 <= now-batch[0] <= 15:
             return report('waiting_for_fresh_scanner_batch')
         captured, snapshots = batch
-        quotes = {}
         for symbol in sorted(COHORT.intersection(snapshots)):
             raw = snapshots[symbol]
             if not isinstance(raw,dict):
@@ -117,12 +121,14 @@ def tick(batch, calendar, *, now, path):
         reason = 'missing_contiguous_phase_chart'
         for symbol,(q,qt) in quotes.items():
             rows = [json.loads(r[0]) for r in db.execute('SELECT candle FROM phase_bars WHERE symbol=? AND stamp>=? ORDER BY stamp DESC LIMIT 3',(symbol,start))][::-1]
+            details[symbol] = ('missing_contiguous_phase_chart',rows)
             if len(rows)!=3 or any(b['t']-a['t']!=60 for a,b in zip(rows,rows[1:])) or not 0 <= now-rows[-1]['t']-60 <= 30:
                 continue
             a,b,c = rows
             if not (qt >= c['t']+60 and a['c'] < b['c'] < c['c'] and c['c'] > max(a['h'],b['h'])
                     and c['v'] >= max(a['v'],b['v']) and c['c'] <= q['ask'] <= c['c']*1.005
                     and (q['ask']/q['bid']-1) <= .0015 and q['ask'] <= 2000):
+                details[symbol] = ('phase_momentum_or_liquidity_skip',rows)
                 reason = 'phase_momentum_or_liquidity_skip'
                 continue
             # One probe across the entire cohort per phase/day; immutable on replay.
@@ -130,7 +136,11 @@ def tick(batch, calendar, *, now, path):
             evidence = json.dumps({'bars':rows,'quote':q,'calendar':calendar,'feed':'iex'})
             inserted = db.execute("INSERT OR IGNORE INTO phase_probes VALUES(?,?,?,?,?,?,'open',NULL,NULL,NULL,?)",
                                   (intent,symbol,phase,now,q['ask'],now+60,evidence))
-            return report('prospective_probe_opened' if inserted.rowcount else 'phase_daily_cap')
+            reason = 'prospective_probe_opened' if inserted.rowcount else 'phase_daily_cap'
+            details[symbol]=(reason,rows)
+            for other in quotes.keys()-details.keys():
+                details[other]=('not_evaluated_after_first_qualified_symbol',None)
+            return report(reason)
         return report(reason)
 
 
@@ -141,7 +151,7 @@ def advance():
 def status():
     from friday_paper_boundary import preview
     path = ledger_path()
-    empty = {'health':None,'probes':[]}
+    empty = {'health':None,'probes':[],'replays':[]}
     if not path.exists():
         return empty
     with closing(sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True)) as db:
@@ -151,5 +161,24 @@ def status():
             return empty
         health = db.execute('SELECT phase,reason,checked FROM phase_health WHERE id=1').fetchone()
         rows = db.execute('SELECT intent,symbol,phase,opened,due,state,net,ask,bid FROM phase_probes ORDER BY opened DESC LIMIT 20')
-        return {'health':dict(health) if health else None,'probes':[{**dict(r),'entry_preview':preview(r,'buy'),
+        return {'replays':friday_replay.summary(db),'health':dict(health) if health else None,'probes':[{**dict(r),'entry_preview':preview(r,'buy'),
                 'exit_preview':preview(r,'sell') if r['state']=='measured' else None} for r in rows]}
+
+def regular_replay(db, now, reason, decisions):
+    phase,start,end=window(now,_calendar)
+    batch=_latest_batch
+    if phase!='regular_session':
+        return
+    if not batch:
+        friday_replay.record(db,phase,start,end,now,None,{},decisions,reason)
+        return
+    scanned,snapshots=batch
+    quotes={}
+    if 0 <= now-scanned <= 15:
+        for symbol in COHORT.intersection(snapshots):
+            q=parse_snapshot(symbol,snapshots[symbol],feed='iex',now=now)
+            if q['quote_fresh'] and q['trade_fresh']:
+                qt,tt=now-q['quote_age_seconds'],now-q['trade_age_seconds']
+                if max(start,now-15) <= min(qt,tt) and max(qt,tt)<=scanned:
+                    quotes[symbol]=q,qt
+    friday_replay.record(db,phase,start,end,now,batch,quotes,decisions,reason)
