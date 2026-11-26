@@ -256,24 +256,30 @@ def submit(api, payload, now=None, *, allow_rotation=False, protect_control=None
         conn.execute('BEGIN IMMEDIATE')
         state, _ = api.read(conn)
         if not state['enabled']:
+            if allow_rotation:return {'status':'full','reason':'paper_engine_paused'}
             raise ValueError('Paper engine is paused')
         if conn.execute('SELECT 1 FROM local_strategies WHERE id=?',(ident,)).fetchone():
             record_event(conn,now,ident,'duplicate',{'name':rule['name']})
             return {'id':ident,'status':'duplicate'}
         rotation_ends=None
         occupied = {r['slot'] for r in conn.execute("SELECT slot FROM local_strategies WHERE status IN ('testing','proven')")}
-        slot = next((slot for slot in SLOTS if slot not in occupied and not state['bots'][slot]['positions']), None)
-        if slot is None and allow_rotation:
+        vacant=[slot for slot in SLOTS if slot not in occupied and not state['bots'][slot]['positions']]
+        slot=next((slot for slot in vacant if not state['bots'][slot].get('local_funded')
+                   or state['bots'][slot]['cash']>=api.BUY_COST),None)
+        reason={'reason':'vacant_slots_lack_cash' if vacant else 'all_slots_occupied'}
+        if allow_rotation:
             import jarvis_rotation
-            # Recovery and owner pauses retain precedence over experiments.
-            healthy=not api.backlog.paused(state,now) and not (state.get('entry_catchup_pause') or {}).get('active')
-            healthy=healthy and not api.exit_queue(api.quote_jobs(state,now),now)['backed_up']
-            choice=jarvis_rotation.select(conn,state,now,api.BUY_COST,protect_control=protect_control) if healthy else None
-            if choice and state['bots'][choice[1]]['cash']>=api.BUY_COST:
-                slot=jarvis_rotation.pause(conn,state,choice,ident,now)
-                rotation_ends=now+jarvis_rotation.WINDOW_SECONDS
+            if api.backlog.paused(state,now) or (state.get('entry_catchup_pause') or {}).get('active'):
+                return {'status':'full','reason':'paper_entries_paused'}
+            if api.exit_queue(api.quote_jobs(state,now),now)['backed_up']:
+                return {'status':'full','reason':'paper_exit_backlog'}
+            if slot is None:
+                choice,reason=jarvis_rotation.selection(conn,state,now,api.BUY_COST,protect_control=protect_control)
+                if choice:
+                    slot=jarvis_rotation.pause(conn,state,choice,ident,now)
+                    rotation_ends=now+jarvis_rotation.WINDOW_SECONDS
         if slot is None:
-            return {'status':'full'}
+            return {'status':'capital_exhausted' if vacant else 'full',**reason}
         portfolio = state['bots'][slot]
         if not portfolio.get('local_funded'):
             portfolio.update(cash=CAPITAL, funding=CAPITAL, local_funded=True)

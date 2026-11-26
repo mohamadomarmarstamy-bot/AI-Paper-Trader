@@ -11,6 +11,7 @@ import solana_http
 FRESH_SECONDS = 180
 CHART_INTERVAL = 6  # Conservative shared pacing: at most ten chart calls/minute.
 CHART_REFRESH = 60  # Provider responses are cached for one minute.
+CHART_EXPLORATION_INTERVALS = 3  # Leave slots for new/incomplete eligible pools.
 CHART_BARS = 20
 # The pool can start during its first candle. Before 19 minutes have passed,
 # even counting that first partial interval, 20 completed candles are impossible.

@@ -163,6 +163,31 @@ class BrainTests(unittest.TestCase):
                 self.assertIsNone(result)
                 self.assertEqual(error,'no_research_sources')
 
+    def test_ready_proposal_waits_during_paper_pause_and_skips_unfunded_vacancy(self):
+        rule={'name':'Pressure trial','hypothesis':'Test order pressure',
+              'entry':'liquidity >= 50000 and buys_m5 > sells_m5 * 1.5','exit':'gain >= 15'}
+        brain.apply_plan(api,{'kind':'strategy'},self.plan(strategy=rule),None,NOW)
+        ident=self.proposal_id()
+        with api.connection() as conn,conn:
+            state,_=api.read(conn)
+            state['bots']['research-01'].update(local_funded=True,cash=1)
+            state['entry_pause_until_all']=True
+            conn.execute('UPDATE run SET state=?',(json.dumps(state),))
+        with patch.object(brain.insight,'scouting_status',return_value=[{'id':ident,'data_ready':True}]):
+            brain.admit_proposal(api,NOW+1)
+            with api.connection() as conn,conn:
+                state,_=api.read(conn)
+                self.assertEqual(brain.status(conn,NOW+1)['admission_checks'],
+                                 [{'reason':'paper_entries_paused','at':NOW+1}])
+                self.assertFalse(state.get('local_rules'))
+                state.pop('entry_pause_until_all')
+                conn.execute('UPDATE run SET state=?',(json.dumps(state),))
+            brain.admit_proposal(api,NOW+62)
+        self.assertEqual(self.state()['bots']['research-01']['cash'],1)
+        with api.connection() as conn:
+            row=conn.execute('SELECT slot,status FROM local_strategies').fetchone()
+            self.assertEqual(tuple(row),('research-02','testing'))
+
     def test_failed_cloud_call_consumes_reservation_without_logging_body(self):
         r=Mock(status_code=401,content=b'private')
         result,error=brain.research_job(api,{'kind':'strategy'},NOW,Mock(return_value=r))
