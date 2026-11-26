@@ -133,6 +133,38 @@ class JarvisResearchTests(unittest.TestCase):
             for _ in range(10):research.record_chart_result(conn,'rate_limited')
             self.assertEqual(research.chart_interval(conn),60)
 
+    def test_successful_responses_without_candles_recover_pace_not_trade_evidence(self):
+        with jarvis.connection() as conn, conn:
+            self.assertEqual(research.record_chart_result(conn, 'rate_limited'), 12)
+            for status in ('ready', 'stale_candles', 'insufficient_history', 'ready'):
+                self.assertEqual(research.record_chart_result(conn, status), 12)
+            self.assertEqual(research.record_chart_result(conn, 'provider_error'), 12)
+            for status in ('stale_candles', 'insufficient_history', 'ready', 'stale_candles'):
+                self.assertEqual(research.record_chart_result(conn, status), 12)
+            self.assertEqual(research.record_chart_result(conn, 'insufficient_history'), 11)
+            self.assertEqual(research.record_chart_result(conn, 'rate_limited'), 22)
+
+    def test_chart_refresh_cannot_replace_fresh_evidence_with_older_or_weaker_chart(self):
+        rows = self.prepare_chart_watch(1)
+        row = next(iter(rows.values()))
+        good = {'closed_at': NOW-60, 'rsi': 55, 'volume_ratio': 2, 'provider': 'codex'}
+        with jarvis.connection() as conn, conn:
+            conn.execute('INSERT INTO research VALUES (?,?,?,?)', (row['mint'], PAIR, NOW-60,
+                json.dumps({'chart': {'at': NOW-60, 'value': good}})))
+        older = {'closed_at': NOW-120, 'rsi': 45, 'volume_ratio': 1}
+        jarvis.research_tick(clock=lambda: NOW, chart=lambda *_: older, social=lambda *_: None)
+        with jarvis.connection() as conn:
+            self.assertEqual(jarvis.entry_evidence(conn, row, NOW)['chart'], good)
+            record = json.loads(conn.execute('SELECT evidence FROM research').fetchone()[0])['chart']
+            self.assertEqual(record['at'], NOW-60)
+            self.assertEqual(record['attempt_at'], NOW)
+            self.assertNotIn('chart', jarvis.entry_evidence(conn, row, NOW+121))
+        weaker = {**good, 'volume_ratio': None}
+        prior = {'at': NOW-60, 'value': good}
+        self.assertEqual(research.choose_chart_record(prior, weaker, NOW), prior)
+        updated = {**good, 'closed_at': NOW}
+        self.assertEqual(research.choose_chart_record(prior, updated, NOW)['value'], updated)
+
     def test_stale_response_lag_is_observed_without_admitting_chart(self):
         rows=self.prepare_chart_watch(1)
         bars=[[NOW-1200-(20-i)*60,100,101,99,100,100] for i in range(20)]

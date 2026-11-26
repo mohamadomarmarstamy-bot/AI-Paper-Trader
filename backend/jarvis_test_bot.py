@@ -1553,8 +1553,11 @@ def research_tick(clock=time.time, chart=research.chart, social=research.social_
             previous=evidence.get(source,{})
             # Preserve a previously valid observation on a failed refresh, but
             # never extend its timestamp or the existing candle freshness limit.
-            record={'at':at,'value':value} if value is not None else {
-                'at':previous.get('at',at),'value':previous.get('value')}
+            if source == 'chart' and value is not None:
+                record = research.choose_chart_record(previous, value, at)
+            else:
+                record = {'at': at, 'value': value} if value is not None else {
+                    'at': previous.get('at', at), 'value': previous.get('value')}
             retry = (research.rate_limit_delay(retry_after, at) if source=='chart' and http_status==429
                      else research.CHART_REFRESH if value is not None
                      else 120 if result_status in ('insufficient_history', 'stale_candles') else 30)
