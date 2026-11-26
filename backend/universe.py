@@ -280,6 +280,8 @@ def _refresh_momentum_universe(*, request_func, market_data_request_func, force_
                 if not isinstance(payload,dict): raise ValueError('Invalid actives')
                 add(payload.get('most_actives',[]))
             except Exception: failures.append('most_active_'+by+'_unavailable')
+    from friday_phase import COHORT, publish
+    friday_snapshots = {}
     pool=list(dict.fromkeys(hot+rotation))[:POOL_LIMIT]
     if market_data_request_func is not None:
         for start in range(0,len(pool),SNAPSHOT_BATCH):
@@ -287,12 +289,19 @@ def _refresh_momentum_universe(*, request_func, market_data_request_func, force_
             try:
                 snapshots=market_data_request_func('GET','/v2/stocks/snapshots',params={'symbols':','.join(batch),'feed':'iex'},timeout=8.0)
                 if not isinstance(snapshots,dict): raise ValueError('Invalid snapshots')
+                for symbol in COHORT.intersection(batch):
+                    if isinstance(snapshots.get(symbol),dict):
+                        friday_snapshots[symbol] = snapshots[symbol]
                 for symbol in batch:
                     metrics=snapshot_metrics(snapshots.get(symbol),now=time.time(),feed='iex')
                     if metrics: metadata[symbol]={'symbol':symbol,**metrics};snapshot_count+=1
             except Exception: failures.append('snapshot_batch_unavailable')
     symbols=rank_pool(pool,rotation,metadata)
     finished=time.time()
+    publish(friday_snapshots,finished)
+    # Publish one completed generation. Later selected-symbol refreshes replace metadata.
+    global _friday_scan
+    _friday_scan = (finished, len(allowed_list), tuple(pool), metadata)
     _hot_universe_cache.update(symbols=symbols.copy(),movers=metadata,updated_at=finished,
         coverage={'profile':'fast_movers_v1','tradable_universe':len(allowed_list),'screened_symbols':len(pool),
           'hot_symbols':len(hot),'rotating_symbols':len(rotation),'fresh_snapshots':snapshot_count,
@@ -366,3 +375,10 @@ def refresh_selected_momentum_snapshots(symbols, market_data_request_func):
         coverage['partial']=True
         coverage['limitations']=list(coverage.get('limitations',[]))+['selected_snapshots_unavailable']
     _hot_universe_cache['coverage']=coverage
+
+
+_friday_scan = None
+
+def latest_friday_scan():
+    """Borrow the last complete discovery batch without acquiring the provider lock."""
+    return _friday_scan
