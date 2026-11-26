@@ -128,6 +128,14 @@ class StoreTests(unittest.TestCase):
     def observe(self):
         return observe({'symbol':'TEST','request_id':self.request_id},data_request=self.data,
                        broker_read=self.broker,feed='iex',clock=lambda:self.now)
+    def test_friday_cohort_stamps_warmup_using_same_provider_reads(self):
+        result=observe({'symbol':'AMD','request_id':self.request_id},data_request=self.data,
+                       broker_read=self.broker,feed='iex',clock=lambda:self.now)
+        decision=result['results'][0]['decision']
+        self.assertEqual(decision['friday_rsi']['decision'],'insufficient_warmup')
+        self.assertEqual(decision['setups'][0]['status'],'candidate')
+        self.assertEqual(len(self.calls),1)
+
     def test_freeze_retries_do_not_refetch_or_rewrite(self):
         first=self.observe();count=len(self.calls)
         self.now+=10

@@ -37,6 +37,13 @@ async function refresh(method) {
             ' · minute bar ' + (r.evidence.candle_at || 'missing') + ' · ' + r.evidence.version +
             (r.evidence.alert ? ' · Pro Ticker published ' + r.evidence.alert.published + ', first seen ' + r.evidence.alert.first_seen : '')) : ['No replay observations recorded.']);
         items('phase-results', extended.probes.length ? extended.probes.map(p => p.symbol + ' · ' + p.phase.replaceAll('_',' ') + ' · ' + p.state + (p.net === null ? '' : ' · modeled net $' + p.net.toFixed(3))) : ['No extended-hours probes recorded.']);
+        const study = trials.rsi_shadow;
+        element('rsi-shadow').textContent = study?.admissions
+            ? 'Latest ' + study.admissions + ' admissions · ' + study.matched + ' matched closes · ' + study.pending +
+              ' awaiting a forward outcome · ' + study.missing + ' unavailable RSI (' + Object.entries(study.missing_reasons).map(([k,v]) => k.replaceAll('_',' ')+' '+v).join(', ') + '). ' +
+              study.confirmed + ' confirmed closes · ' + study.blocked_winners + ' blocked winners · ' + study.filtered_false_moves + ' filtered losses · ' + study.filtered_flat + ' filtered flat.' +
+              (study.matched ? ' Matched modeled net: baseline $' + study.baseline_net.toFixed(2) + ', RSI $' + study.rsi_net.toFixed(2) + '.' : '')
+            : 'Awaiting prospective Friday breakout admissions.';
         items('positions', trials.positions.length ? trials.positions.map(p => p.symbol + ' · ' + p.shares + ' modeled shares · regular session') : ['No open simulated positions.']);
         items('outcomes', trials.history.length ? trials.history.map(p => p.symbol + ' · ' + p.source_group.replaceAll('_', ' ') + ' · ' + p.outcome.scenarios.map(s =>
             s.bps_per_side + ' bps/side: $' + s.modeled_pnl_usd.toFixed(2) + ' vs matched hold $' + s.matched_hold_pnl_usd.toFixed(2)).join(' / ')) : ['No closed simulations.']);
