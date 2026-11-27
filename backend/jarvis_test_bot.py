@@ -296,16 +296,16 @@ def quote(input_mint, output_mint, amount):
     return minimum
 
 
-def observe(state, providers, now):
+def observe(state, providers, now, *, scout=True):
     # Reuse the scanner discovery cache. Rotate fresh candidates and active pullbacks.
     held = sorted({mint for portfolio in state['bots'].values() for mint in portfolio['positions']})
     try:
-        mints = [mint for mint in providers.profiles() if mint not in (USDC, lab.SOL)]
+        mints = [mint for mint in (providers.profiles() if scout else ()) if mint not in (USDC, lab.SOL)]
     except (ValueError, OSError, RuntimeError):
         mints = []
         state['error'] = 'Discovery profiles unavailable.'
     tracked = [mint for mint, row in sorted(state['watch'].items(), key=lambda item: item[1]['last'])
-               if mint not in held and not row['pullback']][:12]
+               if scout and mint not in held and not row['pullback']][:12]
     offset = state['offset'] % max(1, len(mints))
     rotated = mints[offset:] + mints[:offset]
     fresh = rotated[:DISCOVERY_BATCH - len(tracked)]
@@ -678,6 +678,7 @@ def entry_jobs(conn, state, now):
                 if (state.get('entry_guard') or not strategy or portfolio['cash'] < BUY_COST or row['first'] < strategy['activated_at']
                         or row['liquidity_usd'] < strategy['min_liquidity'] or row['age_minutes'] < strategy['min_age']):
                     continue
+                if strategy.get('local_rule') and audit.redundant_trailing_branch(strategy['local_rule'].get('exit')):continue
                 if strategy.get('local_rule') and not local_lab.run(
                         strategy['local_rule']['entry'], local_lab.observations(row, market_evidence)):
                     continue
@@ -733,6 +734,8 @@ def local_entry_status(conn, state, now):
             label='Paper entries paused · exits monitored'
         elif backlog.paused(state,now) or (state.get('entry_catchup_pause') or {}).get('active'):
             label='Buy pause active · exits monitored'
+        elif audit.redundant_trailing_branch(rule.get('exit')):
+            label='Trailing exit under repair · new entries held, exits monitored'
         elif rule.get('entry_paused') or now>=rule.get('challenger_ends',math.inf):
             label='Challenger window ended · exits monitored'
         elif len(portfolio['positions'])>=local_lab.MAX_OPEN:
@@ -990,7 +993,13 @@ def step(conn, state, providers, get_quote, now, *, quote_clock=time.time):
         if providers is not None and now >= state.get('next_discovery', 0):
             state['next_discovery'] = now + DISCOVERY_INTERVAL
             try:
-                observe(state, providers, now)
+                blocker = conn.execute("""SELECT 1 FROM brain_incidents WHERE resolved IS NULL
+                    AND healthy_since IS NULL AND last_seen BETWEEN ? AND ?
+                    AND kind IN ('exit_backlog','engine_error','worker_stalled','chart_data_gap') LIMIT 1""",
+                    (now-90,now)).fetchone()
+                scout = not blocker or now-state.get('last_optional_scout',0)>=60
+                if scout:state['last_optional_scout']=now
+                observe(state, providers, now, scout=scout)
             except (ValueError, OSError, RuntimeError):
                 state['error'] = 'Discovery data unavailable.'
     schedule_market_exits(state, now)
@@ -1656,6 +1665,10 @@ def research_diagnostic():
         brain_status = brain.status(conn)
         learning_status = learning.status(conn,state)
         rotation_status = rotation.status(conn)
+        trailing_counts={r['status']:r['n'] for r in conn.execute(
+            "SELECT status,count(*) n FROM local_strategies WHERE status IN ('repair_pending','repair_review','superseded') GROUP BY status")}
+        trailing_counts['held_active']=sum(audit.redundant_trailing_branch(r.get('exit')) for r in state.get('local_rules',{}).values())
+        trailing_counts['fresh_trials']=conn.execute("SELECT count(*) FROM local_strategy_events WHERE kind='repaired'").fetchone()[0]
         chart_status={row['status'] or 'legacy':row['count'] for row in conn.execute(
             "SELECT json_extract(evidence,'$.chart.status') AS status,count(*) AS count FROM research WHERE checked>=? GROUP BY status",(now-900,))}
     # Fixed labels and aggregate counts only: no tokens, wallet/coin IDs,
@@ -1669,7 +1682,7 @@ def research_diagnostic():
     with connection() as conn:
         sold=conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.reason')='PBH owner-requested paper closeout'").fetchone()[0]
         written=conn.execute("SELECT count(*) FROM trades WHERE json_extract(data,'$.owner_closeout')=1 AND json_extract(data,'$.paper_writeoff') IS NOT NULL").fetchone()[0]
-    return {'improvement_backlog':{'tasks':[{k:t[k] for k in ('kind','priority','status','recurrences')} for t in brain_status.get('improvement_backlog',{}).get('tasks',[])], 'rechecks':[{k:r[k] for k in ('checked','status')} for r in brain_status.get('improvement_backlog',{}).get('rechecks',[])]},
+    return {'trailing_repair':trailing_counts,'improvement_backlog':{'tasks':[{k:t[k] for k in ('kind','priority','status','recurrences')} for t in brain_status.get('improvement_backlog',{}).get('tasks',[])], 'rechecks':[{k:r[k] for k in ('checked','status')} for r in brain_status.get('improvement_backlog',{}).get('rechecks',[])]},
             'learning':{k:learning_status[k] for k in ('interval_coins','reviewed_coins','pending_closed_coins','next_checkpoint')},
             'challenger_rotation':{'active':[{'slot':r['slot'],'started':r['started'],'ends':r['ends'],'status':r['status']} for r in rotation_status['runs'] if r['status'] in ('active','draining')]},
             'brain':{k:brain_status[k] for k in ('enabled','cloud_configured','model','monthly_budget_usd','reserved_this_month_usd','last_call','provider_validation','proposal_counts','paper_repair','scouting_summary','admission_checks','strategy_due_at')},'codex_feed':codex_status,'enabled':state['enabled'],'presets_paused':bool(state.get('preset_entries_paused')),

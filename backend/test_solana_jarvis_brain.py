@@ -548,6 +548,26 @@ class BrainTests(unittest.TestCase):
                     self.assertEqual((call['input_tokens'],call['output_tokens']),tokens)
                     self.assertFalse(conn.execute('SELECT 1 FROM brain_proposals').fetchone())
 
+    def test_due_confirmed_repair_precedes_strategy_and_web_pass_cannot_act(self):
+        incident=self.confirm('engine_error')
+        now=NOW+120
+        with patch.object(brain,'symptoms',return_value=({'engine_error'},{})):
+            first=brain.build_job(api,now)
+            self.assertEqual(first['id'],incident['id'])
+            self.assertTrue(first['local_reasoning'])
+            with api.connection() as conn,conn:
+                conn.execute('UPDATE brain_incidents SET last_seen=?',(now+3600,))
+            second=brain.build_job(api,now+3600)
+            self.assertTrue(second['reference_only'])
+            self.assertFalse(second['local_reasoning'])
+            brain.apply_plan(api,second,self.plan(action='pause_entries',patch={'unexpected':'untrusted'}),None,now+3600)
+            self.assertEqual(brain.build_job(api,now+3800)['kind'],'strategy')
+        with api.connection() as conn:
+            plan=json.loads(conn.execute('SELECT plan FROM brain_incidents').fetchone()[0])
+            self.assertEqual(plan['applied_action'],'monitor')
+            self.assertIsNone(plan['patch'])
+            self.assertFalse(conn.execute('SELECT 1 FROM brain_proposals').fetchone())
+
     def test_daily_strategy_jobs_and_incident_retry_are_bounded(self):
         with patch.object(brain,'symptoms',return_value=(set(),{})):
             job=brain.build_job(api,NOW);self.assertEqual(job['kind'],'strategy')

@@ -26,6 +26,46 @@ class LocalLabTests(unittest.TestCase):
     def submit(self, rule=None, now=100):
         return lab.submit(api, {'rule':rule or RULE,'sources':SOURCES}, now=now)
 
+    def test_masked_submission_and_legacy_drain(self):
+        masked=dict(RULE,exit='('+RULE['exit']+') and gain > 15 and liquidity >= 50000')
+        first=self.submit(masked)
+        self.assertEqual(first['status'],'testing')
+        with api.connection() as conn,conn:
+            state,_=api.read(conn)
+            new=state['local_rules'][first['slot']]
+            position={'policy':{'local_rule':new},'opened':100,'peak':13}
+            self.assertEqual(lab.exit_reason(position,8,120,{'liquidity_usd':51000},{}),'Research strategy exit')
+            self.assertIsNone(lab.exit_reason(position,8,120,{'liquidity_usd':49000},{}))
+            self.assertEqual(lab.exit_reason(position,-11,120,{},{}),'Research safety stop (sampled quote)')
+            # Seed a different pre-release version and its original frozen position policy.
+            old=dict(masked,entry='liquidity > 81000')
+            ident=lab.identity(old)
+            slot='research-10' if first['slot']!='research-10' else 'research-09'
+            conn.execute('INSERT INTO local_strategies(id,slot,created,rule,sources,status) VALUES (?,?,?,?,?,?)',
+                (ident,slot,100,json.dumps(old),json.dumps(SOURCES),'testing'))
+            state['local_rules'][slot]=dict(old,id=ident,created=100)
+            frozen={'policy':{'local_rule':dict(old)},'opened':100,'peak':13}
+            state['bots'][slot]['positions']={'coin':frozen}
+            lab.review(conn,state,120)
+            self.assertTrue(state['local_rules'][slot]['entry_paused'])
+            self.assertIsNone(lab.exit_reason(frozen,8,120,{'liquidity_usd':51000},{}))
+            self.assertEqual(frozen['policy']['local_rule'],old)
+            state['bots'][slot]['positions'].clear()
+            lab.review(conn,state,130)
+            conn.execute('UPDATE run SET state=?',(json.dumps(state),))
+        lab.advance_trailing_repair(api,140)
+        lab.advance_trailing_repair(api,141)
+        with api.connection() as conn:
+            row=conn.execute('SELECT * FROM local_strategies WHERE id=?',(ident,)).fetchone()
+            self.assertEqual((row['status'],json.loads(row['rule'])),('superseded',old))
+            fresh=conn.execute('SELECT * FROM local_strategies WHERE created=140').fetchone()
+            self.assertNotEqual(fresh['id'],ident)
+            self.assertEqual(json.loads(fresh['report']),{})
+        self.assertEqual(self.submit(masked)['status'],'duplicate')
+        ambiguous=dict(masked,exit=masked['exit']+' and gain > 12')
+        self.assertEqual(self.submit(ambiguous)['status'],'repair_review')
+        self.assertEqual(self.submit(RULE)['status'],'testing')
+
     def test_expression_rejects_python_execution_and_future_fields(self):
         for text in ["__import__('os').system('whoami')",'gain > 1','liquidity.__class__ == 1',
                      '[x for x in range(10)]','liquidity ** 100 > 0','liquidity[0] > 1','True',

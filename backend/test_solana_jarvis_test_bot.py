@@ -567,6 +567,31 @@ class JarvisTests(unittest.TestCase):
         self.assertEqual(timed['due'], self.now)
         self.assertEqual(timed['exit_priority'], 0)
 
+    def test_confirmed_blocker_conserves_discovery_and_preserves_held_quotes(self):
+        with jarvis.connection() as conn:
+            state=jarvis.initial()
+            state.update(enabled=True,last_optional_scout=self.now)
+            self.monitored_position(state,'lab-tp5-sl10')
+            state['watch'][MINT]['price_usd']=1.06
+            conn.execute("INSERT INTO brain_incidents(id,kind,opened,last_seen,status) VALUES ('i','exit_backlog',?,?,'investigating')",
+                         (self.now-180,self.now))
+            with patch.object(self.market,'profiles',wraps=self.market.profiles) as profiles, patch.object(self.market,'pairs',wraps=self.market.pairs) as pairs:
+                quotes=[]
+                def quote(*args):
+                    quotes.append(args)
+                    return 49500000
+                jarvis.step(conn,state,self.market,quote,self.now)
+                profiles.assert_not_called()
+                self.assertIn(MINT,pairs.call_args.args[0])
+                self.assertEqual(quotes[0][:2],(MINT,jarvis.USDC))
+                jarvis.step(conn,state,self.market,quote,self.now+60)
+                self.assertEqual(profiles.call_count,1)
+                jarvis.step(conn,state,self.market,quote,self.now+95)
+                self.assertEqual(profiles.call_count,2)
+                conn.execute("UPDATE brain_incidents SET last_seen=?,healthy_since=?",(self.now+100,self.now+100))
+                jarvis.step(conn,state,self.market,quote,self.now+105)
+                self.assertEqual(profiles.call_count,3)
+
     def test_urgent_exit_preempts_buy_and_safe_positions_poll_less_often(self):
         with jarvis.connection() as conn:
             state = jarvis.initial()
