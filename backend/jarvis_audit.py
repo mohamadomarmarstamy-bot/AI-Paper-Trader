@@ -30,6 +30,26 @@ def redundant_trailing_branch(expression):
     return _FIXED_OR_TRAILING in terms and _GAIN_GUARD in terms
 
 
+def trailing_repair(rule):
+    """Return the original, a validated fresh trial, or None for review."""
+    expression = rule['exit']
+    if not redundant_trailing_branch(expression):
+        return rule
+    root = local.parse(expression, exit_rule=True)
+    other = [term for term in root.values if ast.dump(term) not in (_FIXED_OR_TRAILING, _GAIN_GUARD)]
+    # Only plain liquidity floors have an unambiguous role outside this template.
+    # Keep the effective strict target and every liquidity constraint.
+    if len(root.values) != len(other) + 2 or any(
+            not isinstance(term, ast.Compare) or not isinstance(term.left, ast.Name)
+            or term.left.id != 'liquidity' or len(term.ops) != 1
+            or not isinstance(term.ops[0], (ast.GtE, ast.Gt))
+            or not isinstance(term.comparators[0], ast.Constant) for term in other):
+        return None
+    target = '(gain > 15 or (peak >= 10 and gain <= peak - 5))'
+    corrected = ' and '.join([target] + [ast.unparse(term) for term in other])
+    return local.validate(dict(rule, exit=corrected))
+
+
 def sample(conn, state, entries, now):
     bucket=int(now)//300
     if conn.execute('SELECT 1 FROM jarvis_audit_samples WHERE bucket=?',(bucket,)).fetchone():

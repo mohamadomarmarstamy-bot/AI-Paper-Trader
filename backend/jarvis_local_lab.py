@@ -234,7 +234,12 @@ def record_event(conn, at, ident, kind, detail):
     jarvis_hourly_mail.event(conn,at,ident,kind,detail)
 
 
-def submit(api, payload, now=None, *, allow_rotation=False, protect_control=None):
+def identity(rule):
+    signature = ast.dump(parse(rule['entry'])) + ast.dump(parse(rule['exit'], True))
+    return hashlib.sha256(signature.encode()).hexdigest()[:24]
+
+
+def submit(api, payload, now=None, *, allow_rotation=False, protect_control=None, repair_from=None):
     now = time.time() if now is None else now
     if not isinstance(payload, dict) or set(payload) != {'rule','sources'}:
         raise ValueError('Expected rule and sources')
@@ -250,15 +255,32 @@ def submit(api, payload, now=None, *, allow_rotation=False, protect_control=None
                 or urlsplit(source['url']).scheme != 'https'):
             raise ValueError('Invalid research source')
     # Semantic identity prevents renaming the same expressions to reset a failed trial.
-    identity = ast.dump(parse(rule['entry'])) + ast.dump(parse(rule['exit'], True))
-    ident = hashlib.sha256(identity.encode()).hexdigest()[:24]
+    from jarvis_audit import trailing_repair
+    original = identity(rule)
+    corrected = trailing_repair(rule)
+    ident = identity(corrected) if corrected else original
     with api.connection() as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
         state, _ = api.read(conn)
+        if repair_from is not None:
+            pending=conn.execute("SELECT 1 FROM local_strategies WHERE id=? AND status='repair_pending'",(repair_from,)).fetchone()
+            if not pending or repair_from!=original:return {'status':'already_reviewed'}
+            if (not state['enabled'] or api.backlog.paused(state,now)
+                    or (state.get('entry_catchup_pause') or {}).get('active')
+                    or api.exit_queue(api.quote_jobs(state,now),now)['backed_up']):
+                return {'status':'full','reason':'paper_monitoring_priority'}
         if not state['enabled']:
             if allow_rotation:return {'status':'full','reason':'paper_engine_paused'}
             raise ValueError('Paper engine is paused')
+        if corrected is None or (allow_rotation and ident != original):
+            conn.execute("""INSERT OR IGNORE INTO local_strategies(id,slot,created,rule,sources,status,report)
+                VALUES (?,'',?,?,?,'repair_review',?)""",(original,now,json.dumps(rule),json.dumps(sources),
+                json.dumps({'reason':'masked trailing exit requires review'})))
+            return {'id':original,'status':'repair_review'}
+        rule = corrected
         if conn.execute('SELECT 1 FROM local_strategies WHERE id=?',(ident,)).fetchone():
+            if repair_from is not None:
+                conn.execute("UPDATE local_strategies SET status='superseded' WHERE id=?",(repair_from,))
             record_event(conn,now,ident,'duplicate',{'name':rule['name']})
             return {'id':ident,'status':'duplicate'}
         rotation_ends=None
@@ -288,6 +310,10 @@ def submit(api, payload, now=None, *, allow_rotation=False, protect_control=None
         conn.execute('INSERT INTO local_strategies(id,slot,created,rule,sources,status) VALUES (?,?,?,?,?,?)',
                      (ident,slot,now,json.dumps(rule),json.dumps(sources),'testing'))
         record_event(conn,now,ident,'added',{'name':rule['name'],'slot':slot})
+        if repair_from is not None:
+            conn.execute("UPDATE local_strategies SET status='superseded' WHERE id=?",(repair_from,))
+        if original != ident:
+            record_event(conn,now,ident,'repaired',{'original':original,'name':rule['name']})
         state.setdefault('local_rules',{})[slot] = {'id':ident,'created':now,**rule}
         if rotation_ends is not None:state['local_rules'][slot]['challenger_ends']=rotation_ends
         conn.execute('UPDATE run SET state=?,revision=revision+1 WHERE id=1',(json.dumps(state),))
@@ -298,7 +324,8 @@ def submit(api, payload, now=None, *, allow_rotation=False, protect_control=None
 def entry_allowed(state, slot, row, evidence, now):
     rule = state.get('local_rules',{}).get(slot)
     portfolio = state['bots'][slot]
-    return (rule and not rule.get('entry_paused') and now<rule.get('challenger_ends',math.inf) and row['first'] >= rule.get('resumed_at',rule['created']) and 0 <= now-row['first'] <= 900
+    from jarvis_audit import redundant_trailing_branch
+    return (rule and not redundant_trailing_branch(rule.get('exit')) and not rule.get('entry_paused') and now<rule.get('challenger_ends',math.inf) and row['first'] >= rule.get('resumed_at',rule['created']) and 0 <= now-row['first'] <= 900
             and len(portfolio['positions']) < MAX_OPEN and portfolio['cash'] >= 50_250000
             and run(rule['entry'], observations(row,evidence)))
 
@@ -319,6 +346,14 @@ def exit_reason(position, gain, now, row, evidence):
     return None
 
 
+def advance_trailing_repair(api, now):
+    """Submit one drained version via ordinary slot, cash and identity checks."""
+    with api.connection() as conn:
+        row=conn.execute("SELECT id,rule,sources FROM local_strategies WHERE status='repair_pending' ORDER BY created LIMIT 1").fetchone()
+        if not row:return
+    submit(api,{'rule':json.loads(row['rule']),'sources':json.loads(row['sources'])},now,repair_from=row['id'])
+
+
 def review(conn, state, now):
     for slot, rule in list(state.get('local_rules',{}).items()):
         rows = conn.execute("SELECT pnl,mint FROM trades WHERE bot=? AND json_extract(data,'$.policy.local_rule.id')=? ORDER BY opened,id",
@@ -333,6 +368,18 @@ def review(conn, state, now):
         report = {'coins':coins,'closed':total_closed,'net':sum(pnl)/1e6,
                   'net_without_best':(sum(pnl)-max([0,*pnl]))/1e6,
                   'open':len(state['bots'][slot]['positions']), 'halves_positive':consistent}
+        from jarvis_audit import redundant_trailing_branch, trailing_repair
+        if redundant_trailing_branch(rule.get('exit')):
+            rule['entry_paused']=True
+            protected=(state.get('strategy') or {}).get('local_rule',{}).get('id')==rule['id']
+            rotating=conn.execute("SELECT 1 FROM challenger_rotations WHERE slot=? AND status IN ('active','draining')",(slot,)).fetchone()
+            if not report['open'] and not protected and not rotating:
+                fields={k:rule[k] for k in ('name','hypothesis','entry','exit')}
+                status='repair_pending' if trailing_repair(fields) else 'repair_review'
+                conn.execute('UPDATE local_strategies SET status=?,report=? WHERE id=?',(status,json.dumps(report),rule['id']))
+                record_event(conn,now,rule['id'],status,{'name':rule['name']})
+                del state['local_rules'][slot]
+            continue
         status = 'testing'
         if coins >= MIN_COINS:
             if sum(pnl) <= 0:
