@@ -93,6 +93,41 @@ class JarvisResearchTests(unittest.TestCase):
         self.assertEqual(set(called), set(rows))
         self.assertEqual(len(called), 7)  # The early call did not increase request rate.
 
+    def test_pressure_replay_spends_one_slot_on_pool_still_eligible_at_next_claim(self):
+        rows=self.prepare_chart_watch(2)
+        leaving,staying=rows
+        with jarvis.connection() as conn,conn:
+            state,_=jarvis.read(conn)
+            state['local_rules']['research-01']['created']=NOW-1000
+            state['watch'][leaving]['first']=NOW-890
+            conn.execute('UPDATE run SET state=?',(json.dumps(state),))
+            for mint,age in ((leaving,300),(staying,200)):
+                conn.execute('INSERT INTO research VALUES (?,?,?,?)',(mint,PAIR,NOW-age,json.dumps({
+                    'chart':{'at':NOW-age,'attempt_at':NOW-age,'value':{'closed_at':NOW-age,'rsi':50,'volume_ratio':1}}})))
+            # Original ordering within the same renewable tier takes the older attempt.
+            conn.execute('SAVEPOINT baseline')
+            legacy=next(r for source,r in jarvis.claim_research(conn,NOW) if source=='chart')
+            self.assertEqual(legacy['mint'],leaving)
+            evidence={'chart':{'at':NOW,'value':{'closed_at':NOW,'rsi':50,'volume_ratio':1}}}
+            conn.execute('UPDATE research SET evidence=?,checked=? WHERE mint=?',(json.dumps(evidence),NOW,leaving))
+            baseline=jarvis.chart_coverage(conn,state,NOW+55)
+            self.assertEqual((baseline['eligible'],baseline['reasons']['complete']),(1,0))
+            conn.execute('ROLLBACK TO baseline')
+            conn.execute('RELEASE baseline')
+            conn.execute('INSERT INTO chart_provider_budget VALUES (1,55,0)')
+        calls=[]
+        def chart(row,now):
+            calls.append(row['mint'])
+            return {'closed_at':now,'rsi':50,'volume_ratio':1}
+        for offset in (0,10,54):
+            jarvis.research_tick(clock=lambda:NOW+offset,chart=chart,social=lambda *_:None)
+        self.assertEqual(calls,[staying])
+        with jarvis.connection() as conn:
+            coverage=jarvis.chart_coverage(conn,jarvis.read(conn)[0],NOW+55)
+        self.assertEqual((coverage['eligible'],coverage['reasons']['complete']),(1,1))
+        self.assertEqual(coverage['provider']['redirected_still_fresh_complete'],1)
+        self.assertEqual(coverage['provider']['request_interval_seconds'],55)
+
     def test_expired_last_good_chart_is_not_a_successful_latest_refresh(self):
         rows = self.prepare_chart_watch(2)
         failed, renewable = rows

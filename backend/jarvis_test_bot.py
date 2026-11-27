@@ -1460,6 +1460,15 @@ def chart_coverage(conn, state, now):
         'request_interval_seconds':research.chart_interval(conn),'stale_responses_measured':len(lags),
         'median_returned_lag_seconds':round(sorted(lags)[len(lags)//2]) if lags else None,
         'cached_pools_last_refresh_retained':retained}
+    redirected = []
+    for row in rows:
+        pair,evidence=records.get(row['mint'],(None,{}))
+        chart=evidence.get('chart',{}) if pair==row['pair'] else {}
+        if chart.get('pressure_redirected') and now-900<=chart.get('attempt_at',0)<=now:
+            redirected.append(chart)
+    result['provider']['redirected_latest_attempts_still_eligible']=len(redirected)
+    result['provider']['redirected_still_fresh_complete']=sum(
+        research.chart_is_fresh(chart,now) and research.indicator_count(chart['value'])==2 for chart in redirected)
     return result
 
 
@@ -1544,6 +1553,15 @@ def claim_research(conn, now):
             # Keep recurring storage bounded and retain recent coverage for diagnosis.
             conn.execute('DELETE FROM research WHERE checked<?', (now - 900,))
         chosen = min(candidates, key=priority)
+        if source == 'chart' and interval > research.CHART_INTERVAL:
+            # Keep held-pool urgency and the exploration cadence. Within the winning
+            # entry tier, spend the scarce slot on evidence usable into the next slot.
+            tier=priority(chosen)[0]
+            if tier in (1,2,3) and chosen['first']+ENTRY_WINDOW < now+interval:
+                survivors=[row for row in candidates if row['first']+ENTRY_WINDOW >= now+interval
+                           and priority(row)[0]==tier]
+                if survivors:
+                    chosen=dict(min(survivors,key=priority),pressure_redirected=True)
         if source == 'chart':
             pair, evidence = records.get(chosen['mint'], (None, {}))
             record = evidence.get('chart', {}) if pair == chosen['pair'] else {}
@@ -1629,6 +1647,7 @@ def research_tick(clock=time.time, chart=research.chart, social=research.social_
             record.update(attempt_at=at,status=result_status,next_attempt=at+retry)
             if http_status is not None:record['http_status']=http_status
             if source=='chart':
+                if row.get('pressure_redirected'):record['pressure_redirected']=True
                 if latest_candle is not None:
                     record['latest_returned_close']=latest_candle
                     record['returned_lag_seconds']=max(0,at-latest_candle)
