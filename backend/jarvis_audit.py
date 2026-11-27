@@ -1,10 +1,33 @@
 """Automatic observational paper audit. Never changes strategies or execution."""
+import ast
 import json
+
+import jarvis_local_lab as local
 
 SCHEMA = '''CREATE TABLE IF NOT EXISTS jarvis_audit_samples(
  bucket INTEGER PRIMARY KEY, at REAL NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS jarvis_audit_latest(
  id INTEGER PRIMARY KEY CHECK(id=1), at REAL NOT NULL, data TEXT NOT NULL);'''
+
+
+# Match the observed templates structurally. Each must be a direct conjunct:
+# when gain > 15 holds, the first alternative (gain >= 15) already holds.
+_FIXED_OR_TRAILING = ast.dump(ast.parse(
+    'gain >= 15 or (peak >= 10 and gain <= peak - 5)', mode='eval').body)
+_GAIN_GUARD = ast.dump(ast.parse('gain > 15', mode='eval').body)
+
+
+def redundant_trailing_branch(expression):
+    if not isinstance(expression, str):
+        return False
+    try:
+        root = local.parse(expression, exit_rule=True)
+    except (ValueError, OverflowError, RecursionError):
+        return False
+    if not isinstance(root, ast.BoolOp) or not isinstance(root.op, ast.And):
+        return False
+    terms = {ast.dump(term) for term in root.values}
+    return _FIXED_OR_TRAILING in terms and _GAIN_GUARD in terms
 
 
 def sample(conn, state, entries, now):
@@ -47,7 +70,11 @@ def build(conn, now):
         if isinstance(data.get('exit_quote_wait'),(int,float)):g['waits'].append(data['exit_quote_wait'])
         if isinstance(data.get('signal_to_close_seconds'),(int,float)):g['signal_delays'].append(data['signal_to_close_seconds'])
     strategies=[]
+    redundant_exits=[]
     for candidate in conn.execute('SELECT id,slot,status,rule FROM local_strategies ORDER BY created'):
+        rule=json.loads(candidate['rule'])
+        if candidate['status'] in ('testing','proven') and redundant_trailing_branch(rule.get('exit')):
+            redundant_exits.append(candidate['id'])
         ident=candidate['id'];g=groups.get(ident,{})
         values=list(g.get('coins',{}).values());net=sum(values);best=max(values,default=0)
         gains=sum(v for v in values if v>0);losses=-sum(v for v in values if v<0)
@@ -59,7 +86,7 @@ def build(conn, now):
         if any(w>=90 for w in waits):flags.append('delayed_exit_checks_observed')
         if net>0 and net-max(best,0)<=0:flags.append('positive_result_depends_on_best_coin')
         if len(values)<100:flags.append('small_sample')
-        strategies.append({'id':ident,'slot':candidate['slot'],'name':json.loads(candidate['rule'])['name'],'status':candidate['status'],
+        strategies.append({'id':ident,'slot':candidate['slot'],'name':rule['name'],'status':candidate['status'],
             'closed':g.get('closed',0),'distinct_coins':len(values),'net':net,'net_without_best_coin':net-max(best,0),
             'profit_factor':gains/losses if losses else None,'writeoffs':g.get('writeoffs',0),
             'owner_closeouts':g.get('owner_closeouts',0),'owner_closeout_net':g.get('owner_closeout_net',0),
@@ -73,7 +100,7 @@ def build(conn, now):
             'Delayed checks and losses are associations, not proof that delays caused losses.',
             'Owner closeouts are reported separately from strategy results. No-route write-offs remain losses.',
             'One hundred coins is a checkpoint, not evidence of a durable edge.'],
-        'automatic_actions':False}
+        'fixed_gain_guard_redundant_trailing':redundant_exits, 'automatic_actions':False}
 
 
 def refresh(conn, state, entries, now):
@@ -91,7 +118,9 @@ def brief(report):
     if not report:return 'Automated audit is collecting its first observations.'
     active=[s for s in report['strategies'] if s['status'] in ('testing','proven')]
     count=lambda flag:sum(flag in s['flags'] for s in active)
+    redundant=len(report.get('fixed_gain_guard_redundant_trailing',[]))
+    warning=(f' In {redundant} active paper rules, the fixed-gain guard prevents the trailing branch from triggering independently.' if redundant else '')
     return ('Automated audit: '+str(len(active))+' active strategies; '+str(count('missing_data_observed'))+
         ' with missing-data observations; '+str(count('delayed_exit_checks_observed'))+
         ' with measured late exit checks; '+str(count('positive_result_depends_on_best_coin'))+
-        ' positive results dependent on their best coin. These are diagnostic flags, not causal findings.')
+        ' positive results dependent on their best coin. These are diagnostic flags, not causal findings.'+warning)

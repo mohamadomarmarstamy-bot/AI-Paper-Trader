@@ -29,6 +29,27 @@ class AuditTests(unittest.TestCase):
         self.assertFalse(report['automatic_actions'])
         self.assertIn('missing-data',audit.brief(report))
 
+    def test_digest_exit_templates_are_diagnostic_only(self):
+        trailing='peak >= 10 and gain <= peak - 5'
+        either=f'(gain >= 15 or ({trailing}))'
+        guarded=either+' and gain > 15'
+        expressions=[guarded, guarded+' and held_seconds > 60', 'held_seconds > 120 and '+guarded,
+                     trailing, trailing+' and held_seconds > 60', either+' and gain > 5',
+                     guarded+' or held_seconds > 60', either+' and (gain > 15 or held_seconds > 60)',
+                     None, 'unknown_name > 7', guarded]
+        for i,expression in enumerate(expressions):
+            self.conn.execute('INSERT INTO local_strategies VALUES (?,?,?,?,?)',
+                (str(i),'paper','failed' if i==10 else 'testing',json.dumps({'name':'fixture','exit':expression}),i))
+        before=list(self.conn.execute('SELECT * FROM local_strategies ORDER BY id'))
+        audit.refresh(self.conn,self.state,self.entries,1000)
+        report=audit.latest(self.conn)
+        self.assertEqual(set(report['fixed_gain_guard_redundant_trailing']),{'0','1','2'})
+        self.assertIn('3 active paper rules',audit.brief(report))
+        self.assertFalse(report['automatic_actions'])
+        self.assertEqual(before,list(self.conn.execute('SELECT * FROM local_strategies ORDER BY id')))
+        del report['fixed_gain_guard_redundant_trailing']
+        self.assertNotIn('trailing branch',audit.brief(report))
+
     def test_coin_concentration_writeoffs_and_unknown_instrumentation(self):
         self.trade('winner',20)
         self.trade('loser',-5,paper_writeoff={'category':'no_route'})
