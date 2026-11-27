@@ -137,6 +137,53 @@ class PriorityTests(unittest.TestCase):
         with api.connection() as conn:
             self.assertEqual(api.entry_evidence(conn,other,NOW)['chart'],value)
             self.assertEqual(feed.status(conn)['impact_since_tracking'],{'fallback_charts':1,'charts_completing_rules':1,'charts_matching_rules':1})
+    def test_excluded_only_consumer_does_not_start_fallback(self):
+        row,state=self.prepare()
+        original=state['local_rules']['research-01']
+        for overrides in ({'entry_paused':True},{'challenger_ends':NOW},{'resumed_at':row['first']+1},
+                          {'exit':'(gain >= 15 or (peak >= 10 and gain <= peak - 5)) and gain > 15'}):
+            state['local_rules']['research-01']=dict(original,**overrides)
+            with api.connection() as conn,conn:
+                conn.execute('UPDATE run SET state=?',(json.dumps(state),))
+            with patch.object(feed,'attempt') as attempt:
+                feed.tick(api,clock=lambda:NOW)
+                attempt.assert_not_called()
+        state['local_rules']['research-02']=dict(original,resumed_at=row['first'])
+        state['bots']['research-02']['cash']=api.BUY_COST
+        with api.connection() as conn,conn:
+            conn.execute('UPDATE run SET state=?',(json.dumps(state),))
+            self.assertEqual(feed.blocked_rules(api,conn,state,row,NOW),['research-02'])
+            self.assertEqual(feed.status(conn)['calls'],0)
+
+    def test_pause_during_requests_keeps_only_incurred_reservations(self):
+        row,state=self.prepare()
+        original_attempt=feed.attempt
+        def pause():
+            state['local_rules']['research-01']['entry_paused']=True
+            with api.connection() as conn,conn:
+                conn.execute('UPDATE run SET state=?',(json.dumps(state),))
+        for stage,expected in enumerate((0,11,16)):
+            with self.subTest(stage=stage),api.connection() as conn,conn:
+                state['local_rules']['research-01']['entry_paused']=False
+                conn.execute('UPDATE run SET state=?',(json.dumps(state),))
+                for table in ('research_tasks','codex_calls','codex_samples'):conn.execute('DELETE FROM '+table)
+            responses=[CodexTests.metadata(self),CodexTests.bars(self)]
+            def post(*args,**kwargs):
+                data=responses.pop(0)
+                if len(responses)==2-stage:pause()
+                return CodexTests.response(self,data)
+            def attempt(*args,**kwargs):
+                if stage==0:pause()
+                return original_attempt(*args,post=post,**kwargs)
+            with patch.dict(os.environ,{'JARVIS_CODEX_MODE':'fallback'}),patch.object(feed,'attempt',side_effect=attempt):
+                feed.tick(api,clock=lambda:NOW)
+            with api.connection() as conn:
+                info=feed.status(conn,NOW)
+                self.assertEqual(info['calls'],stage)
+                self.assertEqual(info['reserved_cu_today'],expected)
+                self.assertEqual(info['impact_since_tracking']['fallback_charts'],0)
+                self.assertNotIn('chart',api.entry_evidence(conn,row,NOW))
+
     def test_healthy_primary_does_not_spend(self):
         row,state=self.prepare()
         with api.connection() as conn,conn:

@@ -39,11 +39,15 @@ def hourly_allowance(hour):
 def mode():return os.getenv('JARVIS_CODEX_MODE','trial').strip().lower()
 
 
-def reserve(api,now,units,score_id=None):
+def reserve(api,now,units,score_id=None,consumer_row=None):
     dt=datetime.fromtimestamp(now,timezone.utc)
     day,month=dt.strftime('%Y-%m-%d'),dt.strftime('%Y-%m')
     with api.connection() as conn,conn:
         conn.execute('BEGIN IMMEDIATE')
+        if consumer_row is not None:
+            state,_=api.read(conn)
+            if not current_consumers(api,conn,state,consumer_row,now):
+                raise Unavailable('consumer_ineligible')
         control=conn.execute('SELECT * FROM codex_control WHERE id=1').fetchone()
         if control and control['blocked_until']>now:raise Unavailable(control['status'])
         if conn.execute('SELECT count(*) FROM codex_calls WHERE at>?',(now-1,)).fetchone()[0]>=4:
@@ -58,8 +62,8 @@ def reserve(api,now,units,score_id=None):
         conn.execute('INSERT INTO codex_calls(at,day,month,reserved) VALUES (?,?,?,?)',(now,day,month,units))
 
 
-def request(api,query,variables,units,clock,post,score_id=None):
-    reserve(api,clock(),units,score_id)
+def request(api,query,variables,units,clock,post,score_id=None,consumer_row=None):
+    reserve(api,clock(),units,score_id,consumer_row)
     key=os.getenv('JARVIS_CODEX_API_KEY','').strip()
     try:
         response=post(URL,json={'query':query,'variables':variables},headers={'Authorization':key,'Content-Type':'application/json'},timeout=5,allow_redirects=False)
@@ -123,14 +127,17 @@ def attempt(api,row,*,clock,post=solana_http.post,score_id=None):
         previous=conn.execute('SELECT * FROM codex_samples WHERE pair=?',(row['pair'],)).fetchone()
         if previous and (mode()=='trial' or now-previous['at']<3600):return None
         if mode()=='trial' and conn.execute('SELECT count(*) FROM codex_samples').fetchone()[0]>=3:return None
+    consumer_row=row if score_id is not None else None
     value=None
     try:
-        data=request(api,META,{'id':row['pair']+':'+str(NETWORK)},11,clock,post,score_id)
+        data=request(api,META,{'id':row['pair']+':'+str(NETWORK)},11,clock,post,score_id,consumer_row)
         side,addresses=parse_metadata(data,row)
         end=int(clock()-5)//60*60
-        data=request(api,BARS,{'id':row['pair']+':'+str(NETWORK),'start':end-30*60,'end':end,'side':side},5,clock,post,score_id)
+        data=request(api,BARS,{'id':row['pair']+':'+str(NETWORK),'start':end-30*60,'end':end,'side':side},5,clock,post,score_id,consumer_row)
         value=parse_bars(data,row,addresses,clock());status='validated'
-    except Unavailable as error:status=error.status
+    except Unavailable as error:
+        if error.status=='consumer_ineligible':return None
+        status=error.status
     with api.connection() as conn,conn:
         conn.execute('BEGIN IMMEDIATE')
         conn.execute('INSERT OR REPLACE INTO codex_samples VALUES (?,?,?,?)',(row['pair'],row['mint'],clock(),status))
@@ -186,12 +193,20 @@ def blocked_rules(api,conn,state,row,now):
         positions=portfolio.get('positions',{})
         if (slot not in local_lab.SLOTS or slot in closed or row['mint'] in positions
             or len(positions)>=local_lab.MAX_OPEN or portfolio.get('cash',0)<api.BUY_COST
-            or row['first']<rule['created']):continue
+            or not local_lab.entry_window_open(rule,row,now)):continue
         required={n.id for n in ast.walk(local_lab.parse(rule['entry'])) if isinstance(n,ast.Name)}
         missing={k for k in required if values.get(k) is None}
         if missing and missing<= {'rsi','volume_ratio'} and possible(rule['entry'],values) is None:
             slots.append(slot)
     return slots
+
+
+def current_consumers(api,conn,state,selected,now):
+    row=state['watch'].get(selected['mint'])
+    if (not row or row['pair']!=selected['pair'] or row['first']!=selected['first']
+            or api.backlog.paused(state,now) or (state.get('entry_catchup_pause') or {}).get('active')):
+        return []
+    return blocked_rules(api,conn,state,row,now)
 
 
 def tick(api,*,clock):
@@ -237,8 +252,7 @@ def tick(api,*,clock):
         conn.execute('BEGIN IMMEDIATE')
         current,_=api.read(conn)
         current_row=current['watch'].get(row['mint'])
-        same_episode = current_row and current_row['pair']==row['pair'] and current_row['first']==row['first']
-        current_slots=blocked_rules(api,conn,current,current_row,at) if value is not None and same_episode else []
+        current_slots=current_consumers(api,conn,current,row,at) if value is not None else []
         if not current_slots:
             scorecard.finish(conn,current,score_id,at,False,api.ENTRY_WINDOW)
             return

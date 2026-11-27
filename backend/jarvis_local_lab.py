@@ -321,11 +321,19 @@ def submit(api, payload, now=None, *, allow_rotation=False, protect_control=None
     return {'id':ident,'slot':slot,'status':'testing'}
 
 
+def entry_window_open(rule, row, now):
+    from jarvis_audit import redundant_trailing_branch
+    return (rule and not rule.get('entry_paused')
+            and now < rule.get('challenger_ends', math.inf)
+            and row['first'] >= rule.get('resumed_at', rule['created'])
+            and 0 <= now-row['first'] <= 900
+            and not redundant_trailing_branch(rule.get('exit')))
+
+
 def entry_allowed(state, slot, row, evidence, now):
     rule = state.get('local_rules',{}).get(slot)
     portfolio = state['bots'][slot]
-    from jarvis_audit import redundant_trailing_branch
-    return (rule and not redundant_trailing_branch(rule.get('exit')) and not rule.get('entry_paused') and now<rule.get('challenger_ends',math.inf) and row['first'] >= rule.get('resumed_at',rule['created']) and 0 <= now-row['first'] <= 900
+    return (entry_window_open(rule,row,now)
             and len(portfolio['positions']) < MAX_OPEN and portfolio['cash'] >= 50_250000
             and run(rule['entry'], observations(row,evidence)))
 
