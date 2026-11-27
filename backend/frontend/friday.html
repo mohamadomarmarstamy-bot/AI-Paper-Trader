@@ -1,21 +1,82 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AI Friday · Stock research</title><link rel="stylesheet" href="/style.css">
-<style>
-body{display:block;min-height:100vh;background:#101722;color:#e6eef6}
-main{max-width:64rem;margin:auto;padding:2rem clamp(1rem,4vw,3rem);line-height:1.55}
-nav{display:flex;flex-wrap:wrap;gap:.5rem 1.25rem;margin:1.2rem 0}
-a{color:#90d7f7}section{padding:1.3rem;margin:1rem 0;border:1px solid #374456;border-radius:.8rem;background:#182332}
-h1,h2,p{margin:0 0 .65rem}button{cursor:pointer;color:inherit;background:#25465b;padding:.6rem 1rem;border:1px solid #5791a7;border-radius:.4rem}
-ul{padding-left:1.4rem}section:target{border-color:#90d7f7}
-</style></head>
-<body><main><header><a href="/">← Trading dashboard</a><h1>AI Friday</h1></header>
-<nav aria-label="Friday workspace"><a href="#trader">Friday Trader</a><a href="#lab">Strategy Lab</a><a href="#history">History</a><a href="#health">Health</a><a href="#investigations">System Investigations</a><a href="#settings">Settings</a></nav>
-<section id="trader"><h2>Friday Trader</h2><p>Alpaca PAPER routing disabled. Friday tracks local simulated positions separately.</p><ul id="positions"></ul></section>
-<section id="lab"><h2>Strategy Lab</h2><p>Momentum review queue · up to two candidates per scan. Friday checks the existing completed-bar opening breakout against current scanner evidence before opening a local trial.</p><ul id="queue"></ul><h3>Friday Breakout + RSI 55</h3><p>Paper shadow · Wilder RSI(14) ≥ 55 on regular-session breakout entries. Both arms use the original VWAP gate, size, stop, target and time exit (up to 60 minutes). A filtered loss is a negative baseline result after 10 bps and $0.005 per share per side.</p><p id="rsi-shadow" role="status"></p>
-<button type="button" id="capture">Record latest stock scan</button><p id="message" role="status"></p></section>
-<section id="history"><h2>History</h2><p>Latest 20 recorded scans</p><ul id="scans"></ul><h3>Historical PAPER stock fills</h3><button type="button" id="load-baseline">Analyze saved PAPER fills</button><p id="baseline" role="status"></p><h3>Closed simulations</h3><ul id="outcomes"></ul><h3>Extended-hours forward probes</h3><p>One modeled share per phase per day. A fresh same-phase bid is required at the one-minute horizon.</p><ul id="phase-results"></ul></section>
-<section id="health"><h2>Health</h2><p id="coverage"></p><p id="trial-health"></p><p id="phase-health"></p></section>
-<section id="investigations"><h2>System Investigations</h2><h3>Missed-move replay</h3><p>Regular and extended hours · first observation per scanner minute for all four cohort symbols. The one-minute net change uses the recorded ask, a later same-phase bid and modeled costs.</p><ul id="replays"></ul><p id="remedy"></p><p>Latest scan decisions</p><ul id="reasons"></ul><p>Pro Ticker intake awaits a verified feed with publication and receipt times. The phone pilot records observations separately.</p></section>
-<section id="settings"><h2>Settings</h2><p id="passive"></p><p>Execution review cohort · AAPL, AMD, MSFT and NVDA. Maximum quote and trade age · 90 seconds. Review requires a 3–15% move, price at or above session VWAP, at least $5 million IEX session dollar volume and spread at most 0.15%.</p></section>
-</main><script src="/js/friday.js"></script></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Friday · Stock research</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/meme-coins.css">
+  <style>
+    .friday nav {max-width:100%;scrollbar-width:thin}
+    .friday nav a {display:inline-flex;align-items:center;min-height:44px}
+    .friday :is(p,li,dd) {overflow-wrap:anywhere}
+    .friday .panel h3,.friday .panel h2 {font-size:1.06rem;margin:0 0 .65rem}
+    .friday .panel p {line-height:1.55}
+    .friday ul {list-style:none;margin:.5rem 0 0;padding:0}
+    .friday li {padding:.8rem 0;border-top:1px solid #ffffff18;font-size:.9rem;line-height:1.55}
+    .friday .panel .meme-muted {margin:.4rem 0 .75rem}
+    .friday .meme-grid .panel p {margin:0 0 .45rem}
+    .friday .meme-grid .panel small {display:block;margin-top:.25rem}
+    .friday .status-strip:empty,.friday #remedy:empty {display:none}
+    .friday table {border-collapse:collapse;width:100%;min-width:0;font-size:.9rem;font-variant-numeric:tabular-nums}
+    .friday th,.friday td {text-align:left;padding:.7rem .3rem;border-bottom:1px solid #ffffff18}
+    .friday th {color:#a8b5ca;font-size:.77rem;font-weight:600}
+    .friday dl {margin:0}.friday dl div {display:flex;justify-content:space-between;gap:1rem;padding:.7rem 0;border-bottom:1px solid #ffffff18}
+    .friday dt {color:#a8b5ca}.friday dd {margin:0;text-align:right}
+    @media(max-width:700px){.friday nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:14px 0}.friday nav a{justify-content:center;white-space:normal;text-align:center;padding:6px;font-size:.81rem}.friday main{min-width:0}}
+  </style>
+</head>
+<body class="friday"><main>
+  <header>
+    <div class="brand"><span aria-hidden="true">◎</span> AI Friday <small>/ Stocks</small></div>
+    <div class="toolbar"><span class="meme-badge">PAPER · Simulation</span><a class="secondary-button" href="/">Dashboard ↗</a></div>
+  </header>
+  <nav aria-label="Friday workspace">
+    <a href="#trader">Friday Trader</a><a href="#lab">Strategy Lab</a><a href="#history">History</a>
+    <a href="#health">Health</a><a href="#investigations">System Investigations</a><a href="#settings">Settings</a>
+  </nav>
+  <p class="status-strip" id="message" role="status">Loading Friday research…</p>
+  <section id="trader">
+    <div class="page-title"><div><h1>Friday Trader</h1><p class="meme-muted">Stock momentum research and local simulated positions.</p></div></div>
+    <div class="meme-grid">
+      <div class="panel"><p>Open positions</p><strong class="meme-stat" id="open-count">—</strong><small>Local simulations</small></div>
+      <div class="panel"><p>Review queue</p><strong class="meme-stat" id="queue-count">—</strong><small>Up to two per scan</small></div>
+      <div class="panel"><p>Symbols screened</p><strong class="meme-stat" id="screen-count">—</strong><small>Latest recorded scan</small></div>
+      <div class="panel"><p>Order routing</p><strong class="meme-stat">Off</strong><small>Alpaca PAPER</small></div>
+    </div>
+    <article class="panel"><h2>Open simulated positions</h2><ul id="positions"></ul></article>
+  </section>
+  <section id="lab">
+    <div class="page-title"><div><h1>Strategy Lab</h1><p class="meme-muted">Completed-bar breakouts checked against current scanner evidence.</p></div><button class="primary-button" type="button" id="capture">Record latest stock scan</button></div>
+    <article class="panel"><h2>Momentum review queue</h2><table><thead><tr><th scope="col">Symbol</th><th scope="col">Move</th><th scope="col">Spread</th></tr></thead><tbody id="queue"></tbody></table></article>
+    <article class="panel"><div class="meme-title-row"><h3>Friday Breakout + RSI 55</h3><span class="meme-badge">Paper shadow</span></div><p id="rsi-shadow" role="status"></p><details class="meme-notes"><summary>Study rules and costs</summary><p>Wilder RSI(14) ≥ 55 on regular-session breakout entries. Both arms use the original VWAP gate, size, stop, target and time exit (up to 60 minutes). A filtered loss is a negative baseline result after 10 bps and $0.005 per share per side.</p></details></article>
+  </section>
+  <section id="history">
+    <div class="page-title"><h1>History</h1></div>
+    <article class="panel"><h2>Closed simulations</h2><ul id="outcomes"></ul></article>
+    <article class="panel"><h2>Extended-hours forward probes</h2><p class="meme-muted">One modeled share per phase per day. Measurement requires a fresh same-phase bid at the one-minute horizon.</p><ul id="phase-results"></ul></article>
+    <article class="panel"><h2>Historical PAPER stock fills</h2><button type="button" id="load-baseline">Analyze saved PAPER fills</button><p id="baseline" role="status"></p></article>
+    <article class="panel"><h2>Latest 20 recorded scans</h2><ul id="scans"></ul></article>
+  </section>
+  <section id="health">
+    <div class="page-title"><h1>Health</h1></div>
+    <article class="panel"><h2>Scanner coverage</h2><p id="coverage"></p></article>
+    <div class="settings-grid"><article class="panel"><h2>Simulation</h2><p id="trial-health"></p></article><article class="panel"><h2>Extended-hours capture</h2><p id="phase-health"></p></article></div>
+  </section>
+  <section id="investigations">
+    <div class="page-title"><h1>System Investigations</h1></div>
+    <article class="panel"><h2>Latest scan decisions</h2><p id="remedy"></p><ul id="reasons"></ul></article>
+    <article class="panel"><h2>Missed-move replay</h2><p class="meme-muted">First observation per scanner minute for each cohort symbol during regular and extended hours. One-minute net change uses the recorded ask, a later same-phase bid and modeled costs.</p><ul id="replays"></ul></article>
+    <article class="panel"><h2>Pro Ticker intake</h2><p class="meme-muted">Awaiting a verified feed with publication and receipt times. The phone pilot records observations separately.</p></article>
+  </section>
+  <section id="settings">
+    <div class="page-title"><h1>Settings</h1></div>
+    <article class="panel"><h2>Research capture</h2><p id="passive"></p></article>
+    <article class="panel"><h2>Review criteria</h2><dl>
+      <div><dt>Stock cohort</dt><dd>AAPL, AMD, MSFT, NVDA</dd></div>
+      <div><dt>Maximum quote and trade age</dt><dd>90 seconds</dd></div>
+      <div><dt>Price move</dt><dd>3–15%</dd></div><div><dt>Price vs. session VWAP</dt><dd>At or above</dd></div>
+      <div><dt>Minimum IEX session dollar volume</dt><dd>$5 million</dd></div><div><dt>Maximum spread</dt><dd>0.15%</dd></div>
+    </dl></article>
+  </section>
+</main><script src="/js/friday.js?v=workspace-2"></script></body></html>

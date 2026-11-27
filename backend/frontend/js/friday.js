@@ -1,4 +1,32 @@
 const element = id => document.getElementById(id);
+const sections = Array.from(document.querySelectorAll('main > section'));
+function showPage() {
+    const target = sections.find(section => '#' + section.id === location.hash) || sections[0];
+    sections.forEach(section => { section.hidden = section !== target; });
+    document.querySelectorAll('nav a').forEach(link => {
+        if (link.hash === '#' + target.id) link.setAttribute('aria-current', 'page');
+        else link.removeAttribute('aria-current');
+    });
+}
+window.addEventListener('hashchange', showPage);
+showPage();
+
+function renderQueue(candidates) {
+    const body = element('queue');
+    body.replaceChildren();
+    if (!candidates?.length) {
+        const cell = body.insertRow().insertCell();
+        cell.colSpan = 3;
+        cell.textContent = 'No candidates recorded.';
+        return;
+    }
+    candidates.forEach(candidate => {
+        const row = body.insertRow();
+        [candidate.symbol, candidate.change.toFixed(2) + '%', candidate.spread.toFixed(2) + '%']
+            .forEach(value => { row.insertCell().textContent = value; });
+    });
+}
+
 function items(id, values) {
     element(id).replaceChildren(...values.map(value => {
         const li = document.createElement('li');
@@ -47,9 +75,11 @@ async function refresh(method) {
         items('positions', trials.positions.length ? trials.positions.map(p => p.symbol + ' · ' + p.shares + ' modeled shares · regular session') : ['No open simulated positions.']);
         items('outcomes', trials.history.length ? trials.history.map(p => p.symbol + ' · ' + p.source_group.replaceAll('_', ' ') + ' · ' + p.outcome.scenarios.map(s =>
             s.bps_per_side + ' bps/side: $' + s.modeled_pnl_usd.toFixed(2) + ' vs matched hold $' + s.matched_hold_pnl_usd.toFixed(2)).join(' / ')) : ['No closed simulations.']);
-        items('reasons', (latest?.reasons || []).map(r => r.reason.replaceAll('_', ' ') + ' · ' + r.count));
-        items('queue', latest?.candidates.length ? latest.candidates.map(r =>
-            r.symbol + ' · move ' + r.change.toFixed(2) + '% · spread ' + r.spread.toFixed(2) + '%') : ['No candidates recorded.']);
+        items('reasons', latest?.reasons.length ? latest.reasons.map(r => r.reason.replaceAll('_', ' ') + ' · ' + r.count) : ['No scan decisions recorded.']);
+        renderQueue(latest?.candidates);
+        element('open-count').textContent = trials.positions.length;
+        element('queue-count').textContent = latest ? latest.candidates.length : '—';
+        element('screen-count').textContent = latest ? latest.screened : '—';
     } catch {
         element('message').textContent = 'Unable to load Friday research. Try again.';
     } finally {
