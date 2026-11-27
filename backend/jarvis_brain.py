@@ -539,6 +539,7 @@ def research_job(api,job,now,post=solana_http.post):
             'Prefer cache, pacing and existing allowances. Do not predict measured coverage. '
             'Separate the 60-second per-pool refresh floor, current global pace, cooldown, returned lag, '
             'accepted candle age, history and momentum readiness. Return an empty array if insufficient sources.')
+    strategy=job['kind']=='strategy'
     followup=job['kind']=='provider_followup'
     if followup:
         instruction += (' Start with these official documentation targets: '+json.dumps(PROVIDER_DOCS)+
@@ -548,6 +549,7 @@ def research_job(api,job,now,post=solana_http.post):
     outcome='provider_error';usage={};data=None
     domains=DIAGNOSTIC_DOMAINS if job['kind']!='strategy' else ()
     if job['kind']=='provider_followup':domains=tuple(sorted(set().union(*PROVIDER_HOSTS.values())))
+    failure='invalid_or_unavailable'
     try:
         request={'model':MODEL,'instructions':instruction,'input':encoded,'store':False,'max_output_tokens':4500}
         if followup:
@@ -556,15 +558,22 @@ def research_job(api,job,now,post=solana_http.post):
             request.update(tools=[{'type':'web_search','search_context_size':'low',
                 **({'filters':{'allowed_domains':list(domains)}} if domains else {})}],
                 tool_choice='required',max_tool_calls=2,include=['web_search_call.action.sources'])
+        if strategy:failure='strategy_transport_error'
         response=post('https://api.openai.com/v1/responses',headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'},
                       json=request,timeout=90,allow_redirects=False)
+        if strategy:failure='strategy_invalid_response'
         if response.status_code in (401,403):outcome='authentication_or_access';return None,outcome
         if response.status_code==429:outcome='rate_limited';return None,outcome
         if response.status_code!=200:
             outcome='http_'+str(response.status_code);return None,outcome
-        if len(response.content)>300000:return None,outcome
+        if len(response.content)>300000:
+            if strategy:outcome='strategy_invalid_response'
+            return None,outcome
         data=response.json();usage=data.get('usage') or {}
-        if data.get('status')!='completed':outcome='incomplete';return None,outcome
+        if data.get('status')!='completed':
+            outcome='strategy_api_failure' if strategy and data.get('status')=='failed' else 'incomplete'
+            return None,outcome
+        refused=False
         texts=[];retrieved=[];cited=[];searched=False
         for item in data.get('output',[]):
             if item.get('type')=='web_search_call' and item.get('status')=='completed':
@@ -573,6 +582,7 @@ def research_job(api,job,now,post=solana_http.post):
                 retrieved.extend(action.get('sources') or [])
             if item.get('type')=='message':
                 for part in item.get('content',[]):
+                    if strategy and part.get('type')=='refusal':refused=True
                     if followup and part.get('type')=='refusal':
                         outcome='provider_refused';return None,outcome
                     if part.get('type')!='output_text':continue
@@ -583,11 +593,13 @@ def research_job(api,job,now,post=solana_http.post):
         if followup:
             sources=[s for s in sources if urlsplit(s['url']).netloc.lower() in domains]
             counts.update(search_completed=int(searched),official_sources=len(sources))
+        if refused and not texts:outcome='strategy_refused';return None,outcome
         if not local_reasoning and not sources:outcome='no_research_sources';return None,outcome
         try:
             raw=json.loads('\n'.join(texts))
         except ValueError:
             outcome='provider_invalid_json' if followup else 'invalid_or_unavailable'
+            if strategy:outcome='strategy_invalid_json'
             return None,outcome
         if followup:
             validated,outcome=validate_provider_followup(raw,sources,counts)
@@ -595,6 +607,7 @@ def research_job(api,job,now,post=solana_http.post):
             used={o['source'] for o in validated}
             return {'provider_options':validated,'sources':[s for s in sources if s['url'] in used]},None
         options=raw.pop('provider_options', []) if isinstance(raw,dict) and job['kind']=='chart_data_gap' else []
+        if strategy:failure='strategy_plan_rejected'
         plan=validate_plan(raw,job['kind'])
         if options and not local_reasoning:
             validated = provider_options(options, sources)
@@ -604,7 +617,7 @@ def research_job(api,job,now,post=solana_http.post):
         outcome='completed'
         return plan,None
     except Exception:
-        outcome='invalid_or_unavailable';return None,outcome
+        outcome=failure;return None,outcome
     finally:
         with api.connection() as conn,conn:
             if followup:

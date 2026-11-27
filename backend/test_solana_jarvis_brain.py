@@ -509,6 +509,45 @@ class BrainTests(unittest.TestCase):
         self.assertEqual(value['validation'],'syntax_checked_only')
         self.assertIn('must never execute',value['diff'])
         self.assertEqual((Path(brain.__file__).parent/'jarvis_test_bot.py').read_bytes(),before)
+    def test_strategy_failure_status_from_scheduled_review(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from solana_meme_routes import build_router
+        app=FastAPI()
+        app.include_router(build_router(require_session=lambda request: None))
+        client=TestClient(app)
+        cases=('strategy_transport_error','strategy_invalid_response','strategy_api_failure','strategy_refused',
+               'incomplete','strategy_invalid_json','strategy_plan_rejected','no_research_sources','completed')
+        for day,expected in enumerate(cases):
+            with self.subTest(expected=expected):
+                now=NOW+day*86401
+                plan=self.plan()
+                del plan['sources']
+                if expected=='strategy_plan_rejected':plan['strategy']={'private fixture':'bad rule'}
+                response=self.response(plan)
+                post=Mock(return_value=response)
+                data=response.json.return_value
+                if expected=='strategy_transport_error':post.side_effect=TimeoutError('private fixture')
+                if expected=='strategy_invalid_response':response.json.side_effect=ValueError('private fixture')
+                if expected=='strategy_api_failure':data['status']='failed'
+                if expected=='incomplete':data['status']='incomplete'
+                if expected=='strategy_refused':data['output'][1]['content']=[{'type':'refusal','refusal':'private fixture'}]
+                if expected=='strategy_invalid_json':data['output'][1]['content'][0]['text']='private fixture'
+                if expected=='no_research_sources':data['output'][0]['action']['sources']=[]
+                with patch.object(brain,'symptoms',return_value=(set(),{})):
+                    brain.cloud_tick(api,clock=lambda:now,researcher=lambda a,j,t:brain.research_job(a,j,t,post))
+                post.assert_called_once()
+                view=client.get('/jarvis-test-bot/brain/status').json()
+                self.assertEqual(view['last_call'],{'at':now,'purpose':'strategy','status':expected})
+                self.assertNotIn('private fixture',json.dumps(view))
+                self.assertEqual(view['strategy_due_at'],now+86400)
+                with api.connection() as conn:
+                    call=conn.execute('SELECT * FROM brain_calls WHERE at=?',(now,)).fetchone()
+                    self.assertEqual(call['reserved_cents'],brain.RESERVATION_CENTS)
+                    tokens=(None,None) if day<2 else (100,200)
+                    self.assertEqual((call['input_tokens'],call['output_tokens']),tokens)
+                    self.assertFalse(conn.execute('SELECT 1 FROM brain_proposals').fetchone())
+
     def test_daily_strategy_jobs_and_incident_retry_are_bounded(self):
         with patch.object(brain,'symptoms',return_value=(set(),{})):
             job=brain.build_job(api,NOW);self.assertEqual(job['kind'],'strategy')
