@@ -91,7 +91,7 @@ const phases={
   observed_recovery:'Recovery observed',needs_attention:'Needs attention',resolved:'Resolved'
 };
 const actions={monitor:'Monitoring only',pause_entries:'Paused new paper entries',cooldown_chart:'Slowed chart requests'};
-const reviews={completed:'Completed',no_research_sources:'No usable sources returned',rate_limited:'Provider rate limit',authentication_or_access:'Provider access issue',invalid_or_unavailable:'Response could not be used'};
+const reviews={strategy_transport_error:'Strategy request failed during transport',strategy_invalid_response:'Strategy API response could not be read',strategy_api_failure:'Strategy API reported failure',strategy_refused:'Strategy request refused',incomplete:'Response incomplete',strategy_invalid_json:'Strategy output contained malformed JSON',strategy_plan_rejected:'Strategy plan or rule failed validation',completed:'Completed',no_research_sources:'No usable sources returned',rate_limited:'Provider rate limit',authentication_or_access:'Provider access issue',invalid_or_unavailable:'Response could not be used'};
 const facts={
   provider_returned_stale_candles:'Provider returned old candles',cached_chart_evidence_expired:'Cached chart data expired',
   low_complete_indicator_coverage:'Few charts have all indicators',no_complete_candidate_indicators:'No chart had all indicators',
