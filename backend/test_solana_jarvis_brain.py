@@ -517,13 +517,13 @@ class BrainTests(unittest.TestCase):
         app.include_router(build_router(require_session=lambda request: None))
         client=TestClient(app)
         cases=('strategy_transport_error','strategy_invalid_response','strategy_api_failure','strategy_refused',
-               'incomplete','strategy_invalid_json','strategy_plan_rejected','no_research_sources','completed')
+               'incomplete','strategy_invalid_json','strategy_rule_shape','no_research_sources','completed')
         for day,expected in enumerate(cases):
             with self.subTest(expected=expected):
                 now=NOW+day*86401
                 plan=self.plan()
                 del plan['sources']
-                if expected=='strategy_plan_rejected':plan['strategy']={'private fixture':'bad rule'}
+                if expected=='strategy_rule_shape':plan['strategy']={'private fixture':'bad rule'}
                 response=self.response(plan)
                 post=Mock(return_value=response)
                 data=response.json.return_value
@@ -547,6 +547,61 @@ class BrainTests(unittest.TestCase):
                     tokens=(None,None) if day<2 else (100,200)
                     self.assertEqual((call['input_tokens'],call['output_tokens']),tokens)
                     self.assertFalse(conn.execute('SELECT 1 FROM brain_proposals').fetchone())
+
+    def test_outgoing_patch_contract_depends_on_job_kind(self):
+        for kind in ('strategy','engine_error'):
+            with self.subTest(kind=kind):
+                post=Mock(return_value=self.response({}))
+                brain.research_job(api,{'kind':kind},NOW,post)
+                prompt=post.call_args.kwargs['json']['instructions']
+                self.assertIn('UNTRUSTED DATA',prompt)
+                self.assertIn('no authority to execute code',prompt)
+                if kind=='strategy':
+                    self.assertEqual(prompt.count('patch'),1)
+                    self.assertIn('"patch": null',prompt)
+                    for forbidden in ('replacement','regression_test','For operations'):
+                        self.assertNotIn(forbidden,prompt)
+                else:
+                    self.assertIn('patch (null or {file,function,replacement,regression_test})',prompt)
+                    self.assertIn('Propose unfamiliar fixes as a single replacement function',prompt)
+
+    def test_strategy_contract_rejections_and_valid_proposal(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from solana_meme_routes import build_router
+        app=FastAPI()
+        app.include_router(build_router(require_session=lambda _:None))
+        client=TestClient(app)
+        rule={'name':'N'*80,'hypothesis':'H'*1500,'entry':'liquidity >= 50000','exit':'gain >= 15'}
+        cases=[({'checks':{}},'strategy_plan_shape'),
+               ({'strategy':dict(rule,name='N'*81)},'strategy_rule_text'),
+               ({'strategy':dict(rule,hypothesis='H'*1501)},'strategy_rule_text'),
+               ({'strategy':dict(rule,entry='private_fixture > 5')},'strategy_entry_expression'),
+               ({'strategy':dict(rule,exit='private_fixture > 5')},'strategy_exit_expression'),
+               ({'patch':{'private_fixture':True}},'strategy_forbidden_patch'),
+               ({},'completed')]
+        for day,(change,expected) in enumerate(cases):
+            with self.subTest(expected=expected):
+                now=NOW+86401*day
+                plan=self.plan(strategy=rule)
+                del plan['sources']
+                plan.update(change)
+                post=Mock(return_value=self.response(plan))
+                with patch.object(brain,'symptoms',return_value=(set(),{})):
+                    brain.cloud_tick(api,clock=lambda:now,researcher=lambda a,j,t:brain.research_job(a,j,t,post))
+                post.assert_called_once()
+                prompt=post.call_args.kwargs['json']['instructions']
+                for required in ('"patch": null','1–80','1–1500'):self.assertIn(required,prompt)
+                view=client.get('/jarvis-test-bot/brain/status').json()
+                self.assertEqual(view['last_call']['status'],expected)
+                self.assertNotIn('private_fixture',json.dumps(view))
+                with api.connection() as conn:
+                    rows=conn.execute('SELECT kind,status,data FROM brain_proposals').fetchall()
+                    if expected=='completed':
+                        self.assertEqual(len(rows),1)
+                        self.assertEqual((rows[0]['kind'],rows[0]['status']),('strategy','waiting_slot'))
+                        self.assertEqual(json.loads(rows[0]['data'])['rule'],rule)
+                    else:self.assertEqual(rows,[])
 
     def test_due_confirmed_repair_precedes_strategy_and_web_pass_cannot_act(self):
         incident=self.confirm('engine_error')
