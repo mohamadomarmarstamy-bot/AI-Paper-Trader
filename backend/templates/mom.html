@@ -60,6 +60,7 @@ button:focus-visible{outline:3px solid #822048;outline-offset:4px}
 <p id="status" role="status">Sound is off.</p>
 <audio id="siren-clip" preload="none" src="data:audio/wav;base64,{{siren_audio}}"></audio>
 <audio id="heart-clip" preload="none" src="data:audio/mpeg;base64,{{voice_audio}}"></audio>
+<form method="post" action="/i-love-mom/lock"><input type="hidden" name="csrf" value="{{csrf}}"><button type="submit">Lock again</button></form>
 </article></main>
 <script nonce="{{nonce}}">
 const byId = id => document.getElementById(id);
