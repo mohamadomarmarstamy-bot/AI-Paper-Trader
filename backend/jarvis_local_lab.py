@@ -204,16 +204,25 @@ def run(expression, values, exit_rule=False):
         return False
 
 
+class RuleValidationError(ValueError):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
 def validate(rule):
     if not isinstance(rule, dict) or set(rule) != {'name','hypothesis','entry','exit'}:
-        raise ValueError('Expected name, hypothesis, entry, exit')
+        raise RuleValidationError('strategy_rule_shape','Expected name, hypothesis, entry, exit')
     for key, maximum in (('name',80),('hypothesis',1500)):
         if not isinstance(rule[key], str) or not 1 <= len(rule[key]) <= maximum:
-            raise ValueError('Invalid description')
-    if not isinstance(rule['entry'],str) or not isinstance(rule['exit'],str):
-        raise ValueError('Expressions must be strings')
-    parse(rule['entry'])
-    parse(rule['exit'], True)
+            raise RuleValidationError('strategy_rule_text','Invalid description')
+    for field,code in (('entry','strategy_entry_expression'),('exit','strategy_exit_expression')):
+        if not isinstance(rule[field],str):
+            raise RuleValidationError(code,'Expressions must be strings')
+        try:
+            parse(rule[field], exit_rule=field=='exit')
+        except (ValueError, OverflowError, RecursionError) as error:
+            raise RuleValidationError(code,str(error)) from error
     return rule
 
 
