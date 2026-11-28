@@ -16367,6 +16367,9 @@ from solana_meme_routes import build_router as build_meme_router
 from friday_routes import router as friday_router
 app.include_router(friday_router, dependencies=[Depends(require_app_session)])
 
+from mom_dedication import build_router as build_dedication_router
+app.include_router(build_dedication_router(require_app_session))
+
 app.include_router(build_meme_router(require_session=require_app_session))
 
 
