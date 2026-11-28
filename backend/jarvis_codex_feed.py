@@ -201,11 +201,28 @@ def blocked_rules(api,conn,state,row,now):
     return slots
 
 
+def recent_primary_gap(conn,row,now):
+    found=conn.execute('SELECT evidence FROM research WHERE mint=? AND pair=?',(row['mint'],row['pair'])).fetchone()
+    record=(json.loads(found['evidence']).get('chart') or {}) if found else {}
+    attempt=record.get('attempt_at')
+    if type(attempt) not in (int,float) or not 0<=now-attempt<=research.FRESH_SECONDS:
+        return False
+    if record.get('status')!='ready':
+        return True
+    # A ready label describes the last result, not whether its candle is still usable.
+    value=record.get('value')
+    return (mode()=='fallback' and isinstance(value,dict) and value.get('provider')!='codex'
+            and type(value.get('closed_at')) in (int,float) and 0<value['closed_at']<=now
+            and type(record.get('at')) in (int,float) and 0<record['at']<=now
+            and not research.chart_is_fresh(record,now))
+
+
 def current_consumers(api,conn,state,selected,now):
     row=state['watch'].get(selected['mint'])
     if (not row or row['pair']!=selected['pair'] or row['first']!=selected['first']
             or api.backlog.paused(state,now) or (state.get('entry_catchup_pause') or {}).get('active')):
         return []
+    if not recent_primary_gap(conn,row,now):return []
     return blocked_rules(api,conn,state,row,now)
 
 
@@ -235,10 +252,7 @@ def tick(api,*,clock):
             if not all(isinstance(row.get(k),str) and research.ADDRESS.fullmatch(row[k]) for k in ('mint','pair')):continue
             previous=conn.execute('SELECT at FROM codex_samples WHERE pair=?',(row['pair'],)).fetchone()
             if previous and (mode()=='trial' or now-previous['at']<3600):continue
-            found=conn.execute('SELECT evidence FROM research WHERE mint=? AND pair=?',(row['mint'],row['pair'])).fetchone()
-            record=(json.loads(found['evidence']).get('chart') or {}) if found else {}
-            # Try the free primary first. Never pay for healthy or unattempted data.
-            if record.get('status')=='ready' or not 0<=now-record.get('attempt_at',0)<=180:continue
+            if not recent_primary_gap(conn,row,now):continue
             slots=blocked_rules(api,conn,state,row,now)
             if slots:candidates.append((row,slots))
         if not candidates:return
