@@ -11,7 +11,7 @@ body{margin:0;min-height:100vh;min-height:100svh;background:radial-gradient(elli
 main{max-width:64rem;margin:auto;padding:clamp(1rem,5vw,3rem)}
 a{display:inline-block;padding:.8rem 0;color:#852e47;font:600 .9rem system-ui;text-underline-offset:.25rem}
 a:focus-visible{outline:3px solid #9b2451;outline-offset:4px}
-article{position:relative;isolation:isolate;overflow:hidden;margin:clamp(1rem,5vh,4rem) auto;padding:clamp(7rem,18vh,12rem) clamp(1.3rem,6vw,4rem);text-align:center;background:linear-gradient(150deg,#fffbf7,#ffe7ed);border:1px solid #edb1be;border-radius:1.6rem;box-shadow:0 1.5rem 4rem #9d31591a}
+article{position:relative;isolation:isolate;overflow:hidden;margin:clamp(1rem,5vh,4rem) auto;padding:clamp(2rem,5vh,4rem) clamp(1.3rem,6vw,4rem);text-align:center;background:linear-gradient(150deg,#fffbf7,#ffe7ed);border:1px solid #edb1be;border-radius:1.6rem;box-shadow:0 1.5rem 4rem #9d31591a}
 article:before{content:"";position:absolute;inset:.65rem;border:1px dashed #df94a8;border-radius:1.1rem;pointer-events:none}
 h1{position:relative;margin:.35rem 0;color:#a11740;font-size:clamp(2.8rem,10vw,6.8rem);font-weight:500;line-height:1.1;letter-spacing:-.06em}
 .name{position:relative;margin:1.1rem auto .3rem;max-width:24ch;font-size:clamp(1.25rem,4.5vw,2.5rem);font-style:italic;overflow-wrap:anywhere}
@@ -19,6 +19,17 @@ h1{position:relative;margin:.35rem 0;color:#a11740;font-size:clamp(2.8rem,10vw,6
 .sprinkle{position:absolute;inset:0;z-index:-1;color:#ce4769}
 .sprinkle i{position:absolute;left:var(--x);top:var(--y);font:normal var(--s) Georgia;transform:rotate(var(--r));opacity:.65}
 .sprinkle i:nth-child(3n){color:#ea91a7}
+article{max-width:49rem}
+.note{max-width:31ch;margin:1rem auto;line-height:1.55;font-size:clamp(1.1rem,3vw,1.45rem)}
+.cruiser{display:block;width:min(100%,22rem);margin:.75rem auto}
+figure{margin:0}figcaption{margin:.5rem;font:600 .9rem system-ui}
+audio{width:min(100%,19rem);display:block;margin:auto}
+audio:focus-visible{outline:3px solid #9b2451;outline-offset:3px}
+button{cursor:pointer;font:600 1rem system-ui;color:#842341}
+button:focus-visible{outline:3px solid #822048;outline-offset:4px}
+.heart{display:block;margin:.5rem auto 0;border:0;background:transparent;color:#c51d45;font:5rem/1 Georgia;text-shadow:0 4px 0 #941334}
+.hint,#status{font: .9rem/1.5 system-ui;margin:.35rem auto}
+.actions button{padding:.65rem 1rem;background:#fff7f7;border:1px solid #c78395;border-radius:1.5rem}
 </style>
 </head>
 <body><main><a href="/">← Paper Trader</a>
@@ -31,4 +42,55 @@ h1{position:relative;margin:.35rem 0;color:#a11740;font-size:clamp(2.8rem,10vw,6
 <i style="--x:76%;--y:77%;--s:2rem;--r:18deg">♥</i></div>
 <span class="hearts" aria-hidden="true">♡ ♥ ♡</span><h1 id="dedication">I love Mom</h1>
 <p class="name">{{dedication_name}}</p>
-</article></main></body></html>
+<p class="note">You were my first home. Wherever life takes me, your love still feels like coming home.</p>
+<button class="heart" type="button" id="heart" aria-label="Hear Love you, Mom" aria-describedby="hint">♥</button>
+<p class="hint" id="hint">Tap the heart for a little love note.</p>
+<svg class="cruiser" viewBox="0 0 340 136" role="img" aria-label="A little police cruiser with red and blue roof lights, a heart on its door, and flowers beside its wheels">
+<defs><g id="flower"><path d="M0 0q4 10 1 20m1-7q-8 0-9-7q7-1 9 7" fill="#64875d" stroke="#64875d"/><g fill="#d65d80"><circle cx="-4" cy="-2" r="4"/><circle cx="4" cy="-2" r="4"/><circle cy="-6" r="4"/><circle cy="2" r="4"/></g><circle cy="-2" r="2.8" fill="#ffd893"/></g></defs>
+<ellipse cx="171" cy="116" rx="112" ry="6" fill="#eacbd1"/>
+<g stroke="#29374b" stroke-width="3" stroke-linejoin="round">
+<path d="M54 78q1-10 17-12l26-4 22-27q4-5 15-5h55q10 0 17 7l26 26 37 8q12 3 13 15v12q0 6-9 6H62q-12 0-12-9z" fill="#384c67"/>
+<path d="m110 61 17-23h32v23zm57-23h23l27 23h-50z" fill="#d6eef2"/>
+<path d="M119 66h92l-6 34h-87z" fill="#fff9ec"/>
+<path d="M145 29v-8h36v8" fill="#f4ece8"/><path d="M143 23v-7q0-3 4-3h15v10z" fill="#ee5b67"/><path d="M162 13h15q5 0 5 4v6h-20z" fill="#5897de"/>
+<circle cx="92" cy="101" r="17" fill="#333947"/><circle cx="92" cy="101" r="8" fill="#c4c9ce"/><circle cx="240" cy="101" r="17" fill="#333947"/><circle cx="240" cy="101" r="8" fill="#c4c9ce"/></g>
+<path d="M163 91s-15-9-10-15q5-5 10 1 5-6 10-1 5 6-10 15" fill="#bd3759"/>
+<rect x="268" y="78" width="12" height="6" rx="3" fill="#ffe9ad"/><use href="#flower" x="31" y="96"/><use href="#flower" x="307" y="94"/></svg>
+<div class="actions"><button id="siren" type="button">Play siren</button> <button id="stop" type="button">Stop sound</button></div>
+<p id="status" role="status">Sound is off.</p>
+<audio id="siren-clip" preload="none" src="data:audio/wav;base64,{{siren_audio}}"></audio>
+<audio id="heart-clip" preload="none" src="data:audio/mpeg;base64,{{voice_audio}}"></audio>
+</article></main>
+<script nonce="{{nonce}}">
+const byId = id => document.getElementById(id);
+const statusLine = byId('status');
+let active = null;
+function stopSound() {
+  if (active) {
+    active.pause();
+    active.currentTime = 0;
+    active = null;
+  }
+  statusLine.textContent = 'Sound is off.';
+}
+function playSound(id, message) {
+  stopSound();
+  const clip = byId(id);
+  active = clip;
+  clip.volume = 0.65;
+  statusLine.textContent = message;
+  clip.play().catch(error => {
+    if (active === clip && error.name !== 'AbortError') {
+      stopSound();
+      statusLine.textContent = 'Sound could not play. Tap to try again.';
+    }
+  });
+}
+byId('heart').onclick = () => playSound('heart-clip', 'Love you, Mom.');
+byId('siren').onclick = () => playSound('siren-clip', 'The little siren is playing.');
+byId('stop').onclick = stopSound;
+for (const clip of document.querySelectorAll('audio')) {
+  clip.onended = () => { if (active === clip) stopSound(); };
+}
+window.addEventListener('pagehide', stopSound);
+</script></body></html>
