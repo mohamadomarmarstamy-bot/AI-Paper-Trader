@@ -184,6 +184,39 @@ class PriorityTests(unittest.TestCase):
                 self.assertEqual(info['impact_since_tracking']['fallback_charts'],0)
                 self.assertNotIn('chart',api.entry_evidence(conn,row,NOW))
 
+    def test_ready_candle_expires_before_recent_primary_attempt_and_racing_refresh_wins(self):
+        row,state=self.prepare()
+        def save(record):
+            with api.connection() as conn,conn:
+                conn.execute('UPDATE research SET evidence=?',(json.dumps({'chart':record,'other':{'value':True,'at':NOW}}),))
+        old={'status':'ready','at':NOW,'attempt_at':NOW,'value':{'closed_at':NOW-150,'rsi':25,'volume_ratio':1}}
+        with patch.dict(os.environ,{'JARVIS_CODEX_MODE':'fallback'}):
+            with patch.object(feed,'attempt') as attempt:
+                for record,elapsed in ((old,0),(old,30),({**old,'attempt_at':None},31),
+                                       ({**old,'value':dict(old['value'],provider='codex')},31)):
+                    save(record)
+                    feed.tick(api,clock=lambda:NOW+elapsed)
+                attempt.assert_not_called()
+            save(old)
+            fresh={'status':'ready','at':NOW+31,'attempt_at':NOW+31,'value':{'closed_at':NOW,'volume_ratio':1}}
+            def refresh(*args,**kwargs):
+                save(fresh)
+                return {'closed_at':NOW,'rsi':20,'volume_ratio':2,'provider':'codex'}
+            with patch.object(feed,'attempt',side_effect=refresh) as attempt:
+                feed.tick(api,clock=lambda:NOW+31)
+                attempt.assert_called_once()
+            with api.connection() as conn:
+                saved=json.loads(conn.execute('SELECT evidence FROM research').fetchone()[0])
+                self.assertEqual(saved,{'chart':fresh,'other':{'value':True,'at':NOW}})
+            save(old)
+            with api.connection() as conn,conn:
+                conn.execute("DELETE FROM research_tasks WHERE name='codex-priority'")
+            with patch.object(feed,'attempt',return_value={'closed_at':NOW,'rsi':20,'volume_ratio':2,'provider':'codex'}):
+                feed.tick(api,clock=lambda:NOW+31)
+            with api.connection() as conn:
+                self.assertEqual(api.entry_evidence(conn,row,NOW+31)['chart']['provider'],'codex')
+                self.assertTrue(json.loads(conn.execute('SELECT evidence FROM research').fetchone()[0])['other']['value'])
+
     def test_healthy_primary_does_not_spend(self):
         row,state=self.prepare()
         with api.connection() as conn,conn:
